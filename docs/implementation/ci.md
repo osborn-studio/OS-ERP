@@ -4,10 +4,11 @@
 
 ## 2026-10-22 托管 Actions 决定
 
-用户决定：仓库公开且尚未开始收费期间，Linux/Node/Python 验证使用 GitHub 托管 runner（`.github/workflows/ci.yml`，`ubuntu-latest`）。触发方式：push 到 main、pull request、手动 dispatch（可指定回归轮数）。工作流分两段：
+用户决定：仓库公开且尚未开始收费期间，Linux/Node/Python 验证使用 GitHub 托管 runner（`.github/workflows/ci.yml`，`ubuntu-latest`）。触发方式：push 到 main、pull request、手动 dispatch（可指定回归轮数）。工作流分三段：
 
 1. `checks`：锁文件安装、显式重建 better-sqlite3/esbuild、`tsc --noEmit`、Vite 构建、`npm run test:focused`。
 2. `regression`：在独立 venv 安装 `requirements-test.txt` 固定版本的 openpyxl，执行 `scripts/regress-isolated.mjs`（PR/push 默认 1 轮；手动 dispatch 默认 3 轮），只打印白名单汇总行并上传 `summary.json`，原始日志不上传。
+3. `docker`（依赖 `checks`，15 分钟超时）：`docker build --platform linux/amd64 --build-arg GML_BUILD_SHA=$GITHUB_SHA -t os-erp:ci .`（不登录、不推送任何 registry），然后执行 `node scripts/docker-smoke.mjs --image os-erp:ci --expect-sha $GITHUB_SHA`。冒烟内容与 ADR-0012「验证」的手工步骤一致：(a) 不给 `GML_JWT_SECRET` ⇒ 非零退出且日志含 `JWT_SECRET_MISSING_IN_PRODUCTION`；(b) 给公开已知值 ⇒ 同样拒绝；(c) 随机密钥 + 命名卷 `/data` + 只读根 + `cap_drop ALL` + `no-new-privileges` + 只发布到 `127.0.0.1:<随机空闲端口>` ⇒ `/api/meta/health` 200 且 `version` 等于 package.json、`build_sha` 等于提交 SHA；`POST /mcp` 返回 503 `FEATURE_DISABLED`；`docker exec id -u` 为 10001；PID 1 为 tini；`touch /app/…` 报只读；`/data` 内已有 SQLite 库；容器日志不含随机密钥。脚本只用 Node 内建模块、以数组参数调用 `docker` CLI（不经 shell），随机密钥只经 `-e GML_JWT_SECRET`（不带值，从脚本进程环境继承）传入，输出只有 `ok:` / `FAIL:` / `smoke:` 定格行，失败诊断块对 32 位以上不透明串打码；无论成败 `finally` 里删除容器与卷。`tests/docker-smoke-policy.test.mjs` 静态守卫：job 存在且 `needs: checks`、Actions 全部按 40 位 SHA 固定、无 push/login、脚本从不回显密钥。维护者本机可直接复跑同一脚本（Mac mini 为 linux/arm64；**linux/amd64 只在托管 runner 上实际构建与运行**）。通过只代表该提交的运行镜像满足启动闸门与运行契约，不是生产部署验收。
 
 开始收费后切回专用 Linux 主机 `dmserver`（下文 `linux-validation.yml`）。托管 runner 的通过只代表对应提交的隔离源码回归，不是发行包验收或生产就绪。
 

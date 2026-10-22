@@ -57,6 +57,40 @@ jobs:
           export GML_JWT_SECRET="$(node -e "process.stdout.write(require('node:crypto').randomBytes(32).toString('hex'))")"
           npm run test:focused
 
+  docker:
+    # Builds the ADR-0012 runtime image for linux/amd64 (no registry, no push, no login) and runs
+    # scripts/docker-smoke.mjs against it: startup gates (missing / public-default secret are refused),
+    # hardened run (read-only root, cap_drop ALL, no-new-privileges, named /data volume, loopback port),
+    # /api/meta/health version + build_sha, /mcp 503 in production, uid 10001, /app not writable.
+    # Passing here is container-contract evidence for this commit; it is not production acceptance.
+    name: Docker image build and smoke (linux/amd64)
+    needs: checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DOCKER_BUILDKIT: '1'
+      IMAGE: os-erp:ci
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      # The smoke script uses Node built-ins only (child_process, net, fetch); no npm install here.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+      - name: Build runtime image (linux/amd64, build SHA injected, not pushed)
+        run: |
+          set -euo pipefail
+          docker build \
+            --platform linux/amd64 \
+            --build-arg "GML_BUILD_SHA=${GITHUB_SHA}" \
+            --tag "$IMAGE" \
+            .
+          docker image inspect --format 'image={{.Id}} arch={{.Architecture}} user={{.Config.User}} size_bytes={{.Size}}' "$IMAGE"
+      - name: Smoke (scripts/docker-smoke.mjs; prints allowlisted lines only)
+        run: node scripts/docker-smoke.mjs --image "$IMAGE" --expect-sha "$GITHUB_SHA"
+
   regression:
     name: Isolated regression (cosmetic, food)
     needs: checks
