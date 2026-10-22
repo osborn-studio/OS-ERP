@@ -171,6 +171,13 @@ checks.push({ name: 'smoke-api', cmd: ['scripts/smoke-api.mjs'], industries: ['-
 let fail = 0
 const rows = []
 
+// 旧 test-*.mjs 串行跑在**同一个** run-data 目录里，几十个脚本都以 admin 等账号从 127.0.0.1 登录，
+// 会撞上 ADR-0005 的持久登录节流（默认 10 次/5 分钟/账号）—— 表现是后面的脚本"登录失败/401"，
+// 与被测功能无关。节流策略一经写入 run-data 就固定，所以这里对**所有**旧脚本统一给足额度
+// （上限 10000 是 checkedPolicy 允许的最大值）；`tests/*.test.mjs` 各自用临时目录并自带策略，不沾这份 env。
+// 这是测试台的环境设置，不改变生产默认值；节流本身由 tests/login-throttle.test.mjs 与 auth-session A08 守着。
+const LEGACY_LOGIN_ENV = { GML_LOGIN_IP_LIMIT: '10000', GML_LOGIN_ACCOUNT_LIMIT: '10000' }
+
 function run(file, args, extraEnv = {}) {
   const r = spawnSync(NODE, [file, ...args], {
     cwd: ROOT,
@@ -197,7 +204,7 @@ for (let round = 1; round <= ROUNDS; round++) {
       const args = ind === '(单库)' || ind === '-' ? [] : [ind]
       const label = `${c.name}${args.length ? ` [${ind}]` : ''}`
       const t0 = Date.now()
-      const { code, out } = run(c.cmd[0], [...c.cmd.slice(1), ...args], c.env || {})
+      const { code, out } = run(c.cmd[0], [...c.cmd.slice(1), ...args], { ...(c.name === 'node:test' ? {} : LEGACY_LOGIN_ENV), ...(c.env || {}) })
       const ms = Date.now() - t0
       const t = tally(out)
       const good = code === 0 && !(t && t.failed > 0)

@@ -106,7 +106,7 @@ for (const ind of available) {
   const cases = [
     { name: '对象 detail', action: `${MARK}.obj`, payload: { module: 'test', entity: 'subject', entityId: 12, detail: { code: '1001', qty: 2 } }, expect: { detail: '{"code":"1001","qty":2}', entity: 'subject', entity_id: '12' } },
     { name: '字符串 detail（原样，不再包一层引号）', action: `${MARK}.str`, payload: { detail: '{"pre":"stringified"}' }, expect: { detail: '{"pre":"stringified"}' } },
-    { name: '循环引用 detail（明细退化，但**行必须在**）', action: `${MARK}.circular`, payload: { detail: circular }, expect: { detail: '{"__unserializable__":true}' } },
+    { name: '循环引用 detail（脱敏层把环替换成 [CIRCULAR]，**行必须在**；ADR-0010）', action: `${MARK}.circular`, payload: { detail: circular }, expect: { detail: '{"a":1,"self":"[CIRCULAR]"}' } },
     { name: 'BigInt detail（同样序列化不了）', action: `${MARK}.bigint`, payload: { detail: { n: 1n } }, expect: { detail: '{"__unserializable__":true}' } },
     { name: '没有 detail', action: `${MARK}.none`, payload: {}, expect: { detail: null } },
     { name: 'target 别名 period:2026-10', action: `${MARK}.target1`, payload: { target: 'period:2026-10', detail: { x: 1 } }, expect: { entity: 'period', entity_id: '2026-10' } },

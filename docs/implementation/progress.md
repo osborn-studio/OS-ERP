@@ -2,6 +2,12 @@
 
 更新：2026-10-22。全新公开仓库：[osborn-studio/OS-ERP](https://github.com/osborn-studio/OS-ERP)，采用 MIT，仅导入清理后的当前文件快照。旧仓库保留为私有归档，其 PR/Actions/历史对象不导入本仓库。未发布正式 Release、未部署。来源及旧 checkout 使用限制见 [PUBLICATION_HISTORY](../PUBLICATION_HISTORY.md)，MIT 决策不替代第三方权属核验。
 
+## 第三批当前状态（2026-10-22）
+
+第三批由 6 路 Claude Code subagent 在独立工作树并行实现，主执行器集成到 `integration` 分支：F05/F08/F09 通知加固（ADR-0008）、F12 备份校验与迁移校验和（ADR-0009）、F13 审计与错误脱敏（ADR-0010）、F07 MCP 委托授权（ADR-0011）、F14/F16 容器最小化与版本契约（ADR-0012）、授信逆向台账（ADR-0013）。新增迁移 052、053；新增 9 个 `tests/*.test.mjs` 专项。集成后 Mac mini 开发检查：`npm run test:focused` 全绿、`tsc`、Vite 构建、bizcode/file-header/api-contract 守卫全绿；两处原有守卫失败（SESSION_REVOKED/AUTH_INVALID_CREDENTIALS 未经 `bizFail`、SessionBoundary 头缺分隔线）已修。
+
+验证主机决定：仓库公开且未收费期间，用 GitHub 托管 runner 的 `.github/workflows/ci.yml` 作为开发合并闸门（PR/push 1 轮隔离回归，手动 3 轮）；开始收费后切回 dmserver。托管 CI 首轮对 CI 基线提交的回归为 109/113（4 项失败：bizcode、file-header 已修；`test-mcp-purchase.mjs` 在 ubuntu 上失败待定位）。各状态与剩余验收见 [整改跟踪](backlog.md)。
+
 ## 第二批当前状态
 
 第二批已集成到本地 `codex/session-capabilities`：`auth_version` 撤销、统一安全变更事务和密码策略、持久登录节流、前端失效/跨标签页同步、改密和退出全部会话、运行能力展示及生产隐藏演示入口。迁移 026/049 已补避免每次启动重新授予权限的回归。实现和开发专项结果不等于 Linux 集成验收。

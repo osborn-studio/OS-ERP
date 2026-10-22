@@ -29,7 +29,7 @@
 
 import { Router } from 'express'
 import { getDb } from '../db/index.js'
-import { ok, fail, wrap, pageParams } from '../lib/http.js'
+import { ok, fail, bizFail, wrap, pageParams } from '../lib/http.js'
 import { requireAuth, requirePerm, requireInternal, requireGlobalData, currentUser } from '../middleware/auth.js'
 import { audit } from '../middleware/audit.js'
 import {
@@ -47,7 +47,7 @@ function guard(fn) {
       return await fn(req, res, next)
     } catch (e) {
       if (e instanceof NotifyError || e instanceof OutboundUrlError) {
-        return fail(res, e.message, e.httpStatus, 1, { code: e.code, ...(e.detail || {}) })
+        return bizFail(res, { status: e.httpStatus, code: e.code, message: e.message, detail: e.detail || {} })
       }
       throw e
     }

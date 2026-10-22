@@ -10,18 +10,18 @@
 | F02 商城演示登录 | P0 | partial | 生产商城服务端门禁已集成，并通过开发 HTTP 负向测试。关闭不等于实现短信验证；需真实 HTTP 确认固定验证码路径不可达及后台业务仍可用。 |
 | F03 奇门模拟网关 | P0 | partial | 生产默认关闭模拟网关及未验收同步路径，已集成。必须验证未认证读取/模拟成功均被拒；真实签名、重放防护和客户范围暂未实现。 |
 | F04 演示重建 | P0 | partial | 已有独立生产 boot、持久数据库模式、旧库/损坏库拒绝、底层重置和卫星 seed 保护。独立审查与运行隔离专项已完成；自愈迁移配置、副作用与恢复重启还需验收。 |
-| F05 通知越权预览 | P1 | open | 尚未为摘要补齐业务权限和组织/仓库范围。需最低权限角色负向测试。 |
+| F05 通知越权预览 | P1 | partial（第三批已实现） | 预览/推送/日志/总览统一要求内部角色 + `system:notify:*` 权限 + 全局数据范围，否则 403（`purchase_orders`/`approval_instances` 无 org_id，无法诚实按组织过滤，故选 403 而非空摘要）。负向测试覆盖门店/经销商/采购子树/销售角色。见 [ADR-0008](ADR-0008-notify-hardening.md)。待托管 CI 回归与最低权限角色产品验收。 |
 | F06 密码/会话 | P1 | partial | 一次性管理员 bootstrap、生产 JWT 姿态、auth_version 撤销、改密/安全变更事务、持久登录节流和统一失败信息已集成；第二批 Linux 验收待完成，复审发现的表单契约及会话切换页面残留正在补齐。 |
-| F07 MCP 委托授权 | P1 | partial，范围限制 | 生产 MCP 与凭据管理入口已关闭；关闭不修复所有者停用/降权后的 Token 语义。重新开放前逐工具补齐当前身份/权限范围验证。 |
-| F08 Webhook 出站限制 | P1 | open | 尚需批准目标策略、DNS/IP/重定向检查、总超时和响应体上限；不得以模拟外部请求替代受控安全用例。 |
-| F09 Token 日志/秘密存储 | P1 | partial | 新生产 boot 不签演示 Token，演示启动日志已去除 Token 明文；通知秘密存储、读取权限、轮换及历史凭据处置尚未完成。 |
+| F07 MCP 委托授权 | P1 | partial（第三批已实现） | 有主 Token 视为所有者委托：每次调用重读所有者存在/启用/当前权限与数据范围并取交集；签发时记录所有者 `auth_version`，任何 ADR-0004 版本提升令旧 Token 永久失效；停用账号在同一事务吊销其全部 Token；仅接受 Bearer 头；写/危险工具的审计写入与业务同事务。迁移 053。见 [ADR-0011](ADR-0011-mcp-delegated-token-scope.md)。生产仍关闭 MCP；重新开放前需产品级验收。 |
+| F08 Webhook 出站限制 | P1 | partial（第三批已实现） | `server/lib/outbound-url.js`：生产仅 https、拒绝回环/私网/链路本地/保留段（含 IPv4-mapped/NAT64/6to4）、逐 DNS 应答检查并固定已检查地址、不跟随重定向、总超时覆盖响应体、256KB 体积上限、可选 `GML_WEBHOOK_ALLOWED_HOSTS` 只能收窄。保存与发送两处执行。待真实 https 目标联调。 |
+| F09 Token 日志/秘密存储 | P1 | partial（第三批已实现） | 启动日志不输出 Token（已核实）；通知渠道秘密以 AES-256-GCM（`enc:v1:` 前缀，密钥来自 `GML_SECRET_KEY` 或 JWT 密钥 HKDF 派生）落库，接口只返回 `has_secret`/`secret_last4`，旧明文读取兼容并在下次写入时升级；`GML_SECRET_KEY_PREVIOUS` 支持轮换。历史已进入日志的凭据处置仍需运维执行。 |
 | F10 资金闭环 | P1 | open，拟限制暴露面 | 首版排除公共商城在线资金能力，生产已关闭相关入口。后台手工往来仍需凭证/复核/对账验收。 |
 | F11 客户租户隔离 | P1 | open，范围限定 | 目标限定一企业一实例；行业库不是 SaaS 租户。独立密钥、目录、备份和实例部署还需实际安装验收。 |
-| F12 备份升级恢复 | P1 | open | 新备份校验后轮转、失败退出码、试恢复、升级回退与 RPO/RTO 尚未完成。 |
-| F13 审计/错误泄露 | P1 | open | 仍需 URL 凭据清理、统一脱敏、错误码、关键变更事务审计与故障注入。CI 不上传原始日志只是证据管理措施。 |
-| F14 供应链/容器 | P1 | open | 依赖版本沿用锁文件；本批选择性执行原生构建脚本不等于完成公告整改。镜像精简、非 root、摘要固定、SBOM/通知仍待做。另见 [braces 高危公告](dependency-alerts.md)，核查时无已发布修复版本。 |
+| F12 备份升级恢复 | P1 | partial（第三批已实现） | `db-backup.mjs` 默认校验（integrity/foreign_key/表数/迁移数/烟雾查询）通过后才轮转，失败文件隔离为 `.db.failed` 并以非零退出；输出 JSON 报告；备份目录相对 `GML_DATA_DIR`。迁移运行器记录每个迁移的 sha256，生产模式校验不一致即拒绝启动（`MIGRATION_CHECKSUM_MISMATCH`），旧行可 `--adopt-checksums`。见 [ADR-0009](ADR-0009-backup-verification-and-migration-checksums.md)。RPO/RTO 实测、完整恢复与升级回退演练仍 open。 |
+| F13 审计/错误泄露 | P1 | partial（第三批已实现） | 后台 JWT 不再接受 query 参数；`server/lib/redact.js` 统一脱敏（审计 detail、日志 URL）；生产 5xx 仅返回通用信息 + `incident_id`，完整错误按事件号记服务端日志；`auditStrict` 在事务内写审计，失败则业务回滚（设置、经销商授信/返利、账号安全变更已接入）。见 [ADR-0010](ADR-0010-audit-and-error-hygiene.md)。 |
+| F14 供应链/容器 | P1 | partial（第三批已实现） | 多阶段 Dockerfile：运行镜像仅生产依赖、非 root（uid 10001）、基础镜像按摘要固定、HEALTHCHECK、只读根文件系统；compose 仅发布 127.0.0.1、具名数据卷、密钥只经环境变量。本机 Docker 实际构建并启动验证通过（arm64）。静态策略测试守住上述约束。braces 公告仍无修复，运行镜像不含该开发链。见 [ADR-0012](ADR-0012-container-and-version-contract.md)。linux/amd64 与目标主机未验。 |
 | F15 可重复验收 | P1 | partial | dmserver 固定候选 9c 三轮源码回归各 113/113、合计 339 项通过；手动 Actions 配置已提交但未注册 runner/未触发。源码哈希证据与发行包验收分开，后者和实际 Actions 仍未完成。 |
-| F16 API/版本契约 | P2 | open | package 已改 OS ERP 开发版本，新增会话端点合同已补；API/manifest 的统一版本来源、状态一致性及联调尚未完成。 |
+| F16 API/版本契约 | P2 | partial（第三批已实现） | `server/version.js` 单一版本来源（package.json + `GML_BUILD_SHA`/发行 MANIFEST）供 `/api`、健康、AI manifest、MCP serverInfo 使用；商城取消返回持久化状态 `cancelled`；Vite 代理补 `/mcp`。 |
 
 ## 本批分工与合入验收条件
 
@@ -50,3 +50,5 @@
 | 预收抵扣 | [ar.js:1202](https://github.com/osborn-studio/os-egp/blob/b6cb84933672848ff5d1bd6b2832647374506e4a/server/lib/ar.js#L1202) | applyPrepay 只释放 OC，SO/SI 对应统一授信仍可滞留；需同一来源映射/逐笔归属台账、上限及逆向恢复规则，并覆盖跨客户拒绝。 |
 
 这两项未通过生产业务闭环验收，不得因正向 A06 守卫已绿而关闭财务/授信风险。
+
+第三批（2026-10-22）已按逐笔来源台账实现逆向：新增 `credit_release_ledger`（迁移 052）记录每次收款确认/预收抵扣释放的来源单据、客户与金额；作废收款按台账逐笔恢复统一授信与 OC 占用，重复作废、跨客户、超额恢复均拒绝，中途失败整体回滚。见 [ADR-0013](ADR-0013-credit-release-ledger.md)。迁移前已确认的收款无台账行，作废时只按旧路径恢复 OC 并标记 `legacy:true`。另发现 `test-quote-credit.mjs` 两项原有失败（`sales_orders.credit_hold` 在收款结清授信时未同步），属前批正向修复遗留，仍 open。
