@@ -49,7 +49,8 @@ function fingerprint(dir, relative = '') {
     else if (item.isFile()) hashes[rel] = createHash('sha256').update(readFileSync(path.join(dir, item.name))).digest('hex')
   }
 }
-for (const name of ['server', 'src', 'scripts', 'tests', 'public', 'reusable']) {
+// .github 也进副本：tests/docker-smoke-policy.test.mjs 静态核对 CI 工作流。
+for (const name of ['server', 'src', 'scripts', 'tests', 'public', 'reusable', '.github']) {
   if (existsSync(path.join(ROOT, name))) cpSync(path.join(ROOT, name), path.join(repo, name), { recursive: true })
 }
 for (const item of readdirSync(ROOT, { withFileTypes: true })) {
