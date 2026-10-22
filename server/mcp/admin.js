@@ -18,7 +18,7 @@ import { Router } from 'express'
 import { getDb } from '../db/index.js'
 import { ok, fail, wrap } from '../lib/http.js'
 import { requireAuth, requirePerm } from '../middleware/auth.js'
-import { createToken, revokeToken, SCOPE_LABEL } from './tokens.js'
+import { createToken, revokeToken, SCOPE_LABEL, listTokensWithStatus, getTokenWithStatus, sweepOwnerRevokedTokens } from './tokens.js'
 import { TOOLS } from './tools.js'
 // 「AI 能力目录」的唯一口径（单据矩阵 + 工具清单 + 安全边界都由它算，页面不自己编）
 import { buildMcpCatalog } from './catalog.js'
@@ -59,21 +59,35 @@ r.get(
   wrap((_req, res) => ok(res, Object.entries(SCOPE_LABEL).map(([k, v]) => ({ code: k, name: v }))))
 )
 
+/**
+ * 令牌列表 / 详情（ADR-0015）：每行带 `effective_status` / `effective_reason` ——
+ * 行状态 `status` 是历史（谁签的、有没有被吊销），`effective_status` 是现状
+ * （所有者改密 / 停用 / 行不存在 / 过期时它不再是 `active`）。读路径不改库；
+ * 要让行状态追上现状用下面的 `POST /tokens/sweep`。调用时仍以 `delegation.js` 为准。
+ */
 r.get(
   '/tokens',
   requireAuth,
   requirePerm('system.mcp.manage'),
-  wrap((_req, res) => {
-    const db = getDb()
-    const rows = db
-      .prepare(`
-        SELECT t.id, t.name, t.token_prefix, t.org_id, o.name AS org_name, t.industry, t.scopes,
-               t.allow_tools, t.deny_tools, t.rate_limit, t.expires_at, t.last_used_at, t.call_count,
-               t.status, t.remark, t.created_at
-        FROM agent_tokens t LEFT JOIN orgs o ON o.id=t.org_id
-        ORDER BY t.id DESC`)
-      .all()
-    return ok(res, rows)
+  wrap((_req, res) => ok(res, listTokensWithStatus(getDb())))
+)
+
+/** 清扫：把所有者版本已变 / 所有者已不存在、但行仍 active 的令牌置为 revoked 并记原因（幂等） */
+r.post(
+  '/tokens/sweep',
+  requireAuth,
+  requirePerm('system.mcp.manage'),
+  wrap((req, res) => ok(res, sweepOwnerRevokedTokens(getDb(), { actor: req.user.name || req.user.username })))
+)
+
+r.get(
+  '/tokens/:id',
+  requireAuth,
+  requirePerm('system.mcp.manage'),
+  wrap((req, res) => {
+    const t = getTokenWithStatus(getDb(), Number(req.params.id))
+    if (!t) return fail(res, 'Token 不存在', 404)
+    return ok(res, t)
   })
 )
 

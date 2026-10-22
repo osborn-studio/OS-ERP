@@ -36,7 +36,7 @@ import {
   ApprovalError, approvalGate, matchTemplate, amountOf,
   submitApproval, getInstance, decideApproval, cancelApproval,
   listInstances, pendingForMe, listTemplates,
-  approvalOverview, approvalTodos, describeApprover, stepsOfTemplate
+  approvalOverview, approvalTodosFor, describeApprover, stepsOfTemplate
 } from '../lib/approval.js'
 
 const r = Router()
@@ -265,7 +265,18 @@ r.get('/instances/:id', requireAuth, wrap((req, res) => {
   return ok(res, inst)
 }))
 
-r.get('/todos', requireAuth, wrap((_req, res) => ok(res, approvalTodos(getDb()))))
+/**
+ * 审批待办（ADR-0015）：进门要有审批中心的任一权限点（与页面菜单同一组），
+ * 内容只统计**我能处理**的 pending 实例（判据 `pendingInstancesFor`，与「待我审批」同一份）。
+ * 原来只 `requireAuth` 且全库计数 —— 任何登录账号都能数出全公司有多少待审单与总金额。
+ * 全库口径只保留给通知摘要（`approvalTodos`，由 ADR-0008 的全局数据范围门把守）。
+ */
+r.get(
+  '/todos',
+  requireAuth,
+  requirePerm('system:approval:view', 'system:approval:decide', 'system:approval:manage'),
+  wrap((req, res) => ok(res, approvalTodosFor(getDb(), actorOf(req))))
+)
 
 r.post(
   '/instances/:id/decide',

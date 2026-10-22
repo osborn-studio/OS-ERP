@@ -220,7 +220,7 @@ export function buildOpenApi() {
     // —— 模块 07 采购域后段（请购 → 发票 → 三单结算 → 付款核销 + 供货目录）——
     // 与上面「订单/收货/退货」同挂 /api/purchase，Express 先匹配前者、未命中的落到这批。
     '/api/purchase/chain/overview': { get: { tags: ['采购域'], summary: '采购域总览（请购/订单/发票/结算/付款与四段关闭待办）', responses: { 200: jsonResp(null) } } },
-    '/api/purchase/chain/todos': { get: { tags: ['采购域'], summary: '采购域待办（按环节聚合，供首页卡片）', responses: { 200: jsonResp(null) } } },
+    '/api/purchase/chain/todos': { get: { tags: ['采购域'], summary: '采购域待办（供采购工作台）。门：内部主体 + 采购读权限；内容按调用者组织范围（订单按仓的组织）与动作权限过滤，范围为空返回空列表（ADR-0015）', responses: { 200: jsonResp(null), 403: jsonResp(null) } } },
     '/api/purchase/chain/flow': { get: { tags: ['采购域'], summary: '采购十环节业务流定义（内核 biz_flow_steps；含到货与质检拆分为两张单后的质量检验环节）', responses: { 200: jsonResp(null) } } },
     '/api/purchase/chain/actions': { get: { tags: ['采购域'], summary: '某单据当前可执行动作（供界面渲染按钮）', parameters: [q('doc_type', '单据类型 PRQ/PI/PST/PAY', true), q('id', '单据 id', true)], responses: { 200: jsonResp(null) } } },
 
@@ -613,7 +613,7 @@ export function buildOpenApi() {
       post: { tags: ['审批中心'], summary: '新建 / 修改审批模板（级次整体重建；需 system:approval:manage）', responses: { 200: jsonResp(null) } }
     },
     '/api/approval/templates/{id}/toggle': { post: { tags: ['审批中心'], summary: '启用 / 停用模板（未标记需审批的动作不允许启用）', parameters: [idParam], responses: { 200: jsonResp(null) } } },
-    '/api/approval/todos': { get: { tags: ['审批中心'], summary: '审批待办（按单据类型分组，供消息推送）', responses: { 200: jsonResp(null) } } },
+    '/api/approval/todos': { get: { tags: ['审批中心'], summary: '审批待办（按单据类型分组）。门：审批中心任一权限点；只统计当前级指到本人的 pending 实例，admin / system:approval:manage 全见（ADR-0015）', responses: { 200: jsonResp(null), 403: jsonResp(null) } } },
 
     // —— 模块 23 数据口径字典 ——
     // 每条指标是「口径 + 算法」写在同一处的一个对象，表只是投影；这组接口把两者一起端出来。
@@ -1044,6 +1044,15 @@ export function buildOpenApi() {
     // 这里登记的是**管理面**的 REST 接口。数据全部由内核三张表推导，页面不写死名单。
     '/api/mcp/catalog': { get: { tags: ['AI 与 MCP'], summary: '**AI 能力目录**：全部单据类型 × 状态机 × 可推进边（含高危标注）× 工具清单 × 安全边界。由 `doc_types`/`doc_states`/`doc_actions` 实时推导', responses: { 200: jsonResp(null), 403: jsonResp(null) } } },
     '/api/mcp/tools': { get: { tags: ['AI 与 MCP'], summary: 'MCP 工具清单（名称 / 级别 / 用途），供令牌白名单勾选', responses: { 200: jsonResp(null) } } },
+    '/api/mcp/tokens': {
+      get: { tags: ['AI 与 MCP'], summary: 'Agent Token 列表（需 system.mcp.manage）。每行带 `effective_status`（active / revoked / expired / owner_missing / owner_inactive / revoked_by_owner_change）与 `effective_reason`、`revoked_reason`、`revoked_at`、所有者信息；`status` 是行历史，`effective_status` 是现状（ADR-0015）', responses: { 200: jsonResp(null), 403: jsonResp(null) } },
+      post: { tags: ['AI 与 MCP'], summary: '签发 Agent Token（有主：所有者 = 当前登录人；明文只返回一次）', responses: { 200: jsonResp(null), 400: jsonResp(null), 403: jsonResp(null) } }
+    },
+    '/api/mcp/tokens/sweep': { post: { tags: ['AI 与 MCP'], summary: '清扫：把所有者 auth_version 已变 / 所有者已不存在、但行仍 active 的令牌置为 revoked 并记 `revoked_reason`（幂等；返回 swept / ids）', responses: { 200: jsonResp(null), 403: jsonResp(null) } } },
+    '/api/mcp/tokens/{id}': {
+      get: { tags: ['AI 与 MCP'], summary: 'Agent Token 详情（字段与列表同一份，含 effective_status）', parameters: [idParam], responses: { 200: jsonResp(null), 403: jsonResp(null), 404: jsonResp(null) } },
+      delete: { tags: ['AI 与 MCP'], summary: '吊销 Agent Token（revoked_reason=admin）', parameters: [idParam], responses: { 200: jsonResp(null), 403: jsonResp(null), 404: jsonResp(null) } }
+    },
     '/api/mcp/scopes': { get: { tags: ['AI 与 MCP'], summary: '令牌可用范围（组织 / 门店 / 仓库 等）', responses: { 200: jsonResp(null) } } },
     '/api/mcp/logs': { get: { tags: ['AI 与 MCP'], summary: 'MCP 工具调用审计日志', parameters: [q('limit', '返回条数，上限 500'), q('token_id', 'Agent Token ID'), q('level', 'read/write/danger'), q('ok', '0 仅看失败')], responses: { 200: jsonResp(null), 403: jsonResp(null) } } },
     '/api/mcp/confirmations': { get: { tags: ['AI 与 MCP'], summary: '高危 MCP 动作人工确认列表', responses: { 200: jsonResp(null), 403: jsonResp(null) } } },
@@ -1155,7 +1164,7 @@ export function buildOpenApi() {
     openapi: '3.0.3',
     info: {
       title: 'GML 供应链协同系统 API',
-      version: '1.31.0',
+      version: '1.32.0',
       description:
         '化妆品 / 服装 双行业轻量级供应链协同系统接口文档。覆盖主数据、采购、销售、存货、经销商、门店要货、委外管理、计划与生产、生产制造（BOM / 领料 / 完工入库）、质量检验、线上 OMS 与经营看板。\n\n' +
         '**多行业**：登录 `POST /api/auth/login` 时传 `industry`（`cosmetic` / `apparel`）选择行业版本；' +

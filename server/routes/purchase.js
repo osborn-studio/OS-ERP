@@ -31,7 +31,7 @@ import {
   normalizePurchaseOrderLines,
   getPurchaseOrder as loadOrder,
   PURCHASE_ORDER_SELECT, PURCHASE_ORDER_FROM,
-  PurchaseError, DocFlowError
+  PurchaseError, DocFlowError, PO_READ_PERMS
 } from '../lib/purchase.js'
 
 const r = Router()
@@ -41,7 +41,7 @@ const W = ['purchase', 'warehouse', 'scm', 'admin']
 // 在权限表里一个采购权限点都没有 —— 但原来的读接口只有 requireAuth，
 // 于是经销商账号一个 GET 就把全部 41 张采购单连供应商、单价一起拉走。
 // 「有登录态」不等于「有资格」：读接口同样要过功能权限门。
-const PO_READ_PERMS = ['purchase.order.view', 'purchase.inbound', 'purchase.return']
+// 权限点清单本身在 `lib/purchase.js`（`PO_READ_PERMS`），采购工作台待办与这里同一份。
 
 /**
  * 业务错误 → 响应（转成 `detail.code`，与采购后段路由 `guard()` 同一形状）。
