@@ -32,6 +32,9 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 /** 已登记「文件标识块」的文件。补一个加一行。 */
 const DECLARED = [
   'server/index.js',
+  'server/lib/audit-trail.js',
+  'server/lib/redact.js',
+  'server/middleware/audit.js',
   'server/mcp/catalog.js',
   'scripts/check-mcp-coverage.mjs',
   'scripts/check-file-header.mjs',
