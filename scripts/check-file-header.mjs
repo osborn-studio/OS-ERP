@@ -33,6 +33,9 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const DECLARED = [
   'server/index.js',
   'server/mcp/catalog.js',
+  'server/mcp/delegation.js',
+  'server/mcp/tokens.js',
+  'server/db/migrations/053_agent_token_owner_version.cjs',
   'scripts/check-mcp-coverage.mjs',
   'scripts/check-file-header.mjs',
   'src/App.tsx',
