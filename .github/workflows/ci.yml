@@ -106,6 +106,15 @@ jobs:
           set -euo pipefail
           if [ -f "$RAW_ROOT/runner.log" ]; then
             grep -E '^(█ 第|  [✓✗] |  第 [0-9]+ 轮|  断言累计|回归失败|  明细：|全量回归通过)' "$RAW_ROOT/runner.log" || true
+            if [ "${{ steps.regression.outcome }}" != "success" ]; then
+              echo '::group::Failure diagnostics (filtered, long opaque strings redacted)'
+              # Only lines that carry a failure signal; any 32+ char opaque string is masked so test credentials never print.
+              grep -E '失败|FAIL|Error|error|✗|退出码|assert|Timeout|EADDRINUSE|ECONNREFUSED' "$RAW_ROOT/runner.log" \
+                | grep -vE '^  ✓' \
+                | sed -E 's/[A-Za-z0-9_.-]{32,}/[REDACTED]/g' \
+                | tail -120 || true
+              echo '::endgroup::'
+            fi
           fi
           node --input-type=module <<'NODE'
           import { readFileSync, mkdirSync, writeFileSync } from 'node:fs'
