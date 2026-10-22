@@ -64,7 +64,6 @@ jobs:
     timeout-minutes: 120
     env:
       GML_VERIFY_PLATFORM: linux
-      RAW_ROOT: ${{ runner.temp }}/os-erp-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -80,6 +79,8 @@ jobs:
       - name: Prepare isolated Python verifier (openpyxl pinned by requirements-test.txt)
         run: |
           set -euo pipefail
+          # runner.temp is not available in job-level env; export the raw-output root here.
+          echo "RAW_ROOT=$RUNNER_TEMP/os-erp-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_ENV"
           python -m venv "$RUNNER_TEMP/xlsx-venv"
           "$RUNNER_TEMP/xlsx-venv/bin/pip" install --no-cache-dir --disable-pip-version-check -r requirements-test.txt
           echo "GML_PYTHON=$RUNNER_TEMP/xlsx-venv/bin/python" >> "$GITHUB_ENV"
