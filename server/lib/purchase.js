@@ -36,7 +36,7 @@ import { localDate, localNow } from './dates.js'
 // 为什么服务层要 import 中间件：这两个校验器住在 `middleware/auth.js`，
 // 而"同一份判据只有一个实现"是铁律 —— 与其在 lib 里再写一遍下界/小数位，
 // 不如让 lib 直接用那一份（依赖方向 lib → middleware 无环：auth.js 只依赖 db 与 lib/http）。
-import { numQty, numAmount, numField } from '../middleware/auth.js'
+import { numQty, numAmount, numField, hasPerm } from '../middleware/auth.js'
 // 「这个仓还能不能用」+「这类单据允许用哪些仓」的**唯一判据**（`lib/warehouse.js`）。
 // 为什么拦在服务层而不是 HTTP 路由：采购单有**两个建单入口**（后台路由 + MCP 工具
 // `purchase.create_order`），它们都调 `createPurchaseOrder`。判据写两份的下场是本项目
@@ -1927,48 +1927,86 @@ export function purchaseOverview(db) {
   }
 }
 
-/** 待办清单：把「下一步该谁做什么」直接算出来，而不是让用户自己翻列表 */
-export function purchaseTodos(db) {
+/**
+ * 把组织范围翻成待办查询的 SQL 片段（判据与 `middleware/auth.js` 的 `orgScopeFilter` 同源：
+ * 空范围 ⇒ 不查；这里返回 null 让调用方直接给空列表，而不是拼一个 `AND 1=0` 再跑七条查询）。
+ */
+function orgScopeSql(orgScope) {
+  if (!orgScope || orgScope.scope === 'all') return { org: '', wh: '', params: [] }
+  const ids = Array.isArray(orgScope.orgIds) ? orgScope.orgIds.map(Number).filter(Number.isFinite) : []
+  if (orgScope.scope === 'dealer' || orgScope.scope === 'none' || !ids.length) return null
+  const ph = ids.map(() => '?').join(',')
+  return {
+    org: `AND org_id IN (${ph})`,
+    wh: `AND warehouse_id IN (SELECT id FROM warehouses WHERE org_id IN (${ph}))`,
+    params: ids
+  }
+}
+
+/**
+ * 采购单据「读」权限点（任一命中即可进门）。**唯一出处**：
+ * `routes/purchase.js` 的订单 / 收货 / 退货读接口与 `routes/purchase-chain.js` 的待办接口共用，
+ * 两处各抄一份的后果是"列表页进得去、工作台进不去"这种不报错的不一致。
+ * dealer / store 两个外部主体在权限表里一个采购权限点都没有 —— 读接口同样要过功能权限门。
+ */
+export const PO_READ_PERMS = ['purchase.order.view', 'purchase.inbound', 'purchase.return']
+
+/**
+ * 待办清单：把「下一步该谁做什么」直接算出来，而不是让用户自己翻列表。
+ *
+ * 范围（ADR-0015）：
+ *   · `orgScope`（`resolveOrgScope` 的结果）不传或 `all` ⇒ 全库（通知摘要 013 与管理员口径）；
+ *     受限范围按单据归属列过滤 —— 请购 / 发票 / 结算 / 付款用自身 `org_id`，
+ *     采购订单没有组织列，用 `warehouses.org_id`（仓的归属组织）；
+ *     `dealer` / `none` / 空集合 ⇒ **空列表**（与 `orgScopeFilter` 同一口径：空范围不许变成全库）。
+ *     归属列为 NULL 的单据对受限账号不可见（宁可看不到，也不放行）。
+ *   · `permCtx`（`permContext` 的结果）传入时，只保留调用者拥有该待办 `perm` 的项 ——
+ *     工作台上"能看到却点不动"的待办不是待办。
+ */
+export function purchaseTodos(db, { orgScope = null, permCtx = null } = {}) {
   const todos = []
+  const scope = orgScopeSql(orgScope)
+  if (!scope) return todos
   for (const r of db
-    .prepare("SELECT doc_no,id,total_amount FROM purchase_requisitions WHERE status='submitted' ORDER BY id DESC LIMIT 20")
-    .all()) {
+    .prepare(`SELECT doc_no,id,total_amount FROM purchase_requisitions WHERE status='submitted' ${scope.org} ORDER BY id DESC LIMIT 20`)
+    .all(...scope.params)) {
     todos.push({ kind: 'req_approve', doc_type: 'PRQ', doc_id: r.id, doc_no: r.doc_no, label: '请购单待审批', amount: r.total_amount, perm: 'purchase.req.approve' })
   }
   for (const r of db
-    .prepare("SELECT doc_no,id,total_amount FROM purchase_requisitions WHERE status='approved' ORDER BY id DESC LIMIT 20")
-    .all()) {
+    .prepare(`SELECT doc_no,id,total_amount FROM purchase_requisitions WHERE status='approved' ${scope.org} ORDER BY id DESC LIMIT 20`)
+    .all(...scope.params)) {
     todos.push({ kind: 'req_convert', doc_type: 'PRQ', doc_id: r.id, doc_no: r.doc_no, label: '请购单待转采购订单', amount: r.total_amount, perm: 'purchase.order.edit' })
   }
   for (const r of db
-    .prepare("SELECT doc_no,id,total_amount FROM purchase_orders WHERE status='submitted' ORDER BY id DESC LIMIT 20")
-    .all()) {
+    .prepare(`SELECT doc_no,id,total_amount FROM purchase_orders WHERE status='submitted' ${scope.wh} ORDER BY id DESC LIMIT 20`)
+    .all(...scope.params)) {
     todos.push({ kind: 'po_approve', doc_type: 'PO', doc_id: r.id, doc_no: r.doc_no, label: '采购订单待审批', amount: r.total_amount, perm: 'purchase.order.approve' })
   }
   for (const r of db
     .prepare(
       `SELECT doc_no,id,total_amount FROM purchase_orders
-        WHERE status IN ('approved') AND close_arrival=0 ORDER BY id DESC LIMIT 20`
+        WHERE status IN ('approved') AND close_arrival=0 ${scope.wh} ORDER BY id DESC LIMIT 20`
     )
-    .all()) {
+    .all(...scope.params)) {
     todos.push({ kind: 'po_receive', doc_type: 'PO', doc_id: r.id, doc_no: r.doc_no, label: '采购订单待到货', amount: r.total_amount, perm: 'purchase.inbound' })
   }
   for (const r of db
-    .prepare("SELECT doc_no,id,total_amount FROM purchase_invoices WHERE status='submitted' ORDER BY id DESC LIMIT 20")
-    .all()) {
+    .prepare(`SELECT doc_no,id,total_amount FROM purchase_invoices WHERE status='submitted' ${scope.org} ORDER BY id DESC LIMIT 20`)
+    .all(...scope.params)) {
     todos.push({ kind: 'invoice_verify', doc_type: 'PI', doc_id: r.id, doc_no: r.doc_no, label: '采购发票待校验', amount: r.total_amount, perm: 'purchase.invoice.verify' })
   }
   for (const r of db
-    .prepare("SELECT doc_no,id,settle_amount AS total_amount FROM purchase_settlements WHERE status='submitted' ORDER BY id DESC LIMIT 20")
-    .all()) {
+    .prepare(`SELECT doc_no,id,settle_amount AS total_amount FROM purchase_settlements WHERE status='submitted' ${scope.org} ORDER BY id DESC LIMIT 20`)
+    .all(...scope.params)) {
     todos.push({ kind: 'settle_audit', doc_type: 'PST', doc_id: r.id, doc_no: r.doc_no, label: '采购结算待审核', amount: r.total_amount, perm: 'purchase.settle.audit' })
   }
   for (const r of db
-    .prepare("SELECT doc_no,id,amount AS total_amount FROM purchase_payments WHERE status='approved' ORDER BY id DESC LIMIT 20")
-    .all()) {
+    .prepare(`SELECT doc_no,id,amount AS total_amount FROM purchase_payments WHERE status='approved' ${scope.org} ORDER BY id DESC LIMIT 20`)
+    .all(...scope.params)) {
     todos.push({ kind: 'payment_pay', doc_type: 'PAY', doc_id: r.id, doc_no: r.doc_no, label: '付款单待执行', amount: r.total_amount, perm: 'purchase.payment.approve' })
   }
-  return todos
+  if (!permCtx) return todos
+  return todos.filter((x) => hasPerm(permCtx, x.perm))
 }
 
 /** 单据当前可执行动作（把状态机出边翻译成带中文名的按钮） */

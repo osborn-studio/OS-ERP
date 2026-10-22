@@ -19,6 +19,8 @@
  *     ③ 凭什么信它不会乱来？（安全边界 + 每次调用留痕）
  *
  * 【操作边界】能力目录只读；人工确认和调用审计复用服务端现有权限与确认接口，不签发令牌。
+ *   令牌表（ADR-0015）只展示与吊销 / 清扫：`status` 是行历史，`effective_status` 是现状
+ *   （所有者改密 / 停用 / 过期时不再是 active），两列都来自服务端，页面不自己推断。
  * ============================================================================
  */
 import { useEffect, useMemo, useState } from 'react'
@@ -321,20 +323,52 @@ export default function McpCenter() {
   )
 }
 
+/** 令牌有效状态 → 展示文案与色调。键必须与服务端 `EFFECTIVE_STATUS`（server/mcp/tokens.js）逐字一致。 */
+const EFFECTIVE_LABEL: Record<string, { text: string; cls: string }> = {
+  active: { text: '可用', cls: 'bg-green-100 text-green-700' },
+  revoked: { text: '已吊销', cls: 'bg-slate-100 text-slate-600' },
+  expired: { text: '已过期', cls: 'bg-amber-100 text-amber-700' },
+  owner_missing: { text: '所有者不存在', cls: 'bg-red-100 text-red-600' },
+  owner_inactive: { text: '所有者已停用', cls: 'bg-red-100 text-red-600' },
+  revoked_by_owner_change: { text: '所有者已变更·失效', cls: 'bg-red-100 text-red-600' }
+}
+
 function McpOperations() {
   const [confirmations, setConfirmations] = useState<any[]>([])
   const [logs, setLogs] = useState<any[]>([])
+  const [tokens, setTokens] = useState<any[]>([])
   const [busy, setBusy] = useState(false)
   const load = async () => {
     setBusy(true)
     try {
       const pending = await api.get('/mcp/confirmations')
       const calls = await api.get('/mcp/logs', { limit: 30 })
+      const list = await api.get('/mcp/tokens')
       setConfirmations(pending.data || [])
       setLogs(calls.data || [])
+      setTokens(list.data || [])
     } catch (e: any) { toast(e.message, 'error') }
     finally { setBusy(false) }
   }
+  const sweep = async () => {
+    if (!window.confirm('把「所有者已变更 / 所有者不存在」但仍标为 active 的令牌置为已吊销？（调用早已被拒，这一步只让列表与事实一致）')) return
+    setBusy(true)
+    try {
+      const r = await api.post('/mcp/tokens/sweep', {})
+      toast(`已清扫 ${r.data?.swept ?? 0} 张令牌`)
+      await load()
+    } catch (e: any) { toast(e.message, 'error'); setBusy(false) }
+  }
+  const revoke = async (row: any) => {
+    if (!window.confirm(`吊销令牌「${row.name}」（${row.token_prefix}…）？吊销后不可恢复，只能重新签发。`)) return
+    setBusy(true)
+    try {
+      await api.del(`/mcp/tokens/${row.id}`)
+      toast('已吊销')
+      await load()
+    } catch (e: any) { toast(e.message, 'error'); setBusy(false) }
+  }
+  const stale = tokens.filter((t) => t.status === 'active' && (t.effective_status === 'revoked_by_owner_change' || t.effective_status === 'owner_missing')).length
   useEffect(() => { load() }, [])
   const decide = async (row: any, decision: 'approve' | 'reject') => {
     if (!window.confirm(`${decision === 'approve' ? '批准' : '拒绝'} ${row.tool_name}？\n${row.args_json}`)) return
@@ -351,6 +385,28 @@ function McpOperations() {
   }
   return <div className="space-y-3">
     <div className="flex justify-end"><button className="btn-ghost btn-sm" disabled={busy} onClick={load}>刷新记录</button></div>
+    <Card>
+      <SectionTitle
+        title="Agent Token"
+        desc="「状态」是行历史，「有效状态」是现状：所有者改密 / 退出全部会话 / 角色或权限集变更后，旧令牌每次调用都被拒（TOKEN_OWNER_REVOKED），清扫把它们如实标为已吊销。"
+        right={<button className="btn-ghost btn-sm" disabled={busy || stale === 0} onClick={sweep}>清扫失效令牌{stale ? `（${stale}）` : ''}</button>}
+      />
+      <Table data={tokens} rowKey={(r) => r.id} columns={[
+        { key: 'name', title: '名称', render: r => <div><div className="font-medium">{r.name}</div><div className="text-[11px] text-ink-500 font-mono">{r.token_prefix}…</div></div> },
+        { key: 'owner', title: '所有者', render: r => r.owner_user_id == null ? <span className="text-ink-500">无主</span> : (r.owner_name || r.owner_username || `#${r.owner_user_id}`) },
+        { key: 'scopes', title: '范围' },
+        { key: 'status', title: '状态', render: r => r.status === 'active' ? '活跃' : '已吊销' },
+        { key: 'effective_status', title: '有效状态', render: r => {
+          const m = EFFECTIVE_LABEL[r.effective_status] || { text: r.effective_status, cls: 'bg-slate-100 text-slate-600' }
+          return <span className={`tag ${m.cls}`} title={r.effective_reason || ''}>{m.text}</span>
+        } },
+        { key: 'reason', title: '说明', render: r => <span className="break-all text-[12px]">{r.revoked_reason ? `${r.revoked_reason}${r.revoked_at ? ` · ${r.revoked_at}` : ''}` : (r.effective_reason || r.remark || '—')}</span> },
+        { key: 'last_used_at', title: '最近调用', render: r => r.last_used_at || '—' },
+        { key: 'actions', title: '操作', render: r => r.status === 'active'
+          ? <button className="btn-ghost btn-sm" disabled={busy} onClick={() => revoke(r)}>吊销</button>
+          : '—' }
+      ]} empty="暂无 Agent Token" />
+    </Card>
     <Card>
       <SectionTitle title="高危动作确认" desc="批准仅授权本次原参数调用，实际执行仍由Agent发起；申请人不得自行批准。" />
       <Table data={confirmations} rowKey={(r) => r.id} columns={[

@@ -24,7 +24,7 @@
 import { Router } from 'express'
 import { getDb } from '../db/index.js'
 import { ok, fail, wrap, pageParams, paged, failFromError } from '../lib/http.js'
-import { requireAuth, requirePerm, currentUser, permContext } from '../middleware/auth.js'
+import { requireAuth, requirePerm, requireInternal, attachOrgScope, currentUser, permContext } from '../middleware/auth.js'
 import { audit } from '../middleware/audit.js'
 import {
   PurchaseError, DocFlowError,
@@ -36,7 +36,7 @@ import {
   buildSettlement, getSettlement, transitionSettlement,
   createPayment, getPayment, transitionPayment, planAllocation,
   refreshOrderStats, refreshCloseFlags,
-  purchaseOverview, purchaseTodos, purchaseActions
+  purchaseOverview, purchaseTodos, purchaseActions, PO_READ_PERMS
 } from '../lib/purchase.js'
 import { explainLifecycle, assertEdgePermitted, getDocType } from '../lib/docflow.js'
 
@@ -109,10 +109,22 @@ r.get(
   guard((req, res) => ok(res, purchaseOverview(getDb())))
 )
 
+/**
+ * 采购待办（ADR-0015）：与采购订单读接口**同一道门**（内部主体 + `PO_READ_PERMS` 任一），
+ * 再按调用者的组织范围与动作权限收窄 —— 原来只有 `requireAuth`，经销商 / 门店账号一个 GET
+ * 就能把全库待审单号与金额拉走。范围为空的受限账号拿到的是**空列表**（200），
+ * 不是 403：工作台页面对"没有待办"与"没资格进门"要分得开。
+ */
 r.get(
   '/chain/todos',
   requireAuth,
-  guard((req, res) => ok(res, { list: purchaseTodos(getDb()) }))
+  requireInternal('采购待办'),
+  requirePerm(...PO_READ_PERMS),
+  attachOrgScope,
+  guard((req, res) => {
+    const db = getDb()
+    return ok(res, { list: purchaseTodos(db, { orgScope: req.orgScope, permCtx: permContext(db, req.user) }) })
+  })
 )
 
 r.get(

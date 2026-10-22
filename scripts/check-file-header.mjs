@@ -63,7 +63,10 @@ const DECLARED = [
   'server/db/migrations/052_credit_release_ledger.cjs',
   'tests/credit-reversal.test.mjs',
   // 授信投影（ADR-0014）：credit_hold 的唯一写入者与对账守卫
-  'tests/credit-hold-projection.test.mjs'
+  'tests/credit-hold-projection.test.mjs',
+  // 待办范围与 Agent Token 有效状态（ADR-0015）
+  'server/db/migrations/055_agent_token_revoke_reason.cjs',
+  'tests/authz-followups.test.mjs'
 ]
 
 /** 参与覆盖率统计的源文件（**排除** node_modules / dist / data） */
