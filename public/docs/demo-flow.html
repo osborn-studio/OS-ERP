@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>完整演示手册 · 伴圆AI原生ERP系统</title>
+<meta name="description" content="按角色排的演示顺序：先讲什么、后讲什么、每一步点哪里" />
+<style>
+  :root{
+    --brand:#185fa5; --brand-600:#2b82c9; --tech:#06b6d4;
+    --ink-900:#0f172a; --ink-700:#334155; --ink-500:#64748b; --ink-300:#cbd5e1;
+    --bg:#f6f9fc; --line:#e2e8f0;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink-900);
+    font:15px/1.75 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",system-ui,sans-serif}
+  a{color:var(--brand);text-decoration:none}
+  a:hover{text-decoration:underline}
+  header.top{position:sticky;top:0;z-index:20;background:rgba(255,255,255,.92);
+    backdrop-filter:saturate(180%) blur(8px);border-bottom:1px solid var(--line)}
+  .top-in{max-width:1280px;margin:0 auto;padding:10px 20px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+  .logo{width:30px;height:30px;border-radius:8px;color:#fff;display:flex;align-items:center;justify-content:center;
+    font-weight:600;font-size:14px;background:linear-gradient(135deg,#185fa5 0%,#2b82c9 58%,#06b6d4 100%);
+    box-shadow:0 6px 16px rgba(24,95,165,.28)}
+  .brand{font-size:14.5px;font-weight:600}
+  .brand small{display:block;font-weight:400;font-size:11.5px;color:var(--ink-500)}
+  .tag{font-size:11px;padding:1px 7px;border-radius:999px;border:1px solid var(--line);color:var(--brand);
+    background:#eff6fd}
+  .spacer{flex:1}
+  .back{font-size:12.5px;color:var(--ink-500)}
+  .back:hover{color:var(--brand)}
+  .search{width:220px;border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-size:13px;
+    outline:none;background:#fff}
+  .search:focus{border-color:var(--brand-600);box-shadow:0 0 0 3px rgba(43,130,201,.12)}
+  .wrap{max-width:1280px;margin:0 auto;padding:20px;display:grid;grid-template-columns:270px minmax(0,1fr);gap:24px;align-items:start}
+  nav.toc{position:sticky;top:76px;max-height:calc(100vh - 96px);overflow:auto;
+    background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px 10px}
+  nav.toc .t{font-size:11.5px;letter-spacing:.08em;color:var(--ink-500);padding:0 8px 8px}
+  nav.toc a{display:block;padding:4px 8px;border-radius:7px;font-size:13px;color:var(--ink-700);line-height:1.5}
+  nav.toc a.toc-l3{font-size:12.3px;color:var(--ink-500);padding-left:20px}
+  nav.toc a:hover{background:#f1f6fc;color:var(--brand);text-decoration:none}
+  nav.toc a.active{background:#e8f2fd;color:var(--brand);font-weight:600}
+  main{background:#fff;border:1px solid var(--line);border-radius:14px;padding:28px 34px;min-width:0;
+    box-shadow:0 1px 2px rgba(15,23,42,.04)}
+  main h1{font-size:26px;line-height:1.35;margin:0 0 6px}
+  main h2{font-size:19px;margin:34px 0 10px;padding-top:14px;border-top:1px solid var(--line)}
+  main h2:first-of-type{border-top:0;padding-top:0;margin-top:22px}
+  main h3{font-size:15.5px;margin:22px 0 8px;color:#0b3d68}
+  main h4{font-size:14px;margin:18px 0 6px;color:var(--ink-700)}
+  main p{margin:9px 0;color:#1e293b}
+  main ul,main ol{margin:8px 0 8px 4px;padding-left:20px}
+  main li{margin:3px 0}
+  main blockquote{margin:12px 0;padding:10px 14px;background:#f3f8fe;border-left:3px solid var(--brand-600);
+    border-radius:0 8px 8px 0;color:#0b3d68}
+  main blockquote p{margin:0;color:inherit}
+  main code{background:#f1f5f9;border:1px solid #e2e8f0;border-radius:5px;padding:1px 5px;font-size:12.5px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  main pre{background:#0f2032;color:#dbeafe;border-radius:10px;padding:14px 16px;overflow:auto;font-size:12.5px;line-height:1.6}
+  main pre code{background:none;border:0;color:inherit;padding:0}
+  main hr{border:0;border-top:1px solid var(--line);margin:26px 0}
+  .table-wrap{overflow:auto;margin:12px 0;border:1px solid var(--line);border-radius:10px}
+  table{border-collapse:collapse;width:100%;font-size:13px}
+  th,td{border-bottom:1px solid var(--line);padding:7px 10px;text-align:left;vertical-align:top}
+  th{background:#f7fafc;color:var(--ink-700);font-weight:600;white-space:nowrap}
+  tr:last-child td{border-bottom:0}
+  tbody tr:hover{background:#fbfdff}
+  .foot{max-width:1280px;margin:0 auto;padding:0 20px 40px;color:var(--ink-500);font-size:12px}
+  @media print{
+    header.top,nav.toc,.foot{display:none}
+    body{background:#fff;font-size:11pt}
+    .wrap{display:block;padding:0}
+    main{border:0;border-radius:0;box-shadow:none;padding:0}
+    pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f3f4f6!important;color:#111!important}
+    pre code{color:#111!important}
+    h2,h3{break-after:avoid}
+    tr{break-inside:avoid}
+    .table-wrap{overflow:visible}
+  }
+  @media (max-width:1000px){
+    .wrap{grid-template-columns:1fr}
+    nav.toc{position:static;max-height:none;order:2}
+    main{padding:20px}
+    .search{width:100%}
+  }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="top-in">
+    <div class="logo">伴</div>
+    <div class="brand">伴圆AI原生ERP系统<small>AI 伴你，企业信息化管理圆满</small></div>
+    <span class="tag">演示剧本</span>
+    <div class="spacer"></div>
+    <input class="search" id="q" placeholder="搜索目录…" />
+    <a class="back" href="install.html">安装</a>
+    <a class="back" href="manual.html">操作</a>
+    <a class="back" href="demo-flow.html">演示</a>
+    <a class="back" href="dev.html">开发与MCP</a>
+    <a class="back" href="security.html">安全说明</a>
+    <a class="back" href="http://127.0.0.1:3001/login">返回系统</a>
+  </div>
+</header>
+<div class="wrap">
+  <nav class="toc" id="toc">
+    <div class="t">完整演示手册</div>
+    <a class="toc-l2" data-depth="2" href="#一-演示前十分钟">一 演示前十分钟</a>
+<a class="toc-l2" data-depth="2" href="#二-开场一分钟">二 开场一分钟</a>
+<a class="toc-l2" data-depth="2" href="#三-总部经营和销售六分钟">三 总部经营和销售六分钟</a>
+<a class="toc-l2" data-depth="2" href="#四-采购-质量及生产五分钟">四 采购 质量及生产五分钟</a>
+<a class="toc-l2" data-depth="2" href="#五-门店pos和补货六分钟">五 门店POS和补货六分钟</a>
+<a class="toc-l2" data-depth="2" href="#六-线上商城和oms四分钟">六 线上商城和OMS四分钟</a>
+<a class="toc-l2" data-depth="2" href="#七-经销商渠道五分钟">七 经销商渠道五分钟</a>
+<a class="toc-l2" data-depth="2" href="#八-业财追溯三分钟">八 业财追溯三分钟</a>
+<a class="toc-l2" data-depth="2" href="#九-mcp与ai接入五分钟">九 MCP与AI接入五分钟</a>
+<a class="toc-l2" data-depth="2" href="#十-餐饮版差异">十 餐饮版差异</a>
+<a class="toc-l2" data-depth="2" href="#十一-收尾和现场异常">十一 收尾和现场异常</a>
+  </nav>
+  <main id="doc">
+<h1 id="伴圆ai原生erp-演示手册">伴圆AI原生ERP 演示手册</h1>
+<p>本手册供售前、销售及实施人员在本地安装环境完成约35分钟的客户演示。主线是美妆连锁，覆盖总部、门店、线上商城、经销商和 MCP；餐饮另列差异。所有数据为虚构样例，不使用真实客户或消费者资料。</p>
+<h2 id="一-演示前十分钟">一 演示前十分钟</h2>
+<ol><li>按安装手册启动，确认登录页、看板、POS、商城及 MCP 控制台可打开。</li><li>核对美妆版中销售、采购、零售日报、经销商订货均有样本。不要在开场时才重建数据。</li><li>准备总部 admin、门店 store01、经销商 dealer01 三个隔离的浏览器会话。三者密码分别为 12345、123456、123456。</li><li>商城用单独窗口和虚构手机号；避免同一浏览器用户反复登录造成令牌覆盖。</li><li>如需实际演示外部智能体，提前配置客户端并完成只读测试；未配置时只展示接口及调用证据，不表演“AI已经接通”。</li><li>备份演示库，记下本场要处理的真实生成单号。不要在现场输入写死的历史样本编号。</li></ol>
+<p>只做20分钟时，保留销售、POS、商城、经销商、MCP；采购与会计改为简要追溯。做45分钟时补完整采购、质检、生产和财务处理。</p>
+<h2 id="二-开场一分钟">二 开场一分钟</h2>
+<p>建议讲解：“这是一套可以装在企业自己电脑或指定环境中的 ERP 演示系统。业务规则和数据放在 ERP，AI 通过受权限约束的接口查询和执行。我们希望让企业保留业务承载系统，同时能用自己选择的大模型和智能体建设岗位应用。今天先看业务如何运转，再看 AI 如何接入，以及哪些动作必须交给人。”</p>
+<p>补充说明：当前展示的是本地虚构数据，默认不连接真实支付、短信、银行和外部模型。不要承诺客户现场看到的演示即为生产上线完成。</p>
+<h2 id="三-总部经营和销售六分钟">三 总部经营和销售六分钟</h2>
+<p>登录 admin 美妆版，打开经营看板，指出销售、线上、库存、待回款及待办的区别。随后进入销售订单列表，选一张可继续发货的确认单。</p>
+<ol><li>打开详情，指认订货数量、已发和未发。</li><li>小数量部分发货，记录生成的发货单。</li><li>跳到发货及销售发票，说明票和货不是一个状态。</li><li>从应收查看来源及余额，说明收款和核销又是一条链。</li><li>回到订单及库存流水，展示刚才操作留下的状态和来源。</li></ol>
+<p>讲解重点：“真实业务不是只有完成和没完成。订货、发货、开票、收款各有进度，需要分别追溯。”</p>
+<p>成功标准：画面中能看见本次单号、部分发货量和库存变化。不能只讲功能名称而不打开明细。前置条件不足时改用已准备的中间态样本讲解，并明确未在本场执行。</p>
+<h2 id="四-采购-质量及生产五分钟">四 采购 质量及生产五分钟</h2>
+<p>切 scm，进入采购工作台，沿采购订单、收货单、质量中心展示到货与可用的差别。选已审批有剩余量的订单，完成一次部分收货，记录来源关系。</p>
+<p>展示质检结果及后续处置，说明合格、让步和不合格处理会影响库存或退货。再打开生产或委外任务，指明 BOM、领料、完工、入库的衔接；不在同一段演示无准备地跑完复杂制造。</p>
+<p>讲解：“采购不是录一张单结束，到货后能不能用、用了多少料、应付多少都要能追踪。”</p>
+<p>成功标准：订单和到货数量对应，质量处置能追溯到来源。生产及委外若只做功能预览，明确区分与已完成操作。</p>
+<h2 id="五-门店pos和补货六分钟">五 门店POS和补货六分钟</h2>
+<p>先用总部 admin 打开门店运营监控，选日期和门店展示连续营业、日报、班次及渠道差异。随后切到 store01 的独立会话 /pos，画面出现本店身份后再讲门店操作。</p>
+<ol><li>展示本店库存，选有库存商品完成一次小额演示销售。</li><li>指认小票或零售单和本次金额。</li><li>打开交班及核款，按渠道说明账面、实收、差异、责任和缴款。</li><li>展示门店要货，再切总部查看受理和发货；门店按实际到货收货。</li><li>回总部日报核对本店业务。未做当日完整日结时，不声称刚才的收银已进入日结报表。</li></ol>
+<p>讲解：“门店账号看到的是自己店，不是总部后台缩小版。销售、钱款、补货和在途都有独立记录。”</p>
+<p>成功标准：本段全程店长画面与本店数据一致。不要用管理员菜单代替门店角色，更不要在讲门店收银时停留在总部报表。</p>
+<h2 id="六-线上商城和oms四分钟">六 线上商城和OMS四分钟</h2>
+<p>打开 /mall，先出现商品界面再讲线上；用虚构手机号和固定验证码1234完成演示登录。</p>
+<p>选择规格、加入购物车、核对优惠和应付，输入演示收货信息后下单，记录单号。切总部 /oms/orders 查刚刚的订单，打开明细并说明待发货及后续履约。消费者端查看订单状态。</p>
+<p>讲解：“消费者端和总部履约端在同一业务体系中。下单后总部有可处理的单据，而不是只做一个商城外观。”</p>
+<p>必须说明：验证码和支付均为演示方式，未接真实短信和支付。若只查看既有订单，不能把它说成刚刚新建的订单。</p>
+<h2 id="七-经销商渠道五分钟">七 经销商渠道五分钟</h2>
+<p>本段只做美妆版。先用总部 admin 打开经销商总览及渠道中心，展示协议价、信用、返利及对账；再切 dealer01 独立会话，确认画面中显示的是本人订货中心。</p>
+<ol><li>查看本人可订商品及价格，选小数量有货商品。</li><li>提交订单，记下单号。</li><li>切总部销售查该订单，按权限处理确认及后续发货。</li><li>切回经销商刷新本人订单，打开本人对账及余额。</li><li>指出经销商无法进入总部全量看板和他人数据。</li></ol>
+<p>讲解：“总部管政策和履约，经销商看自己的订货和对账。同一套系统用不同身份协作，数据隔离发生在后台，不只是隐藏菜单。”</p>
+<p>成功标准：提经销商时画面已经切到经销商身份；查到本次单号，不用总部经销商总览冒充外部账号界面。</p>
+<h2 id="八-业财追溯三分钟">八 业财追溯三分钟</h2>
+<p>切 finance 或有权限的总部账号，沿应收、收款核销、业务凭证、试算平衡及报表展开。打开一张凭证核对来源，说明它如何与业务关联。</p>
+<p>讲解：“货、票、款和会计分开记录，通过来源和规则衔接。业务系统承载的是可追溯事实，AI 不能随意改这些规则。”</p>
+<p>不要承诺所有客户的科目、税务和复杂核算已匹配。跨自然年度结转当前不作为已完成能力展示。</p>
+<h2 id="九-mcp与ai接入五分钟">九 MCP与AI接入五分钟</h2>
+<p>管理员打开 /system/mcp，按单据矩阵、工具清单、安全边界和调用审计展开。数量以当前页面实时结果为准，不背诵历史工具数。</p>
+<ol><li>发现能力：展示单据类型、状态、动作及工具输入模式。</li><li>只读查询：用事先签发的限权 Agent Token 调 tools/list，再查库存或读取单据。</li><li>写入边界：说明写工具要求幂等键；重复同键同参不应重复记账，同键异参拒绝。</li><li>高危动作：通用单据推进的高危边会拒绝；支持人工确认的领域工具按确认单执行，申请人不能自批，参数不能替换。</li><li>审计留痕：回控制台看刚才调用、结果及失败原因。不要在投屏时展示令牌完整明文。</li></ol>
+<p>讲解：“MCP 是让 AI 找得到工具、看得懂参数并在授权下执行的入口。模型不直接改数据库，工具仍走业务服务和规则。客户可据此建设岗位应用，但具体大模型和智能体客户端需要配置与验证。”</p>
+<p>如果没有配置外部模型，现场运行随包 mcp-readonly-demo 脚本作为接口验证，不能把脚本查询说成大模型自主完成。标准客户端能否直接兼容，以实际联调结果为准。</p>
+<h2 id="十-餐饮版差异">十 餐饮版差异</h2>
+<p>重新登录选择连锁餐饮，沿看板、库存效期、采购到货、质量及门店 POS 演示。突出多门店、短效期及中央供应场景，具体参数以当前样本及配置为准。餐饮不演示经销商链；不要使用 dealer01。</p>
+<p>服装不在此次交付范围，不为了凑全功能切到开发中行业。</p>
+<h2 id="十一-收尾和现场异常">十一 收尾和现场异常</h2>
+<p>收尾建议：“这套系统提供业务承载和开放能力。后续从一两个岗位场景开始，以真实样本验证数据、权限、工具和效果，再由 FDE 陪跑员工建设业务应用；不需要先承诺 AI 全自动接管所有流程。”</p>
+<p>给客户保留安装包与配套手册，并说明默认账号仅供本地演示。约定后续 PoC 的样本、场景、验收和接口边界，不用未核验的节省比例或收益数字。</p>
+<p>现场失败时记录单号和错误，检查角色、行业、状态及库存；优先沿已有合法样本说明规则，不临时改数据库。录制视频按章节分段，每次先切换画面再开始讲解，生成字幕和配音时逐句对齐页面及动作。</p>
+  </main>
+</div>
+<div class="foot">
+  完整演示手册 · 伴圆AI原生ERP系统 · 演示环境说明：本文档中的数据均为虚构样例。
+</div>
+<script>
+  // 目录搜索：只在目录里过滤，不碰正文（正文里有大量"搜索"二字，进去会让人以为坏了）
+  var q = document.getElementById('q')
+  var links = [].slice.call(document.querySelectorAll('#toc a'))
+  q.addEventListener('input', function () {
+    var v = q.value.trim().toLowerCase()
+    links.forEach(function (a) {
+      a.style.display = !v || a.textContent.toLowerCase().indexOf(v) >= 0 ? '' : 'none'
+    })
+  })
+
+  // 滚动高亮：用 IntersectionObserver 而不是 scroll 事件（长文档滚动时前者更省）
+  var hs = [].slice.call(document.querySelectorAll('#doc h2, #doc h3'))
+  var map = new Map()
+  links.forEach(function (a) { map.set(decodeURIComponent(a.getAttribute('href').slice(1)), a) })
+  var io = new IntersectionObserver(function (entries) {
+    entries.forEach(function (e) {
+      if (!e.isIntersecting) return
+      links.forEach(function (a) { a.classList.remove('active') })
+      var a = map.get(e.target.id)
+      if (a) a.classList.add('active')
+    })
+  }, { rootMargin: '-72px 0px -70% 0px', threshold: 0 })
+  hs.forEach(function (h) { io.observe(h) })
+</script>
+</body>
+</html>

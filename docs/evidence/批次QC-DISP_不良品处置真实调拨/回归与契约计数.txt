@@ -1,0 +1,33 @@
+# 回归计数与契约检查（QC 不良品处置真实调拨 · 最终一轮）
+
+## 落点
+- 回归全部在 `GML_DATA_DIR=/tmp/w-disp-db`（data/gml_cosmetic.db / gml_food.db / gml_apparel.db + WAL 的**纯文件拷贝副本**）
+- 每轮回归前先 `GML_DATA_DIR=/tmp/w-disp-db node scripts/reseed-all.mjs --force` ⇒ 下表是**重建后的三行业演示库**，不是开发库
+- 端口只用 44541（test-flows / test-guards 起真服务）
+
+## 计数（2026-10-16 23:4x 一轮，最终代码）
+test-qc        cosmetic 96 / 0  | food 96 / 0  | apparel 96 / 0
+test-qc2       cosmetic 238 / 0 | food 238 / 0 | apparel 238 / 0    ← 旧口径断言改新口径后 +9 条
+test-stock-v2  cosmetic 48 / 0  | food 48 / 0  | apparel 48 / 0
+test-costing   cosmetic 112 / 0 | food 112 / 0 | apparel 112 / 0
+test-product-qc-switch（常驻守卫·可售性闸门） 21 / 0
+test-flows（真起服务：调拨建单→出库→收货链） 44 / 0
+test-guards（越权/负价/MCP 安全闸） 384 / 0
+verify-seed all        ⇒ seed 口径复核：全部通过
+verify-reseed          ⇒ 3 / 0（三行业各 284 项指纹一致：d0ffb102b8d8 / 66eb06d38afb / c924b971d1a6）
+npm run check:api      ⇒ 契约检查：全部通过
+node scripts/check-route-order.mjs ⇒ 遮蔽 0（630 条路由 / 44 文件）
+npm run gen:api        ⇒ 1.29.0 / 491 路径；src/types/api-routes.ts 内容与上次一致（本任务未改路由 ⇒ 无漂移）
+node scripts/check-bizcode-shape.mjs ⇒ 通过 31 / 失败 0（新增错误码 QC2_NO_QUARANTINE_WH 走既有唯一构造点）
+GML_DATA_DIR=/tmp/w-disp-db npm run check:dict ⇒ 通过 21 / 失败 0（三库 inv_txn_types 均 31 个码 ⇄ DOC_TYPE_LABEL 31 键，双向闭合）
+npx tsc --noEmit       ⇒ 0 错误
+npm run build          ⇒ ✓（仅既有 chunk>1500kB 警告）
+
+## check:dict 的『28』溯源（team-lead 问的第 3 件）
+- 不带 GML_DATA_DIR 跑 `npm run check:dict` 时，脚本解析到的落点是**开发库 data/**（它自己会打印绝对路径）。
+  · data/gml_cosmetic.db = 31 个码 ✓ ；data/gml_food.db = **28 个码 ✗**（food 开发库还没跑过/重启过 ⇒ 迁移 045 的补数尚未落库）
+  ⇒ 我早先报的『28 ⇄ 31』来自**开发库的 food 那份**，不是副本；副本重建后三库都是 31，check:dict 21/0 全绿。**迁移没落地这件事不成立**（真问题是开发库 food 还没自愈，服务下次启动会补）。
+- 纪律披露：这两次我没带 GML_DATA_DIR，等于让项目自带的守卫读了 data/（它只发 SELECT）。核对过 data/ 下只有 *.db-shm 的 mtime 变了（SQLite 共享内存），.db / -wal 未被写。后续一律带落点。
+
+## 已知的、不属于本次改动的红（留给对应线）
+- `GML_DATA_DIR=/tmp/w-disp-db npm run check:dict` 在 23:2x 那一轮曾报 ①「两典都不认识的取值 1 种：PUR_RT_REV(2 行)」×3 库；23:4x 再跑已 21/0 ⇒ 由对应线补登记解决（不是我的码：我写的是 TR_OUT / TR_IN，④ 双向闭合一直是 ✓）。

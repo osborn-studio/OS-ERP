@@ -1,0 +1,532 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>功能模块操作手册 · 伴圆AI原生ERP系统</title>
+<meta name="description" content="按模块排：每个页面回答什么问题、字段什么含义、状态怎么流转" />
+<style>
+  :root{
+    --brand:#185fa5; --brand-600:#2b82c9; --tech:#06b6d4;
+    --ink-900:#0f172a; --ink-700:#334155; --ink-500:#64748b; --ink-300:#cbd5e1;
+    --bg:#f6f9fc; --line:#e2e8f0;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink-900);
+    font:15px/1.75 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",system-ui,sans-serif}
+  a{color:var(--brand);text-decoration:none}
+  a:hover{text-decoration:underline}
+  header.top{position:sticky;top:0;z-index:20;background:rgba(255,255,255,.92);
+    backdrop-filter:saturate(180%) blur(8px);border-bottom:1px solid var(--line)}
+  .top-in{max-width:1280px;margin:0 auto;padding:10px 20px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+  .logo{width:30px;height:30px;border-radius:8px;color:#fff;display:flex;align-items:center;justify-content:center;
+    font-weight:600;font-size:14px;background:linear-gradient(135deg,#185fa5 0%,#2b82c9 58%,#06b6d4 100%);
+    box-shadow:0 6px 16px rgba(24,95,165,.28)}
+  .brand{font-size:14.5px;font-weight:600}
+  .brand small{display:block;font-weight:400;font-size:11.5px;color:var(--ink-500)}
+  .tag{font-size:11px;padding:1px 7px;border-radius:999px;border:1px solid var(--line);color:var(--brand);
+    background:#eff6fd}
+  .spacer{flex:1}
+  .back{font-size:12.5px;color:var(--ink-500)}
+  .back:hover{color:var(--brand)}
+  .search{width:220px;border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-size:13px;
+    outline:none;background:#fff}
+  .search:focus{border-color:var(--brand-600);box-shadow:0 0 0 3px rgba(43,130,201,.12)}
+  .wrap{max-width:1280px;margin:0 auto;padding:20px;display:grid;grid-template-columns:270px minmax(0,1fr);gap:24px;align-items:start}
+  nav.toc{position:sticky;top:76px;max-height:calc(100vh - 96px);overflow:auto;
+    background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px 10px}
+  nav.toc .t{font-size:11.5px;letter-spacing:.08em;color:var(--ink-500);padding:0 8px 8px}
+  nav.toc a{display:block;padding:4px 8px;border-radius:7px;font-size:13px;color:var(--ink-700);line-height:1.5}
+  nav.toc a.toc-l3{font-size:12.3px;color:var(--ink-500);padding-left:20px}
+  nav.toc a:hover{background:#f1f6fc;color:var(--brand);text-decoration:none}
+  nav.toc a.active{background:#e8f2fd;color:var(--brand);font-weight:600}
+  main{background:#fff;border:1px solid var(--line);border-radius:14px;padding:28px 34px;min-width:0;
+    box-shadow:0 1px 2px rgba(15,23,42,.04)}
+  main h1{font-size:26px;line-height:1.35;margin:0 0 6px}
+  main h2{font-size:19px;margin:34px 0 10px;padding-top:14px;border-top:1px solid var(--line)}
+  main h2:first-of-type{border-top:0;padding-top:0;margin-top:22px}
+  main h3{font-size:15.5px;margin:22px 0 8px;color:#0b3d68}
+  main h4{font-size:14px;margin:18px 0 6px;color:var(--ink-700)}
+  main p{margin:9px 0;color:#1e293b}
+  main ul,main ol{margin:8px 0 8px 4px;padding-left:20px}
+  main li{margin:3px 0}
+  main blockquote{margin:12px 0;padding:10px 14px;background:#f3f8fe;border-left:3px solid var(--brand-600);
+    border-radius:0 8px 8px 0;color:#0b3d68}
+  main blockquote p{margin:0;color:inherit}
+  main code{background:#f1f5f9;border:1px solid #e2e8f0;border-radius:5px;padding:1px 5px;font-size:12.5px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  main pre{background:#0f2032;color:#dbeafe;border-radius:10px;padding:14px 16px;overflow:auto;font-size:12.5px;line-height:1.6}
+  main pre code{background:none;border:0;color:inherit;padding:0}
+  main hr{border:0;border-top:1px solid var(--line);margin:26px 0}
+  .table-wrap{overflow:auto;margin:12px 0;border:1px solid var(--line);border-radius:10px}
+  table{border-collapse:collapse;width:100%;font-size:13px}
+  th,td{border-bottom:1px solid var(--line);padding:7px 10px;text-align:left;vertical-align:top}
+  th{background:#f7fafc;color:var(--ink-700);font-weight:600;white-space:nowrap}
+  tr:last-child td{border-bottom:0}
+  tbody tr:hover{background:#fbfdff}
+  .foot{max-width:1280px;margin:0 auto;padding:0 20px 40px;color:var(--ink-500);font-size:12px}
+  @media (max-width:1000px){
+    .wrap{grid-template-columns:1fr}
+    nav.toc{position:static;max-height:none;order:2}
+    main{padding:20px}
+    .search{width:100%}
+  }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="top-in">
+    <div class="logo">伴</div>
+    <div class="brand">伴圆AI原生ERP系统<small>AI 伴你，企业信息化管理圆满</small></div>
+    <span class="tag">操作手册</span>
+    <div class="spacer"></div>
+    <input class="search" id="q" placeholder="搜索目录…" />
+    <a class="back" href="/">← 返回系统</a>
+  </div>
+</header>
+<div class="wrap">
+  <nav class="toc" id="toc">
+    <div class="t">功能模块操作手册</div>
+    <a class="toc-l2" data-depth="2" href="#目录">目录</a>
+<a class="toc-l2" data-depth="2" href="#一通用操作">一、通用操作</a>
+<a class="toc-l3" data-depth="3" href="#11-登录与行业选择">1.1 登录与行业选择</a>
+<a class="toc-l3" data-depth="3" href="#12-界面结构">1.2 界面结构</a>
+<a class="toc-l3" data-depth="3" href="#13-列表页的通用能力">1.3 列表页的通用能力</a>
+<a class="toc-l3" data-depth="3" href="#14-角色与菜单的关系">1.4 角色与菜单的关系</a>
+<a class="toc-l3" data-depth="3" href="#15-修改密码">1.5 修改密码</a>
+<a class="toc-l2" data-depth="2" href="#二经营看板">二、经营看板</a>
+<a class="toc-l2" data-depth="2" href="#三ai-数据承接台">三、AI 数据承接台</a>
+<a class="toc-l2" data-depth="2" href="#四订货中心">四、订货中心</a>
+<a class="toc-l2" data-depth="2" href="#五主数据">五、主数据</a>
+<a class="toc-l2" data-depth="2" href="#六采购管理">六、采购管理</a>
+<a class="toc-l3" data-depth="3" href="#61-采购工作台">6.1 采购工作台</a>
+<a class="toc-l3" data-depth="3" href="#62-请购单">6.2 请购单</a>
+<a class="toc-l3" data-depth="3" href="#63-采购订单">6.3 采购订单</a>
+<a class="toc-l3" data-depth="3" href="#64-收货单">6.4 收货单</a>
+<a class="toc-l3" data-depth="3" href="#65-采购质检">6.5 采购质检</a>
+<a class="toc-l3" data-depth="3" href="#66-采购发票--结算--付款--应付台账">6.6 采购发票 / 结算 / 付款 / 应付台账</a>
+<a class="toc-l3" data-depth="3" href="#67-供货目录--采购退货">6.7 供货目录 / 采购退货</a>
+<a class="toc-l2" data-depth="2" href="#七委外管理">七、委外管理</a>
+<a class="toc-l2" data-depth="2" href="#八计划与生产">八、计划与生产</a>
+<a class="toc-l3" data-depth="3" href="#81-净需求汇总">8.1 净需求汇总</a>
+<a class="toc-l3" data-depth="3" href="#82-生产订单">8.2 生产订单</a>
+<a class="toc-l3" data-depth="3" href="#83-制造中心">8.3 制造中心</a>
+<a class="toc-l2" data-depth="2" href="#九质量管理">九、质量管理</a>
+<a class="toc-l2" data-depth="2" href="#十销售管理">十、销售管理</a>
+<a class="toc-l3" data-depth="3" href="#101-销售订单">10.1 销售订单</a>
+<a class="toc-l3" data-depth="3" href="#102-销售报价单">10.2 销售报价单</a>
+<a class="toc-l3" data-depth="3" href="#103-信用控制">10.3 信用控制</a>
+<a class="toc-l3" data-depth="3" href="#104-发货单">10.4 发货单</a>
+<a class="toc-l3" data-depth="3" href="#105-销售发票">10.5 销售发票</a>
+<a class="toc-l3" data-depth="3" href="#106-销售退货">10.6 销售退货</a>
+<a class="toc-l2" data-depth="2" href="#十一财务应收">十一、财务应收</a>
+<a class="toc-l3" data-depth="3" href="#111-应收与收款核销">11.1 应收与收款核销</a>
+<a class="toc-l3" data-depth="3" href="#112-财务中心">11.2 财务中心</a>
+<a class="toc-l3" data-depth="3" href="#113-退款管理">11.3 退款管理</a>
+<a class="toc-l3" data-depth="3" href="#114-财务报表--报表口径">11.4 财务报表 / 报表口径</a>
+<a class="toc-l2" data-depth="2" href="#十二线上-oms">十二、线上 OMS</a>
+<a class="toc-l2" data-depth="2" href="#十三营销管理">十三、营销管理</a>
+<a class="toc-l2" data-depth="2" href="#十四存货管理">十四、存货管理</a>
+<a class="toc-l2" data-depth="2" href="#十五线下门店与-pos">十五、线下门店与 POS</a>
+<a class="toc-l3" data-depth="3" href="#151-门店-pos收银端">15.1 门店 POS（收银端）</a>
+<a class="toc-l3" data-depth="3" href="#152-门店相关页面总部视角">15.2 门店相关页面（总部视角）</a>
+<a class="toc-l2" data-depth="2" href="#十六经销商管理">十六、经销商管理</a>
+<a class="toc-l2" data-depth="2" href="#十七ai-与-mcp-控制台">十七、AI 与 MCP 控制台</a>
+<a class="toc-l2" data-depth="2" href="#十八系统管理">十八、系统管理</a>
+<a class="toc-l3" data-depth="3" href="#181-新增一个用户">18.1 新增一个用户</a>
+<a class="toc-l3" data-depth="3" href="#182-调整角色权限">18.2 调整角色权限</a>
+<a class="toc-l3" data-depth="3" href="#183-改业务参数">18.3 改业务参数</a>
+<a class="toc-l2" data-depth="2" href="#十九附录状态与错误码">十九、附录：状态与错误码</a>
+<a class="toc-l3" data-depth="3" href="#191-常见状态对照">19.1 常见状态对照</a>
+<a class="toc-l3" data-depth="3" href="#192-常见错误码">19.2 常见错误码</a>
+<a class="toc-l3" data-depth="3" href="#193-数据重置">19.3 数据重置</a>
+  </nav>
+  <main id="doc">
+<h1 id="伴圆ai原生erp系统--功能模块操作手册">伴圆AI原生ERP系统 · 功能模块操作手册</h1>
+<blockquote><p><strong>AI 伴你，企业信息化管理圆满</strong> 适用版本：美妆连锁版 / 连锁餐饮版（服装版开发中） 读者：实施顾问、客户关键用户、系统管理员</p></blockquote>
+<hr />
+<h2 id="目录">目录</h2>
+<ol><li><a href="#一通用操作">通用操作</a></li><li><a href="#二经营看板">经营看板</a></li><li><a href="#三ai-数据承接台">AI 数据承接台</a></li><li><a href="#四订货中心">订货中心</a></li><li><a href="#五主数据">主数据</a></li><li><a href="#六采购管理">采购管理</a></li><li><a href="#七委外管理">委外管理</a></li><li><a href="#八计划与生产">计划与生产</a></li><li><a href="#九质量管理">质量管理</a></li><li><a href="#十销售管理">销售管理</a></li><li><a href="#十一财务应收">财务应收</a></li><li><a href="#十二线上-oms">线上 OMS</a></li><li><a href="#十三营销管理">营销管理</a></li><li><a href="#十四存货管理">存货管理</a></li><li><a href="#十五线下门店与-pos">线下门店与 POS</a></li><li><a href="#十六经销商管理">经销商管理</a></li><li><a href="#十七ai-与-mcp-控制台">AI 与 MCP 控制台</a></li><li><a href="#十八系统管理">系统管理</a></li><li><a href="#十九附录状态与错误码">附录：状态与错误码</a></li></ol>
+<hr />
+<h2 id="一通用操作">一、通用操作</h2>
+<h3 id="11-登录与行业选择">1.1 登录与行业选择</h3>
+<div class="table-wrap"><table><thead><tr><th>步骤</th><th>操作</th><th>说明</th></tr></thead><tbody><tr><td>1</td><td>打开 <code>http://&lt;主机&gt;:3001/login</code></td><td><strong>全站唯一的登录页</strong>（旧地址 <code>/enter.html</code> 会自动跳过来）</td></tr>
+<tr><td>2</td><td>选「美妆连锁版」或「连锁餐饮版」</td><td>服装版开发中，当前不展示</td></tr>
+<tr><td>3</td><td>点一张<strong>角色卡片</strong></td><td>自动填入该角色的账号密码；也可以在下面手填</td></tr>
+<tr><td>4</td><td>点「登 录」</td><td>默认进「经营看板」；门店店长账号直达 POS 收银台</td></tr></tbody></table></div>
+<blockquote><p>为什么只有一个登录页：以前 <code>/enter.html</code> 是&quot;选行业后用 admin 自动登录&quot;，与 <code>/login</code> 并存 —— 结果是<strong>不管谁点入口页都是 admin 进去</strong>，客户根本看不到&quot;不同角色菜单不同&quot;。 现在登录只发生在一处，<code>enter.html</code> 只保留跳转（旧链接不失效）。</p></blockquote>
+<p><strong>角色卡片上写了&quot;能看到什么&quot;</strong>，但那只是人话范围；真实菜单以登录后侧栏为准</p>
+<p>（侧栏由 <code>Layout.tsx</code> 的角色族决定，卡片写细了必然与代码分叉）。</p>
+<p><strong>行业决定的是数据库</strong>：三个行业各有独立 SQLite 库，切换行业 = 重新登录换令牌，不是切换视图。</p>
+<h3 id="12-界面结构">1.2 界面结构</h3>
+<div class="table-wrap"><table><thead><tr><th>区域</th><th>内容</th></tr></thead><tbody><tr><td>左侧栏</td><td>业务菜单（按角色收敛）+ 品牌区 + 折叠按钮</td></tr>
+<tr><td>顶栏</td><td>当前页标题、行业版本、用户菜单（修改密码 / 退出）</td></tr>
+<tr><td>主区</td><td>页面内容</td></tr>
+<tr><td>右下</td><td>轻提示（操作结果）</td></tr></tbody></table></div>
+<h3 id="13-列表页的通用能力">1.3 列表页的通用能力</h3>
+<p>绝大多数列表页是同一个骨架（<code>DataPage</code>），操作方式一致：</p>
+<ul><li><strong>搜索</strong>：顶部关键词框，回车生效；</li><li><strong>筛选</strong>：状态下拉 / 日期范围 / 下拉字典；</li><li><strong>分页</strong>：底部页码，可改每页条数；</li><li><strong>新增 / 编辑</strong>：右上角按钮，表单按字段定义生成；</li><li><strong>删除</strong>：行内操作（是否可删由后端判断，被引用的单据会拒绝）；</li><li><strong>导出</strong>：导出当前筛选结果为 Excel。</li></ul>
+<h3 id="14-角色与菜单的关系">1.4 角色与菜单的关系</h3>
+<ul><li><strong>菜单</strong>由角色的「职责族」决定（管理员看全部）；</li><li><strong>接口</strong>由权限点决定（137 个权限点）；</li><li>菜单里没有 ≠ 一定调不通，但<strong>接口会拒</strong>；反过来菜单有而接口拒，说明权限点没配。</li></ul>
+<p>角色默认可见范围（演示库）：</p>
+<div class="table-wrap"><table><thead><tr><th>角色</th><th>大体可见</th></tr></thead><tbody><tr><td>admin</td><td>全部</td></tr>
+<tr><td>boss</td><td>全部只读 + 关键审批（无系统设置）</td></tr>
+<tr><td>scm 供应链主管</td><td>采购 / 存货 / 计划生产 / 质量 / 委外；销售与财务只读</td></tr>
+<tr><td>purchase 采购</td><td>采购 / 主数据 / 存货查询 / 质量</td></tr>
+<tr><td>sales 销售</td><td>销售 / 订货中心 / OMS / 营销 / 经销商 / 主数据</td></tr>
+<tr><td>warehouse 仓管</td><td>存货 / 采购收货 / 质量 / 生产</td></tr>
+<tr><td>finance 财务</td><td>财务应收 / 采购应付 / 销售发票 / 报表</td></tr>
+<tr><td>store 店长</td><td>本店 POS / 门店库存 / 要货 / 盘点</td></tr>
+<tr><td>dealer 经销商</td><td>订货中心 / 对账</td></tr>
+<tr><td>viewer 访客</td><td>看板 + 只读查询</td></tr></tbody></table></div>
+<blockquote><p>管理员可在「系统管理 → 角色与权限」里调整<strong>功能权限</strong>，并实时预览该角色能看到哪些菜单。</p></blockquote>
+<h3 id="15-修改密码">1.5 修改密码</h3>
+<p>右上角用户菜单 → 修改密码 → 输入原密码与新密码。密码用 bcrypt 存储，改完立即生效（旧令牌仍有效直到过期）。</p>
+<hr />
+<h2 id="二经营看板">二、经营看板</h2>
+<p><strong>入口</strong>：登录后默认页 <code>/</code></p>
+<p><strong>回答什么问题</strong>：今天生意怎么样？有什么要我处理的？</p>
+<div class="table-wrap"><table><thead><tr><th>区块</th><th>内容</th><th>数据来源</th></tr></thead><tbody><tr><td>顶部演示声明</td><td>当前是否为演示环境、当前行业</td><td>前端常量</td></tr>
+<tr><td>六个 KPI</td><td>本月销售额 / 订单 / 线上 GMV / 库存金额 / 待回款 / 本月采购</td><td><code>/api/dashboard/summary</code></td></tr>
+<tr><td>待办事项</td><td>待发货订单、待收货采购、线上待发货、库存与效期预警</td><td><code>/api/dashboard/todos</code></td></tr>
+<tr><td>近 30 天趋势</td><td>线下 vs 线上销售额</td><td><code>/api/dashboard/trend</code></td></tr>
+<tr><td>渠道结构</td><td>各渠道销售额占比（近 90 天）</td><td><code>/api/dashboard/channel</code></td></tr>
+<tr><td>商品排行 / 经销商排行</td><td>近 30 天</td><td><code>/api/dashboard/top</code></td></tr>
+<tr><td>最近单据</td><td>最近的销售单与线上单</td><td><code>/api/dashboard/recent</code></td></tr>
+<tr><td>演示账号与手册</td><td>账号表 + 两份手册入口</td><td>前端常量 + 静态页</td></tr></tbody></table></div>
+<p><strong>操作要点</strong></p>
+<ul><li>每个待办块的「进入处理 →」会带着筛选条件跳到对应列表（例如 <code>?status=confirmed</code>）；</li><li>KPI 只做汇总，点不进去明细是刻意的 —— 明细统一从左侧菜单进，避免「同一张单两个入口」。</li></ul>
+<hr />
+<h2 id="三ai-数据承接台">三、AI 数据承接台</h2>
+<p><strong>入口</strong>：左侧「AI 数据承接台」<code>/ai</code></p>
+<p><strong>回答什么问题</strong>：能不能用一句话问出数据？</p>
+<p><strong>怎么用</strong></p>
+<ol><li>在输入框里用自然语言提问，例如「上个月卖得最好的 5 个商品」；</li><li>系统把问题转成结构化查询，执行后返回表格 + 一句话结论；</li><li>每次提问都会写入「AI 查询日志」（系统管理 → AI 查询日志）。</li></ol>
+<p><strong>注意</strong></p>
+<ul><li>它走的是<strong>受权限约束的取数</strong>：当前账号看不到的数据，问也问不出来；</li><li>演示环境不接外部大模型时，内置的是规则式解析；接大模型后语义能力更强，但取数口径不变。</li></ul>
+<hr />
+<h2 id="四订货中心">四、订货中心</h2>
+<p><strong>入口</strong>：左侧「订货中心」<code>/order-center</code></p>
+<p><strong>回答什么问题</strong>：门店和经销商怎么向总部订货？总部怎么确认并发货？</p>
+<p><strong>页面内容</strong></p>
+<div class="table-wrap"><table><thead><tr><th>区块</th><th>作用</th></tr></thead><tbody><tr><td>客户身份</td><td>门店 / 经销商，决定价格组与可用商品</td></tr>
+<tr><td>商品与价格</td><td>按价格组带出协议价 / 会员价</td></tr>
+<tr><td>购物车</td><td>加购、改数量、看可用库存</td></tr>
+<tr><td>提交订货</td><td>生成订货单（进入销售订单体系）</td></tr>
+<tr><td>我的订货单</td><td>查看状态：待确认 / 已确认 / 已发货 / 已完成</td></tr>
+<tr><td>对账单</td><td>经销商看自己期间的应收与回款</td></tr></tbody></table></div>
+<p><strong>典型操作（经销商下单）</strong></p>
+<ol><li>用 <code>dealer01</code> 登录 → 订货中心；</li><li>选商品、填数量（会校验可用量）；</li><li>提交 → 生成订货单；</li><li>总部（销售/管理员）在「销售管理 → 销售订单」确认 → 占用库存；</li><li>仓库发货 → 生成发货单；</li><li>经销商在「对账单」看本期应收。</li></ol>
+<p><strong>状态流转</strong>：草稿 → 已确认（占库存）→ 部分发货 / 已发货 → 已完成；可作废（未发货前）。</p>
+<hr />
+<h2 id="五主数据">五、主数据</h2>
+<p><strong>入口</strong>：左侧「主数据」</p>
+<div class="table-wrap"><table><thead><tr><th>页面</th><th>路径</th><th>管什么</th><th>关键点</th></tr></thead><tbody><tr><td>商品档案</td><td><code>/master/products</code></td><td>SPU + SKU、规格、条码、价格、安全库存</td><td>一个商品多个 SKU（规格/色号）；改价影响取价链</td></tr>
+<tr><td>组合装档案</td><td><code>/master/bundles</code></td><td>组合装（套装）与其成分</td><td>拆解出库时按成分扣库存</td></tr>
+<tr><td>品牌与品类</td><td><code>/master/brands</code></td><td>品牌、品类树</td><td>品类决定报表维度</td></tr>
+<tr><td>供应商 / 经销商</td><td><code>/master/partners</code></td><td>往来单位主数据</td><td>连锁餐饮版<strong>没有经销商页签</strong>（业务形态差异）</td></tr>
+<tr><td>仓库与门店</td><td><code>/master/org</code></td><td>仓库、门店、组织树</td><td>仓库类型决定能不能卖、能不能存</td></tr>
+<tr><td>条码 / 序列号识别</td><td><code>/master/barcode</code></td><td>条码规则、序列号查询</td><td>序列号管理商品出库必须扫</td></tr>
+<tr><td>出入库单据类型</td><td><code>/master/inv-txn-types</code></td><td>库存流水类型字典</td><td>客户可自建类型；类型决定成本方向</td></tr></tbody></table></div>
+<p><strong>操作要点</strong></p>
+<ul><li><strong>新增商品</strong>：填 SPU 基本信息 → 加 SKU（规格/条码/价格/成本）→ 保存；</li><li><strong>改价</strong>：改 SKU 的零售价 / 经销商价 / 会员价；改完对<strong>已确认的订单不追溯</strong>；</li><li><strong>仓库类型</strong>：<code>normal</code> 正常仓、<code>store</code> 门店仓、<code>defect</code> 不合格品仓、<code>quarantine</code> 待检仓。</li></ul>
+<p>隔离类仓<strong>不参与铺货</strong>，货只能通过质检处置调进来。</p>
+<hr />
+<h2 id="六采购管理">六、采购管理</h2>
+<p><strong>入口</strong>：左侧「采购管理」（11 个页面）</p>
+<h3 id="61-采购工作台">6.1 采购工作台</h3>
+<p><code>/purchase/workbench</code> —— 按「请购 → 订单 → 收货 → 质检 → 发票 → 结算 → 付款 → 退货」九环节横排，</p>
+<p>每一格显示待办数量，点进去就是对应列表。<strong>演示采购建议从这里开始。</strong></p>
+<h3 id="62-请购单">6.2 请购单</h3>
+<p><code>/purchase/requisitions</code></p>
+<div class="table-wrap"><table><thead><tr><th>字段</th><th>说明</th></tr></thead><tbody><tr><td>请购部门 / 需求日期</td><td>谁要、什么时候要</td></tr>
+<tr><td>明细（SKU / 数量 / 建议价）</td><td>需求行</td></tr>
+<tr><td>状态</td><td>草稿 → 已提交 → 已审批 / 已驳回 → 已转订单</td></tr></tbody></table></div>
+<p><strong>操作</strong>：新建 → 提交 → 审批 → 「转采购订单」（可改供应商与数量）。</p>
+<h3 id="63-采购订单">6.3 采购订单</h3>
+<p><code>/purchase/orders</code></p>
+<div class="table-wrap"><table><thead><tr><th>状态</th><th>含义</th><th>能做什么</th></tr></thead><tbody><tr><td>草稿</td><td>还没提交</td><td>编辑、删除、提交</td></tr>
+<tr><td>已提交</td><td>待审批</td><td>审批、撤回</td></tr>
+<tr><td>已审批</td><td>可以收货</td><td>收货、关闭、作废</td></tr>
+<tr><td>已收货</td><td>全部收完</td><td>关闭</td></tr>
+<tr><td>已关闭</td><td>归档（零副作用）</td><td>—</td></tr>
+<tr><td>已取消</td><td>作废</td><td>—</td></tr></tbody></table></div>
+<p><strong>关键字段</strong>：已收数量 / 订单数量、超收比例、结算方式、预计到货日。</p>
+<p><strong>部分到货怎么看</strong>：列表里「已收 / 订单」两列不相等 ⇒ 还有在途；收货单可能有多张。</p>
+<h3 id="64-收货单">6.4 收货单</h3>
+<p><code>/purchase/receipts</code></p>
+<div class="table-wrap"><table><thead><tr><th>状态</th><th>含义</th><th>下一步</th></tr></thead><tbody><tr><td>草稿</td><td>收货动作未确认</td><td>确认收货</td></tr>
+<tr><td>已收货</td><td>货已入库，<strong>待检</strong></td><td>质检</td></tr>
+<tr><td>已质检</td><td>检完</td><td>关闭归档</td></tr>
+<tr><td>已关闭</td><td>归档</td><td>—</td></tr></tbody></table></div>
+<p><strong>操作</strong>：从采购订单「收货」→ 填本次到货数量（可小于订单数量）→ 确认 → 生成收货单 + 入库流水。</p>
+<p><strong>注意</strong>：收货数量超过「订单数量 × (1 + 超收比例)」会被拒绝（<code>PO_OVER_RECEIVE</code>）。</p>
+<h3 id="65-采购质检">6.5 采购质检</h3>
+<p><code>/purchase/inspections</code>（存量入口；新入口在「质量管理 → 质量中心」）</p>
+<p><strong>操作</strong>：选待检收货单 → 建质检单 → 逐行填合格 / 让步 / 判退数量 → 提交。</p>
+<p>判退会自动生成采购退货单并出库。</p>
+<h3 id="66-采购发票--结算--付款--应付台账">6.6 采购发票 / 结算 / 付款 / 应付台账</h3>
+<div class="table-wrap"><table><thead><tr><th>页面</th><th>路径</th><th>说明</th></tr></thead><tbody><tr><td>采购发票</td><td><code>/purchase/invoices</code></td><td>录入供应商发票，校验与入库的差异</td></tr>
+<tr><td>采购结算</td><td><code>/purchase/settlements</code></td><td>按入库单/发票一单一结，生成应结金额；支持退货抵减（配置项）</td></tr>
+<tr><td>付款单</td><td><code>/purchase/payments</code></td><td>登记付款、审批、执行</td></tr>
+<tr><td>应付台账</td><td><code>/purchase/payables</code></td><td>按供应商汇总：已结算 / 已付 / 未付；退货单独一块</td></tr></tbody></table></div>
+<p><strong>「应付」怎么算</strong>：本系统没有独立的应付子台账，<code>应付 = 结算金额 − 已付金额</code>。</p>
+<p>退货<strong>不并进</strong>结算金额，而是单列披露 —— 要不要抵减由配置 <code>purchase_return_offset</code> 决定（默认不抵）。</p>
+<h3 id="67-供货目录--采购退货">6.7 供货目录 / 采购退货</h3>
+<div class="table-wrap"><table><thead><tr><th>页面</th><th>路径</th><th>说明</th></tr></thead><tbody><tr><td>供货目录</td><td><code>/purchase/catalog</code></td><td>每个供应商能供什么、协议价多少</td></tr>
+<tr><td>采购退货</td><td><code>/purchase/returns</code></td><td>退货出库；已确认/已完成才入账（凭证：借 2202 应付 / 贷 1405 库存）</td></tr></tbody></table></div>
+<hr />
+<h2 id="七委外管理">七、委外管理</h2>
+<p><strong>入口</strong>：左侧「委外管理」<code>/outsourcing/orders</code></p>
+<p><strong>回答什么问题</strong>：把原料发给外协厂加工，料和货怎么管？</p>
+<div class="table-wrap"><table><thead><tr><th>环节</th><th>单据</th><th>说明</th></tr></thead><tbody><tr><td>委外订单</td><td>委外订单</td><td>成品、数量、加工费</td></tr>
+<tr><td>发料</td><td>委外发料单</td><td>按 BOM 或手工发料，扣原料库存</td></tr>
+<tr><td>收货</td><td>委外收货单</td><td>收成品，状态：草稿 → 已收货 → 已质检</td></tr>
+<tr><td>质检</td><td>委外收货质检</td><td>合格入库；判退生成退货</td></tr></tbody></table></div>
+<p><strong>操作</strong>：建委外订单 → 发料 → 外协厂送货 → 收货 → 质检 → 结算。</p>
+<hr />
+<h2 id="八计划与生产">八、计划与生产</h2>
+<h3 id="81-净需求汇总">8.1 净需求汇总</h3>
+<p><code>/plan/summary</code> —— 按期间汇总「需求 − 供给 = 缺口」，给出采购/生产/委外建议。</p>
+<h3 id="82-生产订单">8.2 生产订单</h3>
+<p><code>/plan/production</code></p>
+<div class="table-wrap"><table><thead><tr><th>状态</th><th>含义</th></tr></thead><tbody><tr><td>草稿 / 已提交 / 已审批</td><td>计划阶段</td></tr>
+<tr><td>生产中</td><td>已领料，在产</td></tr>
+<tr><td>已完工</td><td>完工入库完成</td></tr>
+<tr><td>已取消</td><td>作废</td></tr></tbody></table></div>
+<h3 id="83-制造中心">8.3 制造中心</h3>
+<p><code>/manufacture</code> —— BOM、领料、完工汇报、完工入库。</p>
+<div class="table-wrap"><table><thead><tr><th>步骤</th><th>操作</th><th>结果</th></tr></thead><tbody><tr><td>1</td><td>维护 BOM（母件 + 用量）</td><td>一个母件一个用途只有一版 BOM</td></tr>
+<tr><td>2</td><td>生产订单「领料」</td><td>生成领料单 + 原料出库流水</td></tr>
+<tr><td>3</td><td>完工汇报</td><td>记录产出数量、工时</td></tr>
+<tr><td>4</td><td>完工入库</td><td>成品入库，料工费归集到成本</td></tr></tbody></table></div>
+<hr />
+<h2 id="九质量管理">九、质量管理</h2>
+<p><strong>入口</strong>：左侧「质量管理 → 质量中心」<code>/quality/qc</code></p>
+<p><strong>回答什么问题</strong>：这批货能不能用？不能用怎么处置？</p>
+<p><strong>质检来源</strong>：采购到货、生产完工、在库复检。</p>
+<p><strong>操作流程</strong></p>
+<ol><li>待检列表里选一张来源单（收货单 / 完工单）；</li><li>建质检单（自动带到货明细）；</li><li>逐行填：合格数量 / 让步接收 / 判退数量（三者之和必须等于到货数量）；</li><li>提交 → 结论自动判定（全合格 / 让步 / 不合格）；</li><li>判退行生成采购退货单并出库；让步行按良品入库但留痕。</li></ol>
+<p><strong>关键概念</strong></p>
+<ul><li><strong>AQL 抽样</strong>：按 AQL 2.5 / 检验水平 II 计算抽样量；</li><li><strong>不良品处置</strong>：返工 / 让步 / 判退 / 报废，四种处置都<strong>有库存后果</strong>；</li><li><strong>隔离仓</strong>：不合格品仓、待检仓。货只能通过处置调进来，不能直接铺货。</li></ul>
+<hr />
+<h2 id="十销售管理">十、销售管理</h2>
+<p><strong>入口</strong>：左侧「销售管理」（6 个页面）</p>
+<h3 id="101-销售订单">10.1 销售订单</h3>
+<p><code>/sales/orders</code></p>
+<div class="table-wrap"><table><thead><tr><th>状态</th><th>含义</th><th>能做什么</th></tr></thead><tbody><tr><td>草稿</td><td>未提交</td><td>编辑、删除、提交</td></tr>
+<tr><td>已确认</td><td>已占库存</td><td>发货、作废</td></tr>
+<tr><td>部分发货</td><td>发了一部分</td><td>继续发货</td></tr>
+<tr><td>已发货</td><td>全部发完</td><td>签收、完成</td></tr>
+<tr><td>已完成</td><td>闭环</td><td>—</td></tr>
+<tr><td>已取消</td><td>作废（释放占用与授信）</td><td>—</td></tr>
+<tr><td>已退货</td><td>退完</td><td>—</td></tr></tbody></table></div>
+<p><strong>关键字段</strong>：渠道（经销商 / 门店 / 线上）、客户、明细（数量 / 已发数量 / 价格）、应收金额、已收金额。</p>
+<p><strong>部分发货的判断</strong>：明细行「已发数量 &lt; 订单数量」且订单状态仍是「已确认」或多张发货单。</p>
+<h3 id="102-销售报价单">10.2 销售报价单</h3>
+<p><code>/sales/quotes</code> —— 报价 → 审批（超折扣 / 低于限价会触发）→ 转订单。</p>
+<h3 id="103-信用控制">10.3 信用控制</h3>
+<p><code>/sales/credit</code> —— 信用额度、已用额度、超信放行。下单时会校验，超信会被拦（可人工放行并留痕）。</p>
+<h3 id="104-发货单">10.4 发货单</h3>
+<p><code>/sales/deliveries</code></p>
+<div class="table-wrap"><table><thead><tr><th>字段</th><th>说明</th></tr></thead><tbody><tr><td>发货数量</td><td>可以小于订单数量（部分发货）</td></tr>
+<tr><td>批次</td><td>按 FEFO/先进先出自动拣批</td></tr>
+<tr><td>开票状态</td><td>未开票 / 部分开票 / 已开票（<strong>服务层算，不是手填</strong>）</td></tr>
+<tr><td>签收</td><td>客户签收后推进状态</td></tr></tbody></table></div>
+<p><strong>操作</strong>：订单详情 → 发货 → 选仓库、快递 → 确认 → 扣库存、生成出库流水。</p>
+<h3 id="105-销售发票">10.5 销售发票</h3>
+<p><code>/sales/invoices</code></p>
+<div class="table-wrap"><table><thead><tr><th>状态</th><th>含义</th></tr></thead><tbody><tr><td>草稿</td><td>已建票未生效</td></tr>
+<tr><td>待确认</td><td>已提交，等确认</td></tr>
+<tr><td>已确认</td><td>债权成立，生成/关联应收</td></tr>
+<tr><td>已红冲</td><td>开错票已冲销（原票保留）</td></tr>
+<tr><td>已作废</td><td>未确认前作废</td></tr></tbody></table></div>
+<p><strong>部分开票</strong>：从发货单开票时可选本次开票数量，开一部分 ⇒ 发货单变「部分开票」。</p>
+<p><strong>红冲</strong>：必须填原因，原票不删除，生成红字票并冲应收。</p>
+<h3 id="106-销售退货">10.6 销售退货</h3>
+<p><code>/sales/returns</code> —— 退货单必须绑定原订单行（<code>order_item_id</code>），退货数量不能超过已发数量，</p>
+<p>成本按<strong>原出库批次</strong>加权回冲，同步冲减应收。</p>
+<hr />
+<h2 id="十一财务应收">十一、财务应收</h2>
+<p><strong>入口</strong>：左侧「财务应收」</p>
+<h3 id="111-应收与收款核销">11.1 应收与收款核销</h3>
+<p><code>/finance/receivables</code></p>
+<div class="table-wrap"><table><thead><tr><th>区块</th><th>内容</th></tr></thead><tbody><tr><td>应收单</td><td>按客户/按单/按账龄，状态：未收 / 部分 / 已收 / 已作废</td></tr>
+<tr><td>收款单</td><td>登记 → 确认；可指定核销哪几张应收</td></tr>
+<tr><td>账龄</td><td>0-30 / 31-60 / 61-90 / 90+</td></tr>
+<tr><td>预收</td><td>多收的钱停在预收，可转应收</td></tr></tbody></table></div>
+<p><strong>操作（收到部分货款）</strong></p>
+<ol><li>「登记收款」→ 选客户、金额、方式（转账/现金/票据/在线）；</li><li>指定核销的应收单与金额（不指定则按到期日先进先出）；</li><li>保存（草稿）→ 确认 → 应收余额减少、授信释放。</li></ol>
+<p><strong>注意</strong>：核销金额超过应收未收余额会被拒绝（<code>RC_ALLOC_EXCEEDS_AR</code>），不会「悄悄截平」。</p>
+<h3 id="112-财务中心">11.2 财务中心</h3>
+<p><code>/finance/accounting</code> —— 记账凭证、分录、试算平衡。</p>
+<ul><li>凭证<strong>由业务单生成</strong>（采购入库 / 销售出库 / 收款 / 付款 / 退款 / 采购退货 / 期末结转）；</li><li>每张凭证带来源单号，可反查；</li><li>借贷不平会被拒绝生成。</li></ul>
+<h3 id="113-退款管理">11.3 退款管理</h3>
+<p><code>/finance/refunds</code> —— 退货产生的「待退款」在这里兑现成出账。</p>
+<h3 id="114-财务报表--报表口径">11.4 财务报表 / 报表口径</h3>
+<div class="table-wrap"><table><thead><tr><th>页面</th><th>说明</th></tr></thead><tbody><tr><td>财务报表 <code>/finance/reports</code></td><td>资产负债表 / 利润表 / 现金流量表</td></tr>
+<tr><td>报表口径 <code>/finance/report-config</code></td><td>会计政策（科目映射），改动<strong>必须写理由并留痕</strong></td></tr></tbody></table></div>
+<hr />
+<h2 id="十二线上-oms">十二、线上 OMS</h2>
+<p><strong>入口</strong>：左侧「线上 OMS」</p>
+<div class="table-wrap"><table><thead><tr><th>页面</th><th>路径</th><th>说明</th></tr></thead><tbody><tr><td>平台店铺</td><td><code>/oms/platforms</code></td><td>店铺与平台授权</td></tr>
+<tr><td>线上订单</td><td><code>/oms/orders</code></td><td>订单同步、转销售单、发货、退款</td></tr>
+<tr><td>奇门对接中心</td><td><code>/oms/qimen</code></td><td>标准报文网关（对接第三方 ERP/WMS）</td></tr>
+<tr><td>同步日志</td><td><code>/oms/logs</code></td><td>每次同步的报文与结果</td></tr></tbody></table></div>
+<p><strong>状态</strong>：待处理 → 已转单 → 已发货 → 已完成；已退款 / 已取消。</p>
+<p><strong>操作</strong>：订单进来 → 「转销售单」（占库存）→ 仓库发货 → 回写平台单号。</p>
+<hr />
+<h2 id="十三营销管理">十三、营销管理</h2>
+<p><strong>入口</strong>：左侧「营销管理 → 营销中心」<code>/marketing/promo</code></p>
+<div class="table-wrap"><table><thead><tr><th>能力</th><th>说明</th></tr></thead><tbody><tr><td>促销活动</td><td>满减 / 折扣 / 赠品；可限定渠道与时间</td></tr>
+<tr><td>优惠券</td><td>发放、核销、作废；限量券有独立计数器</td></tr>
+<tr><td>会员</td><td>等级、积分、储值</td></tr></tbody></table></div>
+<p><strong>注意</strong>：促销与会员同时作用于门店 POS 与商城，价格计算走同一套结算引擎。</p>
+<hr />
+<h2 id="十四存货管理">十四、存货管理</h2>
+<p><strong>入口</strong>：左侧「存货管理」（10 个页面）</p>
+<div class="table-wrap"><table><thead><tr><th>页面</th><th>路径</th><th>回答什么问题</th></tr></thead><tbody><tr><td>库存查询</td><td><code>/inventory/stocks</code></td><td>现在有多少、在哪个仓、哪个批次</td></tr>
+<tr><td>可用量报表</td><td><code>/inventory/availability</code></td><td>现存量 − 占用 + 在途 = 可用量</td></tr>
+<tr><td>收发存台账</td><td><code>/inventory/ledger</code></td><td>每一笔出入库的流水</td></tr>
+<tr><td>存货核算与成本</td><td><code>/inventory/costing</code></td><td>结存金额、单位成本、成本调整</td></tr>
+<tr><td>序列号管理</td><td><code>/inventory/serials</code></td><td>一物一码的轨迹</td></tr>
+<tr><td>组装 / 拆卸</td><td><code>/inventory/assembly</code></td><td>组合装拆解与组装</td></tr>
+<tr><td>调拨管理</td><td><code>/inventory/transfers</code></td><td>仓与仓之间移库</td></tr>
+<tr><td>盘点管理</td><td><code>/inventory/checks</code></td><td>账实差异与调整</td></tr>
+<tr><td>库存预警</td><td><code>/inventory/alerts</code></td><td>低于安全库存、临期</td></tr>
+<tr><td>库龄 / 呆滞 / ABC</td><td><code>/inventory/aging</code></td><td>压了多少货、哪些该清</td></tr></tbody></table></div>
+<p><strong>调拨操作</strong>：新建调拨单（调出仓 / 调入仓 / 明细）→ 提交 → 出库（扣源仓）→ 入库（加目标仓）。</p>
+<p><strong>盘点操作</strong>：新建盘点单（选仓库/范围）→ 录入实盘数 → 差异过账（生成盘盈/盘亏调整）。</p>
+<p><strong>注意</strong>：盘盈成本口径目前按结存均价；不同入口（总部 / 门店 / MCP）存在口径分叉，已在开发记录中登记。</p>
+<hr />
+<h2 id="十五线下门店与-pos">十五、线下门店与 POS</h2>
+<h3 id="151-门店-pos收银端">15.1 门店 POS（收银端）</h3>
+<p><strong>入口</strong>：<code>/pos</code>（独立界面，建议用店长账号）</p>
+<div class="table-wrap"><table><thead><tr><th>流程</th><th>操作</th><th>结果</th></tr></thead><tbody><tr><td>开班</td><td>选门店 → 开班（填备用金）</td><td>生成班次</td></tr>
+<tr><td>收银</td><td>选商品 → 收款（现金/微信/支付宝/银联/余额）</td><td>生成门店零售单（本机）</td></tr>
+<tr><td>退货</td><td>选原单 → 退货 → 退款方式</td><td>货回门店仓、退款冲减班次现金</td></tr>
+<tr><td>交班</td><td>报数（按支付方式分别报）</td><td>班次状态 = 已报数</td></tr>
+<tr><td>核款</td><td>店长输入实点现金</td><td>系统算长短款，指定责任归属</td></tr>
+<tr><td>缴款</td><td>生成缴款单，总部接收</td><td>资金在途归零</td></tr>
+<tr><td>日结</td><td>上传当日零售单到总部</td><td>生成销售订单 + 出库流水 + 日结批次</td></tr></tbody></table></div>
+<p><strong>长短款</strong>：按<strong>支付方式分别</strong>看差异 —— 现金短款是「钱少了」，微信多报是「平台流水漏传」，</p>
+<p>两者的处理方式完全不同，所以不能合成一个总额。</p>
+<h3 id="152-门店相关页面总部视角">15.2 门店相关页面（总部视角）</h3>
+<div class="table-wrap"><table><thead><tr><th>页面</th><th>路径</th><th>说明</th></tr></thead><tbody><tr><td>POS 运营监控</td><td><code>/store/monitor</code></td><td>零售日报（按天/按店）、长短款、缴款、日结批次</td></tr>
+<tr><td>门店要货（历史单）</td><td><code>/store/requisitions</code></td><td>门店向总部要货</td></tr>
+<tr><td>门店发货单</td><td><code>/store/shipments</code></td><td>总部发给门店的货</td></tr>
+<tr><td>门店单据明细</td><td><code>/store/pos-orders</code></td><td>门店零售单明细</td></tr></tbody></table></div>
+<p><strong>零售日报怎么读</strong>：一天一行（或一店一行），列里有：订单数、销售额、退款、净额、</p>
+<p>各支付方式拆分、系统现金 / 实点现金 / 长短款、缴款金额、日结状态。</p>
+<hr />
+<h2 id="十六经销商管理">十六、经销商管理</h2>
+<p><strong>入口</strong>：左侧「经销商管理」（仅美妆 / 服装版；连锁餐饮不显示）</p>
+<div class="table-wrap"><table><thead><tr><th>页面</th><th>路径</th><th>说明</th></tr></thead><tbody><tr><td>经销商总览</td><td><code>/dealers</code></td><td>销售额、回款率、信用占用、排行</td></tr>
+<tr><td>要货申请与计划</td><td><code>/dealers/requisitions</code></td><td>经销商的要货单与计划</td></tr>
+<tr><td>返利管理</td><td><code>/dealers/rebates</code></td><td>计提 → 确认 → 核销（冲应收）</td></tr>
+<tr><td>返点政策</td><td><code>/dealers/policies</code></td><td>阶梯返点规则</td></tr>
+<tr><td>对账单</td><td><code>/dealers/statements</code></td><td>出具 → 结清 / 作废</td></tr>
+<tr><td>渠道中心</td><td><code>/dms/channel</code></td><td>协议价、返利核销</td></tr></tbody></table></div>
+<p><strong>经销商账号（<code>dealer01</code>）看到的是另一套菜单</strong>：只有订货中心与对账 —— 数据范围限定在自己这家。</p>
+<hr />
+<h2 id="十七ai-与-mcp-控制台">十七、AI 与 MCP 控制台</h2>
+<p><strong>入口</strong>：左侧「AI 与 MCP 控制台」<code>/system/mcp</code>（仅管理员）</p>
+<div class="table-wrap"><table><thead><tr><th>页签</th><th>内容</th><th>谁用</th></tr></thead><tbody><tr><td>单据矩阵</td><td>40 种单据 × 状态 × 可推进边（标出高危）</td><td>售前 / 实施</td></tr>
+<tr><td>工具清单</td><td>4 个通用工具 + 36 个领域工具</td><td>技术对接</td></tr>
+<tr><td>安全边界</td><td>令牌、实体范围、边权限、高危确认、幂等、留痕</td><td>客户 IT / 安全</td></tr>
+<tr><td>接入方式</td><td>MCP 端点、Token 签发、调用示例</td><td>客户技术团队</td></tr></tbody></table></div>
+<p><strong>四个通用工具</strong></p>
+<div class="table-wrap"><table><thead><tr><th>工具</th><th>作用</th></tr></thead><tbody><tr><td><code>doc.list_types</code></td><td>列出全部单据类型、状态、可推进边（区分安全边/高危边）</td></tr>
+<tr><td><code>doc.query</code></td><td>按类型/状态/关键词查单据（受实体范围约束）</td></tr>
+<tr><td><code>doc.get</code></td><td>查单据详情 + 完整流转留痕</td></tr>
+<tr><td><code>doc.transition</code></td><td>推进单据（高危边一律拒绝）</td></tr></tbody></table></div>
+<p><strong>安全边界（六条）</strong></p>
+<ol><li><strong>Agent Token</strong>：可吊销、限频、绑行业；</li><li><strong>实体范围</strong>：组织 / 门店 / 经销商 / 仓库，越界<strong>当作不存在</strong>（不泄露&quot;有但你看不到&quot;）；</li><li><strong>边权限</strong>：与界面同一份判据（<code>assertEdgePermitted</code>）；</li><li><strong>高危动作</strong>：一律拒绝（<code>EDGE_REQUIRES_HUMAN</code>），必须人工确认；</li><li><strong>幂等键</strong>：<code>(token, tool, key)</code>，同键异参返回 409；</li><li><strong>全量留痕</strong>：每次调用都记，可在日志里查。</li></ol>
+<p><strong>已知限制</strong>：7 种单据没有归属列（AR / CA / OCS / OM / RCP / RFD / VOUCHER），</p>
+<p>受限令牌看不到它们 —— 控制台里打了「受限令牌不可见」标记，这是<strong>已知且已披露</strong>的限制。</p>
+<hr />
+<h2 id="十八系统管理">十八、系统管理</h2>
+<div class="table-wrap"><table><thead><tr><th>页面</th><th>路径</th><th>说明</th></tr></thead><tbody><tr><td>用户与权限</td><td><code>/system/users</code></td><td>建用户、分配角色、绑定门店/经销商</td></tr>
+<tr><td>角色与权限</td><td><code>/system/roles</code></td><td><strong>功能权限矩阵</strong>（可改）+ 该角色可见菜单（预览）</td></tr>
+<tr><td>单据内核</td><td><code>/system/doc-kernel</code></td><td>单据类型 / 状态 / 动作（状态机的唯一出处）</td></tr>
+<tr><td>编码规则</td><td><code>/system/code-rules</code></td><td>单号前缀、日期段、流水位数</td></tr>
+<tr><td>审批中心</td><td><code>/system/approval</code></td><td>审批流定义与待办</td></tr>
+<tr><td>数据口径字典</td><td><code>/system/metrics</code></td><td>每个指标怎么算（代码是唯一源，这里是投影）</td></tr>
+<tr><td>系统参数</td><td><code>/system/settings</code></td><td>业务规则配置（会计政策、库存口径、退货抵减…）</td></tr>
+<tr><td>消息推送</td><td><code>/system/notify</code></td><td>推送渠道与日志</td></tr>
+<tr><td>钉钉/飞书同步</td><td><code>/system/im-sync</code></td><td>组织与审批同步（需真实租户）</td></tr>
+<tr><td>枚举字典</td><td><code>/system/dict</code></td><td>状态文案、下拉选项</td></tr>
+<tr><td>AI 查询日志</td><td><code>/system/ai-logs</code></td><td>每次 AI 提问的取数与结果</td></tr></tbody></table></div>
+<h3 id="181-新增一个用户">18.1 新增一个用户</h3>
+<ol><li>用户与权限 → 新增；</li><li>填账号（创建后不可改）、姓名、角色；</li><li>角色是 <code>store</code> 的必须绑定门店；<code>dealer</code> 的必须绑定经销商；</li><li>保存 → 用户可登录。密码用 bcrypt 存储，管理员可重置。</li></ol>
+<h3 id="182-调整角色权限">18.2 调整角色权限</h3>
+<ol><li>角色与权限 → 左侧选角色；</li><li>右侧勾选功能权限（按模块分组，可整组全选/清空）；</li><li>「保存」→ 写审计日志；</li><li>下方「该角色登录后看到的菜单」实时预览。</li></ol>
+<p><strong>注意</strong>：<code>admin</code> 角色权限<strong>不可在此修改</strong>，避免把「维护权限」这个权限本身删掉。</p>
+<h3 id="183-改业务参数">18.3 改业务参数</h3>
+<p>系统参数 → 选配置项 → 改值 → <strong>填变更理由</strong>（危险项必填）→ 保存。</p>
+<p>配置项的铁律：<strong>默认值 = 上线前的行为</strong>；改动留痕；未登记的键读写都拒绝。</p>
+<hr />
+<h2 id="十九附录状态与错误码">十九、附录：状态与错误码</h2>
+<h3 id="191-常见状态对照">19.1 常见状态对照</h3>
+<div class="table-wrap"><table><thead><tr><th>单据</th><th>状态链</th></tr></thead><tbody><tr><td>采购订单</td><td>草稿 → 已提交 → 已审批 → 已收货 → 已关闭（可取消）</td></tr>
+<tr><td>收货单</td><td>草稿 → 已收货 → 已质检 → 已关闭</td></tr>
+<tr><td>质检单</td><td>草稿 → 已提交（合格/让步/不合格）→ 已处置</td></tr>
+<tr><td>销售订单</td><td>草稿 → 已确认 → 部分发货 → 已发货 → 已完成（可取消/退货）</td></tr>
+<tr><td>发货单</td><td>已发货 → 已签收（开票状态：未开 / 部分 / 已开）</td></tr>
+<tr><td>销售发票</td><td>草稿 → 待确认 → 已确认 → 已红冲 / 已作废</td></tr>
+<tr><td>应收单</td><td>未收 → 部分 → 已收 / 已作废</td></tr>
+<tr><td>收款单</td><td>草稿 → 已收款 / 已作废</td></tr>
+<tr><td>调拨单</td><td>草稿 → 已提交 → 已出库 → 已入库（可取消）</td></tr>
+<tr><td>盘点单</td><td>草稿 → 盘点中 → 已调整（可取消）</td></tr>
+<tr><td>生产订单</td><td>草稿 → 已提交 → 已审批 → 生产中 → 已完工</td></tr>
+<tr><td>门店班次</td><td>营业中 → 已报数 → 已核款 → 已日结</td></tr>
+<tr><td>日结批次</td><td>已上传 → 已确认（总部）</td></tr>
+<tr><td>委外收货单</td><td>草稿 → 已收货 → 已质检</td></tr>
+<tr><td>平台订单</td><td>待处理 → 已转单 → 已发货 → 已完成 / 已退款 / 已取消</td></tr></tbody></table></div>
+<h3 id="192-常见错误码">19.2 常见错误码</h3>
+<div class="table-wrap"><table><thead><tr><th>错误码</th><th>含义</th><th>怎么处理</th></tr></thead><tbody><tr><td><code>TRANSITION_NOT_ALLOWED</code></td><td>当前状态不允许这个动作</td><td>刷新详情，看当前状态与可用动作</td></tr>
+<tr><td><code>EDGE_REQUIRES_HUMAN</code></td><td>高危动作需人工确认</td><td>到界面由有权限的人操作</td></tr>
+<tr><td><code>PST_RETURN_OVERFLOW</code></td><td>退货抵减后金额为负</td><td>检查退货是否超过入库</td></tr>
+<tr><td><code>RC_ALLOC_EXCEEDS_AR</code></td><td>核销超过应收余额</td><td>改小金额或分次核销</td></tr>
+<tr><td><code>PO_OVER_RECEIVE</code></td><td>收货超过超收比例</td><td>改小数量或调整超收比例</td></tr>
+<tr><td><code>SHIFT_NOT_REVIEWED</code></td><td>班次未核款就日结</td><td>先核款</td></tr>
+<tr><td><code>INSUFFICIENT_STOCK</code></td><td>库存不足</td><td>补货或改小数量</td></tr>
+<tr><td><code>INDUSTRY_CODE_INVALID</code></td><td>行业码非法</td><td>用登录页提供的行业</td></tr>
+<tr><td><code>SI_NOTHING_TO_INVOICE</code></td><td>没有可开票数量</td><td>该发货单已开完</td></tr></tbody></table></div>
+<h3 id="193-数据重置">19.3 数据重置</h3>
+<pre><code>npm run reseed        # 三库全部重建（约 10 秒）</code></pre>
+<p>重建会恢复：演示账号密码、演示单据、库存、配置项基线。<strong>不会</strong>删除自定义的代码级配置。</p>
+<hr />
+<p><strong>文档版本</strong>：2026-10-17 ｜ 对应系统版本：伴圆AI原生ERP系统（HEAD <code>703bc69</code> 之后）</p>
+  </main>
+</div>
+<div class="foot">
+  功能模块操作手册 · 伴圆AI原生ERP系统 · 演示环境说明：本文档中的数据均为虚构样例。
+</div>
+<script>
+  // 目录搜索：只在目录里过滤，不碰正文（正文里有大量"搜索"二字，进去会让人以为坏了）
+  var q = document.getElementById('q')
+  var links = [].slice.call(document.querySelectorAll('#toc a'))
+  q.addEventListener('input', function () {
+    var v = q.value.trim().toLowerCase()
+    links.forEach(function (a) {
+      a.style.display = !v || a.textContent.toLowerCase().indexOf(v) >= 0 ? '' : 'none'
+    })
+  })
+
+  // 滚动高亮：用 IntersectionObserver 而不是 scroll 事件（长文档滚动时前者更省）
+  var hs = [].slice.call(document.querySelectorAll('#doc h2, #doc h3'))
+  var map = new Map()
+  links.forEach(function (a) { map.set(decodeURIComponent(a.getAttribute('href').slice(1)), a) })
+  var io = new IntersectionObserver(function (entries) {
+    entries.forEach(function (e) {
+      if (!e.isIntersecting) return
+      links.forEach(function (a) { a.classList.remove('active') })
+      var a = map.get(e.target.id)
+      if (a) a.classList.add('active')
+    })
+  }, { rootMargin: '-72px 0px -70% 0px', threshold: 0 })
+  hs.forEach(function (h) { io.observe(h) })
+</script>
+</body>
+</html>

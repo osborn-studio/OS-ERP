@@ -1,0 +1,574 @@
+/**
+ * ============================================================================
+ * 文件标识：server/lib/metrics.js ｜ 数据口径字典（模块 23）
+ * ============================================================================
+ * 【职责】数据口径字典（模块 23）
+ *
+ * 【这个标识块是怎么来的】由 `scripts/check-file-header.mjs` 的批量补标识生成 ——
+ *   职责**取自本文件原有的首行注释**（不是新编的），原文保留在下面。
+ *   人工完善时建议补三件事：这块解决什么问题 / 为什么这样设计 / 改它要注意什么。
+ *
+ * 【通用注意】本项目的硬规矩：判据只有一处（不要在第二个地方再抄一遍条件）；
+ *   改完必须跑 `node scripts/regress-all.mjs`（3 轮）与相关 `test-*.mjs`。
+ * ============================================================================
+ */
+
+// 数据口径字典（模块 23）
+//
+// 要解决的问题：同一个「销售额」，看板按一个状态集算、报表按另一个状态集算、
+// AI 问答又按第三种 —— 三个页面的数字互相对不上，而且**没有任何一处说得清
+// 到底谁对**。口径一旦散落，争论就永远停在「你这个数不对」，查不下去。
+//
+// 本模块的口径：**定义与计算必须写在同一处**。
+//   每条指标是一个对象，`formula`（给人看的文字口径）与 `compute`（真正跑的 SQL）
+//   挨在一起。这样「文档写的」和「代码算的」不可能分家 ——
+//   分家正是口径漂移的根源（改了 SQL 忘了改文档，或者反过来）。
+//
+// 每条口径必须显式回答四个问题，缺一不可：
+//   ① formula      怎么算（能照着复现）
+//   ② exclusions   不算什么（**排除项比包含项更容易出错**，必须写出来）
+//   ③ source       取自哪些表
+//   ④ note         什么时候会踩坑 / 为什么这么定
+//
+// 定义会同步进 `metric_defs` 表（启动时 syncMetricDefs），供 SQL 直查与 AI 理解；
+// 但**代码是唯一源**，表只是投影。测试会校验两者一致，防止有人只改一边。
+
+import { getDb } from '../db/index.js'
+import { stampDef, defStale } from '../db/migrations/_helpers.cjs'
+
+const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100
+const num = (v) => Number(v) || 0
+
+/** 通用：把 `days` 变成一个安全的整数天数（防注入，也防手滑传 0 导致除零） */
+const days = (p, dflt = 30) => {
+  const n = Math.floor(Number(p?.days))
+  return Number.isFinite(n) && n > 0 && n <= 3650 ? n : dflt
+}
+
+/**
+ * 指标字典。分组顺序即字典展示顺序。
+ * compute 一律返回数字（金额取两位小数），不返回对象 —— 便于前端直接排队比较。
+ */
+export const METRICS = [
+  // ------------------------------------------------------------------ 销售
+  {
+    key: 'sales_amount',
+    name: '销售额',
+    module: '销售',
+    category: '规模',
+    unit: 'CNY',
+    formula: 'SUM(sales_orders.receivable_amount)',
+    exclusions: '排除 status IN (draft, cancelled)：草稿与已取消不构成销售',
+    source: 'sales_orders',
+    note: '应收口径（已含运费、已扣折扣）。线上/线下都算，若要拆分用 channel 维度',
+    compute: (db) =>
+      round2(num(db.prepare(
+        `SELECT COALESCE(SUM(receivable_amount),0) v FROM sales_orders WHERE status NOT IN ('draft','cancelled')`
+      ).get().v))
+  },
+  {
+    key: 'sales_qty',
+    name: '销售数量',
+    module: '销售',
+    category: '规模',
+    unit: '件',
+    formula: 'SUM(sales_orders.total_qty)',
+    exclusions: '同销售额：排除 draft / cancelled',
+    source: 'sales_orders',
+    note: '按单据头的汇总数量，与明细 SUM(qty) 应当一致；不一致说明写入时没同步汇总',
+    compute: (db) =>
+      num(db.prepare(
+        `SELECT COALESCE(SUM(total_qty),0) v FROM sales_orders WHERE status NOT IN ('draft','cancelled')`
+      ).get().v)
+  },
+  {
+    key: 'sales_order_count',
+    name: '销售订单数',
+    module: '销售',
+    category: '规模',
+    unit: '单',
+    formula: 'COUNT(sales_orders)',
+    exclusions: '同销售额：排除 draft / cancelled',
+    source: 'sales_orders',
+    note: '客单价与连带率的分母，必须与销售额用同一状态集 —— 否则算出来的比值没有意义',
+    compute: (db) =>
+      num(db.prepare(
+        `SELECT COUNT(*) v FROM sales_orders WHERE status NOT IN ('draft','cancelled')`
+      ).get().v)
+  },
+  {
+    key: 'avg_order_value',
+    name: '客单价',
+    module: '销售',
+    category: '效率',
+    unit: 'CNY',
+    formula: '销售额 / 销售订单数',
+    exclusions: '分子分母同用「排除 draft / cancelled」的口径',
+    source: 'sales_orders',
+    note: '订单数为 0 时返回 0，不返回 null —— 界面上 null 会显示成空白，看不出是 0 还是没算',
+    compute: (db) => {
+      const a = METRIC_BY_KEY.sales_amount.compute(db)
+      const n = METRIC_BY_KEY.sales_order_count.compute(db)
+      return n > 0 ? round2(a / n) : 0
+    }
+  },
+  {
+    key: 'attach_rate',
+    name: '连带率',
+    module: '销售',
+    category: '效率',
+    unit: '件/单',
+    formula: '销售数量 / 销售订单数',
+    exclusions: '同销售额口径',
+    source: 'sales_orders',
+    note: '反映「一单带几件」。低于 1 说明有订单头数量没同步（正常业务不可能 < 1）',
+    compute: (db) => {
+      const q = METRIC_BY_KEY.sales_qty.compute(db)
+      const n = METRIC_BY_KEY.sales_order_count.compute(db)
+      return n > 0 ? round2(q / n) : 0
+    }
+  },
+  {
+    key: 'return_rate',
+    name: '退货率',
+    module: '销售',
+    category: '效率',
+    unit: '%',
+    formula: '销售退货金额 / 销售额 × 100',
+    exclusions: '退货只取 sales_returns 里 status<>cancelled 的；销售额分母同「销售额」口径',
+    source: 'sales_returns, sales_orders',
+    note: '分子分母如果一边含运费一边不含，退货率会系统性偏离 —— 这里两边都取单据金额口径',
+    compute: (db) => {
+      const r = num(db.prepare(
+        `SELECT COALESCE(SUM(total_amount),0) v FROM sales_returns WHERE status NOT IN ('cancelled')`
+      ).get().v)
+      const a = METRIC_BY_KEY.sales_amount.compute(db)
+      return a > 0 ? round2((r / a) * 100) : 0
+    }
+  },
+  {
+    key: 'unpaid',
+    name: '未回款',
+    module: '销售',
+    category: '资金',
+    unit: 'CNY',
+    formula: 'SUM(receivable_amount - paid_amount)',
+    exclusions: '排除 draft / cancelled；负数（超收）按原样保留，便于发现录入错误',
+    source: 'sales_orders',
+    note: '"超过已收" 时若取 GREATEST(0, ...) 会把错账抹平 —— 宁可让它显示负数',
+    compute: (db) =>
+      round2(num(db.prepare(
+        `SELECT COALESCE(SUM(receivable_amount - paid_amount),0) v FROM sales_orders
+          WHERE status NOT IN ('draft','cancelled')`
+      ).get().v))
+  },
+
+  // ------------------------------------------------------------------ 线上
+  {
+    key: 'gmv',
+    name: '线上 GMV',
+    module: '线上 OMS',
+    category: '规模',
+    unit: 'CNY',
+    formula: 'SUM(oms_orders.pay_amount)',
+    exclusions: '排除 status = refunded（已退款不计成交）；pending（未支付）另计',
+    source: 'oms_orders',
+    note: '平台成交口径。与「销售额」不是一回事：GMV 含未转销售订单的部分，两者不应相等',
+    compute: (db) =>
+      round2(num(db.prepare(
+        `SELECT COALESCE(SUM(pay_amount),0) v FROM oms_orders WHERE status <> 'refunded'`
+      ).get().v))
+  },
+  {
+    key: 'oms_order_count',
+    name: '线上订单数',
+    module: '线上 OMS',
+    category: '规模',
+    unit: '单',
+    formula: 'COUNT(oms_orders)',
+    exclusions: '排除 status = refunded',
+    source: 'oms_orders',
+    note: '与 GMV 同口径，便于算线上客单价',
+    compute: (db) =>
+      num(db.prepare(`SELECT COUNT(*) v FROM oms_orders WHERE status <> 'refunded'`).get().v)
+  },
+
+  // ------------------------------------------------------------------ 存货
+  {
+    key: 'stock_qty',
+    name: '库存数量',
+    module: '存货',
+    category: '规模',
+    unit: '件',
+    formula: 'SUM(inventory_stocks.qty_on_hand)',
+    exclusions: '不含在途（qty_in_transit）；不含已占用（那是可用量的事）',
+    source: 'inventory_stocks',
+    note: '实物层口径 —— 仓里真的有多少。跨批次汇总，不看批次明细',
+    compute: (db) =>
+      num(db.prepare(`SELECT COALESCE(SUM(qty_on_hand),0) v FROM inventory_stocks`).get().v)
+  },
+  {
+    key: 'available_qty',
+    name: '可用量',
+    module: '存货',
+    category: '规模',
+    unit: '件',
+    formula: 'SUM(qty_on_hand - qty_reserved)',
+    exclusions: '不含在途（预计入库），也不含冻结 —— 本演示系统暂未启用冻结维度',
+    source: 'inventory_stocks',
+    note: '「现在能卖多少」。与库存数量的差就是被订单占用的部分',
+    compute: (db) =>
+      num(db.prepare(
+        `SELECT COALESCE(SUM(qty_on_hand - qty_reserved),0) v FROM inventory_stocks`
+      ).get().v)
+  },
+  {
+    key: 'stock_amount',
+    name: '库存金额',
+    module: '存货',
+    category: '资金',
+    unit: 'CNY',
+    formula: 'SUM(inventory_stocks.cost_amount)',
+    exclusions: '成本口径，不是售价口径；不含未入库的采购在途',
+    source: 'inventory_stocks',
+    note: '用表上的 cost_amount 列（写入时已按 cost_price 算好），不在这里现乘 —— 现乘会与流水里的余额口径打架',
+    compute: (db) =>
+      round2(num(db.prepare(`SELECT COALESCE(SUM(cost_amount),0) v FROM inventory_stocks`).get().v))
+  },
+  {
+    key: 'turnover_days',
+    name: '库存周转天数',
+    module: '存货',
+    category: '效率',
+    unit: '天',
+    formula: '当前库存数量 / (近 N 天出库量 / N)，N 默认 30',
+    exclusions: '出库只取 direction=out 的流水；仓库调拨不在指标内单独剔除（演示系统不做调拨剔除）',
+    source: 'inventory_stocks, inventory_transactions',
+    note: '按数量算而不是按金额 —— 演示数据里同一 SKU 的单价跨度大，按金额算会被高价品带偏',
+    compute: (db, p) => {
+      const d = days(p, 30)
+      const out = num(db.prepare(
+        `SELECT COALESCE(SUM(qty),0) v FROM inventory_transactions
+          WHERE direction='out' AND biz_date >= date('now','localtime','-' || ? || ' days')`
+      ).get(d).v)
+      if (out <= 0) return 0 // 无出库 → 周转天数无意义，返回 0 而不是 Infinity
+      const stock = METRIC_BY_KEY.stock_qty.compute(db)
+      return round2(stock / (out / d))
+    }
+  },
+  {
+    key: 'below_safe',
+    name: '低于安全库存 SKU 数',
+    module: '存货',
+    category: '风险',
+    unit: '个',
+    formula: 'COUNT(SKU WHERE 该 SKU 库存合计 < 安全库存)',
+    exclusions: '安全库存为 0 或空的 SKU 不参与（未设基准就没有「低于」可言）',
+    source: 'product_skus, inventory_stocks',
+    note: '按 SKU 跨仓汇总后再比，不是逐仓比 —— 逐仓比会把「A 仓缺但 B 仓有」也算成缺货',
+    compute: (db) =>
+      num(db.prepare(
+        `SELECT COUNT(*) v FROM (
+           SELECT s.id, COALESCE(SUM(st.qty_on_hand),0) q, s.safe_stock
+             FROM product_skus s
+             LEFT JOIN inventory_stocks st ON st.sku_id = s.id
+            WHERE COALESCE(s.safe_stock,0) > 0
+            GROUP BY s.id
+           HAVING q < s.safe_stock
+         )`
+      ).get().v)
+  },
+  {
+    key: 'expiring_qty',
+    name: '临期数量',
+    module: '存货',
+    category: '风险',
+    unit: '件',
+    formula: 'SUM(qty_on_hand) WHERE expire_date <= today + N 天，N 默认 90',
+    exclusions: '无到期日（expire_date 为空）的批次不计；已过期的**计入**（更该被看见）',
+    source: 'inventory_stocks',
+    note: '默认 90 天。过期批次故意不剔除 —— 剔除会把最该处理的货从预警里藏起来',
+    compute: (db, p) => {
+      const d = days(p, 90)
+      return num(db.prepare(
+        `SELECT COALESCE(SUM(qty_on_hand),0) v FROM inventory_stocks
+          WHERE expire_date IS NOT NULL AND expire_date <> ''
+            AND expire_date <= date('now','localtime','+' || ? || ' days')`
+      ).get(d).v)
+    }
+  },
+
+  // ------------------------------------------------------------------ 采购
+  {
+    key: 'purchase_amount',
+    name: '采购金额',
+    module: '采购',
+    category: '规模',
+    unit: 'CNY',
+    formula: 'SUM(purchase_orders.total_amount)',
+    exclusions: '排除 status = cancelled；草稿（draft）**计入**',
+    source: 'purchase_orders',
+    note: '草稿计入是有意的：采购金额看的是「已经谈定的量」，草稿也占用了采购意图。' +
+      '要看「已生效」请用 purchase_amount_effective',
+    compute: (db) =>
+      round2(num(db.prepare(
+        `SELECT COALESCE(SUM(total_amount),0) v FROM purchase_orders WHERE status <> 'cancelled'`
+      ).get().v))
+  },
+  {
+    key: 'purchase_amount_effective',
+    name: '采购金额（已生效）',
+    module: '采购',
+    category: '规模',
+    unit: 'CNY',
+    formula: 'SUM(purchase_orders.total_amount)',
+    exclusions: '排除 status IN (draft, cancelled)',
+    source: 'purchase_orders',
+    note: '与 purchase_amount 只差一个 draft —— 两个口径都留着，是为了让「草稿占多少」可以被量化',
+    compute: (db) =>
+      round2(num(db.prepare(
+        `SELECT COALESCE(SUM(total_amount),0) v FROM purchase_orders WHERE status NOT IN ('draft','cancelled')`
+      ).get().v))
+  },
+  {
+    key: 'payable_open',
+    name: '应付未结',
+    module: '采购',
+    category: '资金',
+    unit: 'CNY',
+    formula: 'SUM(purchase_settlements.settle_amount - paid_amount)',
+    exclusions: '排除 status = voided（作废结算单不构成应付）',
+    source: 'purchase_settlements',
+    note: '与采购域「核销生效点=付款单审批通过」同源：paid_amount 由核销明细算出，不是累加出来的',
+    compute: (db) =>
+      round2(num(db.prepare(
+        `SELECT COALESCE(SUM(settle_amount - paid_amount),0) v FROM purchase_settlements
+          WHERE status <> 'voided'`
+      ).get().v))
+  },
+
+  // ------------------------------------------------------------------ 订货
+  {
+    key: 'oc_order_amount',
+    name: '订货金额',
+    module: '订货中心',
+    category: '规模',
+    unit: 'CNY',
+    formula: 'SUM(oc_orders.total_amount)',
+    exclusions: '排除 status = cancelled',
+    source: 'oc_orders',
+    note: '门店要货与经销商订货的合计口径 —— 两者已统一收口为一张单，这里不拆',
+    compute: (db) =>
+      round2(num(db.prepare(
+        `SELECT COALESCE(SUM(total_amount),0) v FROM oc_orders WHERE status <> 'cancelled'`
+      ).get().v))
+  },
+  {
+    key: 'oc_fill_rate',
+    name: '订货满足率',
+    module: '订货中心',
+    category: '效率',
+    unit: '%',
+    formula: '已完成订货单数 / 非取消订货单数 × 100',
+    exclusions: '分母排除 cancelled；分母含在途（submitted/approved/allocated/shipped）',
+    source: 'oc_orders',
+    note: '在途算「未满足」是刻意的 —— 满足率看的是「客户已经拿到货的比例」，在途还没拿到',
+    compute: (db) => {
+      const all = num(db.prepare(`SELECT COUNT(*) v FROM oc_orders WHERE status <> 'cancelled'`).get().v)
+      const done = num(db.prepare(`SELECT COUNT(*) v FROM oc_orders WHERE status = 'completed'`).get().v)
+      return all > 0 ? round2((done / all) * 100) : 0
+    }
+  },
+
+  // ------------------------------------------------------------------ 门店
+  {
+    key: 'pos_sales',
+    name: '门店零售额',
+    module: '门店 POS',
+    category: '规模',
+    unit: 'CNY',
+    formula: 'SUM(pos_orders.pay_amount)',
+    exclusions: '按实收（pay_amount）而不是吊牌额（total_amount）；已作废单不在表内',
+    source: 'pos_orders',
+    note: '门店口径用「实收」—— 折扣与抹零都发生在收银台，用 total_amount 会高估',
+    compute: (db) =>
+      round2(num(db.prepare(`SELECT COALESCE(SUM(pay_amount),0) v FROM pos_orders`).get().v))
+  },
+
+  // ------------------------------------------------------------------ 往来
+  {
+    key: 'credit_usage',
+    name: '信用占用率',
+    module: '经销商',
+    category: '风险',
+    unit: '%',
+    formula: 'SUM(credit_used) / SUM(credit_limit) × 100',
+    exclusions: '授信额度为 0 或空的经销商不参与分母（未授信就没有占用率）',
+    source: 'dealers',
+    note: '整体口径。单客户超限请用 dealer 维度看明细 —— 整体 60% 里可能藏着几个 120%',
+    compute: (db) => {
+      const r = db.prepare(
+        `SELECT COALESCE(SUM(credit_used),0) u, COALESCE(SUM(credit_limit),0) l
+           FROM dealers WHERE COALESCE(credit_limit,0) > 0`
+      ).get()
+      return num(r.l) > 0 ? round2((num(r.u) / num(r.l)) * 100) : 0
+    }
+  },
+  {
+    key: 'over_credit_dealers',
+    name: '超授信经销商数',
+    module: '经销商',
+    category: '风险',
+    unit: '个',
+    formula: 'COUNT(dealers WHERE credit_used > credit_limit)',
+    exclusions: '仅统计授信额度 > 0 的经销商',
+    source: 'dealers',
+    note: '「占用率」是整体视角，这个才是能直接催办的名单长度',
+    compute: (db) =>
+      num(db.prepare(
+        `SELECT COUNT(*) v FROM dealers
+          WHERE COALESCE(credit_limit,0) > 0 AND COALESCE(credit_used,0) > credit_limit`
+      ).get().v)
+  },
+
+  // ------------------------------------------------------------------ 流程
+  {
+    key: 'approval_pending',
+    name: '待审批单数',
+    module: '审批中心',
+    category: '流程',
+    unit: '个',
+    formula: 'COUNT(approval_instances WHERE status = pending)',
+    exclusions: '不含已通过 / 已驳回 / 已撤回',
+    source: 'approval_instances',
+    note: '这是「卡住的工作流」规模。与采购待办数不是一回事：待办是「该做」，待审批是「等着别人放行」',
+    compute: (db) =>
+      num(db.prepare(`SELECT COUNT(*) v FROM approval_instances WHERE status='pending'`).get().v)
+  },
+  {
+    key: 'closed_order_ratio',
+    name: '采购订单四段闭环率',
+    module: '采购',
+    category: '流程',
+    unit: '%',
+    formula: '四段全关闭订单数 / 非取消订单数 × 100',
+    exclusions: '排除 cancelled；四段 = 到货 / 入库 / 开票 / 付款 全部关闭。' +
+      '**不等于** status=closed 的占比 —— 订单可以被提前关闭（剩余不再要了），那时四段并未走完',
+    source: 'purchase_orders',
+    note: '关闭标记是**只进不退**的推导结果。比率低不代表流程有问题，只代表在途多。' +
+      '与「订单关闭率」（status=closed）是两个口径，别混用',
+    compute: (db) => {
+      const all = num(db.prepare(`SELECT COUNT(*) v FROM purchase_orders WHERE status <> 'cancelled'`).get().v)
+      const done = num(db.prepare(
+        `SELECT COUNT(*) v FROM purchase_orders WHERE status <> 'cancelled'
+            AND close_arrival=1 AND close_inbound=1 AND close_invoice=1 AND close_payment=1`
+      ).get().v)
+      return all > 0 ? round2((done / all) * 100) : 0
+    }
+  }
+]
+
+/** key → 指标，供 compute 内部互相引用（客单价要通过它拿分子分母） */
+export const METRIC_BY_KEY = Object.fromEntries(METRICS.map((m) => [m.key, m]))
+
+/** 去掉 compute（不可序列化），得到可入库/可下发的定义 */
+export function metricDefinitions() {
+  return METRICS.map((m) => ({
+    key: m.key,
+    name: m.name,
+    module: m.module,
+    category: m.category,
+    unit: m.unit,
+    formula: m.formula,
+    exclusions: m.exclusions,
+    source: m.source,
+    note: m.note
+  }))
+}
+
+/** 取指标值。keys 不传则算全部；返回 { key: value } */
+export function metricValues(db = getDb(), { keys = null, days: d = 30 } = {}) {
+  const want = Array.isArray(keys) && keys.length ? keys : METRICS.map((m) => m.key)
+  const out = {}
+  for (const k of want) {
+    const m = METRIC_BY_KEY[k]
+    if (!m) continue
+    try {
+      out[k] = m.compute(db, { days: d })
+    } catch (e) {
+      // 某条算不出来不该把整页拖垮 —— 但也不能假装它是 0
+      out[k] = { error: e.message }
+    }
+  }
+  return out
+}
+
+/** 定义 + 当前值（字典页主接口） */
+export function metricCatalog(db = getDb(), { days: d = 30, withValues = true } = {}) {
+  const values = withValues ? metricValues(db, { days: d }) : {}
+  return METRICS.map((m) => ({
+    ...metricDefinitions().find((x) => x.key === m.key),
+    value: values[m.key] ?? null
+  }))
+}
+
+// ---------------------------------------------------------------------------
+// 同步进 metric_defs 表
+// ---------------------------------------------------------------------------
+
+export const METRIC_DEFS_FINGERPRINT_ID = 'metric_defs_sync'
+
+/**
+ * 把定义投影进 `metric_defs` 表。
+ * 代码是唯一源，表只是投影 —— 供 SQL 直查与 AI 理解表结构用。
+ * 每次启动调用（幂等），并写入定义指纹，供漂移检测。
+ */
+export function syncMetricDefs(db = getDb()) {
+  const defs = metricDefinitions()
+  const tx = db.transaction(() => {
+    const up = db.prepare(
+      `INSERT INTO metric_defs (key,name,module,category,unit,formula,exclusions,source,note,updated_at)
+       VALUES (?,?,?,?,?,?,?,?,?,datetime('now','localtime'))
+       ON CONFLICT(key) DO UPDATE SET
+         name=excluded.name, module=excluded.module, category=excluded.category, unit=excluded.unit,
+         formula=excluded.formula, exclusions=excluded.exclusions, source=excluded.source,
+         note=excluded.note, updated_at=excluded.updated_at`
+    )
+    for (const d of defs) {
+      up.run(d.key, d.name, d.module, d.category, d.unit, d.formula, d.exclusions, d.source, d.note)
+    }
+    // 代码里删掉的指标要从表里清掉，否则字典页与 SQL 查询会各说各话
+    const keep = defs.map((d) => d.key)
+    if (keep.length) {
+      db.prepare(`DELETE FROM metric_defs WHERE key NOT IN (${keep.map(() => '?').join(',')})`).run(...keep)
+    }
+  })
+  tx()
+  stampDef(db, METRIC_DEFS_FINGERPRINT_ID, defs)
+  return { synced: defs.length }
+}
+
+/** 表的定义是否落后于代码（测试与启动自检用） */
+export function metricDefsStale(db = getDb()) {
+  return defStale(db, METRIC_DEFS_FINGERPRINT_ID, metricDefinitions())
+}
+
+/** 分组后的字典（前端分组渲染用） */
+export function metricGroups(db = getDb(), { days: d = 30, withValues = true } = {}) {
+  const list = metricCatalog(db, { days: d, withValues })
+  const order = []
+  const map = new Map()
+  for (const m of list) {
+    if (!map.has(m.module)) {
+      map.set(m.module, [])
+      order.push(m.module)
+    }
+    map.get(m.module).push(m)
+  }
+  return order.map((mod) => ({ module: mod, items: map.get(mod) }))
+}
+
+export default {
+  METRICS, METRIC_BY_KEY, metricDefinitions, metricValues, metricCatalog,
+  syncMetricDefs, metricDefsStale, metricGroups
+}

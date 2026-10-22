@@ -1,0 +1,493 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>开发说明手册 · 伴圆AI原生ERP系统</title>
+<meta name="description" content="面向程序员的接手手册：架构分层、目录职责、单据内核、改造任务清单" />
+<style>
+  :root{
+    --brand:#185fa5; --brand-600:#2b82c9; --tech:#06b6d4;
+    --ink-900:#0f172a; --ink-700:#334155; --ink-500:#64748b; --ink-300:#cbd5e1;
+    --bg:#f6f9fc; --line:#e2e8f0;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink-900);
+    font:15px/1.75 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",system-ui,sans-serif}
+  a{color:var(--brand);text-decoration:none}
+  a:hover{text-decoration:underline}
+  header.top{position:sticky;top:0;z-index:20;background:rgba(255,255,255,.92);
+    backdrop-filter:saturate(180%) blur(8px);border-bottom:1px solid var(--line)}
+  .top-in{max-width:1280px;margin:0 auto;padding:10px 20px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+  .logo{width:30px;height:30px;border-radius:8px;color:#fff;display:flex;align-items:center;justify-content:center;
+    font-weight:600;font-size:14px;background:linear-gradient(135deg,#185fa5 0%,#2b82c9 58%,#06b6d4 100%);
+    box-shadow:0 6px 16px rgba(24,95,165,.28)}
+  .brand{font-size:14.5px;font-weight:600}
+  .brand small{display:block;font-weight:400;font-size:11.5px;color:var(--ink-500)}
+  .tag{font-size:11px;padding:1px 7px;border-radius:999px;border:1px solid var(--line);color:var(--brand);
+    background:#eff6fd}
+  .spacer{flex:1}
+  .back{font-size:12.5px;color:var(--ink-500)}
+  .back:hover{color:var(--brand)}
+  .search{width:220px;border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-size:13px;
+    outline:none;background:#fff}
+  .search:focus{border-color:var(--brand-600);box-shadow:0 0 0 3px rgba(43,130,201,.12)}
+  .wrap{max-width:1280px;margin:0 auto;padding:20px;display:grid;grid-template-columns:270px minmax(0,1fr);gap:24px;align-items:start}
+  nav.toc{position:sticky;top:76px;max-height:calc(100vh - 96px);overflow:auto;
+    background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px 10px}
+  nav.toc .t{font-size:11.5px;letter-spacing:.08em;color:var(--ink-500);padding:0 8px 8px}
+  nav.toc a{display:block;padding:4px 8px;border-radius:7px;font-size:13px;color:var(--ink-700);line-height:1.5}
+  nav.toc a.toc-l3{font-size:12.3px;color:var(--ink-500);padding-left:20px}
+  nav.toc a:hover{background:#f1f6fc;color:var(--brand);text-decoration:none}
+  nav.toc a.active{background:#e8f2fd;color:var(--brand);font-weight:600}
+  main{background:#fff;border:1px solid var(--line);border-radius:14px;padding:28px 34px;min-width:0;
+    box-shadow:0 1px 2px rgba(15,23,42,.04)}
+  main h1{font-size:26px;line-height:1.35;margin:0 0 6px}
+  main h2{font-size:19px;margin:34px 0 10px;padding-top:14px;border-top:1px solid var(--line)}
+  main h2:first-of-type{border-top:0;padding-top:0;margin-top:22px}
+  main h3{font-size:15.5px;margin:22px 0 8px;color:#0b3d68}
+  main h4{font-size:14px;margin:18px 0 6px;color:var(--ink-700)}
+  main p{margin:9px 0;color:#1e293b}
+  main ul,main ol{margin:8px 0 8px 4px;padding-left:20px}
+  main li{margin:3px 0}
+  main blockquote{margin:12px 0;padding:10px 14px;background:#f3f8fe;border-left:3px solid var(--brand-600);
+    border-radius:0 8px 8px 0;color:#0b3d68}
+  main blockquote p{margin:0;color:inherit}
+  main code{background:#f1f5f9;border:1px solid #e2e8f0;border-radius:5px;padding:1px 5px;font-size:12.5px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  main pre{background:#0f2032;color:#dbeafe;border-radius:10px;padding:14px 16px;overflow:auto;font-size:12.5px;line-height:1.6}
+  main pre code{background:none;border:0;color:inherit;padding:0}
+  main hr{border:0;border-top:1px solid var(--line);margin:26px 0}
+  .table-wrap{overflow:auto;margin:12px 0;border:1px solid var(--line);border-radius:10px}
+  table{border-collapse:collapse;width:100%;font-size:13px}
+  th,td{border-bottom:1px solid var(--line);padding:7px 10px;text-align:left;vertical-align:top}
+  th{background:#f7fafc;color:var(--ink-700);font-weight:600;white-space:nowrap}
+  tr:last-child td{border-bottom:0}
+  tbody tr:hover{background:#fbfdff}
+  .foot{max-width:1280px;margin:0 auto;padding:0 20px 40px;color:var(--ink-500);font-size:12px}
+  @media (max-width:1000px){
+    .wrap{grid-template-columns:1fr}
+    nav.toc{position:static;max-height:none;order:2}
+    main{padding:20px}
+    .search{width:100%}
+  }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="top-in">
+    <div class="logo">伴</div>
+    <div class="brand">伴圆AI原生ERP系统<small>AI 伴你，企业信息化管理圆满</small></div>
+    <span class="tag">开发文档</span>
+    <div class="spacer"></div>
+    <input class="search" id="q" placeholder="搜索目录…" />
+    <a class="back" href="/">← 返回系统</a>
+  </div>
+</header>
+<div class="wrap">
+  <nav class="toc" id="toc">
+    <div class="t">开发说明手册</div>
+    <a class="toc-l2" data-depth="2" href="#一30-秒认识这套系统">一、30 秒认识这套系统</a>
+<a class="toc-l2" data-depth="2" href="#二跑起来10-分钟">二、跑起来（10 分钟）</a>
+<a class="toc-l3" data-depth="3" href="#21-安装与启动">2.1 安装与启动</a>
+<a class="toc-l3" data-depth="3" href="#22-数据从哪来">2.2 数据从哪来</a>
+<a class="toc-l3" data-depth="3" href="#23-改代码后要做什么">2.3 改代码后要做什么</a>
+<a class="toc-l3" data-depth="3" href="#24-环境变量">2.4 环境变量</a>
+<a class="toc-l3" data-depth="3" href="#25-三个最常见的坑">2.5 三个最常见的坑</a>
+<a class="toc-l2" data-depth="2" href="#三目录结构每块负责什么">三、目录结构：每块负责什么</a>
+<a class="toc-l2" data-depth="2" href="#四架构分层四层从上到下依赖">四、架构分层：四层，从上到下依赖</a>
+<a class="toc-l2" data-depth="2" href="#五一次请求怎么走后端">五、一次请求怎么走（后端）</a>
+<a class="toc-l2" data-depth="2" href="#六数据库">六、数据库</a>
+<a class="toc-l3" data-depth="3" href="#61-三库与切库">6.1 三库与切库</a>
+<a class="toc-l3" data-depth="3" href="#62-迁移">6.2 迁移</a>
+<a class="toc-l3" data-depth="3" href="#63-表结构约定">6.3 表结构约定</a>
+<a class="toc-l2" data-depth="2" href="#七单据内核最重要的一层">七、单据内核（最重要的一层）</a>
+<a class="toc-l3" data-depth="3" href="#71-三张表定义一切">7.1 三张表定义一切</a>
+<a class="toc-l3" data-depth="3" href="#72-推进状态">7.2 推进状态</a>
+<a class="toc-l3" data-depth="3" href="#73-为什么路由里不许写状态白名单">7.3 为什么路由里不许写状态白名单</a>
+<a class="toc-l3" data-depth="3" href="#74-高危边">7.4 高危边</a>
+<a class="toc-l2" data-depth="2" href="#八业务链钱和货怎么串起来">八、业务链：钱和货怎么串起来</a>
+<a class="toc-l2" data-depth="2" href="#九权限体系">九、权限体系</a>
+<a class="toc-l3" data-depth="3" href="#91-三个维度">9.1 三个维度</a>
+<a class="toc-l3" data-depth="3" href="#92-中间件">9.2 中间件</a>
+<a class="toc-l3" data-depth="3" href="#93-前端菜单">9.3 前端菜单</a>
+<a class="toc-l2" data-depth="2" href="#十配置底座拿不准就做成配置项">十、配置底座（&quot;拿不准就做成配置项&quot;）</a>
+<a class="toc-l3" data-depth="3" href="#101-一个配置项的完整形态">10.1 一个配置项的完整形态</a>
+<a class="toc-l3" data-depth="3" href="#102-写入必须留痕">10.2 写入必须留痕</a>
+<a class="toc-l2" data-depth="2" href="#十一mcp-层ai-能做什么">十一、MCP 层（AI 能做什么）</a>
+<a class="toc-l3" data-depth="3" href="#111-两类工具">11.1 两类工具</a>
+<a class="toc-l3" data-depth="3" href="#112-六条安全边界">11.2 六条安全边界</a>
+<a class="toc-l3" data-depth="3" href="#113-加一个-mcp-工具">11.3 加一个 MCP 工具</a>
+<a class="toc-l2" data-depth="2" href="#十二前端">十二、前端</a>
+<a class="toc-l3" data-depth="3" href="#121-一条页面的生命周期">12.1 一条页面的生命周期</a>
+<a class="toc-l3" data-depth="3" href="#122-加一个页面四步缺一不可">12.2 加一个页面（四步，缺一不可）</a>
+<a class="toc-l2" data-depth="2" href="#十三测试与守卫改完必须跑">十三、测试与守卫（改完必须跑）</a>
+<a class="toc-l3" data-depth="3" href="#131-一条命令">13.1 一条命令</a>
+<a class="toc-l3" data-depth="3" href="#132-十道静态守卫">13.2 十道静态守卫</a>
+<a class="toc-l3" data-depth="3" href="#133-反例纪律这条比断言数更重要">13.3 反例纪律（这条比断言数更重要）</a>
+<a class="toc-l2" data-depth="2" href="#十四演示数据seed-vs-demo-seed">十四、演示数据（seed vs demo-seed）</a>
+<a class="toc-l2" data-depth="2" href="#十五六个常见改造任务照着做就行">十五、六个常见改造任务（照着做就行）</a>
+<a class="toc-l3" data-depth="3" href="#任务-1给某张表加一个字段">任务 1：给某张表加一个字段</a>
+<a class="toc-l3" data-depth="3" href="#任务-2加一个接口">任务 2：加一个接口</a>
+<a class="toc-l3" data-depth="3" href="#任务-3加一个页面">任务 3：加一个页面</a>
+<a class="toc-l3" data-depth="3" href="#任务-4加一种单据类型">任务 4：加一种单据类型</a>
+<a class="toc-l3" data-depth="3" href="#任务-5加一个配置项">任务 5：加一个配置项</a>
+<a class="toc-l3" data-depth="3" href="#任务-6加一个-mcp-工具">任务 6：加一个 MCP 工具</a>
+<a class="toc-l2" data-depth="2" href="#十六代码规范不是风格问题是防事故">十六、代码规范（不是风格问题，是防事故）</a>
+<a class="toc-l2" data-depth="2" href="#十七故障排查速查">十七、故障排查速查</a>
+<a class="toc-l2" data-depth="2" href="#十八已知边界与技术债不藏">十八、已知边界与技术债（不藏）</a>
+<a class="toc-l2" data-depth="2" href="#十九命令速查">十九、命令速查</a>
+<a class="toc-l2" data-depth="2" href="#二十接手第一天的建议路线">二十、接手第一天的建议路线</a>
+  </nav>
+  <main id="doc">
+<h1 id="伴圆ai原生erp系统--开发说明手册">伴圆AI原生ERP系统 · 开发说明手册</h1>
+<blockquote><p>面向：接手这套代码的程序员 / 实施顾问里的技术角色 / 做二次开发的合作方 目标：<strong>看完能跑起来、能找到代码、能安全地改</strong>。 版本：2026-10-17 ｜ 对应代码 <code>c16eb46</code></p></blockquote>
+<hr />
+<h2 id="一30-秒认识这套系统">一、30 秒认识这套系统</h2>
+<div class="table-wrap"><table><thead><tr><th>项目</th><th>内容</th></tr></thead><tbody><tr><td>形态</td><td>浏览器访问的 Web 系统（B/S），单机一条命令跑起来</td></tr>
+<tr><td>后端</td><td>Node.js 18+ ｜ Express 4 ｜ better-sqlite3 11（同步 API）</td></tr>
+<tr><td>前端</td><td>React 18 ｜ Vite 5 ｜ TypeScript ｜ Tailwind 3 ｜ Recharts</td></tr>
+<tr><td>数据库</td><td><strong>SQLite × 3</strong>（美妆 / 连锁餐饮 / 服装），同一套表结构，各存一个 <code>.db</code> 文件</td></tr>
+<tr><td>规模</td><td>后端 119 个 js / 约 6.8 万行；前端 88 个 tsx / 约 3.9 万行</td></tr>
+<tr><td>库规模</td><td>每库 <strong>194 张表 / 10 个视图 / 372 个索引</strong>；迁移 49 个文件</td></tr>
+<tr><td>单据内核</td><td><strong>40 种单据 / 190 个状态 / 215 条流转边</strong>（其中 92 条高危）</td></tr>
+<tr><td>权限</td><td><strong>137 个权限点 / 10 个角色</strong> + 数据范围（组织 / 门店 / 经销商）</td></tr>
+<tr><td>配置</td><td>21 个业务配置项（唯一登记表 <code>SETTING_RULES</code>）</td></tr>
+<tr><td>对外</td><td>REST（<code>/api/*</code>，契约 508 条路径） + MCP（<code>/mcp</code>，40 个工具）</td></tr></tbody></table></div>
+<p><strong>一句话架构</strong>：三条路由入口（REST / MCP / 前端），共用同一套 <code>lib/*</code> 领域服务与同一套判据。</p>
+<hr />
+<h2 id="二跑起来10-分钟">二、跑起来（10 分钟）</h2>
+<h3 id="21-安装与启动">2.1 安装与启动</h3>
+<pre><code>git clone &lt;repo&gt; &amp;&amp; cd gml
+npm install              # 开发需要 devDependencies
+npm run dev              # 前端 Vite + 后端 Express 一起起（推荐）
+# 或分开：
+npm run dev:api          # 只起后端 :3001
+npm run dev:web          # 只起前端 :5173（代理 /api 到 3001）</code></pre>
+<p>生产/演示形态：</p>
+<pre><code>npm run build            # 产出 dist/
+npm start                # 单进程，Express 同时托管 API 与 dist
+# 打开 http://localhost:3001/login</code></pre>
+<h3 id="22-数据从哪来">2.2 数据从哪来</h3>
+<p>首次启动时 <code>bootIndustry()</code> 会自动建表 + 灌演示数据（约 2 秒/库）。想手动重建：</p>
+<pre><code>npm run reseed           # 三库全部重建（约 10 秒）
+npm run seed -- cosmetic # 只重建美妆</code></pre>
+<h3 id="23-改代码后要做什么">2.3 改代码后要做什么</h3>
+<div class="table-wrap"><table><thead><tr><th>改了什么</th><th>要做什么</th></tr></thead><tbody><tr><td>前端 <code>.tsx</code></td><td>Vite 热更新，无需重启</td></tr>
+<tr><td>后端 <code>.js</code></td><td><strong>必须重启</strong>（本机由 launchd <code>com.gml.server</code> 托管：<code>launchctl kickstart -k gui/$(id -u)/com.gml.server</code>）</td></tr>
+<tr><td>数据库结构</td><td>新增迁移文件 → 重启自动执行</td></tr>
+<tr><td>接口签名</td><td><code>npm run gen:api</code> 重生成前端类型 → 再跑 <code>npm run check:api</code></td></tr>
+<tr><td>业务配置项</td><td>改 <code>lib/settings.js</code> 的 <code>SETTING_RULES</code> → 重启（会补齐缺失键）</td></tr></tbody></table></div>
+<h3 id="24-环境变量">2.4 环境变量</h3>
+<div class="table-wrap"><table><thead><tr><th>变量</th><th>作用</th><th>备注</th></tr></thead><tbody><tr><td><code>PORT</code></td><td>服务端口，默认 3001</td><td></td></tr>
+<tr><td><code>GML_DATA_DIR</code></td><td>数据库目录</td><td><strong>测试脚本必须设</strong>，否则会写仓库 <code>data/</code></td></tr>
+<tr><td><code>GML_SEED_NOW</code></td><td>冻结灌数时刻</td><td>用于&quot;逐字节可复现&quot;的重建比对</td></tr>
+<tr><td><code>JWT_SECRET</code></td><td>令牌签名密钥</td><td>演示有默认值，<strong>生产必须换</strong></td></tr></tbody></table></div>
+<h3 id="25-三个最常见的坑">2.5 三个最常见的坑</h3>
+<ol><li><strong>同步 API</strong>：better-sqlite3 是同步的，别在事务里 <code>await</code>（事务外的异步会让事务边界失效）。</li><li><strong><code>cp</code> 不是备份</strong>：WAL 模式下 <code>cp x.db</code> 会丢 <code>-wal</code> 里的数据。备份用 <code>db.backup()</code>。</li><li><strong><code>GML_DATA_DIR</code> 不设就跑测试</strong>：会写到仓库 <code>data/</code>，把演示库搞脏。所有 <code>test-*.mjs</code> 都自带&quot;非 /tmp 就 exit 2&quot;的闸门。</li></ol>
+<hr />
+<h2 id="三目录结构每块负责什么">三、目录结构：每块负责什么</h2>
+<pre><code>gml/
+├── server/                     后端（Express）
+│   ├── index.js                入口：中间件 → 挂路由 → 静态 → 错误处理（顺序不能改）
+│   ├── openapi.js              接口契约（唯一出处）→ npm run gen:api 生成前端类型
+│   ├── routes/                 39 个路由文件（HTTP 层：鉴权 + 参数 + 调 lib）
+│   ├── lib/                    46 个领域服务（业务规则都在这里，路由不写业务）
+│   ├── middleware/             鉴权 / 权限 / 审计
+│   ├── mcp/                    MCP 协议端点 + 工具注册表 + 能力目录
+│   └── db/
+│       ├── index.js            连接池 + 多行业切库（AsyncLocalStorage）
+│       ├── boot.js             单库启动序列（顺序有依赖，注释写明为什么）
+│       ├── seed.js             演示数据种子（确定性随机源）
+│       ├── demo-seed.js        演示剧本补充（连续 22 天日报 + 部分流转）
+│       ├── migrations/         49 个迁移（.cjs，按文件名序执行）
+│       └── schema.sql          建表基线
+├── src/                        前端
+│   ├── App.tsx                 路由表（含 DealerOnly 行业守卫）
+│   ├── components/             Layout（菜单+角色族）、ui.tsx（组件库）、DataPage（列表骨架）
+│   ├── pages/                  81 个页面，按业务域分目录
+│   ├── api/client.ts           唯一 HTTP 出口（token / 行业 / 错误归一）
+│   ├── store/auth.tsx          登录态与行业上下文
+│   ├── hooks/opts.ts           下拉选项（把 /api/meta/* 包成 {value,label}）
+│   ├── constants/              brand.ts（产品名）、capabilities.ts（行业能力）
+│   └── types/api-routes.ts     【自动生成】接口路径类型
+├── scripts/                    97 个脚本（测试 / 守卫 / 重建 / 打包）
+├── docs/                       设计与交付文档
+├── public/                     入口页、landing、网页版手册（docs/*.html）
+├── deliverables/               对外交付快照（安装包 + 手册）
+└── data/                       三套 SQLite 库（gitignore）</code></pre>
+<hr />
+<h2 id="四架构分层四层从上到下依赖">四、架构分层：四层，从上到下依赖</h2>
+<pre><code>┌──────────────────────────────────────────────────────────────┐
+│ 第 3 层  财务与报表   凭证 / 试算平衡 / 三大报表 / 期末结转        │
+├──────────────────────────────────────────────────────────────┤
+│ 第 2 层  业务链       采购 · 销售 · 库存 · 门店 · 经销商 · 生产    │
+├──────────────────────────────────────────────────────────────┤
+│ 第 1 层  单据内核     doc_types / doc_states / doc_actions        │
+│                       单据状态机 + 流转留痕（doc_events）          │
+├──────────────────────────────────────────────────────────────┤
+│ 第 0 层  配置底座     SETTING_RULES + settings + 变更留痕          │
+└──────────────────────────────────────────────────────────────┘</code></pre>
+<p><strong>依赖方向只能向下</strong>：</p>
+<ul><li>业务代码可以读配置、可以推进单据状态；</li><li>单据内核<strong>不知道</strong>任何具体业务（它只认识&quot;类型/状态/动作&quot;）；</li><li>配置层不依赖任何上层。</li></ul>
+<p>违反这条的典型症状：在路由里写死一个状态判断，导致内核改了状态机而路由不跟。</p>
+<hr />
+<h2 id="五一次请求怎么走后端">五、一次请求怎么走（后端）</h2>
+<p>以「销售订单发货」为例：</p>
+<pre><code>POST /api/sales/orders/123/deliver
+  │
+  ├─ server/index.js         中间件：JSON / 静态 / 日志
+  ├─ middleware/auth.js      requireAuth（验 JWT）→ requireRole('warehouse', ...)
+  ├─ db/index.js             AsyncLocalStorage 取到当前行业 → getDb() 返回对应库连接
+  ├─ routes/sales.js         参数校验 + 组装 actor → 调 lib
+  ├─ lib/stock.js            pickBatches（FEFO 拣批）+ applyStockOut（扣库存、写流水）
+  ├─ lib/docflow.js          advanceStatus（推进 SO 状态 + 写 doc_events）
+  └─ lib/http.js             ok(res, data) 统一返回 { code, data, message }</code></pre>
+<p><strong>三条硬规则</strong></p>
+<ol><li><strong>路由不写业务</strong>：只做&quot;鉴权 + 取参 + 调 lib + 返回&quot;。</li><li><strong>状态只走 <code>advanceStatus</code></strong>：任何地方都不许 <code>UPDATE sales_orders SET status=...</code>（会漏留痕、绕过状态机）。</li><li><strong>派生字段由服务层算</strong>：<code>invoice_status</code> / <code>shipped_qty</code> / <code>received_qty</code> 这些不许手写。</li></ol>
+<hr />
+<h2 id="六数据库">六、数据库</h2>
+<h3 id="61-三库与切库">6.1 三库与切库</h3>
+<pre><code>// server/db/index.js
+export const INDUSTRIES = {
+  cosmetic: { code:'cosmetic', label:'美妆连锁版', visible:true,  db:'gml_cosmetic.db' },
+  food:     { code:'food',     label:'连锁餐饮版', visible:true,  db:'gml_food.db' },
+  apparel:  { code:'apparel',  label:'服装版（开发中）', visible:false, db:'gml_apparel.db' }
+}</code></pre>
+<p>行业来自登录签发的 JWT；请求进来后由 <code>AsyncLocalStorage</code> 带到 <code>getDb()</code>。</p>
+<p><strong>业务代码里永远不要自己拼库路径</strong>，一律 <code>const db = getDb()</code>。</p>
+<h3 id="62-迁移">6.2 迁移</h3>
+<ul><li>文件：<code>server/db/migrations/NNN_名称.cjs</code></li><li>导出：<code>module.exports = { name, up(db), verify(db) }</code></li><li>规则：<strong>只往后加，不改历史文件</strong>；<code>verify()</code> 要在结构脱节时返回 <code>false</code>（会自动重跑 <code>up</code>）</li><li>新增表/列后，<code>verify-seed</code> 与 <code>seed.js</code> 的 <code>TABLES</code> 也要跟着登记（否则重建不可复现）</li></ul>
+<pre><code>// 最小模板
+module.exports.name = '补一列 xxx'
+module.exports.up = (db) =&gt; {
+  if (!hasColumn(db, 'sales_orders', 'xxx')) db.exec(&quot;ALTER TABLE sales_orders ADD COLUMN xxx TEXT&quot;)
+}
+module.exports.verify = (db) =&gt; hasColumn(db, 'sales_orders', 'xxx')</code></pre>
+<h3 id="63-表结构约定">6.3 表结构约定</h3>
+<div class="table-wrap"><table><thead><tr><th>约定</th><th>说明</th></tr></thead><tbody><tr><td>主键</td><td><code>id INTEGER PRIMARY KEY AUTOINCREMENT</code></td></tr>
+<tr><td>单号</td><td><code>doc_no</code>，由 <code>lib/docno.js</code> 的 <code>nextDocNo</code> 生成，<strong>不要自己拼</strong></td></tr>
+<tr><td>时间</td><td><code>created_at</code> 用 <code>datetime('now','localtime')</code>；业务日期用 <code>lib/dates.js</code></td></tr>
+<tr><td>金额</td><td>一律 <code>round2</code>（两位小数）</td></tr>
+<tr><td>数量</td><td>一律 <code>round4</code>（四位小数），与金额<strong>不共用</strong></td></tr>
+<tr><td>留痕</td><td>每个状态变更写 <code>doc_events</code>（<code>doc_type / doc_id / action / from_state / to_state / actor</code>）</td></tr></tbody></table></div>
+<hr />
+<h2 id="七单据内核最重要的一层">七、单据内核（最重要的一层）</h2>
+<h3 id="71-三张表定义一切">7.1 三张表定义一切</h3>
+<div class="table-wrap"><table><thead><tr><th>表</th><th>内容</th><th>例子</th></tr></thead><tbody><tr><td><code>doc_types</code></td><td>单据类型</td><td><code>SO</code> 销售订单、<code>PO</code> 采购订单、<code>GR</code> 收货单…共 40 种</td></tr>
+<tr><td><code>doc_states</code></td><td>每个类型有哪些状态</td><td><code>SO</code>: draft / confirmed / shipped / completed / cancelled</td></tr>
+<tr><td><code>doc_actions</code></td><td>状态之间的边</td><td><code>SO.confirm: draft → confirmed</code>，<code>is_danger=1</code> 表示高危</td></tr></tbody></table></div>
+<h3 id="72-推进状态">7.2 推进状态</h3>
+<pre><code>import { advanceStatus } from '../lib/docflow.js'
+
+advanceStatus(db, req, {
+  docType: 'SO',
+  id,
+  action: 'confirm',
+  set: { /* 同事务要写的其他字段 */ },
+  remark: '销售确认'
+})</code></pre>
+<p>它做四件事：<strong>查边 → 判权限 → 改状态 → 写留痕</strong>。</p>
+<p>非法来源态抛 <code>DocFlowError</code> → HTTP 409 <code>TRANSITION_NOT_ALLOWED</code>。</p>
+<h3 id="73-为什么路由里不许写状态白名单">7.3 为什么路由里不许写状态白名单</h3>
+<pre><code>// ❌ 错：路由里再判一遍状态
+if (order.status !== 'confirmed') return fail(res, '只有已确认的订单可以发货')
+
+// ✅ 对：交给内核
+const out = advanceStatus(db, req, { docType: 'SO', id, action: 'ship' })</code></pre>
+<p>第二份判据迟早与内核分叉 —— 内核加了新状态、路由没跟，就出现&quot;界面能点、后端拒绝&quot;。</p>
+<h3 id="74-高危边">7.4 高危边</h3>
+<p><code>is_danger=1</code> 的边（作废已过账凭证、强平账等）<strong>AI 一律不能执行</strong>，必须人工在界面确认。</p>
+<p>MCP 侧直接抛 <code>EDGE_REQUIRES_HUMAN</code>。</p>
+<hr />
+<h2 id="八业务链钱和货怎么串起来">八、业务链：钱和货怎么串起来</h2>
+<div class="table-wrap"><table><thead><tr><th>域</th><th>主 lib</th><th>关键链路</th></tr></thead><tbody><tr><td>采购</td><td><code>lib/purchase.js</code></td><td>请购 → 订单 → 收货（部分）→ 质检 → 发票 → 结算 → 付款 → 退货</td></tr>
+<tr><td>销售</td><td><code>routes/sales.js</code> + <code>lib/invoice.js</code> + <code>lib/ar.js</code></td><td>订单 → 发货（部分）→ 开票（部分）→ 应收 → 收款核销（部分）</td></tr>
+<tr><td>库存</td><td><code>lib/stock.js</code></td><td><code>applyStockIn</code> / <code>applyStockOut</code> / <code>pickBatches</code>（FEFO）/ <code>reserveStock</code></td></tr>
+<tr><td>门店</td><td><code>lib/pos2.js</code></td><td>开班 → 收银 → 交班报数 → 核款 → 缴款 → 日结上传（生成销售单 + 出库）</td></tr>
+<tr><td>经销商</td><td><code>lib/dealer-statement.js</code> <code>lib/rebate.js</code></td><td>订货 → 对账单 → 结清；返利计提 → 确认 → 核销（冲应收）</td></tr>
+<tr><td>财务</td><td><code>lib/accounting.js</code></td><td>由业务单生成凭证（借贷必平）→ 试算平衡 → 报表</td></tr>
+<tr><td>质检</td><td><code>lib/qc.js</code> / <code>lib/qc2.js</code></td><td>报检 → 检验（合格/让步/判退）→ 判退自动生成退货单并出库</td></tr></tbody></table></div>
+<p><strong>库存只在 <code>lib/stock.js</code> 里动</strong>。绕过它直接 <code>UPDATE inventory_stocks</code> 的结果是：</p>
+<p>现存量对、流水没有、成本报表错，而且<strong>不会报错</strong>。</p>
+<hr />
+<h2 id="九权限体系">九、权限体系</h2>
+<h3 id="91-三个维度">9.1 三个维度</h3>
+<div class="table-wrap"><table><thead><tr><th>维度</th><th>存在哪</th><th>决定什么</th></tr></thead><tbody><tr><td>角色</td><td><code>users.role</code> → <code>roles</code></td><td>大类的职责</td></tr>
+<tr><td>权限点</td><td><code>role_permissions</code>（137 个点）</td><td>接口层放不放行</td></tr>
+<tr><td>数据范围</td><td><code>roles.data_scope</code></td><td>这个角色能看哪些组织的数据</td></tr></tbody></table></div>
+<h3 id="92-中间件">9.2 中间件</h3>
+<pre><code>r.get('/orders', requireAuth, requirePerm('sales.order.view'), wrap(handler))
+r.post('/orders/:id/ship', requireAuth, requireRole('warehouse','sales','admin'), wrap(handler))</code></pre>
+<ul><li><code>requireAuth</code>：验 JWT，挂 <code>req.user</code></li><li><code>requireRole(...roles)</code>：粗粒度角色门</li><li><code>requirePerm(code)</code>：细粒度权限点</li><li><strong>两者可以叠加</strong>；新接口默认加 <code>requirePerm</code>，不要只加角色门。</li></ul>
+<h3 id="93-前端菜单">9.3 前端菜单</h3>
+<p>菜单的可见性由 <code>src/components/Layout.tsx</code> 的<strong>角色族</strong>决定：</p>
+<pre><code>const ROLE_GROUPS = {
+  exec: ['boss'], supply: ['scm','purchase'], stock: ['scm','purchase','warehouse'],
+  sell: ['scm','sales'], money: ['finance'], shop: ['store'], dealer: ['dealer'], viewer: ['viewer']
+}
+{ key:'purchase', label:'采购管理', roles: rolesOf('exec','supply','stock','money'), children:[...] }</code></pre>
+<ul><li><strong>菜单隐藏只是界面收敛，不是权限边界</strong>（接口层另有判据）；</li><li>加角色只改 <code>ROLE_GROUPS</code> 一处；</li><li>行业差异用 <code>industries: ['cosmetic','apparel']</code>（与角色维度正交）。</li></ul>
+<hr />
+<h2 id="十配置底座拿不准就做成配置项">十、配置底座（&quot;拿不准就做成配置项&quot;）</h2>
+<h3 id="101-一个配置项的完整形态">10.1 一个配置项的完整形态</h3>
+<pre><code>// server/lib/settings.js
+purchase_return_offset: {
+  group: 'supply', label: '采购退货抵减结算', type: 'bool', default: '0',
+  is_danger: true, wired: true,
+  impact: '打开后结算金额会扣减同期退货；不影响历史单据'
+}</code></pre>
+<p>配套三件事缺一不可：</p>
+<ol><li><strong>默认值 = 上线前的实际行为</strong>（不改变既有账）；</li><li><strong>唯一一处读取</strong>（<code>readSetting(db, 'key')</code>），并接进判据；</li><li><strong>反例</strong>证明&quot;改配置 ⇒ 行为真的变&quot;（否则只是登记了，没接线）。</li></ol>
+<h3 id="102-写入必须留痕">10.2 写入必须留痕</h3>
+<pre><code>writeSetting(db, { key, value, actor, reason })   // 内部同事务写 setting_audit_log</code></pre>
+<p><code>is_danger: true</code> 的项<strong>必须填理由</strong>，否则拒绝。</p>
+<hr />
+<h2 id="十一mcp-层ai-能做什么">十一、MCP 层（AI 能做什么）</h2>
+<h3 id="111-两类工具">11.1 两类工具</h3>
+<div class="table-wrap"><table><thead><tr><th>类型</th><th>数量</th><th>说明</th></tr></thead><tbody><tr><td>领域工具</td><td>36</td><td>采购建单 / 收货 / 库存出入库 / 调拨 / 盘点 / 销售作废…</td></tr>
+<tr><td><strong>通用单据工具</strong></td><td>4</td><td><code>doc.list_types</code> / <code>doc.query</code> / <code>doc.get</code> / <code>doc.transition</code></td></tr></tbody></table></div>
+<p>通用这 4 个<strong>只认内核</strong>，不认具体业务 —— 内核里新增一种单据，AI 立刻能读能推，<strong>不用改 MCP 代码</strong>。</p>
+<h3 id="112-六条安全边界">11.2 六条安全边界</h3>
+<ol><li><strong>Agent Token</strong>：可吊销、限频、绑行业；</li><li><strong>实体范围</strong>：组织/门店/经销商/仓库，越界<strong>当作不存在</strong>（不泄露&quot;有但你看不到&quot;）；</li><li><strong>边权限</strong>：与界面同一份 <code>assertEdgePermitted</code>；</li><li><strong>高危边</strong>：一律拒绝（<code>EDGE_REQUIRES_HUMAN</code>）；</li><li><strong>幂等键</strong>：<code>(token_id, tool_name, key)</code>，同键异参 → 409；</li><li><strong>全量留痕</strong>：每次调用都记。</li></ol>
+<h3 id="113-加一个-mcp-工具">11.3 加一个 MCP 工具</h3>
+<pre><code>// server/mcp/tools.js
+{
+  name: 'sales.xxx',
+  level: 'write',            // read | write | danger
+  title: '……',
+  description: '……',
+  inputSchema: { ... },
+  handler({ db, args, ctx }) { ... }
+}</code></pre>
+<p>然后跑 <code>node scripts/check-mcp-coverage.mjs</code> —— 它会断言&quot;声明的工具真的注册且级别一致&quot;。</p>
+<hr />
+<h2 id="十二前端">十二、前端</h2>
+<h3 id="121-一条页面的生命周期">12.1 一条页面的生命周期</h3>
+<pre><code>App.tsx 路由  →  Layout 菜单  →  pages/*.tsx  →  DataPage（列表骨架）  →  api/client.ts</code></pre>
+<ul><li><strong>列表页 90% 用 <code>DataPage</code></strong>：传 <code>fields</code>（列 + 表单）和 <code>path</code>，增删改查/分页/导出全有了；</li><li>**下拉选项从 <code>/api/meta/*</code> 取<strong>（<code>hooks/opts.ts</code>），</strong>页面里不写死枚举**；</li><li><strong>所有请求走 <code>src/api/client.ts</code></strong>（统一带 token、拆 <code>{code,data}</code>、把业务错误转成 Error）。</li></ul>
+<h3 id="122-加一个页面四步缺一不可">12.2 加一个页面（四步，缺一不可）</h3>
+<ol><li><code>src/pages/&lt;域&gt;/&lt;Page&gt;.tsx</code> 新建文件（<strong>文件头写「文件标识」块</strong>）；</li><li><code>src/App.tsx</code> 加 <code>&lt;Route&gt;</code>；</li><li><code>src/components/Layout.tsx</code> 加菜单项（<code>roles: rolesOf(...)</code>）；</li><li>若需要新接口：<code>server/routes/*</code> + <code>server/openapi.js</code> + <code>npm run gen:api</code>。</li></ol>
+<hr />
+<h2 id="十三测试与守卫改完必须跑">十三、测试与守卫（改完必须跑）</h2>
+<h3 id="131-一条命令">13.1 一条命令</h3>
+<pre><code>GML_DATA_DIR=/tmp/reg node scripts/regress-all.mjs        # 默认 3 轮
+ROUNDS=1 GML_DATA_DIR=/tmp/reg node scripts/regress-all.mjs</code></pre>
+<p>它按顺序跑：56 套 <code>test-*.mjs</code> × 3 行业 → <code>verify-*</code> → 10 道 <code>check-*</code> → <code>smoke-api</code> → <code>tsc</code> → <code>vite build</code>，</p>
+<p>最后输出「通过 N / 失败 M」与断言累计。</p>
+<h3 id="132-十道静态守卫">13.2 十道静态守卫</h3>
+<div class="table-wrap"><table><thead><tr><th>守卫</th><th>守什么</th></tr></thead><tbody><tr><td><code>check-api-contract</code></td><td>前端调用的接口都在 OpenAPI 里；类型文件与契约一致</td></tr>
+<tr><td><code>check-contract-routes</code></td><td>契约里的路径后端真有（反向也查）</td></tr>
+<tr><td><code>check-route-order</code></td><td>字面段路由排在参数段之前（<code>/x/explain</code> 不被 <code>/x/:id</code> 吃掉）</td></tr>
+<tr><td><code>check-doc-events-edges</code></td><td>留痕里的边与内核 <code>doc_actions</code> 一致</td></tr>
+<tr><td><code>check-inv-txn-dict</code></td><td>库存流水类型都在字典里</td></tr>
+<tr><td><code>check-bizcode-shape</code></td><td>业务码格式统一</td></tr>
+<tr><td><code>check-env-pinning</code></td><td>脚本自己钉 <code>GML_DATA_DIR</code>，不会误写仓库库</td></tr>
+<tr><td><code>check-test-helper-shape</code></td><td>测试脚本的断言形状正确（防止 <code>ok(msg, cond)</code> 参数错位导致恒真）</td></tr>
+<tr><td><code>check-mcp-coverage</code></td><td>声明的 MCP 工具真的注册；无归属列的单据只限已知 7 个</td></tr>
+<tr><td><code>check-file-header</code></td><td>381 个源文件都有「文件标识」块（棘轮 100%）</td></tr></tbody></table></div>
+<h3 id="133-反例纪律这条比断言数更重要">13.3 反例纪律（这条比断言数更重要）</h3>
+<p><strong>&quot;断言绿&quot;不等于&quot;功能对&quot;</strong>。凡是修缺陷，必须做一次<strong>先红后绿</strong>：</p>
+<ol><li>在 <code>/tmp</code> 影子副本里把被测代码改坏（<strong>不改仓库文件</strong>）；</li><li>跑测试 → 必须<strong>红</strong>，且失败项<strong>可读</strong>（不是崩栈）；</li><li>还原（逐字节写回 + sha256 比对）→ 必须<strong>绿</strong>。</li></ol>
+<p>如果改坏了还是绿，说明这条断言没覆盖到，或者断言本身写错了对象。</p>
+<hr />
+<h2 id="十四演示数据seed-vs-demo-seed">十四、演示数据（seed vs demo-seed）</h2>
+<div class="table-wrap"><table><thead><tr><th>文件</th><th>负责</th><th>为什么分开</th></tr></thead><tbody><tr><td><code>db/seed.js</code></td><td>主数据 + 全量业务单据</td><td>它的 <code>rnd()</code> 序列是<strong>全库可复现的锚点</strong></td></tr>
+<tr><td><code>db/demo-seed.js</code></td><td>连续 22 天零售日报 + 部分流转</td><td>单独模块，<strong>不动主序列</strong>，插进去不会让整库数据漂移</td></tr></tbody></table></div>
+<p>演示数据的三条要求：</p>
+<ol><li><strong>可复现</strong>：两次 <code>npm run reseed</code> 逐表 0 差异（随机只用 <code>rnd/R/RI/RF/PICK</code>，禁 <code>ORDER BY RANDOM()</code>）；</li><li><strong>中间态必须有</strong>：部分发货 / 部分开票 / 部分收款 / 部分入库 / 待检，靠随机是造不出来的；</li><li><strong>幂等</strong>：重复执行不叠加（用&quot;本模块才会产生的日期/备注&quot;当哨兵）。</li></ol>
+<hr />
+<h2 id="十五六个常见改造任务照着做就行">十五、六个常见改造任务（照着做就行）</h2>
+<h3 id="任务-1给某张表加一个字段">任务 1：给某张表加一个字段</h3>
+<ol><li>新建迁移 <code>NNN_xxx.cjs</code>（<code>up</code> 加列 + <code>verify</code> 判列存在）；</li><li><code>lib/*</code> 里读写这个字段（金额 <code>round2</code>、数量 <code>round4</code>）；</li><li>前端 <code>fields</code> 加一项；</li><li>若对外暴露：<code>openapi.js</code> 补字段说明；</li><li>跑 <code>regress-all</code>。</li></ol>
+<h3 id="任务-2加一个接口">任务 2：加一个接口</h3>
+<ol><li><code>server/routes/x.js</code> 加 <code>r.post('/path', requireAuth, requirePerm('...'), wrap(...))</code>；</li><li><strong>字面段路由放参数段之前</strong>；</li><li><code>server/openapi.js</code> 登记（否则 <code>check:api</code> 红）；</li><li><code>npm run gen:api</code>；</li><li>跑 <code>check:contract-routes</code> + <code>regress-all</code>。</li></ol>
+<h3 id="任务-3加一个页面">任务 3：加一个页面</h3>
+<p>见 §12.2 四步。</p>
+<h3 id="任务-4加一种单据类型">任务 4：加一种单据类型</h3>
+<ol><li><code>migrations/008_doc_kernel.cjs</code> 里加类型 / 状态 / 边（或在后续迁移里补）；</li><li><strong>字典三处齐</strong>：<code>meta.js</code> 的 <code>*_status</code> 文案、<code>ui.tsx</code> 的 <code>Status</code> 映射、前端页签来源；</li><li>建表（或复用表）+ <code>seed.js</code> 的 <code>TABLES</code> 登记；</li><li>MCP 不需要改（通用工具自动覆盖）；</li><li>跑 <code>check:doc-events-edges</code>。</li></ol>
+<blockquote><p>表里真实存在的每个状态值，内核 / 字典 / 标签三处都要有它 —— 少一处，这张单会<strong>从页签里消失</strong>。</p></blockquote>
+<h3 id="任务-5加一个配置项">任务 5：加一个配置项</h3>
+<ol><li><code>lib/settings.js</code> 的 <code>SETTING_RULES</code> 加键（<code>default</code> = 当前行为）；</li><li>在<strong>唯一一处</strong> <code>readSetting</code> 并接进判据；</li><li>写一条反例证明&quot;改了真的变&quot;；</li><li>若危险项，<code>is_danger: true</code> + <code>impact</code> 写清边界。</li></ol>
+<h3 id="任务-6加一个-mcp-工具">任务 6：加一个 MCP 工具</h3>
+<p>见 §11.3；跑 <code>check:mcp</code>。</p>
+<hr />
+<h2 id="十六代码规范不是风格问题是防事故">十六、代码规范（不是风格问题，是防事故）</h2>
+<div class="table-wrap"><table><thead><tr><th>规则</th><th>为什么</th></tr></thead><tbody><tr><td><strong>每个源文件头有「文件标识」块</strong></td><td>接手的人第一屏就知道这文件干什么、改它注意什么；<code>check-file-header</code> 守 100%</td></tr>
+<tr><td><strong>判据只有一处</strong></td><td>状态机在内核、配置在 <code>SETTING_RULES</code>、颜色在 <code>tailwind.config.js</code>、产品名在 <code>brand.ts</code></td></tr>
+<tr><td><strong>日期只用 <code>lib/dates.js</code></strong></td><td><code>toISOString().slice(0,10)</code> 在 UTC+8 会差一天</td></tr>
+<tr><td><strong>随机只用 seed 的 <code>rnd/R/RI/RF/PICK</code></strong></td><td>保证重建可复现</td></tr>
+<tr><td><strong>金额 <code>round2</code>、数量 <code>round4</code></strong></td><td>混用会出现 0.0001 的残差，对账时找不到</td></tr>
+<tr><td><strong>错误码要具体</strong></td><td><code>throw bad('...', 'PO_OVER_RECEIVE', 409)</code>，前端与测试都靠它</td></tr>
+<tr><td><strong>catch 里按错误码分支必须 fail-closed</strong></td><td><code>if (e?.code === X)</code> 会把未知异常静默降级</td></tr>
+<tr><td><strong>改被 <code>require</code> 的模块先 <code>node --check</code></strong></td><td>语法错在启动时才炸，演示现场最难看</td></tr></tbody></table></div>
+<hr />
+<h2 id="十七故障排查速查">十七、故障排查速查</h2>
+<div class="table-wrap"><table><thead><tr><th>现象</th><th>最可能的原因</th><th>怎么查</th></tr></thead><tbody><tr><td>登录 401 / 一直跳登录页</td><td>token 过期 / <code>JWT_SECRET</code> 变了</td><td>看 <code>localStorage.gml_token</code>，重新登录</td></tr>
+<tr><td>接口 403</td><td>角色或权限点没配</td><td><code>SELECT * FROM role_permissions WHERE role_code=?</code>，注意 <code>byModule()</code> 是<strong>批量授予</strong>，grep 会假阴</td></tr>
+<tr><td>接口 404 但路由写了</td><td>路由顺序被参数段吃掉</td><td><code>check-route-order</code></td></tr>
+<tr><td>状态推进 409 <code>TRANSITION_NOT_ALLOWED</code></td><td>当前状态不在该动作的 <code>from_state</code></td><td>查 <code>doc_actions</code></td></tr>
+<tr><td>页面数据是空的</td><td>数据范围（data_scope）过滤了</td><td>换 admin 看；或查 <code>resolveOrgScope</code></td></tr>
+<tr><td>库存对不上</td><td>有人绕过 <code>lib/stock.js</code> 直接改表</td><td>查 <code>inventory_transactions</code> 有没有对应流水</td></tr>
+<tr><td>重灌后测试红一片</td><td>用了裸 <code>cp</code> 复制库（丢 <code>-wal</code>）</td><td>改用 <code>db.backup()</code></td></tr>
+<tr><td>前端改了没生效</td><td>看的是旧 <code>dist/</code></td><td><code>npm run build</code> 或强刷</td></tr></tbody></table></div>
+<hr />
+<h2 id="十八已知边界与技术债不藏">十八、已知边界与技术债（不藏）</h2>
+<ol><li><strong>边权限跨域不一致</strong>：<code>assertEdgePermitted</code> 只被 5 个通用入口调用，部分领域专属流转端点没调 ——</li></ol>
+<p>补一半会让同一单据两套规则，<strong>刻意保持现状</strong>，等统一收口。</p>
+<ol><li><strong>7 种单据没有归属列</strong>（AR / CA / OCS / OM / RCP / RFD / VOUCHER）⇒ 受限令牌看不到它们；</li></ol>
+<p>已在「AI 与 MCP 控制台」打标并钉死清单。</p>
+<ol><li><strong>盘盈成本三条路分叉</strong>：总部按结存均价 / MCP 传 <code>unitCost:null</code> 被吃成 0 / 门店 <code>lib/pos2.js</code> 仍是 0。</li><li><strong>契约 ②方向历史欠账</strong>：前端调用→契约的检查不计入退出码（<code>--strict</code> 才红）。</li><li><strong>服装版只做&quot;前端不展示、后台保留&quot;</strong>，业务差异（颜色×尺码矩阵）未补。</li><li><strong>钉钉/飞书</strong>只做了映射与冲突检测，<strong>真实租户 HTTP 未实现</strong>（刻意不写假实现）。</li><li><strong>没有自动化 UI 测试</strong>：断言管&quot;有没有&quot;不管&quot;对不对&quot;，关键页面仍需人眼看。</li></ol>
+<hr />
+<h2 id="十九命令速查">十九、命令速查</h2>
+<pre><code>npm run dev              # 前后端一起
+npm start                # 生产形态（单进程 :3001）
+npm run build            # 构建前端
+npm run reseed           # 三库重建（约 10s）
+npm run gen:api          # 由 openapi.js 重生成前端类型
+npm run check:api        # 契约检查
+npm run check:mcp        # MCP 覆盖检查
+npm run check:file-header# 文件标识覆盖率
+npm run docs:build       # 手册 MD → 网页版
+npm run release          # 打本地安装包 → release/
+
+node scripts/regress-all.mjs            # 全量回归（3 轮）
+node scripts/verify-seed.mjs all        # 种子数据不变量
+node scripts/accept/run-on-copy.mjs     # 独立副本验收（220 项）</code></pre>
+<hr />
+<h2 id="二十接手第一天的建议路线">二十、接手第一天的建议路线</h2>
+<ol><li>跑 <code>npm run dev</code>，用 <code>admin / 12345</code> 登进去，把<strong>销售订单 → 发货 → 开票 → 收款</strong>点一遍；</li><li>打开 <code>server/routes/sales.js</code>，对着界面看「这一页的按钮对应哪个路由」；</li><li>打开 <code>server/lib/docflow.js</code> 的 <code>advanceStatus</code>，理解&quot;状态只走内核&quot;；</li><li>打开 <code>server/db/seed.js</code> 的 <code>TABLES</code>，看看数据是怎么造的；</li><li>改一个小东西（比如给某个列表加一列），跑一次 <code>regress-all</code>，感受一下这条流水线。</li></ol>
+<hr />
+<p>*手册版本：2026-10-17 ｜ 代码版本：<code>c16eb46</code> ｜ 如有出入，以代码与 <code>docs/</code> 下的设计文档为准。*</p>
+  </main>
+</div>
+<div class="foot">
+  开发说明手册 · 伴圆AI原生ERP系统 · 演示环境说明：本文档中的数据均为虚构样例。
+</div>
+<script>
+  // 目录搜索：只在目录里过滤，不碰正文（正文里有大量"搜索"二字，进去会让人以为坏了）
+  var q = document.getElementById('q')
+  var links = [].slice.call(document.querySelectorAll('#toc a'))
+  q.addEventListener('input', function () {
+    var v = q.value.trim().toLowerCase()
+    links.forEach(function (a) {
+      a.style.display = !v || a.textContent.toLowerCase().indexOf(v) >= 0 ? '' : 'none'
+    })
+  })
+
+  // 滚动高亮：用 IntersectionObserver 而不是 scroll 事件（长文档滚动时前者更省）
+  var hs = [].slice.call(document.querySelectorAll('#doc h2, #doc h3'))
+  var map = new Map()
+  links.forEach(function (a) { map.set(decodeURIComponent(a.getAttribute('href').slice(1)), a) })
+  var io = new IntersectionObserver(function (entries) {
+    entries.forEach(function (e) {
+      if (!e.isIntersecting) return
+      links.forEach(function (a) { a.classList.remove('active') })
+      var a = map.get(e.target.id)
+      if (a) a.classList.add('active')
+    })
+  }, { rootMargin: '-72px 0px -70% 0px', threshold: 0 })
+  hs.forEach(function (h) { io.observe(h) })
+</script>
+</body>
+</html>

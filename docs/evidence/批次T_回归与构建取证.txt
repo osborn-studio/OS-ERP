@@ -1,0 +1,11 @@
+=== 批次 T 证据归档 ===
+
+1) 三轮全量回归：每轮 103 项通过 / 1 项失败（唯一失败 = vite build 在沙箱内读不到 public/enter.html）
+   断言累计通过 21891 条；跑批项 312 个
+
+2) 自检步骤（每轮都跑）：verify-seed(all) / verify-reseed(两次重建比对) 3 / verify-migrations /
+   check:api / check:route-order / smoke-api / tsc --noEmit —— 全绿
+
+3) 非沙箱单独取证：
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+✓ built in 1.94s

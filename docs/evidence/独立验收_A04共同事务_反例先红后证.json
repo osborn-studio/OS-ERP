@@ -1,0 +1,44 @@
+{
+  "kind": "a04-common-transaction-reversal",
+  "at": "2026-10-16T08:51:28.190Z",
+  "target": "server/mcp/server.js · runInOneTx",
+  "phases": {
+    "A_defect": {
+      "label": "A-拆掉事务",
+      "toolError": "A04_INJECTED_CACHE_FAIL",
+      "isError": true,
+      "beforeRows": 0,
+      "afterRows": 1,
+      "afterQty": 7,
+      "idemRows": 0,
+      "wh": 1,
+      "sku": 1
+    },
+    "B_fixed": {
+      "label": "B-保留事务",
+      "toolError": "A04_INJECTED_CACHE_FAIL",
+      "isError": true,
+      "beforeRows": 0,
+      "afterRows": 0,
+      "afterQty": 0,
+      "idemRows": 0,
+      "wh": 1,
+      "sku": 1
+    },
+    "C_control": {
+      "label": "C-对照",
+      "toolError": null,
+      "isError": false,
+      "beforeRows": 0,
+      "afterRows": 1,
+      "afterQty": 7,
+      "idemRows": 1,
+      "wh": 1,
+      "sku": 1
+    }
+  },
+  "summary": {
+    "passed": 9,
+    "failed": 0
+  }
+}

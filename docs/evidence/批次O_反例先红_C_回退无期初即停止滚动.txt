@@ -1,0 +1,87 @@
+# 批次 O 反例先红后证 · 反例 C：回退「没有期初登记时停止滚动」（本批修掉的真实缺陷）
+
+## 注入内容
+
+文件 server/lib/report.js → openingBalancesAsOf()
+
+    -  const earliest = earliestPostedPeriod(db)
+    -  if (!earliest || earliest >= p) return out
+    -  rollForwardOpening(db, map, out, earliest, p)
+    -  out.virtual_base_period = earliest
+    -  return out
+    +  return out   // 反例注入 C：没有期初登记时停止滚动
+
+这是**批次 L 留下的原始行为**：`if (!base) return out` ——
+一个从未登记过期初的库，它的"期初"恒为 0，**更早期间的发生额整段被吞掉**。
+
+危害在于**它不会让任何账不平**：每期各算各的，而每张凭证自身借贷平衡（Σsigned ≡ 0），
+所以"资产 = 负债 + 权益"照样成立 —— 没有任何探针会发现它。
+本批用一个"从零开始记账、从未登记期初"的自造年度（2024）走完整条年结链路时才撞出来：
+11 月收入 10000、12 月费用 2000，4103 该是 −8000 却只有 −2000。
+
+## 预期
+
+A2（4103 = −8000）、A4（4104 增量 / 结转金额）、A7（可分配余额）、A11（跨年衔接）
+多组金额断言红；并因 `OPENING_NE_BASE_CLOSE` 探针响而连带 A3 的关账被拦。
+
+## 实际输出
+
+=== 年度结转与利润分配测试（cosmetic） ===
+
+[36mA0 基线：4104 存在且是权益叶子；分配目标科目规则[0m
+
+[36mA1 前置：漏一个月没结转就不许年结（否则是一笔永久错账）[0m
+  [31m✗[0m 11 月月结后 4103 的余额 = −10000（贷方 10000）：期望≈-10000，实际 0
+  [31m✗[0m 11 月月结后 4103 的余额 = −10000（贷方 10000）
+  [31m✗[0m 此时 4103 的余额非 0（10000）⇒ ANNUAL_NOTHING 兜不住：期望≈10000，实际 0
+  [31m✗[0m 此时 4103 的余额非 0（10000）⇒ ANNUAL_NOTHING 兜不住
+  [31m✗[0m 2024-10 是净额为 0 的月份，结转后 4103 不变（−10000）：期望≈-10000，实际 0
+  [31m✗[0m 2024-10 是净额为 0 的月份，结转后 4103 不变（−10000）
+
+[36mA2 年末月份记账与月结[0m
+  [31m✗[0m 全年月结完成后 4103 = −8000（收入 10000 − 费用 2000）：期望≈-8000，实际 2000
+  [31m✗[0m 全年月结完成后 4103 = −8000（收入 10000 − 费用 2000）
+
+[36mA3 其余前置检查各自会拦[0m
+file:///Users/linxinlan/%E5%B7%A5%E4%BD%9C%E6%96%87%E6%A1%A3/gml/server/lib/report.js:342
+    throw new ReportError(
+          ^
+
+ReportError: 期间 2024-12 的报表自证不通过，不能关账：有 5 处「本期期初 ≠ 上期期末」（如 2024-11 的 1002：期初 0 ≠ 2024-10 期末 -1000） —— 这类偏差**账仍然是平的**（少滚的那一期借贷本就平衡），所以只有这一条会响
+    at Module.closePeriod (file:///Users/linxinlan/%E5%B7%A5%E4%BD%9C%E6%96%87%E6%A1%A3/gml/server/lib/report.js:342:11)
+    at file:///Users/linxinlan/%E5%B7%A5%E4%BD%9C%E6%96%87%E6%A1%A3/gml/scripts/test-annual.mjs:247:7
+    at ModuleJob.run (node:internal/modules/esm/module_job:343:25)
+    at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:665:26)
+    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:117:5) {
+  code: 'PERIOD_NOT_BALANCED',
+  http: 409,
+  status: 409,
+  detail: {
+    problems: [
+      {
+        code: 'OPENING_NE_BASE_CLOSE',
+        message: '有 5 处「本期期初 ≠ 上期期末」（如 2024-11 的 1002：期初 0 ≠ 2024-10 期末 -1000） —— 这类偏差**账仍然是平的**（少滚的那一期借贷本就平衡），所以只有这一条会响',
+        detail: {
+          count: 5,
+          sample: [ [Object], [Object], [Object], [Object], [Object] ]
+        }
+      }
+    ]
+  }
+}
+
+Node.js v22.22.2
+
+
+### 这组反例的额外价值：探针⑦第一次能抓到它
+
+批次 N 的探针⑦要求"账上存在 period <= prev 的期初登记"才检查，
+于是"从未登记期初的库"整段被跳过 —— **恰恰是唯一会出错的情形**。
+本批把这道前提去掉（因为滚动已修），探针⑦的覆盖面因此不再是"有基准的期间"，
+而是**全部期间**。这条注入同时也验证了那次放宽是对的。
+
+## 还原注入点后（应回绿）
+
+
+────────────────────────────────────────────────────────────────────────
+通过 119 / 失败 0

@@ -1,0 +1,559 @@
+{
+  "kind": "injection-reversal-selfcheck",
+  "at": "2026-10-16T12:53:39.863Z",
+  "source_root": "/Users/linxinlan/工作文档/gml",
+  "groups_run": [
+    "A",
+    "B",
+    "C",
+    "D",
+    "E",
+    "F",
+    "G",
+    "H",
+    "I",
+    "J",
+    "K",
+    "K2",
+    "L",
+    "M",
+    "N",
+    "O",
+    "P"
+  ],
+  "isolation": "each injection patched a /tmp isolated copy; workspace untouched (sha256 verified)",
+  "summary": {
+    "total": 17,
+    "passed": 16,
+    "failed": 1,
+    "red_crashed": 1,
+    "env_failure": 0,
+    "no_red": 0,
+    "anchor_miss": 0
+  },
+  "injections": [
+    {
+      "id": "A",
+      "title": "A14 送分口径（强制每元 1 分）",
+      "file": "server/lib/member.js",
+      "expect": [
+        "A14 送分口径不是",
+        "A14 送分与"
+      ]
+    },
+    {
+      "id": "B",
+      "title": "A15 撤单退回抵扣积分",
+      "file": "server/lib/member.js",
+      "expect": [
+        "A15 撤单后积分回到期初"
+      ]
+    },
+    {
+      "id": "C",
+      "title": "A17b 改草稿时数量必须为正",
+      "file": "server/routes/sales.js",
+      "expect": [
+        "A17b 改草稿数量为 0 被拒"
+      ]
+    },
+    {
+      "id": "D",
+      "title": "A17b MCP 未知字段校验",
+      "file": "server/mcp/validate.js",
+      "expect": [
+        "A17b MCP 传未知字段被拒",
+        "A17b 拒绝码来自参数校验 ARG_UNKNOWN"
+      ]
+    },
+    {
+      "id": "E",
+      "title": "A17b MCP 数量下界（负出库）",
+      "file": "server/mcp/tools.js",
+      "expect": [
+        "A17b MCP 负出库被拒",
+        "A17b 拒绝理由说清是数量非法"
+      ]
+    },
+    {
+      "id": "F",
+      "title": "A18 核销的供应商一致校验",
+      "file": "server/lib/purchase.js",
+      "expect": [
+        "PAY_ALLOC_SUPPLIER_MISMATCH",
+        "A18 跨供应商核销"
+      ]
+    },
+    {
+      "id": "G",
+      "title": "A18 生效时重验余额",
+      "file": "server/lib/purchase.js",
+      "expect": [
+        "A18 第二张生效被拒"
+      ]
+    },
+    {
+      "id": "H",
+      "title": "A19 approval.approve 改回裸 UPDATE（绕开领域服务）",
+      "file": "server/mcp/tools.js",
+      "expect": [
+        "A19 approval.approve 改调领域服务",
+        "A19/D5c approval.approve 未经人工确认不得执行"
+      ]
+    },
+    {
+      "id": "I",
+      "title": "A12 库存参数缓存退回模块级 Map（不按 db 分区）",
+      "file": "server/lib/stock.js",
+      "expect": [
+        "A12 库存参数缓存按 db 分区",
+        "A12 没有退回"
+      ]
+    },
+    {
+      "id": "J",
+      "title": "A06 收款释放授信退回按 RCP+收款单号（恒 0 条流水）",
+      "file": "server/lib/ar.js",
+      "expect": [
+        "A06 收款核销后可用额度回到占用前",
+        "A06 台账里占用与释放都挂在同一个"
+      ]
+    },
+    {
+      "id": "K",
+      "title": "A08 核销退回 FIFO 分摊（丢掉显式指定的那条）—— lib 层",
+      "file": "server/lib/ar.js",
+      "expect": [
+        "A08 核销只落在",
+        "A08 另一张"
+      ]
+    },
+    {
+      "id": "K2",
+      "title": "A08 核销退回 FIFO —— HTTP 边界（种子不受影响）",
+      "file": "server/routes/ar.js",
+      "expect": [
+        "A08 核销只落在",
+        "A08 另一张"
+      ]
+    },
+    {
+      "id": "L",
+      "title": "A07 核销额超实收的校验短路",
+      "file": "server/lib/ar.js",
+      "expect": [
+        "RC_ALLOC_EXCEEDS_RECEIPT",
+        "A07 被拒后一张收款单都没落库"
+      ]
+    },
+    {
+      "id": "M",
+      "title": "A10 红冲不区分 linked/created，一律作废整张应收",
+      "file": "server/lib/invoice.js",
+      "expect": [
+        "A10 共享的订单级应收"
+      ]
+    },
+    {
+      "id": "N",
+      "title": "A11 跨批次成本误用末批单价",
+      "file": "server/lib/stock.js",
+      "expect": [
+        "A11 行成本 = 各批次金额之和",
+        "A11 行金额与逐批流水之和一致"
+      ]
+    },
+    {
+      "id": "O",
+      "title": "A13 把 MR 移出\"只许可售货\"的集合",
+      "file": "server/lib/stock.js",
+      "expect": [
+        "BATCH_NOT_SELLABLE",
+        "A13 显式指定不合格批次出库"
+      ]
+    },
+    {
+      "id": "P",
+      "title": "getInvParam 的 global 分支去掉 ORDER BY id DESC（取最新一行）",
+      "file": "server/lib/stock.js",
+      "expect": [
+        "A12b：同一 global 键多行时读到"
+      ]
+    }
+  ],
+  "results": [
+    {
+      "id": "A",
+      "title": "A14 送分口径（强制每元 1 分）",
+      "file": "server/lib/member.js",
+      "runner": "selfcheck",
+      "anchor": {
+        "file": "server/lib/member.js",
+        "line": 128
+      },
+      "status": "pass",
+      "failures": [
+        "A14 送分口径不是\"1 元 1 分\"（旧口径会等于 floor(实付元)）",
+        "A14 送分与\"每元 N 分\"（N≥10）吻合"
+      ],
+      "hit": [
+        "A14 送分口径不是",
+        "A14 送分与"
+      ],
+      "greenFailures": 0,
+      "crashed": false,
+      "note": ""
+    },
+    {
+      "id": "B",
+      "title": "A15 撤单退回抵扣积分",
+      "file": "server/lib/member.js",
+      "runner": "selfcheck",
+      "anchor": {
+        "file": "server/lib/member.js",
+        "line": 603
+      },
+      "status": "pass",
+      "failures": [
+        "A15 撤单后积分回到期初（抵扣被退回、送分被扣回）",
+        "A15 重复撤单后积分没再变"
+      ],
+      "hit": [
+        "A15 撤单后积分回到期初"
+      ],
+      "greenFailures": 0,
+      "crashed": false,
+      "note": ""
+    },
+    {
+      "id": "C",
+      "title": "A17b 改草稿时数量必须为正",
+      "file": "server/routes/sales.js",
+      "runner": "selfcheck",
+      "anchor": {
+        "file": "server/routes/sales.js",
+        "line": 288
+      },
+      "status": "pass",
+      "failures": [
+        "A17b 改草稿数量为 0 被拒"
+      ],
+      "hit": [
+        "A17b 改草稿数量为 0 被拒"
+      ],
+      "greenFailures": 0,
+      "crashed": false,
+      "note": ""
+    },
+    {
+      "id": "D",
+      "title": "A17b MCP 未知字段校验",
+      "file": "server/mcp/validate.js",
+      "runner": "selfcheck",
+      "anchor": {
+        "file": "server/mcp/validate.js",
+        "line": 88
+      },
+      "status": "pass",
+      "failures": [
+        "A17b MCP 传未知字段被拒（不是静默接受）",
+        "A17b 拒绝码来自参数校验 ARG_UNKNOWN"
+      ],
+      "hit": [
+        "A17b MCP 传未知字段被拒",
+        "A17b 拒绝码来自参数校验 ARG_UNKNOWN"
+      ],
+      "greenFailures": 0,
+      "crashed": false,
+      "note": ""
+    },
+    {
+      "id": "E",
+      "title": "A17b MCP 数量下界（负出库）",
+      "file": "server/mcp/tools.js",
+      "runner": "selfcheck",
+      "anchor": {
+        "file": "server/mcp/tools.js",
+        "line": 978
+      },
+      "status": "pass",
+      "failures": [
+        "A17b MCP 负出库被拒（不是\"成功但什么都没做\"）",
+        "A17b 拒绝理由说清是数量非法（一句人话）"
+      ],
+      "hit": [
+        "A17b MCP 负出库被拒",
+        "A17b 拒绝理由说清是数量非法"
+      ],
+      "greenFailures": 0,
+      "crashed": false,
+      "note": ""
+    },
+    {
+      "id": "F",
+      "title": "A18 核销的供应商一致校验",
+      "file": "server/lib/purchase.js",
+      "runner": "selfcheck",
+      "anchor": {
+        "file": "server/lib/purchase.js",
+        "line": 1208
+      },
+      "status": "pass",
+      "failures": [
+        "A18 拒绝码 PAY_ALLOC_SUPPLIER_MISMATCH"
+      ],
+      "hit": [
+        "PAY_ALLOC_SUPPLIER_MISMATCH"
+      ],
+      "greenFailures": 0,
+      "crashed": false,
+      "note": ""
+    },
+    {
+      "id": "G",
+      "title": "A18 生效时重验余额",
+      "file": "server/lib/purchase.js",
+      "runner": "selfcheck",
+      "anchor": {
+        "file": "server/lib/purchase.js",
+        "line": 1249
+      },
+      "status": "pass",
+      "failures": [
+        "A18 第二张生效被拒（不会重复占用同一笔余额）",
+        "A18 拒绝码指明超未付余额",
+        "A18 该结算单实付额没有超过面额"
+      ],
+      "hit": [
+        "A18 第二张生效被拒"
+      ],
+      "greenFailures": 0,
+      "crashed": false,
+      "note": ""
+    },
+    {
+      "id": "H",
+      "title": "A19 approval.approve 改回裸 UPDATE（绕开领域服务）",
+      "file": "server/mcp/tools.js",
+      "runner": "selfcheck",
+      "anchor": {
+        "file": "server/mcp/tools.js",
+        "line": 1266
+      },
+      "status": "pass",
+      "failures": [
+        "A19 approval.approve 改调领域服务 decideApproval（代码里不再裸 UPDATE）",
+        "A19 动态：**approval_records 里多了一条 approve 记录**（裸 UPDATE 永远不写这张表）",
+        "A19 动态：签字人落的是真人（不是空、也不是令牌名）"
+      ],
+      "hit": [
+        "A19 approval.approve 改调领域服务"
+      ],
+      "greenFailures": 0,
+      "crashed": false,
+      "note": ""
+    },
+    {
+      "id": "I",
+      "title": "A12 库存参数缓存退回模块级 Map（不按 db 分区）",
+      "file": "server/lib/stock.js",
+      "runner": "selfcheck",
+      "anchor": {
+        "file": "server/lib/stock.js",
+        "line": 153
+      },
+      "status": "pass",
+      "failures": [
+        "A12 库存参数缓存按 db 分区（WeakMap keyed by db），不是全局单例",
+        "A12 没有退回\"模块级 new Map() 当参数缓存\"的写法",
+        "A13 参数确实被读到 1（否则下面那条\"被排除\"可能只是我改错了地方）",
+        "A13 参数置 1 后待检批次被排除出自动拣选",
+        "A13 参数置 1 后显式指定待检批次做销售出库 → 409 BATCH_NOT_SELLABLE"
+      ],
+      "hit": [
+        "A12 库存参数缓存按 db 分区",
+        "A12 没有退回"
+      ],
+      "greenFailures": 0,
+      "crashed": false,
+      "note": ""
+    },
+    {
+      "id": "J",
+      "title": "A06 收款释放授信退回按 RCP+收款单号（恒 0 条流水）",
+      "file": "server/lib/ar.js",
+      "runner": "selfcheck",
+      "anchor": {
+        "file": "server/lib/ar.js",
+        "line": 500
+      },
+      "status": "pass",
+      "failures": [
+        "A06 收款核销后可用额度回到占用前（旧缺陷：按 RCP 释放 ⇒ 一条流水都写不出 ⇒ 额度只减不增）",
+        "A06 台账里占用与释放都挂在同一个 `SO+orderId` 上（释放没有跑到 `RCP+receiptId`）"
+      ],
+      "hit": [
+        "A06 收款核销后可用额度回到占用前",
+        "A06 台账里占用与释放都挂在同一个"
+      ],
+      "greenFailures": 0,
+      "crashed": false,
+      "note": ""
+    },
+    {
+      "id": "K",
+      "title": "A08 核销退回 FIFO 分摊（丢掉显式指定的那条）—— lib 层",
+      "file": "server/lib/ar.js",
+      "runner": "selfcheck",
+      "anchor": {
+        "file": "server/lib/ar.js",
+        "line": 356
+      },
+      "status": "red_crashed",
+      "failures": [],
+      "hit": [],
+      "greenFailures": 0,
+      "crashed": true,
+      "note": "K：这一刀切在 lib 层 `createReceipt`，而**运行时与建库种子两个用户共用它** —— `server/db/ar-seed.js:183` → `applyPrepay` → `ar.js:978` 会抛 `PREPAY_EMPTY`，于是 selfcheck 在种子阶段就崩、一条 ✗ 都产生不出来。故记 `red_crashed`（不计入通过），并**保留这条记录**：它说明 lib 层那道闸门有两个承重用户，拆它会同时打到两边。A08 那条断言\"有没有牙\"由 K2（只拆 HTTP 边界）证明。 ｜ 注入后进程退出码 1 且**没有可读的 ✗**；还原后同一套件全绿 ⇒ 崩溃**由这次注入引起**（不是环境问题），但仍不计为\"变红\"（铁律 21）。stderr 尾部： | Node.js v22.22.2 | "
+    },
+    {
+      "id": "K2",
+      "title": "A08 核销退回 FIFO —— HTTP 边界（种子不受影响）",
+      "file": "server/routes/ar.js",
+      "runner": "selfcheck",
+      "anchor": {
+        "file": "server/routes/ar.js",
+        "line": 296
+      },
+      "status": "pass",
+      "failures": [
+        "A08 核销只落在**显式指定**的那张（乙）上（旧缺陷：被 FIFO 抵到同主体的甲）",
+        "A08 乙应收已结清",
+        "A08 甲应收仍是未结",
+        "A07 核销额 > 实收额 → 409（不是截平后静默成功）",
+        "A07 拒绝码 RC_ALLOC_EXCEEDS_RECEIPT",
+        "A07 拒绝里带出了两个可核对的数（实收剩余 / 本次要核）",
+        "A07 被拒后一张收款单都没落库",
+        "A07 核销额 > 应收未核销余额 → 409",
+        "A07 拒绝码 RC_ALLOC_EXCEEDS_AR",
+        "A07 同一应收在一次核销里重复出现 → 400",
+        "A07 拒绝码 RC_ALLOC_DUPLICATE_AR"
+      ],
+      "hit": [
+        "A08 核销只落在"
+      ],
+      "greenFailures": 0,
+      "crashed": false,
+      "note": ""
+    },
+    {
+      "id": "L",
+      "title": "A07 核销额超实收的校验短路",
+      "file": "server/lib/ar.js",
+      "runner": "selfcheck",
+      "anchor": {
+        "file": "server/lib/ar.js",
+        "line": 386
+      },
+      "status": "pass",
+      "failures": [
+        "A07 核销额 > 实收额 → 409（不是截平后静默成功）",
+        "A07 拒绝码 RC_ALLOC_EXCEEDS_RECEIPT",
+        "A07 拒绝里带出了两个可核对的数（实收剩余 / 本次要核）",
+        "A07 被拒后一张收款单都没落库"
+      ],
+      "hit": [
+        "RC_ALLOC_EXCEEDS_RECEIPT",
+        "A07 被拒后一张收款单都没落库"
+      ],
+      "greenFailures": 0,
+      "crashed": false,
+      "note": ""
+    },
+    {
+      "id": "M",
+      "title": "A10 红冲不区分 linked/created，一律作废整张应收",
+      "file": "server/lib/invoice.js",
+      "runner": "selfcheck",
+      "anchor": {
+        "file": "server/lib/invoice.js",
+        "line": 419
+      },
+      "status": "pass",
+      "failures": [
+        "A10 共享的订单级应收**没有被作废**"
+      ],
+      "hit": [
+        "A10 共享的订单级应收"
+      ],
+      "greenFailures": 0,
+      "crashed": false,
+      "note": ""
+    },
+    {
+      "id": "N",
+      "title": "A11 跨批次成本误用末批单价",
+      "file": "server/lib/stock.js",
+      "runner": "selfcheck",
+      "anchor": {
+        "file": "server/lib/stock.js",
+        "line": 525
+      },
+      "status": "pass",
+      "failures": [
+        "A11 行成本 = 各批次金额之和（5×10 + 5×20 = 150，而不是 10 × 末批价 20 = 200）",
+        "A11 行金额与逐批流水之和一致（没有一个数是\"另外算的\"）"
+      ],
+      "hit": [
+        "A11 行成本 = 各批次金额之和",
+        "A11 行金额与逐批流水之和一致"
+      ],
+      "greenFailures": 0,
+      "crashed": false,
+      "note": ""
+    },
+    {
+      "id": "O",
+      "title": "A13 把 MR 移出\"只许可售货\"的集合",
+      "file": "server/lib/stock.js",
+      "runner": "selfcheck",
+      "anchor": {
+        "file": "server/lib/stock.js",
+        "line": 66
+      },
+      "status": "pass",
+      "failures": [
+        "A13 显式指定不合格批次出库 → 409",
+        "A13 拒绝码 BATCH_NOT_SELLABLE",
+        "A13 被拒后该批次库存一个字节都没动"
+      ],
+      "hit": [
+        "BATCH_NOT_SELLABLE",
+        "A13 显式指定不合格批次出库"
+      ],
+      "greenFailures": 0,
+      "crashed": false,
+      "note": ""
+    },
+    {
+      "id": "P",
+      "title": "getInvParam 的 global 分支去掉 ORDER BY id DESC（取最新一行）",
+      "file": "server/lib/stock.js",
+      "runner": "test-guards",
+      "anchor": {
+        "file": "server/lib/stock.js",
+        "line": 190
+      },
+      "status": "pass",
+      "failures": [
+        "A12b：同一 global 键多行时读到**最新**那一行（NEW，不是最早那行 OLD）"
+      ],
+      "hit": [
+        "A12b：同一 global 键多行时读到"
+      ],
+      "greenFailures": 0,
+      "crashed": false,
+      "note": "P：闸门由 **`test-guards` G12 的 A12b** 守（**不在 selfcheck**）。用 selfcheck 量它全绿是**量错了尺子**；用 `test-guards` 量：注入后**红 1 条**（红的正是 A12b），还原后 **0 失败**。刻意不写当时的套件总数（`370/1`、`371/0` 那类）—— 总数每批都在变（HTTP 信用形状那 7 条加上来之后就不是那个数了），写死就会过期，而这正是本批在修的毛病。"
+    }
+  ]
+}

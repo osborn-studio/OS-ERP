@@ -1,0 +1,32 @@
+node_modules
+dist/
+data/*.db
+data/*.db-journal
+data/*.db-wal
+data/*.db-shm
+data/uploads/
+# 数据库快照（VACUUM INTO 产物，本机保留即可，不进仓）
+data/backups/
+.env
+.env.local
+*.log
+.DS_Store
+release/
+.local/
+backups/
+test-evidence/
+.workbuddy/
+
+# 开源参考仓库（只读，不进主仓）
+_ref/
+
+# OS EGP local verification artifacts
+artifacts/
+.test-data/
+
+# Retired historical materials: private archive only; never reintroduce them.
+/docs/evidence/批次U之四_真实HTTP冒烟.txt
+/deliverables/伴圆ERP_演示交付_20261017/01_演示程序/伴圆ERP-演示版-20261017.zip
+/deliverables/伴圆ERP_演示交付_20261017/伴圆ai原生erp整体打包.zip
+/docs/screenshots/
+/docs/shots/

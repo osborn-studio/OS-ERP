@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>本地安装手册 · 伴圆AI原生ERP系统</title>
+<meta name="description" content="环境准备、安装启动、备份恢复与故障排查" />
+<style>
+  :root{
+    --brand:#185fa5; --brand-600:#2b82c9; --tech:#06b6d4;
+    --ink-900:#0f172a; --ink-700:#334155; --ink-500:#64748b; --ink-300:#cbd5e1;
+    --bg:#f6f9fc; --line:#e2e8f0;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink-900);
+    font:15px/1.75 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",system-ui,sans-serif}
+  a{color:var(--brand);text-decoration:none}
+  a:hover{text-decoration:underline}
+  header.top{position:sticky;top:0;z-index:20;background:rgba(255,255,255,.92);
+    backdrop-filter:saturate(180%) blur(8px);border-bottom:1px solid var(--line)}
+  .top-in{max-width:1280px;margin:0 auto;padding:10px 20px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+  .logo{width:30px;height:30px;border-radius:8px;color:#fff;display:flex;align-items:center;justify-content:center;
+    font-weight:600;font-size:14px;background:linear-gradient(135deg,#185fa5 0%,#2b82c9 58%,#06b6d4 100%);
+    box-shadow:0 6px 16px rgba(24,95,165,.28)}
+  .brand{font-size:14.5px;font-weight:600}
+  .brand small{display:block;font-weight:400;font-size:11.5px;color:var(--ink-500)}
+  .tag{font-size:11px;padding:1px 7px;border-radius:999px;border:1px solid var(--line);color:var(--brand);
+    background:#eff6fd}
+  .spacer{flex:1}
+  .back{font-size:12.5px;color:var(--ink-500)}
+  .back:hover{color:var(--brand)}
+  .search{width:220px;border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-size:13px;
+    outline:none;background:#fff}
+  .search:focus{border-color:var(--brand-600);box-shadow:0 0 0 3px rgba(43,130,201,.12)}
+  .wrap{max-width:1280px;margin:0 auto;padding:20px;display:grid;grid-template-columns:270px minmax(0,1fr);gap:24px;align-items:start}
+  nav.toc{position:sticky;top:76px;max-height:calc(100vh - 96px);overflow:auto;
+    background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px 10px}
+  nav.toc .t{font-size:11.5px;letter-spacing:.08em;color:var(--ink-500);padding:0 8px 8px}
+  nav.toc a{display:block;padding:4px 8px;border-radius:7px;font-size:13px;color:var(--ink-700);line-height:1.5}
+  nav.toc a.toc-l3{font-size:12.3px;color:var(--ink-500);padding-left:20px}
+  nav.toc a:hover{background:#f1f6fc;color:var(--brand);text-decoration:none}
+  nav.toc a.active{background:#e8f2fd;color:var(--brand);font-weight:600}
+  main{background:#fff;border:1px solid var(--line);border-radius:14px;padding:28px 34px;min-width:0;
+    box-shadow:0 1px 2px rgba(15,23,42,.04)}
+  main h1{font-size:26px;line-height:1.35;margin:0 0 6px}
+  main h2{font-size:19px;margin:34px 0 10px;padding-top:14px;border-top:1px solid var(--line)}
+  main h2:first-of-type{border-top:0;padding-top:0;margin-top:22px}
+  main h3{font-size:15.5px;margin:22px 0 8px;color:#0b3d68}
+  main h4{font-size:14px;margin:18px 0 6px;color:var(--ink-700)}
+  main p{margin:9px 0;color:#1e293b}
+  main ul,main ol{margin:8px 0 8px 4px;padding-left:20px}
+  main li{margin:3px 0}
+  main blockquote{margin:12px 0;padding:10px 14px;background:#f3f8fe;border-left:3px solid var(--brand-600);
+    border-radius:0 8px 8px 0;color:#0b3d68}
+  main blockquote p{margin:0;color:inherit}
+  main code{background:#f1f5f9;border:1px solid #e2e8f0;border-radius:5px;padding:1px 5px;font-size:12.5px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  main pre{background:#0f2032;color:#dbeafe;border-radius:10px;padding:14px 16px;overflow:auto;font-size:12.5px;line-height:1.6}
+  main pre code{background:none;border:0;color:inherit;padding:0}
+  main hr{border:0;border-top:1px solid var(--line);margin:26px 0}
+  .table-wrap{overflow:auto;margin:12px 0;border:1px solid var(--line);border-radius:10px}
+  table{border-collapse:collapse;width:100%;font-size:13px}
+  th,td{border-bottom:1px solid var(--line);padding:7px 10px;text-align:left;vertical-align:top}
+  th{background:#f7fafc;color:var(--ink-700);font-weight:600;white-space:nowrap}
+  tr:last-child td{border-bottom:0}
+  tbody tr:hover{background:#fbfdff}
+  .foot{max-width:1280px;margin:0 auto;padding:0 20px 40px;color:var(--ink-500);font-size:12px}
+  @media print{
+    header.top,nav.toc,.foot{display:none}
+    body{background:#fff;font-size:11pt}
+    .wrap{display:block;padding:0}
+    main{border:0;border-radius:0;box-shadow:none;padding:0}
+    pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f3f4f6!important;color:#111!important}
+    pre code{color:#111!important}
+    h2,h3{break-after:avoid}
+    tr{break-inside:avoid}
+    .table-wrap{overflow:visible}
+  }
+  @media (max-width:1000px){
+    .wrap{grid-template-columns:1fr}
+    nav.toc{position:static;max-height:none;order:2}
+    main{padding:20px}
+    .search{width:100%}
+  }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="top-in">
+    <div class="logo">伴</div>
+    <div class="brand">伴圆AI原生ERP系统<small>AI 伴你，企业信息化管理圆满</small></div>
+    <span class="tag">安装维护</span>
+    <div class="spacer"></div>
+    <input class="search" id="q" placeholder="搜索目录…" />
+    <a class="back" href="install.html">安装</a>
+    <a class="back" href="manual.html">操作</a>
+    <a class="back" href="demo-flow.html">演示</a>
+    <a class="back" href="dev.html">开发与MCP</a>
+    <a class="back" href="security.html">安全说明</a>
+    <a class="back" href="http://127.0.0.1:3001/login">返回系统</a>
+  </div>
+</header>
+<div class="wrap">
+  <nav class="toc" id="toc">
+    <div class="t">本地安装手册</div>
+    <a class="toc-l2" data-depth="2" href="#一-安装前准备">一 安装前准备</a>
+<a class="toc-l2" data-depth="2" href="#二-解压及目录检查">二 解压及目录检查</a>
+<a class="toc-l2" data-depth="2" href="#三-macos-安装启动">三 macOS 安装启动</a>
+<a class="toc-l2" data-depth="2" href="#四-windows-安装启动">四 Windows 安装启动</a>
+<a class="toc-l2" data-depth="2" href="#五-linux-安装启动">五 Linux 安装启动</a>
+<a class="toc-l2" data-depth="2" href="#六-登录与启动检查">六 登录与启动检查</a>
+<a class="toc-l2" data-depth="2" href="#七-端口和配置">七 端口和配置</a>
+<a class="toc-l2" data-depth="2" href="#八-备份和恢复">八 备份和恢复</a>
+<a class="toc-l2" data-depth="2" href="#九-重置演示及升级">九 重置演示及升级</a>
+<a class="toc-l2" data-depth="2" href="#十-常见故障">十 常见故障</a>
+<a class="toc-l2" data-depth="2" href="#十一-正式使用前的边界">十一 正式使用前的边界</a>
+  </nav>
+  <main id="doc">
+<h1 id="伴圆ai原生erp-本地安装手册">伴圆AI原生ERP 本地安装手册</h1>
+<p>适用版本：2026年10月21日本地源码交付版。面向接收安装包的演示人员、实施顾问和维护人员。按本手册可以在自己的电脑上安装、启动、备份和恢复演示环境。</p>
+<p>本包是演示及方案验证环境，不是已完成生产上线认证的企业系统。首次启动生成虚构数据，默认只允许本机访问；美妆连锁、连锁餐饮为本次业务验收范围，服装不在范围内。</p>
+<h2 id="一-安装前准备">一 安装前准备</h2>
+<div class="table-wrap"><table><thead><tr><th>项目</th><th>要求</th></tr></thead><tbody><tr><td>运行环境</td><td>Node.js 22.x LTS，安装时保留 npm；不使用 Node 18、20、24 或其他主版本</td></tr>
+<tr><td>浏览器</td><td>能运行现代 JavaScript 的浏览器，例如 Chrome、Edge、Safari</td></tr>
+<tr><td>网络</td><td>首次安装需访问 npm 官方仓库及原生模块下载站点；不能保证断网首次安装</td></tr>
+<tr><td>本地空间</td><td>建议预留至少 2GB，安装目录须可读写</td></tr>
+<tr><td>数据库</td><td>无须单独安装数据库，SQLite 文件存放在本副本 data 目录</td></tr>
+<tr><td>已验证平台</td><td>本次安装验证以 macOS Apple Silicon 为准；Windows、Linux 提供脚本和步骤，未做对应实机验收</td></tr></tbody></table></div>
+<p>从 Node.js 官方网站获取 22.x 安装程序。安装完重新打开终端，运行以下命令，第一行须是 v22 开头，第二行须返回 npm 版本号。</p>
+<pre><code>node -v
+npm -v</code></pre>
+<p>不要把原机的 node_modules 复制到其他系统。better-sqlite3 包含原生模块，不同系统、CPU 和 Node 主版本不通用。首次安装会按当前电脑下载或编译对应版本。</p>
+<h2 id="二-解压及目录检查">二 解压及目录检查</h2>
+<p>完整解压 ZIP 到普通本地目录，不要在压缩包预览窗口中直接执行。避免同步盘、只读目录、系统保护目录和过长路径；目录名允许中文及空格。</p>
+<div class="table-wrap"><table><thead><tr><th>目录或文件</th><th>用途</th></tr></thead><tbody><tr><td>src</td><td>React 前端完整源码</td></tr>
+<tr><td>server</td><td>API、业务服务、数据库结构和迁移、种子数据、MCP 服务</td></tr>
+<tr><td>scripts</td><td>安装维护、代码检查、回归测试和重新打包脚本</td></tr>
+<tr><td>reusable</td><td>可复用模块及相关说明</td></tr>
+<tr><td>public 和 dist</td><td>静态资源及已构建前端；接收者不必先编译</td></tr>
+<tr><td>docs/本地交付</td><td>安装、操作、演示、开发及安全说明原文和验收记录</td></tr>
+<tr><td>手册</td><td>可离线打开的 HTML 手册，双击 install.html 即可</td></tr>
+<tr><td>MANIFEST.json</td><td>发布文件的 SHA256 清单</td></tr>
+<tr><td>package-lock.json</td><td>锁定依赖版本，安装使用 npm ci</td></tr></tbody></table></div>
+<p>包中不包含原机业务数据库、实际密钥、环境配置、录屏、日志、Git 历史或 node_modules。首次启动才会在此副本生成 data 目录内的样本库。</p>
+<h2 id="三-macos-安装启动">三 macOS 安装启动</h2>
+<ol><li>双击 install.command。首次联网安装运行依赖，出现 Ready 表示安装完成。</li><li>双击 start.command。等待首次建库完成，健康检查通过后自动打开登录页。</li><li>默认访问 http://127.0.0.1:3001/login，选择美妆连锁或连锁餐饮，再选择角色登录。</li><li>保持启动终端窗口开启。停止时在该窗口按 Ctrl+C；日后再双击 start.command，已有业务数据会保留。</li></ol>
+<p>如果系统拦截脚本，请先确认来源及校验结果，再按系统提示允许打开。也可在终端进入解压目录后运行：</p>
+<pre><code>node scripts/local-manage.mjs setup
+node scripts/local-manage.mjs start</code></pre>
+<p>只有提示没有执行权限时，才对本包脚本添加权限，不要全盘关闭系统安全保护：</p>
+<pre><code>chmod +x install.command start.command backup.command</code></pre>
+<h2 id="四-windows-安装启动">四 Windows 安装启动</h2>
+<ol><li>安装 Node.js 22.x，确保加入 PATH，重新打开命令窗口。</li><li>用资源管理器完整解压，再双击 install-windows.bat。</li><li>安装成功后双击 start-windows.bat。浏览器打开登录页后保持黑色运行窗口开启。</li><li>在该窗口按 Ctrl+C 停止服务。如提示终止批处理，确认即可。</li></ol>
+<p>也可在 PowerShell 或命令提示符进入解压目录后，执行与 macOS 相同的两条 node 命令。</p>
+<p>此路径尚未在 Windows 实机执行；遇到编译工具错误，应先检查 Node 是否确为 22.x 及下载站点是否可达。必须源码编译时，由 IT 配置 Python、Visual Studio C++ 构建工具，再重试安装，不要关闭 TLS 校验。</p>
+<h2 id="五-linux-安装启动">五 Linux 安装启动</h2>
+<p>安装 Node.js 22.x 和 npm 后，在解压目录运行：</p>
+<pre><code>node scripts/local-manage.mjs setup
+node scripts/local-manage.mjs start --no-browser</code></pre>
+<p>在同一台电脑浏览器打开默认登录地址。无桌面环境时不会自动出现网页。若原生依赖需要编译，须预装 Python 3、make 和 C++ 编译工具。Linux 路径未在本次环境实机验收。</p>
+<p>Dockerfile 和 docker-compose.yml 随源码提供，属于 IT 可选部署路径，不是本次已验收的双击安装方式。使用前须自行配置 GML_JWT_SECRET、检查端口暴露范围及卷备份；不要直接以默认账号向公网提供访问。</p>
+<h2 id="六-登录与启动检查">六 登录与启动检查</h2>
+<div class="table-wrap"><table><thead><tr><th>角色</th><th>账号</th><th>初始密码</th><th>场景</th></tr></thead><tbody><tr><td>管理员</td><td>admin</td><td>12345</td><td>总部功能及系统设置</td></tr>
+<tr><td>供应链主管</td><td>scm</td><td>123456</td><td>采购、库存、生产、质量</td></tr>
+<tr><td>财务</td><td>finance</td><td>123456</td><td>应收、凭证、报表</td></tr>
+<tr><td>门店店长</td><td>store01</td><td>123456</td><td>本店 POS、库存和要货</td></tr>
+<tr><td>经销商</td><td>dealer01</td><td>123456</td><td>美妆版本人订货、对账</td></tr>
+<tr><td>老板</td><td>boss</td><td>123456</td><td>经营查询及授权审批</td></tr>
+<tr><td>只读访客</td><td>viewer</td><td>123456</td><td>授权范围内只读访问</td></tr></tbody></table></div>
+<p>其他演示账号：purchase、sales、warehouse，初始密码均为 123456。餐饮演示不要使用经销商角色。</p>
+<p>登录后检查经营看板、销售订单、库存和手册能否打开；退出后分别用 store01、dealer01 验证角色差异。后台、POS、商城入口分别为 /login、/pos、/mall。</p>
+<pre><code>node scripts/local-manage.mjs doctor
+node scripts/verify-release.mjs</code></pre>
+<p>doctor 输出 Node、SQLite、前端及健康检查情况，不输出签名密钥。服务未启动时 health 显示 not running 属正常；安装必需项失败时退出码非零。verify-release 应显示 0 errors。</p>
+<h2 id="七-端口和配置">七 端口和配置</h2>
+<p>安装工具首次创建 .local/config.json，内容为端口和本机随机签名密钥。不要把这个文件发送给他人；每次启动保留它，避免旧登录令牌因密钥变化失效。</p>
+<p>默认端口 3001，默认只监听 127.0.0.1。端口已占用时启动工具会退出，不会结束占用进程。可编辑 config.json 的 port 字段为 3011，或使用临时环境变量：</p>
+<pre><code># macOS / Linux
+GML_LOCAL_PORT=3011 node scripts/local-manage.mjs start</code></pre>
+<pre><code># Windows PowerShell
+$env:GML_LOCAL_PORT=&quot;3011&quot;
+node scripts/local-manage.mjs start</code></pre>
+<p>更换端口后，登录、POS、商城和 MCP 端点中的端口均应同步更改。离线手册的“返回系统”链接默认仍指向 3001；此时手动输入实际地址。</p>
+<p>本地工具强制使用本副本 data 目录，不继承外部 GML_DATA_DIR、GML_DB 或旧 JWT_SECRET。开发者如需自定义存储或局域网访问，应走开发部署路径并自行做安全评估。</p>
+<h2 id="八-备份和恢复">八 备份和恢复</h2>
+<p>备份建议先停止服务，再双击 backup.command 或 backup-windows.bat，也可执行：</p>
+<pre><code>node scripts/local-manage.mjs backup</code></pre>
+<p>备份保存在 backups 下的时间戳目录。SQLite 通过 backup API 导出，避免直接复制运行中 DB 丢失 WAL 内容；配置文件一并备份。多行业同一业务时点的一致性要求先停服务。备份含数据库和签名密钥，须按敏感文件管理。</p>
+<p>恢复步骤：</p>
+<ol><li>停止所有指向此安装副本的服务，先备份当前 data 和 .local。</li><li>将当前 data 目录改名保留，创建新的空 data 目录。</li><li>将指定备份中的 gml_cosmetic.db、gml_food.db、gml_apparel.db 放入新的 data；不要混入旧的 -wal、-shm 文件。</li><li>将同次备份的 config.json 恢复到 .local/config.json。</li><li>启动并检查行业、近期单据、库存和角色；核对后再处理旧目录。</li></ol>
+<p>不要混用不同日期的数据库和配置。不要在服务运行中覆盖 DB。首次安装不依赖备份，直接启动即可生成新样本。</p>
+<h2 id="九-重置演示及升级">九 重置演示及升级</h2>
+<p>日常退出、重启和重复安装不会主动清空已有业务数据。需要恢复演示初始态时，先停止服务并备份，再将 data 目录改名为 data-before-reset，重新启动。系统将在新的 data 中生成全新样本，原目录保留可回退。</p>
+<p>不要在演示中误点 npm run reseed、reset 或测试脚本：其中有重建或修改数据库的工具。只在独立测试副本执行开发命令。</p>
+<p>升级时先备份，在新目录解压新版并安装依赖，将停机备份恢复到新版，验证后再切换使用。不要覆盖旧版后才发现无法回退；跨版本兼容性须单独验证。</p>
+<h2 id="十-常见故障">十 常见故障</h2>
+<div class="table-wrap"><table><thead><tr><th>现象</th><th>检查及处理</th></tr></thead><tbody><tr><td>node 或 npm 找不到</td><td>安装 22.x，重新开终端；检查 PATH</td></tr>
+<tr><td>npm 下载失败</td><td>检查官方 npm 仓库及原生模块站点网络；保留原始错误，不要使用关闭证书校验的做法</td></tr>
+<tr><td>NODE_MODULE_VERSION 或 invalid ELF 错误</td><td>不同系统或 Node 版本的依赖混用；切到 Node 22，再运行 setup 重新安装</td></tr>
+<tr><td>Port unavailable</td><td>更换本包端口，不要随意结束其他服务</td></tr>
+<tr><td>网页未打开</td><td>看启动窗口是否出现 ready，手动输入显示的登录地址</td></tr>
+<tr><td>首次建库较慢</td><td>等待日志完成；健康检查最多等待 180 秒，超时会停止本次子服务</td></tr>
+<tr><td>登录成功但无权限</td><td>先核对所选行业和角色；门店、经销商不可进入总部页面</td></tr>
+<tr><td>校验报告 hash mismatch</td><td>文件被改动或解压不完整；开发改动先保留，普通接收者应重新完整解压</td></tr>
+<tr><td>备份没有数据库</td><td>至少完成一次首次启动；确认操作的是正确安装目录</td></tr></tbody></table></div>
+<h2 id="十一-正式使用前的边界">十一 正式使用前的边界</h2>
+<p>默认密码、商城固定验证码、模拟付款及外部平台演示适配不能用于公网生产。正式使用须完成账号治理、HTTPS、访问控制、最小权限、审计、备份恢复、容量和并发测试，并核验真实业务规则。</p>
+<p>包中没有附带国外大模型账号、API Key 或额度。MCP 是 ERP 能力接口，不等于已经接通某个大模型。模型供应商、联网策略、成本及数据出境等须按客户要求另行评估和配置。</p>
+  </main>
+</div>
+<div class="foot">
+  本地安装手册 · 伴圆AI原生ERP系统 · 演示环境说明：本文档中的数据均为虚构样例。
+</div>
+<script>
+  // 目录搜索：只在目录里过滤，不碰正文（正文里有大量"搜索"二字，进去会让人以为坏了）
+  var q = document.getElementById('q')
+  var links = [].slice.call(document.querySelectorAll('#toc a'))
+  q.addEventListener('input', function () {
+    var v = q.value.trim().toLowerCase()
+    links.forEach(function (a) {
+      a.style.display = !v || a.textContent.toLowerCase().indexOf(v) >= 0 ? '' : 'none'
+    })
+  })
+
+  // 滚动高亮：用 IntersectionObserver 而不是 scroll 事件（长文档滚动时前者更省）
+  var hs = [].slice.call(document.querySelectorAll('#doc h2, #doc h3'))
+  var map = new Map()
+  links.forEach(function (a) { map.set(decodeURIComponent(a.getAttribute('href').slice(1)), a) })
+  var io = new IntersectionObserver(function (entries) {
+    entries.forEach(function (e) {
+      if (!e.isIntersecting) return
+      links.forEach(function (a) { a.classList.remove('active') })
+      var a = map.get(e.target.id)
+      if (a) a.classList.add('active')
+    })
+  }, { rootMargin: '-72px 0px -70% 0px', threshold: 0 })
+  hs.forEach(function (h) { io.observe(h) })
+</script>
+</body>
+</html>

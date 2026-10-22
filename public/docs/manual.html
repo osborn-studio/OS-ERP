@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>功能模块操作手册 · 伴圆AI原生ERP系统</title>
+<meta name="description" content="按模块排：每个页面回答什么问题、字段什么含义、状态怎么流转" />
+<style>
+  :root{
+    --brand:#185fa5; --brand-600:#2b82c9; --tech:#06b6d4;
+    --ink-900:#0f172a; --ink-700:#334155; --ink-500:#64748b; --ink-300:#cbd5e1;
+    --bg:#f6f9fc; --line:#e2e8f0;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink-900);
+    font:15px/1.75 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",system-ui,sans-serif}
+  a{color:var(--brand);text-decoration:none}
+  a:hover{text-decoration:underline}
+  header.top{position:sticky;top:0;z-index:20;background:rgba(255,255,255,.92);
+    backdrop-filter:saturate(180%) blur(8px);border-bottom:1px solid var(--line)}
+  .top-in{max-width:1280px;margin:0 auto;padding:10px 20px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+  .logo{width:30px;height:30px;border-radius:8px;color:#fff;display:flex;align-items:center;justify-content:center;
+    font-weight:600;font-size:14px;background:linear-gradient(135deg,#185fa5 0%,#2b82c9 58%,#06b6d4 100%);
+    box-shadow:0 6px 16px rgba(24,95,165,.28)}
+  .brand{font-size:14.5px;font-weight:600}
+  .brand small{display:block;font-weight:400;font-size:11.5px;color:var(--ink-500)}
+  .tag{font-size:11px;padding:1px 7px;border-radius:999px;border:1px solid var(--line);color:var(--brand);
+    background:#eff6fd}
+  .spacer{flex:1}
+  .back{font-size:12.5px;color:var(--ink-500)}
+  .back:hover{color:var(--brand)}
+  .search{width:220px;border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-size:13px;
+    outline:none;background:#fff}
+  .search:focus{border-color:var(--brand-600);box-shadow:0 0 0 3px rgba(43,130,201,.12)}
+  .wrap{max-width:1280px;margin:0 auto;padding:20px;display:grid;grid-template-columns:270px minmax(0,1fr);gap:24px;align-items:start}
+  nav.toc{position:sticky;top:76px;max-height:calc(100vh - 96px);overflow:auto;
+    background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px 10px}
+  nav.toc .t{font-size:11.5px;letter-spacing:.08em;color:var(--ink-500);padding:0 8px 8px}
+  nav.toc a{display:block;padding:4px 8px;border-radius:7px;font-size:13px;color:var(--ink-700);line-height:1.5}
+  nav.toc a.toc-l3{font-size:12.3px;color:var(--ink-500);padding-left:20px}
+  nav.toc a:hover{background:#f1f6fc;color:var(--brand);text-decoration:none}
+  nav.toc a.active{background:#e8f2fd;color:var(--brand);font-weight:600}
+  main{background:#fff;border:1px solid var(--line);border-radius:14px;padding:28px 34px;min-width:0;
+    box-shadow:0 1px 2px rgba(15,23,42,.04)}
+  main h1{font-size:26px;line-height:1.35;margin:0 0 6px}
+  main h2{font-size:19px;margin:34px 0 10px;padding-top:14px;border-top:1px solid var(--line)}
+  main h2:first-of-type{border-top:0;padding-top:0;margin-top:22px}
+  main h3{font-size:15.5px;margin:22px 0 8px;color:#0b3d68}
+  main h4{font-size:14px;margin:18px 0 6px;color:var(--ink-700)}
+  main p{margin:9px 0;color:#1e293b}
+  main ul,main ol{margin:8px 0 8px 4px;padding-left:20px}
+  main li{margin:3px 0}
+  main blockquote{margin:12px 0;padding:10px 14px;background:#f3f8fe;border-left:3px solid var(--brand-600);
+    border-radius:0 8px 8px 0;color:#0b3d68}
+  main blockquote p{margin:0;color:inherit}
+  main code{background:#f1f5f9;border:1px solid #e2e8f0;border-radius:5px;padding:1px 5px;font-size:12.5px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  main pre{background:#0f2032;color:#dbeafe;border-radius:10px;padding:14px 16px;overflow:auto;font-size:12.5px;line-height:1.6}
+  main pre code{background:none;border:0;color:inherit;padding:0}
+  main hr{border:0;border-top:1px solid var(--line);margin:26px 0}
+  .table-wrap{overflow:auto;margin:12px 0;border:1px solid var(--line);border-radius:10px}
+  table{border-collapse:collapse;width:100%;font-size:13px}
+  th,td{border-bottom:1px solid var(--line);padding:7px 10px;text-align:left;vertical-align:top}
+  th{background:#f7fafc;color:var(--ink-700);font-weight:600;white-space:nowrap}
+  tr:last-child td{border-bottom:0}
+  tbody tr:hover{background:#fbfdff}
+  .foot{max-width:1280px;margin:0 auto;padding:0 20px 40px;color:var(--ink-500);font-size:12px}
+  @media print{
+    header.top,nav.toc,.foot{display:none}
+    body{background:#fff;font-size:11pt}
+    .wrap{display:block;padding:0}
+    main{border:0;border-radius:0;box-shadow:none;padding:0}
+    pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f3f4f6!important;color:#111!important}
+    pre code{color:#111!important}
+    h2,h3{break-after:avoid}
+    tr{break-inside:avoid}
+    .table-wrap{overflow:visible}
+  }
+  @media (max-width:1000px){
+    .wrap{grid-template-columns:1fr}
+    nav.toc{position:static;max-height:none;order:2}
+    main{padding:20px}
+    .search{width:100%}
+  }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="top-in">
+    <div class="logo">伴</div>
+    <div class="brand">伴圆AI原生ERP系统<small>AI 伴你，企业信息化管理圆满</small></div>
+    <span class="tag">操作手册</span>
+    <div class="spacer"></div>
+    <input class="search" id="q" placeholder="搜索目录…" />
+    <a class="back" href="install.html">安装</a>
+    <a class="back" href="manual.html">操作</a>
+    <a class="back" href="demo-flow.html">演示</a>
+    <a class="back" href="dev.html">开发与MCP</a>
+    <a class="back" href="security.html">安全说明</a>
+    <a class="back" href="http://127.0.0.1:3001/login">返回系统</a>
+  </div>
+</header>
+<div class="wrap">
+  <nav class="toc" id="toc">
+    <div class="t">功能模块操作手册</div>
+    <a class="toc-l2" data-depth="2" href="#一-登录和通用操作">一 登录和通用操作</a>
+<a class="toc-l2" data-depth="2" href="#二-角色和数据范围">二 角色和数据范围</a>
+<a class="toc-l2" data-depth="2" href="#三-经营看板">三 经营看板</a>
+<a class="toc-l2" data-depth="2" href="#四-主数据">四 主数据</a>
+<a class="toc-l2" data-depth="2" href="#五-订货中心">五 订货中心</a>
+<a class="toc-l2" data-depth="2" href="#六-采购闭环">六 采购闭环</a>
+<a class="toc-l3" data-depth="3" href="#61-请购与采购订单">6.1 请购与采购订单</a>
+<a class="toc-l3" data-depth="3" href="#62-收货与检验">6.2 收货与检验</a>
+<a class="toc-l3" data-depth="3" href="#63-发票与结算付款">6.3 发票与结算付款</a>
+<a class="toc-l3" data-depth="3" href="#64-退货">6.4 退货</a>
+<a class="toc-l2" data-depth="2" href="#七-计划-生产与委外">七 计划 生产与委外</a>
+<a class="toc-l2" data-depth="2" href="#八-质量管理">八 质量管理</a>
+<a class="toc-l2" data-depth="2" href="#九-销售-发货-开票及退货">九 销售 发货 开票及退货</a>
+<a class="toc-l2" data-depth="2" href="#十-应收-收款和退款">十 应收 收款和退款</a>
+<a class="toc-l2" data-depth="2" href="#十一-存货管理">十一 存货管理</a>
+<a class="toc-l2" data-depth="2" href="#十二-门店-pos">十二 门店 POS</a>
+<a class="toc-l3" data-depth="3" href="#121-收银及退货">12.1 收银及退货</a>
+<a class="toc-l3" data-depth="3" href="#122-交班-核款-缴款及日结">12.2 交班 核款 缴款及日结</a>
+<a class="toc-l3" data-depth="3" href="#123-门店补货及收货">12.3 门店补货及收货</a>
+<a class="toc-l2" data-depth="2" href="#十三-线上商城及-oms">十三 线上商城及 OMS</a>
+<a class="toc-l2" data-depth="2" href="#十四-经销商和渠道">十四 经销商和渠道</a>
+<a class="toc-l2" data-depth="2" href="#十五-会计与报表">十五 会计与报表</a>
+<a class="toc-l2" data-depth="2" href="#十六-ai-数据承接台和-mcp">十六 AI 数据承接台和 MCP</a>
+<a class="toc-l2" data-depth="2" href="#十七-系统管理">十七 系统管理</a>
+<a class="toc-l2" data-depth="2" href="#十八-操作异常处理">十八 操作异常处理</a>
+  </nav>
+  <main id="doc">
+<h1 id="伴圆ai原生erp-操作手册">伴圆AI原生ERP 操作手册</h1>
+<p>本手册对应2026年10月21日本地交付版，供管理员、业务关键用户及实施人员完成演示操作。范围包括总部后台、门店 POS、线上商城、经销商订货及 MCP 管理。数据均为虚构样例，操作结果用于验证流程，不代表真实账务或支付。</p>
+<h2 id="一-登录和通用操作">一 登录和通用操作</h2>
+<ol><li>启动系统，打开 /login，先选美妆连锁或连锁餐饮。</li><li>选择角色卡片或手工填账号密码，点击登录。管理员 admin / 12345，其他常用角色密码为 123456。</li><li>从左侧进入对应业务模块。门店账号从 /pos 进入本店业务，经销商从订货中心进入本人数据。</li><li>退出后重新选择行业即可切换独立行业库。不同角色比较建议使用不同浏览器用户配置或无痕窗口，避免同一浏览器会话相互覆盖。</li></ol>
+<p>列表通常支持关键词、状态筛选、分页及详情。新增后先保存草稿，核对后再提交或确认；行内按钮随状态、权限变化。遇到拒绝提示，应核对前置单据、可用库存、当前角色和数据范围，不要反复点击。</p>
+<p>操作成功后，返回列表刷新，核对状态和数量金额；对库存和财务操作再查看流水或来源单号。已过账单据不得靠删除来撤销业务，应走系统提供的退货、红冲或作废路径。</p>
+<h2 id="二-角色和数据范围">二 角色和数据范围</h2>
+<div class="table-wrap"><table><thead><tr><th>账号</th><th>工作入口</th><th>范围提醒</th></tr></thead><tbody><tr><td>admin</td><td>全部模块和系统设置</td><td>管理员权力大，不作为日常业务账号</td></tr>
+<tr><td>scm</td><td>采购、库存、计划生产、质量、委外</td><td>查看及操作仍取决于具体权限点</td></tr>
+<tr><td>purchase / warehouse / sales</td><td>本岗位模块</td><td>不等于具备全流程审批权限</td></tr>
+<tr><td>finance</td><td>应收、收款、会计和报表</td><td>票、款、凭证分别核对</td></tr>
+<tr><td>store01</td><td>门店 POS 和门店业务</td><td>必须绑定门店，只处理本店数据</td></tr>
+<tr><td>dealer01</td><td>美妆版订货中心</td><td>必须绑定经销商，只看本人订货及对账</td></tr>
+<tr><td>boss / viewer</td><td>授权查询与部分审批 / 只读</td><td>不应展示未授权的修改能力</td></tr></tbody></table></div>
+<p>门店、经销商登录若缺少实体绑定会被拒绝。隐藏菜单不等于安全边界，后台接口也会检查范围。新增用户、换角色后，管理员应使用目标账号复核。</p>
+<h2 id="三-经营看板">三 经营看板</h2>
+<p>入口：/。管理员或总部授权角色可查看销售、库存、采购、应收、线上订单及待办。</p>
+<p>先看行业和统计期间，再看 KPI、趋势和渠道结构。待办可引导进入对应列表；如需查明细，从销售、库存、应收等菜单进入，不要把所有 KPI 当成可点击的明细链接。总部看板不向外部门店、经销商开放。</p>
+<h2 id="四-主数据">四 主数据</h2>
+<p>入口：主数据下的商品、品牌品类、往来单位、仓库门店、组合装、条码及出入库类型。</p>
+<ol><li>新建商品时先维护商品信息，再维护 SKU 的规格、单位、条码、价格和成本。</li><li>新建供应商、经销商或门店后，核对主体、仓库及用户绑定。</li><li>组合装须维护成分及数量，实际拆装通过对应业务单处理。</li><li>改价或改档案后核对新建单据，不把档案修改当作对历史确认单据的追溯调整。</li></ol>
+<p>正常仓、门店仓与待检、不合格品等隔离仓用途不同。质检状态及货权会影响可用库存，不能只看账面数量。</p>
+<h2 id="五-订货中心">五 订货中心</h2>
+<p>入口：/order-center。经销商账号展示本人客户身份、商品价格、购物车、订单及对账；总部账号按授权处理。</p>
+<ol><li>用 dealer01 登录美妆版，确认显示的是本人客户。</li><li>选有可用库存的商品，输入小数量，加入购物车并核对价格。</li><li>提交订货，记录系统实际生成的单号。</li><li>总部角色在销售订单中查询该单，确认、发货；客户再进入本人订单查看进度。</li><li>对账按期间核对应收和已收款，不把订货金额、开票额和实收混为一谈。</li></ol>
+<p>不能通过改地址、单号或请求参数查询其他客户单据。库存不足、客户停用或信用限制时按提示处理。</p>
+<h2 id="六-采购闭环">六 采购闭环</h2>
+<p>入口：/purchase/workbench。按待办进入请购、采购订单、收货、质检、发票、结算和付款。</p>
+<h3 id="61-请购与采购订单">6.1 请购与采购订单</h3>
+<p>新建请购，填写需求日期、SKU、数量和建议价；保存后提交，授权人员审批，再转采购订单。也可由有权限人员直接建采购订单。</p>
+<p>采购订单核对供应商、仓库、明细和数量后提交及审批。已审批订单才进入收货链；已收与订单数量不一致表示仍有未到货数量。演示部分收货时填小于剩余量的数量，记录收货单号。</p>
+<h3 id="62-收货与检验">6.2 收货与检验</h3>
+<p>打开收货单，核对批次、效期、仓库及实收数量。到货不等于可用，涉及检验的货物进入质量流程后，根据合格、让步、拒收等结果处理。不要手动改库存绕过检验。</p>
+<h3 id="63-发票与结算付款">6.3 发票与结算付款</h3>
+<p>采购发票记录票据，结算单核对可结范围及退货影响，付款单记录实际付款并按流程确认。核对订单、到货、票、应付和已付，分别留存来源单号。系统付款操作是内部业务记录，不会自动向银行转账。</p>
+<h3 id="64-退货">6.4 退货</h3>
+<p>选择来源收货及可退明细，填写数量和原因，按授权确认。查看库存出库及应付或结算变化。退货抵减政策以系统参数及实际规则为准，不能假设所有客户口径一致。</p>
+<h2 id="七-计划-生产与委外">七 计划 生产与委外</h2>
+<p>入口：/plan/summary、/plan/production、/manufacture、/outsourcing/orders。</p>
+<ol><li>在净需求汇总核对门店或渠道需求，扣除可用量后查看采购、生产或委外建议。</li><li>生产流程先核对 BOM，再创建生产任务，领料、报工、完工和入库。</li><li>每次领料、完工须核对 SKU、仓库、数量及来源任务；库存不足时先处理补料，不要重复提交。</li><li>委外订单维护加工方、材料、加工费及交期，按页面可用动作发料、收回和结算。</li><li>完工涉及质检时，从质量中心追踪后续处置。</li></ol>
+<p>本地样本用于验证流程，不代表已覆盖客户的排产、设备、工艺及复杂成本需求。</p>
+<h2 id="八-质量管理">八 质量管理</h2>
+<p>入口：/quality/qc。从采购到货、生产完工或在库检查等来源报检，填写检验数量及结果，提交后按处置动作处理。</p>
+<p>核对合格、让步和不合格数量是否与检验总量一致。拒收、返工或隔离会影响库存和关联单据；操作后检查实际生成的退货、调拨或处置单及流转记录，不只检查一个状态标签。</p>
+<h2 id="九-销售-发货-开票及退货">九 销售 发货 开票及退货</h2>
+<p>入口：/sales/quotes、/sales/orders、/sales/deliveries、/sales/invoices、/sales/returns。</p>
+<ol><li>报价或新建订单：选客户、仓库、SKU、数量和价格，保存核对。</li><li>确认订单：检查信用及库存，成功后观察预留或占用变化。</li><li>发货：按剩余可发量填数量；部分发货后核对已发、未发及库存流水。</li><li>开票：从可开票来源创建发票，按允许数量开票并确认；内部发票记录不等于税控平台已经开出真实发票。</li><li>签收或完成：按订单当前可用动作推进，不跳过前置状态。</li><li>退货：选择原订单和可退明细，填数量及原因；确认后核对库存和应收；已收款部分可能另需退款处理。</li></ol>
+<p>订单金额、发货金额、开票金额、收款金额是不同口径。样本中有部分发货、部分开票、部分收款的中间态，不能只用“已完成”概括。</p>
+<h2 id="十-应收-收款和退款">十 应收 收款和退款</h2>
+<p>入口：/finance/receivables、/finance/refunds。</p>
+<p>应收先按客户及来源单核对；登记收款后，选择对应应收进行核销。部分核销应保留余额，累计核销不能超过允许金额。完成后同时检查收款单、核销记录和应收余额。</p>
+<p>退款先核对来源退货、已收及可退金额，再登记并确认出账。系统不会因为点击确认自动执行真实银行或第三方支付退款。</p>
+<h2 id="十一-存货管理">十一 存货管理</h2>
+<p>入口：/inventory/stocks、/inventory/ledger、/inventory/availability、/inventory/transfers、/inventory/checks 等。</p>
+<div class="table-wrap"><table><thead><tr><th>业务</th><th>操作要点</th><th>结果核对</th></tr></thead><tbody><tr><td>现存与可用</td><td>按仓库、SKU、批次筛选</td><td>区分现存、占用、可用及隔离数量</td></tr>
+<tr><td>出入库流水</td><td>按日期和来源单过滤</td><td>看数量方向、金额、批次及来源</td></tr>
+<tr><td>调拨</td><td>新建、出库或发运、收货</td><td>发运后是“在途”，目标仓收货后才入库</td></tr>
+<tr><td>盘点</td><td>创建盘点、录实盘、审核调整</td><td>差异、调整流水和金额须核对</td></tr>
+<tr><td>预警与库龄</td><td>看缺货、临期、超储或呆滞</td><td>结合效期、仓库和业务处理，不直接改汇总</td></tr>
+<tr><td>组合拆装</td><td>核对组合与成分数量</td><td>成分和成品出入方向正确</td></tr>
+<tr><td>成本及货权</td><td>按授权查询或处理</td><td>数量、成本和货主分开核对</td></tr></tbody></table></div>
+<p>盘点调整、作废等有风险动作须按角色及审批要求处理；不要用直接改数据库来修正业务。</p>
+<h2 id="十二-门店-pos">十二 门店 POS</h2>
+<p>店长使用 store01 登录 /pos；总部管理员从 /store/monitor 及门店业务菜单查看运营。两种角色不要混用。</p>
+<h3 id="121-收银及退货">12.1 收银及退货</h3>
+<p>进入本店收银，扫码或选商品，修改数量，核对优惠和应付，再选页面支持的付款方式完成演示收款。检查小票、零售单及库存变化。这里只模拟业务结算，不接真实扫码支付。</p>
+<p>退货须选择原销售或系统允许的来源，核对可退数量和退款口径；退后查看零售记录及库存。不要直接删除已完成销售。</p>
+<h3 id="122-交班-核款-缴款及日结">12.2 交班 核款 缴款及日结</h3>
+<p>按现金、微信、支付宝等实际展示渠道分别录交班金额，由授权店长核款，发现差异时填写原因及归属；缴款和日结继续按状态推进。总部查看日报、班次和渠道差异。现金差异与第三方渠道差异含义不同，不宜相加当作同一种损失。</p>
+<h3 id="123-门店补货及收货">12.3 门店补货及收货</h3>
+<p>门店查本店库存后提交要货，总部处理并生成发货，门店按实到明细收货。部分收货后保留剩余在途。门店不应看到其他门店及总部全量库存。</p>
+<h2 id="十三-线上商城及-oms">十三 线上商城及 OMS</h2>
+<p>消费者入口 /mall；后台订单入口 /oms/orders，营销入口 /marketing/promo。</p>
+<ol><li>打开商城浏览商品，选择规格并加入购物车。</li><li>需要登录时输入演示手机号，验证码固定为 1234。不要填写真实个人信息。</li><li>填演示收货信息，核对商品、优惠券、积分、运费和应付，提交订单。</li><li>记录商城生成单号，后台用 admin 或授权销售账号在 OMS 查该订单。</li><li>按可用状态处理发货、完成、取消或退款，消费者端刷新查看结果。</li></ol>
+<p>商城固定验证码、支付流程及奇门等对接为演示能力，不代表已接真实短信、支付和电商平台。促销、会员等级、优惠券及积分需与业务结算一起核验。</p>
+<h2 id="十四-经销商和渠道">十四 经销商和渠道</h2>
+<p>美妆版总部入口：/dealers、/dms/channel、/dealers/rebates、/dealers/statements。餐饮版不做经销商演示。</p>
+<p>总部查看经销商档案、销售和回款、信用、协议价及渠道政策。返利按页面可用流程计提、确认或核销；核销涉及应收影响，须在往来账核对。对账按期间生成并核对明细。</p>
+<p>外部经销商使用 dealer01，只从订货中心看本人订货及对账；总部经销商总览不是外部经销商入口。</p>
+<h2 id="十五-会计与报表">十五 会计与报表</h2>
+<p>入口：/finance/accounting、/finance/reports、/finance/report-config。</p>
+<p>从业务单生成凭证后核对来源、科目、借贷及期间，按权限审核和记账。试算平衡用于检查借贷关系，不等于已经证明所有会计口径符合客户要求。报表要核对期间、配置及明细取数。</p>
+<p>结账、反结账及年度动作应先备份并确认授权。跨自然年度的年度结转不在当前已完成能力范围，不应作为上线承诺演示。</p>
+<h2 id="十六-ai-数据承接台和-mcp">十六 AI 数据承接台和 MCP</h2>
+<p>AI 查询入口 /ai；管理员 MCP 控制台 /system/mcp。</p>
+<p>本地未配置外部模型时，AI 数据承接台采用现有规则式解析，不能描述为已接通国外最优大模型。真正外部智能体通过 /mcp 调用工具，使用独立 Agent Token，不使用用户网页登录 JWT。</p>
+<p>管理员在 MCP 控制台查看单据矩阵、工具清单和调用审计；进入令牌管理签发只读、限行业及有效期的令牌，复制一次性明文后交给授权客户端。首次试用从 tools/list 和只读查询开始。</p>
+<p>写工具需按输入模式传幂等键；高危领域工具需人工确认，通用单据推进中的高危边会拒绝，不能概括为“AI 任意修改所有单据”。详细接入示例见开发与MCP接手手册。</p>
+<h2 id="十七-系统管理">十七 系统管理</h2>
+<p>管理员维护用户、角色权限、组织绑定、配置字典、审批、通知及日志。改动权限或用户角色后，使用原账号重新验证可见和可操作范围；不要只看管理员页面上的勾选。</p>
+<p>参数变更应填原因并检查审计记录。真实 IM 平台连接、组织同步或审批回写需要具体适配和联调；演示适配不等于真实钉钉或飞书已经打通。</p>
+<h2 id="十八-操作异常处理">十八 操作异常处理</h2>
+<p>失败后记录行业、账号、页面、单号、输入值、错误提示及时间。先确认是否已经生成单据，再决定重试，尤其是发货、入库、付款和核销。库存不足应回查可用量及批次，权限不足应由管理员确认职责范围，不能临时都改成管理员。</p>
+<p>需要恢复初始样本时按安装手册先停机备份，再改名保留 data 目录并重新启动。回归脚本只能在独立测试副本执行，不在正在演示或真实业务环境运行。</p>
+  </main>
+</div>
+<div class="foot">
+  功能模块操作手册 · 伴圆AI原生ERP系统 · 演示环境说明：本文档中的数据均为虚构样例。
+</div>
+<script>
+  // 目录搜索：只在目录里过滤，不碰正文（正文里有大量"搜索"二字，进去会让人以为坏了）
+  var q = document.getElementById('q')
+  var links = [].slice.call(document.querySelectorAll('#toc a'))
+  q.addEventListener('input', function () {
+    var v = q.value.trim().toLowerCase()
+    links.forEach(function (a) {
+      a.style.display = !v || a.textContent.toLowerCase().indexOf(v) >= 0 ? '' : 'none'
+    })
+  })
+
+  // 滚动高亮：用 IntersectionObserver 而不是 scroll 事件（长文档滚动时前者更省）
+  var hs = [].slice.call(document.querySelectorAll('#doc h2, #doc h3'))
+  var map = new Map()
+  links.forEach(function (a) { map.set(decodeURIComponent(a.getAttribute('href').slice(1)), a) })
+  var io = new IntersectionObserver(function (entries) {
+    entries.forEach(function (e) {
+      if (!e.isIntersecting) return
+      links.forEach(function (a) { a.classList.remove('active') })
+      var a = map.get(e.target.id)
+      if (a) a.classList.add('active')
+    })
+  }, { rootMargin: '-72px 0px -70% 0px', threshold: 0 })
+  hs.forEach(function (h) { io.observe(h) })
+</script>
+</body>
+</html>

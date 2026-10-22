@@ -1,0 +1,47 @@
+# 核对 1：lib/transfer.js 是「抽取复用」不是「两套实现」
+
+## routes/inventory.js 的 diff 摘要（git diff HEAD -- server/routes/inventory.js）
+ server/routes/inventory.js | 96 ++++++++++------------------------------------
+ 1 file changed, 20 insertions(+), 76 deletions(-)
+⇒ 原地那段（建单 INSERT + 逐行 applyStockOut/applyStockIn + 成本回写 + applyTransition）**被删掉了**，
+   改成调 lib/transfer.js。净删 56 行，没有任何 "新旧两套并存"。
+
+## 三个函数的全部调用点（全库检索）
+server/lib/transfer.js:62   export function createTransfer(db, p)      ← 唯一实现
+server/lib/transfer.js:122  export function shipTransfer(db, id, actor, {remark})
+server/lib/transfer.js:168  export function receiveTransfer(db, id, actor, {receiveDate, remark})
+server/lib/transfer.js:107    if (p.autoShip) shipTransfer(db, tid, actor)   ← 内部
+-- 消费点只有两处：
+server/routes/inventory.js:380  const { id: tid } = createTransfer(db, {...})   ← 页面建单
+server/routes/inventory.js:404  db.transaction(() => shipTransfer(db, id, u))()
+server/routes/inventory.js:422  db.transaction(() => receiveTransfer(db, id, u, {receiveDate: ...}))()
+server/lib/qc2.js:1079          const tr = createTransfer(db, {...})            ← 质检处置自动建单
+server/lib/qc2.js:1107/1108     shipTransfer(...) / receiveTransfer(...)
+
+## 为什么放 server/lib/ 而不是留在 routes/inventory.js
+质检处置（lib/qc2.js）也要产生调拨单，而 **lib 不能反向依赖 routes**（routes 依赖 lib，反向会成环、
+且服务层会被 HTTP 层绑死）。把实现留在路由里就只有两条路：要么 lib 里再写一套（两套实现必在
+「实际出库单价回写明细 → 入库用同一价」这一处分叉，即 G4 那个「出 100 进 0」的坑），
+要么 lib 直接 require 路由文件（架构倒挂）。⇒ 抽到 lib 是唯一不产生第二套的选择。
+行为等价性由 test-flows（真起服务走 HTTP 的调拨建单→出库→收货链）44/0 守住。
+
+# 核对 2：stock_transfers.type 的取值与消费点（客户要的『出入库单要有类型』）
+
+## 取值（唯一登记处：server/lib/transfer.js 的 TRANSFER_TYPES，与既有值同域、不近名）
+normal          普通调拨（页面手工开单的默认值，也是 schema.sql 里该列的 DEFAULT）
+allocation      铺货调拨（门店要货配货生成：routes/requisitions.js 的 to-transfer）
+qc_disposition  质检处置调拨（★本次新增：让步→不合格品仓 / 返工→待检品仓，质检确认处置时自动生成）
+
+## 按 type 做白名单筛选的地方 —— 全库检索结果：**一处都没有**
+唯一的三个消费点是：① createTransfer 的缺省值；② 页面新建调拨单的类型下拉（只给 normal/allocation，
+   qc_disposition 是系统生成、人不能选）；③ 调拨列表的「类型」列文案。
+⇒ 多一个取值不会被任何白名单漏掉；已把 qc_disposition 的中文文案补进
+   src/pages/inventory/Transfers.tsx 的类型列映射（不补的话这一档会渲染成裸码，等于类型没加）。
+
+## 出入库流水两层的落法（客户问的『你那两个出/入库单上加了类型没有』）
+doc_type = TR_OUT / TR_IN（**保持调拨语义**，不另造码 ⇒ 不会与「调拨」分裂、也不会冒出未登记的码）
+doc_id   = 调拨单 id（结构化指向来源单据）
+remark   = 「质检让步接收（QCI…）处置单 DH…：调拨出库 → 不合格品仓」（人读的来源）
+"这是质检处置调拨"这层信息由 **四处**同时承载，任一处单独看都够：
+   stock_transfers.type='qc_disposition' / 单头 remark / 两条流水 remark / doc_id 指向调拨单。
+⇒ 只要流水一个 JOIN 就能筛出来（原文见 证据_处置调拨原文.txt 的『按 type=qc_disposition 反查流水』）

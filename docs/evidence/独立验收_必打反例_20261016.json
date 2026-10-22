@@ -1,0 +1,2382 @@
+{
+  "kind": "independent-self-acceptance",
+  "at": "2026-10-16T18:16:38.531Z",
+  "commit_sha": "8b6a9daf9335b0cdeb8e2658a0271c8e083ba1c9",
+  "commit_sha_source": "env：harness 传入",
+  "working_tree_dirty": true,
+  "source_root": "/private/var/folders/xk/g22b7_y50056ywygj6pb57kc0000gn/T/gml-copy-GVBRWp/repo",
+  "isolation_facts": {
+    "source_root": "/private/var/folders/xk/g22b7_y50056ywygj6pb57kc0000gn/T/gml-copy-GVBRWp/repo",
+    "repo_root_at_runtime": null,
+    "has_git_dir": false,
+    "has_data_dir": false,
+    "sentinel": {
+      "path": "/var/folders/xk/g22b7_y50056ywygj6pb57kc0000gn/T/gml-copy-GVBRWp/repo/.accept-sentinel.json",
+      "kind": "accept-isolation-sentinel",
+      "written_by": "scripts/accept/run-on-copy.mjs",
+      "source_root": "/Users/linxinlan/工作文档/gml",
+      "source_head_sha": "8b6a9daf9335b0cdeb8e2658a0271c8e083ba1c9",
+      "source_working_tree_dirty_lines": 8,
+      "copied_at": "2026-10-16T18:16:31.939Z",
+      "note": "本文件只出现在**副本**里；仓库的 .gitignore 之外无需清理（副本跑完即删）"
+    },
+    "harness_declared_copy": true,
+    "contradictions": []
+  },
+  "isolation": {
+    "data_dir": "/var/folders/xk/g22b7_y50056ywygj6pb57kc0000gn/T/gml-accept-xIZHdv/data",
+    "port": 42351,
+    "fresh_databases": [
+      "cosmetic",
+      "food",
+      "apparel"
+    ]
+  },
+  "summary": {
+    "total": 220,
+    "passed": 220,
+    "failed": 0
+  },
+  "http_checklist": [
+    {
+      "label": "健康检查",
+      "method": "GET",
+      "url": "/api/meta/health",
+      "expect": "200",
+      "got": 200,
+      "code": null,
+      "ok": true
+    },
+    {
+      "label": "登录（正）",
+      "method": "POST",
+      "url": "/api/auth/login",
+      "expect": "200",
+      "got": 200,
+      "code": null,
+      "ok": true
+    },
+    {
+      "label": "登录（负·错误口令）",
+      "method": "POST",
+      "url": "/api/auth/login",
+      "expect": "401",
+      "got": 401,
+      "code": null,
+      "ok": true
+    },
+    {
+      "label": "通用流转驱动带副作用的单据（负）",
+      "method": "POST",
+      "url": "/api/docflow/transition",
+      "expect": "409",
+      "got": 409,
+      "code": "EFFECT_REQUIRES_BUSINESS_API",
+      "ok": true
+    },
+    {
+      "label": "采购结算（负·无权限）",
+      "method": "POST",
+      "url": "/api/purchase/settlements/1/settle",
+      "expect": "403",
+      "got": 403,
+      "code": "PERM_DENIED",
+      "ok": true
+    },
+    {
+      "label": "C 端令牌打 MCP（负）",
+      "method": "POST",
+      "url": "/mcp",
+      "expect": "200",
+      "got": 200,
+      "code": {
+        "code": -32001,
+        "message": "Agent Token 无效"
+      },
+      "ok": true
+    },
+    {
+      "label": "退货（负·超退）",
+      "method": "POST",
+      "url": "/api/sales/returns",
+      "expect": "409",
+      "got": 409,
+      "code": "RETURN_EXCEEDS_SHIPPED",
+      "ok": true
+    },
+    {
+      "label": "退货（负·缺来源行）",
+      "method": "POST",
+      "url": "/api/sales/returns",
+      "expect": "400",
+      "got": 400,
+      "code": "SOURCE_REQUIRED",
+      "ok": true
+    },
+    {
+      "label": "审批提交（负·外部主体×内部单据）",
+      "method": "POST",
+      "url": "/api/approval/instances",
+      "expect": "403",
+      "got": 403,
+      "code": null,
+      "ok": true
+    },
+    {
+      "label": "审批提交（负·单据不存在）",
+      "method": "POST",
+      "url": "/api/approval/instances",
+      "expect": "404",
+      "got": 404,
+      "code": null,
+      "ok": true
+    },
+    {
+      "label": "协议价取证接口（正·本轮修复的那个）",
+      "method": "GET",
+      "url": "/api/dms/agreements/explain?sku_id=1&dealer_id=1&qty=1",
+      "expect": "200",
+      "got": 200,
+      "code": null,
+      "ok": true
+    },
+    {
+      "label": "IM 元数据（正）",
+      "method": "GET",
+      "url": "/api/im/meta",
+      "expect": "200",
+      "got": 200,
+      "code": null,
+      "ok": true
+    },
+    {
+      "label": "IM 状态（正）",
+      "method": "GET",
+      "url": "/api/im/status",
+      "expect": "200",
+      "got": 200,
+      "code": null,
+      "ok": true
+    },
+    {
+      "label": "IM 同步（负·未配置）",
+      "method": "POST",
+      "url": "/api/im/sync/org",
+      "expect": "409",
+      "got": 409,
+      "code": "IM_NOT_CONFIGURED",
+      "ok": true
+    },
+    {
+      "label": "IM 同步（负·viewer 无权限）",
+      "method": "POST",
+      "url": "/api/im/sync/org",
+      "expect": "403",
+      "got": 403,
+      "code": null,
+      "ok": true
+    },
+    {
+      "label": "IM 自检（正）",
+      "method": "POST",
+      "url": "/api/im/self-test",
+      "expect": "200",
+      "got": 200,
+      "code": null,
+      "ok": true
+    },
+    {
+      "label": "IM 自证（正）",
+      "method": "GET",
+      "url": "/api/im/audit",
+      "expect": "200",
+      "got": 200,
+      "code": null,
+      "ok": true
+    },
+    {
+      "label": "IM 未知平台（负）",
+      "method": "POST",
+      "url": "/api/im/sync/org",
+      "expect": "400",
+      "got": 400,
+      "code": null,
+      "ok": true
+    },
+    {
+      "label": "不存在的接口（负）",
+      "method": "GET",
+      "url": "/api/definitely/not/here",
+      "expect": "404",
+      "got": 404,
+      "code": null,
+      "ok": true
+    },
+    {
+      "label": "A14 商城下单（应走 checkout.settle）",
+      "method": "POST",
+      "url": "/api/mall/orders",
+      "expect": "200",
+      "got": 200,
+      "code": null,
+      "ok": true
+    },
+    {
+      "label": "A15 商城下单（用积分抵现）",
+      "method": "POST",
+      "url": "/api/mall/orders",
+      "expect": "200",
+      "got": 200,
+      "code": null,
+      "ok": true
+    },
+    {
+      "label": "A15 撤单",
+      "method": "POST",
+      "url": "/api/mall/orders/400/cancel",
+      "expect": "200",
+      "got": 200,
+      "code": null,
+      "ok": true
+    },
+    {
+      "label": "A17b 改草稿数量为 0（应拒）",
+      "method": "PUT",
+      "url": "/api/sales/orders/233",
+      "expect": "400",
+      "got": 400,
+      "code": null,
+      "ok": true
+    },
+    {
+      "label": "A17b 只改运费（应重算）",
+      "method": "PUT",
+      "url": "/api/sales/orders/233",
+      "expect": "200",
+      "got": 200,
+      "code": null,
+      "ok": true
+    },
+    {
+      "label": "A18 跨供应商核销（应拒）",
+      "method": "POST",
+      "url": "/api/purchase/payments",
+      "expect": "409",
+      "got": 409,
+      "code": "PAY_ALLOC_SUPPLIER_MISMATCH",
+      "ok": true
+    },
+    {
+      "label": "A18 超未付余额核销（应拒）",
+      "method": "POST",
+      "url": "/api/purchase/payments",
+      "expect": "409",
+      "got": 409,
+      "code": "PAY_ALLOC_OVER_OPEN",
+      "ok": true
+    },
+    {
+      "label": "A18 非法币种（应拒）",
+      "method": "POST",
+      "url": "/api/purchase/payments",
+      "expect": "400",
+      "got": 400,
+      "code": "PAY_BAD_CURRENCY",
+      "ok": true
+    },
+    {
+      "label": "A18 第一张草稿生效",
+      "method": "POST",
+      "url": "/api/purchase/payments/5/submit",
+      "expect": "200",
+      "got": 200,
+      "code": null,
+      "ok": true
+    },
+    {
+      "label": "A18 第二张草稿生效（应被余额闸门拒）",
+      "method": "POST",
+      "url": "/api/purchase/payments/6/submit",
+      "expect": "409",
+      "got": 409,
+      "code": "PAY_ALLOC_OVER_OPEN",
+      "ok": true
+    },
+    {
+      "label": "A06 建销售订单（正）",
+      "method": "POST",
+      "url": "/api/sales/orders",
+      "expect": "200",
+      "got": 200,
+      "code": null,
+      "ok": true
+    },
+    {
+      "label": "A06 确认订单（正·占用授信）",
+      "method": "POST",
+      "url": "/api/sales/orders/331/confirm",
+      "expect": "200",
+      "got": 200,
+      "code": null,
+      "ok": true
+    },
+    {
+      "label": "A06 确认收款（正·应释放授信）",
+      "method": "POST",
+      "url": "/api/ar/receipts/7/confirm",
+      "expect": "200",
+      "got": 200,
+      "code": null,
+      "ok": true
+    },
+    {
+      "label": "A07 核销额 > 实收额（负）",
+      "method": "POST",
+      "url": "/api/ar/receipts",
+      "expect": "409",
+      "got": 409,
+      "code": "RC_ALLOC_EXCEEDS_RECEIPT",
+      "ok": true
+    },
+    {
+      "label": "A07 第二张草稿确认（负·重复抵同一应收）",
+      "method": "POST",
+      "url": "/api/ar/receipts/10/confirm",
+      "expect": "409",
+      "got": 409,
+      "code": "AR_OVER_ALLOCATED",
+      "ok": true
+    },
+    {
+      "label": "A10 部分发票红冲（正）",
+      "method": "POST",
+      "url": "/api/invoices/4/red-chart",
+      "expect": "200",
+      "got": 200,
+      "code": null,
+      "ok": true
+    },
+    {
+      "label": "A11 建生产领料单（正·不指定批次 ⇒ 允许跨批次）",
+      "method": "POST",
+      "url": "/api/manufacture/issues",
+      "expect": "200",
+      "got": 200,
+      "code": null,
+      "ok": true
+    },
+    {
+      "label": "A11 确认领料出库（正）",
+      "method": "POST",
+      "url": "/api/manufacture/issues/5/issue",
+      "expect": "200",
+      "got": 200,
+      "code": null,
+      "ok": true
+    },
+    {
+      "label": "A13 指名不合格批次做可售出库（负）",
+      "method": "POST",
+      "url": "/api/manufacture/issues/6/issue",
+      "expect": "409",
+      "got": 409,
+      "code": "BATCH_NOT_SELLABLE",
+      "ok": true
+    }
+  ],
+  "results": [
+    {
+      "group": "S1 环境自证 —— 这套东西到底跑在哪",
+      "name": "数据目录不是开发库",
+      "pass": true,
+      "detail": "/var/folders/xk/g22b7_y50056ywygj6pb57kc0000gn/T/gml-accept-xIZHdv/data"
+    },
+    {
+      "group": "S1 环境自证 —— 这套东西到底跑在哪",
+      "name": "服务健康",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "group": "S1 环境自证 —— 这套东西到底跑在哪",
+      "name": "临时库结构完整（新表在）",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "group": "S1 环境自证 —— 这套东西到底跑在哪",
+      "name": "三库都建起来了",
+      "pass": true,
+      "detail": "实际 true / 期望 true"
+    },
+    {
+      "group": "S1 环境自证 —— 这套东西到底跑在哪",
+      "name": "admin 拿到真实令牌",
+      "pass": true,
+      "detail": "长度 327"
+    },
+    {
+      "group": "S1 环境自证 —— 这套东西到底跑在哪",
+      "name": "其余演示账号可登录",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "group": "S2 A01 残留 —— 通用流转入口有没有绕过领域副作用",
+      "name": "找到一张已发货销售订单作为样本",
+      "pass": true,
+      "detail": {
+        "id": 1,
+        "doc_no": "SO202607190001",
+        "status": "completed"
+      }
+    },
+    {
+      "group": "S2 A01 残留 —— 通用流转入口有没有绕过领域副作用",
+      "name": "SO 走通用入口被拒（HTTP 409）",
+      "pass": true,
+      "detail": "实际 409 / 期望 409"
+    },
+    {
+      "group": "S2 A01 残留 —— 通用流转入口有没有绕过领域副作用",
+      "name": "拒绝码是 EFFECT_REQUIRES_BUSINESS_API",
+      "pass": true,
+      "detail": "实际 \"EFFECT_REQUIRES_BUSINESS_API\" / 期望 \"EFFECT_REQUIRES_BUSINESS_API\""
+    },
+    {
+      "group": "S2 A01 残留 —— 通用流转入口有没有绕过领域副作用",
+      "name": "SO 状态一个字节都没动",
+      "pass": true,
+      "detail": "实际 \"completed\" / 期望 \"completed\""
+    },
+    {
+      "group": "S2 A01 残留 —— 通用流转入口有没有绕过领域副作用",
+      "name": "找到一张采购结算单作为样本",
+      "pass": true,
+      "detail": {
+        "id": 1,
+        "doc_no": "PST202610050002",
+        "status": "audited"
+      }
+    },
+    {
+      "group": "S2 A01 残留 —— 通用流转入口有没有绕过领域副作用",
+      "name": "viewer 结算采购结算单被拒（403）",
+      "pass": true,
+      "detail": {
+        "status": 403,
+        "code": "PERM_DENIED",
+        "msg": "当前身份没有「结清」的操作权限（需 finance.settle.edit）"
+      }
+    },
+    {
+      "group": "S2 A01 残留 —— 通用流转入口有没有绕过领域副作用",
+      "name": "结算单状态未变",
+      "pass": true,
+      "detail": "实际 \"audited\" / 期望 \"audited\""
+    },
+    {
+      "group": "S2 A01 残留 —— 通用流转入口有没有绕过领域副作用",
+      "name": "viewer 付款被拒（403）",
+      "pass": true,
+      "detail": {
+        "status": 403,
+        "code": "PERM_DENIED"
+      }
+    },
+    {
+      "group": "S2 A01 残留 —— 通用流转入口有没有绕过领域副作用",
+      "name": "付款单状态未变",
+      "pass": true,
+      "detail": "实际 \"approved\" / 期望 \"approved\""
+    },
+    {
+      "group": "S2 A01 残留 —— 通用流转入口有没有绕过领域副作用",
+      "name": "门店账号动别家门店的单被拒",
+      "pass": true,
+      "detail": {
+        "status": 403,
+        "code": null,
+        "msg": "无权查看其他门店的单据"
+      }
+    },
+    {
+      "group": "S2 A01 残留 —— 通用流转入口有没有绕过领域副作用",
+      "name": "外部主体（门店）为内部单据提交审批被拒",
+      "pass": true,
+      "detail": {
+        "status": 403,
+        "code": null,
+        "msg": "无权查看其他门店的单据"
+      }
+    },
+    {
+      "group": "S2 A01 残留 —— 通用流转入口有没有绕过领域副作用",
+      "name": "对不存在的单据提交审批被拒（404，而不是凭空建一条实例）",
+      "pass": true,
+      "detail": {
+        "status": 404,
+        "code": null,
+        "msg": "单据 #99999999 不存在"
+      }
+    },
+    {
+      "group": "S2 A01 残留 —— 通用流转入口有没有绕过领域副作用",
+      "name": "未知单据类型被拒（400）",
+      "pass": true,
+      "detail": {
+        "status": 400,
+        "code": null,
+        "msg": "未知单据类型「NOPE」"
+      }
+    },
+    {
+      "group": "S2 A01 残留 —— 通用流转入口有没有绕过领域副作用",
+      "name": "被拒的提交没有留下审批实例",
+      "pass": true,
+      "detail": "实际 0 / 期望 0"
+    },
+    {
+      "group": "S3 A16 反向 —— 两套凭据双向隔离 + 行业钉死",
+      "name": "C 端登录拿到令牌",
+      "pass": true,
+      "detail": "长度 239"
+    },
+    {
+      "group": "S3 A16 反向 —— 两套凭据双向隔离 + 行业钉死",
+      "name": "C 端令牌打 MCP 端点被拒（-32001 Agent Token 无效）",
+      "pass": true,
+      "detail": {
+        "status": 200,
+        "err": {
+          "code": -32001,
+          "message": "Agent Token 无效"
+        }
+      }
+    },
+    {
+      "group": "S3 A16 反向 —— 两套凭据双向隔离 + 行业钉死",
+      "name": "C 端令牌打 ERP 采购接口被拒（401）",
+      "pass": true,
+      "detail": {
+        "status": 401,
+        "code": null,
+        "msg": "登录状态无效，请重新登录"
+      }
+    },
+    {
+      "group": "S3 A16 反向 —— 两套凭据双向隔离 + 行业钉死",
+      "name": "ERP 令牌打 C 端接口被拒（401）",
+      "pass": true,
+      "detail": {
+        "status": 401,
+        "msg": "登录状态无效，请重新登录"
+      }
+    },
+    {
+      "group": "S3 A16 反向 —— 两套凭据双向隔离 + 行业钉死",
+      "name": "带不一致的 x-industry 仍能正常响应（行业被令牌钉死）",
+      "pass": true,
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "group": "S3 A16 反向 —— 两套凭据双向隔离 + 行业钉死",
+      "name": "（钉死判据）响应里带上当前行业",
+      "pass": true,
+      "detail": {
+        "status": "ok",
+        "service": "gml-supply-chain",
+        "version": "1.0.0",
+        "time": "2026-10-16T18:16:38.202Z",
+        "database": {
+          "tables": 193,
+          "products": 26,
+          "seeded": true
+        }
+      }
+    },
+    {
+      "group": "S4 A20 —— 撤权 / 停用是否即时生效",
+      "name": "停用前 viewer 令牌可用",
+      "pass": true,
+      "detail": 200
+    },
+    {
+      "group": "S4 A20 —— 撤权 / 停用是否即时生效",
+      "name": "admin 停用 viewer 成功",
+      "pass": true,
+      "detail": {
+        "status": 200,
+        "msg": null
+      }
+    },
+    {
+      "group": "S4 A20 —— 撤权 / 停用是否即时生效",
+      "name": "同一枚旧令牌立刻失效（HTTP 403）",
+      "pass": true,
+      "detail": "实际 403 / 期望 403"
+    },
+    {
+      "group": "S4 A20 —— 撤权 / 停用是否即时生效",
+      "name": "失效原因是\"账号已停用\"而不是令牌过期",
+      "pass": true,
+      "detail": "账号已停用，请联系管理员"
+    },
+    {
+      "group": "S4 A20 —— 撤权 / 停用是否即时生效",
+      "name": "停用后连登录都进不来",
+      "pass": true,
+      "detail": {
+        "status": 403,
+        "msg": "账号已停用，请联系管理员"
+      }
+    },
+    {
+      "group": "S4 A20 —— 撤权 / 停用是否即时生效",
+      "name": "恢复后旧令牌又可用（说明刚才拒的是状态，不是令牌）",
+      "pass": true,
+      "detail": "实际 200 / 期望 200"
+    },
+    {
+      "group": "S5 D1 销售退货闭环",
+      "name": "找到一条已发货、且挂着应收的订单行",
+      "pass": true,
+      "detail": {
+        "order_item_id": 545,
+        "doc_no": "SO202610080004",
+        "shipped": 47
+      }
+    },
+    {
+      "group": "S5 D1 销售退货闭环",
+      "name": "该订单确实挂着应收",
+      "pass": true,
+      "detail": {
+        "id": 16,
+        "amount": 51152.26,
+        "status": "open"
+      }
+    },
+    {
+      "group": "S5 D1 销售退货闭环",
+      "name": "超退被拒（409）",
+      "pass": true,
+      "detail": "实际 409 / 期望 409"
+    },
+    {
+      "group": "S5 D1 销售退货闭环",
+      "name": "拒绝码 RETURN_EXCEEDS_SHIPPED",
+      "pass": true,
+      "detail": "实际 \"RETURN_EXCEEDS_SHIPPED\" / 期望 \"RETURN_EXCEEDS_SHIPPED\""
+    },
+    {
+      "group": "S5 D1 销售退货闭环",
+      "name": "拒绝里带出了可退量的算法依据",
+      "pass": true,
+      "detail": {
+        "order_item_id": 545,
+        "shipped_qty": 47,
+        "returned_qty": 0,
+        "returnable": 47,
+        "requested": 95,
+        "code": "RETURN_EXCEEDS_SHIPPED"
+      }
+    },
+    {
+      "group": "S5 D1 销售退货闭环",
+      "name": "有单退货缺 order_item_id 被拒（400）",
+      "pass": true,
+      "detail": "实际 400 / 期望 400"
+    },
+    {
+      "group": "S5 D1 销售退货闭环",
+      "name": "拒绝码 SOURCE_REQUIRED",
+      "pass": true,
+      "detail": "实际 \"SOURCE_REQUIRED\" / 期望 \"SOURCE_REQUIRED\""
+    },
+    {
+      "group": "S5 D1 销售退货闭环",
+      "name": "正常退一行成功",
+      "pass": true,
+      "detail": {
+        "status": 200,
+        "code": null,
+        "msg": null
+      }
+    },
+    {
+      "group": "S5 D1 销售退货闭环",
+      "name": "入库成本流水确实写了",
+      "pass": true,
+      "detail": 1
+    },
+    {
+      "group": "S5 D1 销售退货闭环",
+      "name": "客户端传的成本 0.01 没有落进库",
+      "pass": true,
+      "detail": [
+        294.4
+      ]
+    },
+    {
+      "group": "S5 D1 销售退货闭环",
+      "name": "成本来源被如实报出（不是客户端价）",
+      "pass": true,
+      "detail": [
+        "source_out"
+      ]
+    },
+    {
+      "group": "S5 D1 销售退货闭环",
+      "name": "退货单上记了应收冲减金额 > 0",
+      "pass": true,
+      "detail": {
+        "ar_offset_amount": 635.9,
+        "refund_due": 0
+      }
+    },
+    {
+      "group": "S5 D1 销售退货闭环",
+      "name": "应收被同步冲减（金额变小或已冲平）",
+      "pass": true,
+      "detail": {
+        "before": 51152.26,
+        "after": 50516.36
+      }
+    },
+    {
+      "group": "S5 D1 销售退货闭环",
+      "name": "库存确实增加 1",
+      "pass": true,
+      "detail": {
+        "before": 3657,
+        "after": 3658
+      }
+    },
+    {
+      "group": "S5 D1 销售退货闭环",
+      "name": "同幂等键重放返回首次那张单",
+      "pass": true,
+      "detail": {
+        "replayed": true,
+        "id": 27,
+        "first": 27
+      }
+    },
+    {
+      "group": "S5 D1 销售退货闭环",
+      "name": "重放没有多建一张单",
+      "pass": true,
+      "detail": "实际 1 / 期望 1"
+    },
+    {
+      "group": "S6 D5 MCP 是否复用领域服务",
+      "name": "建出 MCP 令牌（明文只此一次）",
+      "pass": true,
+      "detail": [
+        "id",
+        "token",
+        "prefix",
+        "name",
+        "scopes",
+        "warning"
+      ]
+    },
+    {
+      "group": "S6 D5 MCP 是否复用领域服务",
+      "name": "高危工具要求人工确认",
+      "pass": true,
+      "detail": {
+        "status": "confirmation_required",
+        "message": "「作废订单」属于高危操作，需人工在系统内确认后才会执行。",
+        "confirm_token": "cfm_c5c4402fc45bdbb5108426950e056ff1",
+        "expires_at": "2026-10-17 02:46:38",
+        "how_to_confirm": "POST /mcp/confirmations/cfm_c5c4402fc45bdbb5108426950e056ff1/approve（需登录用户 JWT 且具备确认权限）",
+        "args_preview": {
+          "order_id": 1,
+          "reason": "独立验收·作废已发货单",
+          "idempotency_key": "acc-d5-1792174598260"
+        }
+      }
+    },
+    {
+      "group": "S6 D5 MCP 是否复用领域服务",
+      "name": "发起者自己批准被拒（403）",
+      "pass": true,
+      "detail": "实际 403 / 期望 403"
+    },
+    {
+      "group": "S6 D5 MCP 是否复用领域服务",
+      "name": "拒绝理由说明是\"自批\"而不是权限不足",
+      "pass": true,
+      "detail": "不能批准本人名下 Agent Token 发起的确认单，请由他人确认"
+    },
+    {
+      "group": "S6 D5 MCP 是否复用领域服务",
+      "name": "他人（finance）确认成功",
+      "pass": true,
+      "detail": {
+        "status": 200,
+        "msg": null
+      }
+    },
+    {
+      "group": "S6 D5 MCP 是否复用领域服务",
+      "name": "已发货订单经 MCP 作废被拒",
+      "pass": true,
+      "detail": {
+        "isError": true,
+        "payload": {
+          "error": "ORDER_NOT_CANCELLABLE",
+          "message": "当前状态「completed」的订单不能作废（已发货/已完成/已作废）",
+          "detail": {
+            "status": "completed"
+          }
+        },
+        "rpc": null
+      }
+    },
+    {
+      "group": "S6 D5 MCP 是否复用领域服务",
+      "name": "拒绝码是域内状态机给的 ORDER_NOT_CANCELLABLE（不是裸 SQL 放行）",
+      "pass": true,
+      "detail": "实际 \"ORDER_NOT_CANCELLABLE\" / 期望 \"ORDER_NOT_CANCELLABLE\""
+    },
+    {
+      "group": "S6 D5 MCP 是否复用领域服务",
+      "name": "订单状态一个字节都没动",
+      "pass": true,
+      "detail": "实际 \"completed\" / 期望 \"completed\""
+    },
+    {
+      "group": "S6 D5 MCP 是否复用领域服务",
+      "name": "只读令牌调写型工具被拒",
+      "pass": true,
+      "detail": {
+        "error": "SCOPE_DENIED",
+        "message": "该 Token 的权限范围为 [read]，不足以调用 danger 级工具「作废订单」",
+        "detail": null
+      }
+    },
+    {
+      "group": "S6 D5 MCP 是否复用领域服务",
+      "name": "拒绝码来自范围闸门",
+      "pass": true,
+      "detail": {
+        "error": "SCOPE_DENIED",
+        "message": "该 Token 的权限范围为 [read]，不足以调用 danger 级工具「作废订单」",
+        "detail": null
+      }
+    },
+    {
+      "group": "S6 D5 MCP 是否复用领域服务",
+      "name": "每次调用都进了 mcp_call_logs（成功与失败都记）",
+      "pass": true,
+      "detail": [
+        {
+          "ok": 0,
+          "error_code": "SCOPE_DENIED"
+        },
+        {
+          "ok": 0,
+          "error_code": "ORDER_NOT_CANCELLABLE"
+        },
+        {
+          "ok": 0,
+          "error_code": "CONFIRMATION_REQUIRED"
+        }
+      ]
+    },
+    {
+      "group": "S6 D5 MCP 是否复用领域服务",
+      "name": "失败调用也被记下来",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "group": "S7 G 渠道协议价与返利核销",
+      "name": "找到经销商样本",
+      "pass": true,
+      "detail": {
+        "id": 1,
+        "name": "华东经销甲"
+      }
+    },
+    {
+      "group": "S7 G 渠道协议价与返利核销",
+      "name": "查价接口可用",
+      "pass": true,
+      "detail": {
+        "status": 200,
+        "msg": null,
+        "keys": [
+          "price",
+          "source",
+          "currency",
+          "skuId",
+          "trace",
+          "warn",
+          "rule",
+          "explanation",
+          "base_without_agreement",
+          "saved"
+        ]
+      }
+    },
+    {
+      "group": "S7 G 渠道协议价与返利核销",
+      "name": "无已确认返利时核销被拒（409）",
+      "pass": true,
+      "detail": {
+        "status": 409,
+        "code": "NO_CONFIRMED_REBATE",
+        "msg": "华东经销甲 在 2019-01 没有已确认的返利可核销"
+      }
+    },
+    {
+      "group": "S7 G 渠道协议价与返利核销",
+      "name": "拒绝码 NO_CONFIRMED_REBATE",
+      "pass": true,
+      "detail": "实际 \"NO_CONFIRMED_REBATE\" / 期望 \"NO_CONFIRMED_REBATE\""
+    },
+    {
+      "group": "S7 G 渠道协议价与返利核销",
+      "name": "返利域自证接口可用",
+      "pass": true,
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "group": "S7 G 渠道协议价与返利核销",
+      "name": "（记录现状）一次核销的结果",
+      "pass": true,
+      "detail": {
+        "status": 409,
+        "code": "NO_CONFIRMED_REBATE",
+        "msg": "华东经销甲 在 2026-10 没有已确认的返利可核销"
+      }
+    },
+    {
+      "group": "S8 H 业财一体凭证",
+      "name": "找到一张已发货发货单",
+      "pass": true,
+      "detail": {
+        "id": 1,
+        "doc_no": "SD202607210001",
+        "status": "shipped"
+      }
+    },
+    {
+      "group": "S8 H 业财一体凭证",
+      "name": "试算可用",
+      "pass": true,
+      "detail": {
+        "status": 200,
+        "code": null,
+        "msg": null
+      }
+    },
+    {
+      "group": "S8 H 业财一体凭证",
+      "name": "试算借贷相等",
+      "pass": true,
+      "detail": {
+        "debit": 684,
+        "credit": 684
+      }
+    },
+    {
+      "group": "S8 H 业财一体凭证",
+      "name": "生成凭证成功",
+      "pass": true,
+      "detail": {
+        "status": 200,
+        "code": null,
+        "msg": null
+      }
+    },
+    {
+      "group": "S8 H 业财一体凭证",
+      "name": "同来源再生成返回同一张（幂等）",
+      "pass": true,
+      "detail": {
+        "id": 3,
+        "replayed": true,
+        "first": 3
+      }
+    },
+    {
+      "group": "S8 H 业财一体凭证",
+      "name": "凭证落库且借贷平衡",
+      "pass": true,
+      "detail": {
+        "d": 684,
+        "c": 684,
+        "status": "posted"
+      }
+    },
+    {
+      "group": "S8 H 业财一体凭证",
+      "name": "作废不给理由被拒",
+      "pass": true,
+      "detail": {
+        "status": 400,
+        "code": "VOID_REASON_REQUIRED",
+        "msg": "作废已过账凭证 PZ202607210001 必须填写理由"
+      }
+    },
+    {
+      "group": "S8 H 业财一体凭证",
+      "name": "凭证没被作废",
+      "pass": true,
+      "detail": "实际 \"posted\" / 期望 \"posted\""
+    },
+    {
+      "group": "S11 IM（钉钉/飞书）组织与审批同步 —— 真实 HTTP",
+      "name": "meta 可用",
+      "pass": true,
+      "detail": {
+        "status": 200,
+        "msg": null
+      }
+    },
+    {
+      "group": "S11 IM（钉钉/飞书）组织与审批同步 —— 真实 HTTP",
+      "name": "契约如实写着\"真实租户调用未实现\"",
+      "pass": true,
+      "detail": "实际 false / 期望 false"
+    },
+    {
+      "group": "S11 IM（钉钉/飞书）组织与审批同步 —— 真实 HTTP",
+      "name": "冲突码字典是一本封闭字典且每条带人话",
+      "pass": true,
+      "detail": 12
+    },
+    {
+      "group": "S11 IM（钉钉/飞书）组织与审批同步 —— 真实 HTTP",
+      "name": "status 可用",
+      "pass": true,
+      "detail": {
+        "status": 200,
+        "msg": null
+      }
+    },
+    {
+      "group": "S11 IM（钉钉/飞书）组织与审批同步 —— 真实 HTTP",
+      "name": "登记了两个平台",
+      "pass": true,
+      "detail": "实际 2 / 期望 2"
+    },
+    {
+      "group": "S11 IM（钉钉/飞书）组织与审批同步 —— 真实 HTTP",
+      "name": "**默认停用**（同步会改组织与审批状态，必须是显式打开的）",
+      "pass": true,
+      "detail": [
+        {
+          "platform": "dingtalk",
+          "label": "钉钉",
+          "enabled": false,
+          "secret_present": false,
+          "adapter_ready": false,
+          "last_sync_at": null
+        },
+        {
+          "platform": "feishu",
+          "label": "飞书",
+          "enabled": false,
+          "secret_present": false,
+          "adapter_ready": false,
+          "last_sync_at": null
+        }
+      ]
+    },
+    {
+      "group": "S11 IM（钉钉/飞书）组织与审批同步 —— 真实 HTTP",
+      "name": "未配置时明确拒绝（409）而不是\"成功 0 条\"",
+      "pass": true,
+      "detail": "实际 409 / 期望 409"
+    },
+    {
+      "group": "S11 IM（钉钉/飞书）组织与审批同步 —— 真实 HTTP",
+      "name": "拒绝码 IM_NOT_CONFIGURED",
+      "pass": true,
+      "detail": "实际 \"IM_NOT_CONFIGURED\" / 期望 \"IM_NOT_CONFIGURED\""
+    },
+    {
+      "group": "S11 IM（钉钉/飞书）组织与审批同步 —— 真实 HTTP",
+      "name": "拒绝消息是一句人话（指出要填哪个环境变量）",
+      "pass": true,
+      "detail": "钉钉未启用：请在系统设置的 IM 同步里填入凭据的环境变量名并启用。（密钥**不落库**，库里只存环境变量名，例如 DINGTALK_APP_SECRET）"
+    },
+    {
+      "group": "S11 IM（钉钉/飞书）组织与审批同步 —— 真实 HTTP",
+      "name": "全链路自检可用",
+      "pass": true,
+      "detail": {
+        "status": 200,
+        "msg": null
+      }
+    },
+    {
+      "group": "S11 IM（钉钉/飞书）组织与审批同步 —— 真实 HTTP",
+      "name": "自检在一个会回滚的事务里跑完（库里一行都不多）",
+      "pass": true,
+      "detail": "实际 true / 期望 true"
+    },
+    {
+      "group": "S11 IM（钉钉/飞书）组织与审批同步 —— 真实 HTTP",
+      "name": "自检真的跑到了\"幂等\"这一步（第二次新建 0 条）",
+      "pass": true,
+      "detail": {
+        "first": {
+          "created": 7,
+          "updated": 0,
+          "conflicts": 8,
+          "status": "partial"
+        },
+        "second": {
+          "created": 0,
+          "updated": 0,
+          "conflicts": 8,
+          "status": "partial"
+        },
+        "second_is_idempotent": true,
+        "partial_missing_count": 0,
+        "partial_has_snapshot_conflict": true,
+        "approval_unknown_status": 1,
+        "approval_instance_missing": 1,
+        "audit": {
+          "ok": true,
+          "problems": [],
+          "checked": {
+            "runs": 2,
+            "dept_maps": 4,
+            "user_maps": 3,
+            "approval_maps": 0,
+            "conflicts": 16
+          }
+        }
+      }
+    },
+    {
+      "group": "S11 IM（钉钉/飞书）组织与审批同步 —— 真实 HTTP",
+      "name": "自检真的跑到了\"不完整快照不做缺失判定\"这一步",
+      "pass": true,
+      "detail": {
+        "first": {
+          "created": 7,
+          "updated": 0,
+          "conflicts": 8,
+          "status": "partial"
+        },
+        "second": {
+          "created": 0,
+          "updated": 0,
+          "conflicts": 8,
+          "status": "partial"
+        },
+        "second_is_idempotent": true,
+        "partial_missing_count": 0,
+        "partial_has_snapshot_conflict": true,
+        "approval_unknown_status": 1,
+        "approval_instance_missing": 1,
+        "audit": {
+          "ok": true,
+          "problems": [],
+          "checked": {
+            "runs": 2,
+            "dept_maps": 4,
+            "user_maps": 3,
+            "approval_maps": 0,
+            "conflicts": 16
+          }
+        }
+      }
+    },
+    {
+      "group": "S11 IM（钉钉/飞书）组织与审批同步 —— 真实 HTTP",
+      "name": "自检真的跑到了\"认不出的审批状态不猜\"这一步",
+      "pass": true,
+      "detail": {
+        "first": {
+          "created": 7,
+          "updated": 0,
+          "conflicts": 8,
+          "status": "partial"
+        },
+        "second": {
+          "created": 0,
+          "updated": 0,
+          "conflicts": 8,
+          "status": "partial"
+        },
+        "second_is_idempotent": true,
+        "partial_missing_count": 0,
+        "partial_has_snapshot_conflict": true,
+        "approval_unknown_status": 1,
+        "approval_instance_missing": 1,
+        "audit": {
+          "ok": true,
+          "problems": [],
+          "checked": {
+            "runs": 2,
+            "dept_maps": 4,
+            "user_maps": 3,
+            "approval_maps": 0,
+            "conflicts": 16
+          }
+        }
+      }
+    },
+    {
+      "group": "S11 IM（钉钉/飞书）组织与审批同步 —— 真实 HTTP",
+      "name": "自检前后：同步流水条数一致",
+      "pass": true,
+      "detail": "实际 0 / 期望 0"
+    },
+    {
+      "group": "S11 IM（钉钉/飞书）组织与审批同步 —— 真实 HTTP",
+      "name": "自检前后：冲突条数一致",
+      "pass": true,
+      "detail": "实际 0 / 期望 0"
+    },
+    {
+      "group": "S11 IM（钉钉/飞书）组织与审批同步 —— 真实 HTTP",
+      "name": "自检前后：部门映射一致",
+      "pass": true,
+      "detail": "实际 0 / 期望 0"
+    },
+    {
+      "group": "S11 IM（钉钉/飞书）组织与审批同步 —— 真实 HTTP",
+      "name": "自检前后：成员映射一致",
+      "pass": true,
+      "detail": "实际 0 / 期望 0"
+    },
+    {
+      "group": "S11 IM（钉钉/飞书）组织与审批同步 —— 真实 HTTP",
+      "name": "同步链自证全绿",
+      "pass": true,
+      "detail": []
+    },
+    {
+      "group": "S11 IM（钉钉/飞书）组织与审批同步 —— 真实 HTTP",
+      "name": "viewer 发起同步被拒（403）",
+      "pass": true,
+      "detail": {
+        "status": 403,
+        "msg": "当前角色无此操作权限（需 system.im.sync）"
+      }
+    },
+    {
+      "group": "S12 端到端 HTTP 清单（URL / 期望码 / 实际码，含负向对照）",
+      "name": "（负）C 端令牌打 MCP：HTTP 200 但 JSON-RPC 里报 -32001",
+      "pass": true,
+      "detail": {
+        "code": -32001,
+        "message": "Agent Token 无效"
+      }
+    },
+    {
+      "group": "S12 端到端 HTTP 清单（URL / 期望码 / 实际码，含负向对照）",
+      "name": "清单里每一条的实际码都等于期望码",
+      "pass": true,
+      "detail": "实际 0 / 期望 0"
+    },
+    {
+      "group": "S12 端到端 HTTP 清单（URL / 期望码 / 实际码，含负向对照）",
+      "name": "清单覆盖了正向与负向两类",
+      "pass": true,
+      "detail": {
+        "正向": 8,
+        "负向": 11
+      }
+    },
+    {
+      "group": "S13 A14 / A15 / A17b / A18 —— 四条验收缺陷的独立复现",
+      "name": "A14 商城会员登录成功",
+      "pass": true,
+      "detail": 200
+    },
+    {
+      "group": "S13 A14 / A15 / A17b / A18 —— 四条验收缺陷的独立复现",
+      "name": "A14 存在可售库存",
+      "pass": true,
+      "detail": {
+        "sku_id": 1
+      }
+    },
+    {
+      "group": "S13 A14 / A15 / A17b / A18 —— 四条验收缺陷的独立复现",
+      "name": "A14 返回里带 points_earned（说明结算走的是 checkout）",
+      "pass": true,
+      "detail": {
+        "id": 399,
+        "order_no": "H5202610170001",
+        "goods_amount": 1987.2,
+        "freight": 0,
+        "discount_amount": 272.96,
+        "member_discount": 0,
+        "promotion_discount": 272.96,
+        "points_discount": 0,
+        "points_used": 0,
+        "points_earned": 17142,
+        "coupon_not_used": [],
+        "pay_amount": 1714.24
+      }
+    },
+    {
+      "group": "S13 A14 / A15 / A17b / A18 —— 四条验收缺陷的独立复现",
+      "name": "A14 送分 == 会员账户积分增量（只有一个写入点）",
+      "pass": true,
+      "detail": "实际 17142 / 期望 17142"
+    },
+    {
+      "group": "S13 A14 / A15 / A17b / A18 —— 四条验收缺陷的独立复现",
+      "name": "A14 送分口径不是\"1 元 1 分\"（旧口径会等于 floor(实付元)）",
+      "pass": true,
+      "detail": {
+        "实付": 1714.24,
+        "送分": 17142
+      }
+    },
+    {
+      "group": "S13 A14 / A15 / A17b / A18 —— 四条验收缺陷的独立复现",
+      "name": "A14 送分与\"每元 N 分\"（N≥10）吻合",
+      "pass": true,
+      "detail": {
+        "实付": 1714.24,
+        "送分": 17142
+      }
+    },
+    {
+      "group": "S13 A14 / A15 / A17b / A18 —— 四条验收缺陷的独立复现",
+      "name": "A14 送分在流水里只有一条",
+      "pass": true,
+      "detail": "实际 1 / 期望 1"
+    },
+    {
+      "group": "S13 A14 / A15 / A17b / A18 —— 四条验收缺陷的独立复现",
+      "name": "A14 累计消费按实付计入（分）",
+      "pass": true,
+      "detail": {
+        "delta": 171424,
+        "实付分": 171424
+      }
+    },
+    {
+      "group": "S13 A14 / A15 / A17b / A18 —— 四条验收缺陷的独立复现",
+      "name": "A14 冗余展示列与账户余额同源（没有第二套写入）",
+      "pass": true,
+      "detail": {
+        "mall": 28652,
+        "acc": 28652
+      }
+    },
+    {
+      "group": "S13 A14 / A15 / A17b / A18 —— 四条验收缺陷的独立复现",
+      "name": "A15 抵扣的积分如实回显",
+      "pass": true,
+      "detail": "实际 100 / 期望 100"
+    },
+    {
+      "group": "S13 A14 / A15 / A17b / A18 —— 四条验收缺陷的独立复现",
+      "name": "A15 下单后积分 = 期初 − 抵扣 + 送分",
+      "pass": true,
+      "detail": "实际 33238 / 期望 33238"
+    },
+    {
+      "group": "S13 A14 / A15 / A17b / A18 —— 四条验收缺陷的独立复现",
+      "name": "A15 撤单成功",
+      "pass": true,
+      "detail": {
+        "status": 200,
+        "code": null,
+        "msg": null
+      }
+    },
+    {
+      "group": "S13 A14 / A15 / A17b / A18 —— 四条验收缺陷的独立复现",
+      "name": "A15 撤单后积分回到期初（抵扣被退回、送分被扣回）",
+      "pass": true,
+      "detail": "实际 21912 / 期望 21912"
+    },
+    {
+      "group": "S13 A14 / A15 / A17b / A18 —— 四条验收缺陷的独立复现",
+      "name": "A15 撤单后累计消费回到期初",
+      "pass": true,
+      "detail": "实际 211050 / 期望 211050"
+    },
+    {
+      "group": "S13 A14 / A15 / A17b / A18 —— 四条验收缺陷的独立复现",
+      "name": "A15 撤单写入了回退流水",
+      "pass": true,
+      "detail": {
+        "before": 0,
+        "after": 2
+      }
+    },
+    {
+      "group": "S13 A14 / A15 / A17b / A18 —— 四条验收缺陷的独立复现",
+      "name": "A15 重复撤单被拒（409，不会退两遍）",
+      "pass": true,
+      "detail": "实际 409 / 期望 409"
+    },
+    {
+      "group": "S13 A14 / A15 / A17b / A18 —— 四条验收缺陷的独立复现",
+      "name": "A15 重复撤单后积分没再变",
+      "pass": true,
+      "detail": "实际 21912 / 期望 21912"
+    },
+    {
+      "group": "S13 A14 / A15 / A17b / A18 —— 四条验收缺陷的独立复现",
+      "name": "A15 重复撤单没有新增回退流水（幂等落点）",
+      "pass": true,
+      "detail": "实际 2 / 期望 2"
+    },
+    {
+      "group": "S13 A14 / A15 / A17b / A18 —— 四条验收缺陷的独立复现",
+      "name": "A17b 找到草稿销售订单",
+      "pass": true,
+      "detail": "SO202610130002"
+    },
+    {
+      "group": "S13 A14 / A15 / A17b / A18 —— 四条验收缺陷的独立复现",
+      "name": "A17b 改草稿数量为 0 被拒",
+      "pass": true,
+      "detail": {
+        "status": 400,
+        "code": null,
+        "msg": "第 1 行销售数量必须大于 0"
+      }
+    },
+    {
+      "group": "S13 A14 / A15 / A17b / A18 —— 四条验收缺陷的独立复现",
+      "name": "A17b 只改运费成功",
+      "pass": true,
+      "detail": {
+        "status": 200,
+        "code": null,
+        "msg": null
+      }
+    },
+    {
+      "group": "S13 A14 / A15 / A17b / A18 —— 四条验收缺陷的独立复现",
+      "name": "A17b 应收随运费重算",
+      "pass": true,
+      "detail": {
+        "before": 3621,
+        "after": 3709.88,
+        "d期望": 88.88
+      }
+    },
+    {
+      "group": "S13 A14 / A15 / A17b / A18 —— 四条验收缺陷的独立复现",
+      "name": "A17b MCP 传未知字段被拒（不是静默接受）",
+      "pass": true,
+      "detail": {
+        "error": "ARG_UNKNOWN",
+        "message": "未知参数：__nope",
+        "detail": null
+      }
+    },
+    {
+      "group": "S13 A14 / A15 / A17b / A18 —— 四条验收缺陷的独立复现",
+      "name": "A17b 拒绝码来自参数校验 ARG_UNKNOWN",
+      "pass": true,
+      "detail": "实际 \"ARG_UNKNOWN\" / 期望 \"ARG_UNKNOWN\""
+    },
+    {
+      "group": "S13 A14 / A15 / A17b / A18 —— 四条验收缺陷的独立复现",
+      "name": "A17b MCP 负出库被拒（不是\"成功但什么都没做\"）",
+      "pass": true,
+      "detail": {
+        "error": "ARG_TYPE",
+        "message": "参数 qty 必须大于 0（收到 -5）",
+        "detail": null
+      }
+    },
+    {
+      "group": "S13 A14 / A15 / A17b / A18 —— 四条验收缺陷的独立复现",
+      "name": "A17b 拒绝理由说清是数量非法（一句人话）",
+      "pass": true,
+      "detail": {
+        "error": "ARG_TYPE",
+        "message": "参数 qty 必须大于 0（收到 -5）",
+        "detail": null
+      }
+    },
+    {
+      "group": "S13 A14 / A15 / A17b / A18 —— 四条验收缺陷的独立复现",
+      "name": "A17b 负出库没有反向加库存",
+      "pass": true,
+      "detail": "实际 3658 / 期望 3658"
+    },
+    {
+      "group": "S13 A14 / A15 / A17b / A18 —— 四条验收缺陷的独立复现",
+      "name": "A18 找到两张不同供应商的可核销结算单",
+      "pass": true,
+      "detail": {
+        "a": "PST202610050002",
+        "b": "PST202610120002"
+      }
+    },
+    {
+      "group": "S13 A14 / A15 / A17b / A18 —— 四条验收缺陷的独立复现",
+      "name": "A18 拒绝码 PAY_ALLOC_SUPPLIER_MISMATCH",
+      "pass": true,
+      "detail": "实际 \"PAY_ALLOC_SUPPLIER_MISMATCH\" / 期望 \"PAY_ALLOC_SUPPLIER_MISMATCH\""
+    },
+    {
+      "group": "S13 A14 / A15 / A17b / A18 —— 四条验收缺陷的独立复现",
+      "name": "A18 拒绝码 PAY_ALLOC_OVER_OPEN",
+      "pass": true,
+      "detail": "实际 \"PAY_ALLOC_OVER_OPEN\" / 期望 \"PAY_ALLOC_OVER_OPEN\""
+    },
+    {
+      "group": "S13 A14 / A15 / A17b / A18 —— 四条验收缺陷的独立复现",
+      "name": "A18 拒绝码 PAY_BAD_CURRENCY",
+      "pass": true,
+      "detail": "实际 \"PAY_BAD_CURRENCY\" / 期望 \"PAY_BAD_CURRENCY\""
+    },
+    {
+      "group": "S13 A14 / A15 / A17b / A18 —— 四条验收缺陷的独立复现",
+      "name": "A18 两张草稿各自都能建（草稿不占额 —— 设计如此，已如实记录）",
+      "pass": true,
+      "detail": {
+        "第一张": 200,
+        "第二张": 200,
+        "code2": null
+      }
+    },
+    {
+      "group": "S13 A14 / A15 / A17b / A18 —— 四条验收缺陷的独立复现",
+      "name": "A18 第一张草稿可以生效",
+      "pass": true,
+      "detail": {
+        "status": 200,
+        "code": null,
+        "msg": null
+      }
+    },
+    {
+      "group": "S13 A14 / A15 / A17b / A18 —— 四条验收缺陷的独立复现",
+      "name": "A18 第二张生效被拒（不会重复占用同一笔余额）",
+      "pass": true,
+      "detail": {
+        "status": 409,
+        "code": "PAY_ALLOC_OVER_OPEN",
+        "msg": "第 1 条核销明细超过结算单 PST202610050002 的未付余额（未付 26262.72，本单已计划 0，本条 39394.08）"
+      }
+    },
+    {
+      "group": "S13 A14 / A15 / A17b / A18 —— 四条验收缺陷的独立复现",
+      "name": "A18 拒绝码指明超未付余额",
+      "pass": true,
+      "detail": "PAY_ALLOC_OVER_OPEN"
+    },
+    {
+      "group": "S13 A14 / A15 / A17b / A18 —— 四条验收缺陷的独立复现",
+      "name": "A18 该结算单实付额没有超过面额",
+      "pass": true,
+      "detail": {
+        "paid": 83165.28,
+        "settle": 109428
+      }
+    },
+    {
+      "group": "S14 A19 / A12 —— 干净库上遍历公开只读 MCP 工具 + 库存参数缓存按库分区",
+      "name": "A19 代码里不再引用不存在的列 sales_orders.total_amount",
+      "pass": true,
+      "detail": {
+        "原文出现次数": 15
+      }
+    },
+    {
+      "group": "S14 A19 / A12 —— 干净库上遍历公开只读 MCP 工具 + 库存参数缓存按库分区",
+      "name": "A19 代码里不再引用不存在的列 approval_instances.finished_at",
+      "pass": true,
+      "detail": {
+        "原文出现次数": 2
+      }
+    },
+    {
+      "group": "S14 A19 / A12 —— 干净库上遍历公开只读 MCP 工具 + 库存参数缓存按库分区",
+      "name": "A19 approval.approve 改调领域服务 decideApproval（代码里不再裸 UPDATE）",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "group": "S14 A19 / A12 —— 干净库上遍历公开只读 MCP 工具 + 库存参数缓存按库分区",
+      "name": "A19 至少真实调用了 5 个只读工具（否则本节是空跑）",
+      "pass": true,
+      "detail": {
+        "只读数": 15,
+        "实调": 14
+      }
+    },
+    {
+      "group": "S14 A19 / A12 —— 干净库上遍历公开只读 MCP 工具 + 库存参数缓存按库分区",
+      "name": "A19 没有任何只读工具因\"列/表不存在\"失败",
+      "pass": true,
+      "detail": "实际 0 / 期望 0"
+    },
+    {
+      "group": "S14 A19 / A12 —— 干净库上遍历公开只读 MCP 工具 + 库存参数缓存按库分区",
+      "name": "A19/D5c approval.approve 未经人工确认不得执行",
+      "pass": true,
+      "detail": {
+        "status": "confirmation_required",
+        "message": "「审批通过」属于高危操作，需人工在系统内确认后才会执行。",
+        "confirm_token": "cfm_ff5bab5e06fb694f780d95e88d0197be",
+        "expires_at": "2026-10-17 02:46:38",
+        "how_to_confirm": "POST /mcp/confirmations/cfm_ff5bab5e06fb694f780d95e88d0197be/approve（需登录用户 JWT 且具备确认权限）",
+        "args_preview": {
+          "instance_id": 1
+        }
+      }
+    },
+    {
+      "group": "S14 A19 / A12 —— 干净库上遍历公开只读 MCP 工具 + 库存参数缓存按库分区",
+      "name": "A19 动态：找到可发起审批的采购订单（夹具前提）",
+      "pass": true,
+      "detail": "PO202609180001"
+    },
+    {
+      "group": "S14 A19 / A12 —— 干净库上遍历公开只读 MCP 工具 + 库存参数缓存按库分区",
+      "name": "A19 动态：待审实例已建立并留下 submit 留痕",
+      "pass": true,
+      "detail": {
+        "instance_id": 1,
+        "status": "pending"
+      }
+    },
+    {
+      "group": "S14 A19 / A12 —— 干净库上遍历公开只读 MCP 工具 + 库存参数缓存按库分区",
+      "name": "A19 动态：代签待审实例同样要求人工确认",
+      "pass": true,
+      "detail": {
+        "status": "confirmation_required",
+        "message": "「审批通过」属于高危操作，需人工在系统内确认后才会执行。",
+        "confirm_token": "cfm_a15bda252ac30515995ba889eb4e69c2",
+        "expires_at": "2026-10-17 02:46:38",
+        "how_to_confirm": "POST /mcp/confirmations/cfm_a15bda252ac30515995ba889eb4e69c2/approve（需登录用户 JWT 且具备确认权限）",
+        "args_preview": {
+          "instance_id": 1
+        }
+      }
+    },
+    {
+      "group": "S14 A19 / A12 —— 干净库上遍历公开只读 MCP 工具 + 库存参数缓存按库分区",
+      "name": "A19 动态：他人（finance）完成了二次确认",
+      "pass": true,
+      "detail": {
+        "status": 200,
+        "msg": null
+      }
+    },
+    {
+      "group": "S14 A19 / A12 —— 干净库上遍历公开只读 MCP 工具 + 库存参数缓存按库分区",
+      "name": "A19 动态：确认后执行成功（领域服务放行，不是 MCP 自己放行）",
+      "pass": true,
+      "detail": {
+        "summary": "审批 #1 已通过（由「钱财务」签字），业务动作已执行",
+        "instance_id": 1,
+        "doc_no": "PO202609180001",
+        "status": "approved",
+        "step": 1,
+        "done": true,
+        "next_step": null,
+        "signed_by": "钱财务",
+        "applied": {
+          "from": "approved",
+          "to": "cancelled"
+        },
+        "comment": ""
+      }
+    },
+    {
+      "group": "S14 A19 / A12 —— 干净库上遍历公开只读 MCP 工具 + 库存参数缓存按库分区",
+      "name": "A19 动态：**approval_records 里多了一条 approve 记录**（裸 UPDATE 永远不写这张表）",
+      "pass": true,
+      "detail": {
+        "decision": "approve",
+        "approver_name": "钱财务"
+      }
+    },
+    {
+      "group": "S14 A19 / A12 —— 干净库上遍历公开只读 MCP 工具 + 库存参数缓存按库分区",
+      "name": "A19 动态：签字人落的是真人（不是空、也不是令牌名）",
+      "pass": true,
+      "detail": {
+        "decision": "approve",
+        "approver_name": "钱财务"
+      }
+    },
+    {
+      "group": "S14 A19 / A12 —— 干净库上遍历公开只读 MCP 工具 + 库存参数缓存按库分区",
+      "name": "A19 动态：实例状态被状态机推进到 approved",
+      "pass": true,
+      "detail": "实际 \"approved\" / 期望 \"approved\""
+    },
+    {
+      "group": "S14 A19 / A12 —— 干净库上遍历公开只读 MCP 工具 + 库存参数缓存按库分区",
+      "name": "A12 库存参数缓存按 db 分区（WeakMap keyed by db），不是全局单例",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "group": "S14 A19 / A12 —— 干净库上遍历公开只读 MCP 工具 + 库存参数缓存按库分区",
+      "name": "A12 没有退回\"模块级 new Map() 当参数缓存\"的写法",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "group": "S15 A06 / A08 —— 授信与应收的\"来源\"必须对得上",
+      "name": "A06 找到\"有授信额度\"的经销商账户",
+      "pass": true,
+      "detail": {
+        "account_id": 1,
+        "dealer_id": 1,
+        "limit": 1200000
+      }
+    },
+    {
+      "group": "S15 A06 / A08 —— 授信与应收的\"来源\"必须对得上",
+      "name": "A06 找到可下单的\"仓 × SKU\"（否则确认订单会卡在占库）",
+      "pass": true,
+      "detail": {
+        "sku_id": 1,
+        "warehouse_id": 2
+      }
+    },
+    {
+      "group": "S15 A06 / A08 —— 授信与应收的\"来源\"必须对得上",
+      "name": "A06 读到授信快照（可用额度是一个数）",
+      "pass": true,
+      "detail": {
+        "limit": 1560000,
+        "used": 0,
+        "available": 1560000
+      }
+    },
+    {
+      "group": "S15 A06 / A08 —— 授信与应收的\"来源\"必须对得上",
+      "name": "A06 草稿订单建出来了",
+      "pass": true,
+      "detail": {
+        "status": 200,
+        "code": null,
+        "msg": null
+      }
+    },
+    {
+      "group": "S15 A06 / A08 —— 授信与应收的\"来源\"必须对得上",
+      "name": "A06 该订单确实有应收金额（> 0 才谈得上占用）",
+      "pass": true,
+      "detail": {
+        "so_id": 331,
+        "receivable": 200
+      }
+    },
+    {
+      "group": "S15 A06 / A08 —— 授信与应收的\"来源\"必须对得上",
+      "name": "A06 确认订单成功",
+      "pass": true,
+      "detail": {
+        "status": 200,
+        "code": null,
+        "msg": null
+      }
+    },
+    {
+      "group": "S15 A06 / A08 —— 授信与应收的\"来源\"必须对得上",
+      "name": "A06 订单上记下了占用额（占用真的发生了）",
+      "pass": true,
+      "detail": {
+        "credit_hold": 200
+      }
+    },
+    {
+      "group": "S15 A06 / A08 —— 授信与应收的\"来源\"必须对得上",
+      "name": "A06 占用后可用额度确实减少（减少额 = 该单应收）",
+      "pass": true,
+      "detail": {
+        "占用前": 1560000,
+        "占用后": 1559800,
+        "应收": 200
+      }
+    },
+    {
+      "group": "S15 A06 / A08 —— 授信与应收的\"来源\"必须对得上",
+      "name": "A06 为该订单生成应收（来源 SO#331）",
+      "pass": true,
+      "detail": {
+        "status": 200,
+        "code": null,
+        "msg": null
+      }
+    },
+    {
+      "group": "S15 A06 / A08 —— 授信与应收的\"来源\"必须对得上",
+      "name": "A06 建收款单并把核销指定到这张应收",
+      "pass": true,
+      "detail": {
+        "status": 200,
+        "code": null,
+        "msg": null,
+        "plan": [
+          {
+            "ar_id": 31,
+            "amount": 200
+          }
+        ]
+      }
+    },
+    {
+      "group": "S15 A06 / A08 —— 授信与应收的\"来源\"必须对得上",
+      "name": "A06 确认收款成功",
+      "pass": true,
+      "detail": {
+        "status": 200,
+        "code": null,
+        "msg": null
+      }
+    },
+    {
+      "group": "S15 A06 / A08 —— 授信与应收的\"来源\"必须对得上",
+      "name": "A06 收款核销后可用额度回到占用前（旧缺陷：按 RCP 释放 ⇒ 一条流水都写不出 ⇒ 额度只减不增）",
+      "pass": true,
+      "detail": {
+        "占用前": 1560000,
+        "占用后": 1559800,
+        "核销后": 1560000
+      }
+    },
+    {
+      "group": "S15 A06 / A08 —— 授信与应收的\"来源\"必须对得上",
+      "name": "A06 台账里占用与释放都挂在同一个 `SO+orderId` 上（释放没有跑到 `RCP+receiptId`）",
+      "pass": true,
+      "detail": [
+        {
+          "change_type": "occupy",
+          "source_type": "SO",
+          "source_id": 331,
+          "amount": 200
+        },
+        {
+          "change_type": "settle",
+          "source_type": "SO",
+          "source_id": 331,
+          "amount": -200
+        }
+      ]
+    },
+    {
+      "group": "S15 A06 / A08 —— 授信与应收的\"来源\"必须对得上",
+      "name": "A08 造出同主体的两张未结应收（甲 1000 / 乙 2000）",
+      "pass": true,
+      "detail": {
+        "甲": 32,
+        "乙": 33
+      }
+    },
+    {
+      "group": "S15 A06 / A08 —— 授信与应收的\"来源\"必须对得上",
+      "name": "A08 收款单建出来了",
+      "pass": true,
+      "detail": {
+        "status": 200,
+        "code": null,
+        "msg": null
+      }
+    },
+    {
+      "group": "S15 A06 / A08 —— 授信与应收的\"来源\"必须对得上",
+      "name": "A08 核销只落在**显式指定**的那张（乙）上（旧缺陷：被 FIFO 抵到同主体的甲）",
+      "pass": true,
+      "detail": [
+        {
+          "ar_id": 33,
+          "amount": 2000
+        }
+      ]
+    },
+    {
+      "group": "S15 A06 / A08 —— 授信与应收的\"来源\"必须对得上",
+      "name": "A08 另一张（甲）一个字节都没被抵",
+      "pass": true,
+      "detail": {
+        "allocated_amount": 0
+      }
+    },
+    {
+      "group": "S15 A06 / A08 —— 授信与应收的\"来源\"必须对得上",
+      "name": "A08 确认收款成功（甲仍未结、乙已结清）",
+      "pass": true,
+      "detail": {
+        "status": 200,
+        "code": null,
+        "msg": null
+      }
+    },
+    {
+      "group": "S15 A06 / A08 —— 授信与应收的\"来源\"必须对得上",
+      "name": "A08 乙应收已结清",
+      "pass": true,
+      "detail": "实际 \"closed\" / 期望 \"closed\""
+    },
+    {
+      "group": "S15 A06 / A08 —— 授信与应收的\"来源\"必须对得上",
+      "name": "A08 甲应收仍是未结",
+      "pass": true,
+      "detail": "实际 \"open\" / 期望 \"open\""
+    },
+    {
+      "group": "S16 A07 / A10 —— 核销与红冲的边界",
+      "name": "A07 找到往来对象（复用 A06 的那家经销商）",
+      "pass": true,
+      "detail": 1
+    },
+    {
+      "group": "S16 A07 / A10 —— 核销与红冲的边界",
+      "name": "A07 造出一张 1000 的未结应收",
+      "pass": true,
+      "detail": 34
+    },
+    {
+      "group": "S16 A07 / A10 —— 核销与红冲的边界",
+      "name": "A07 核销额 > 实收额 → 409（不是截平后静默成功）",
+      "pass": true,
+      "detail": "实际 409 / 期望 409"
+    },
+    {
+      "group": "S16 A07 / A10 —— 核销与红冲的边界",
+      "name": "A07 拒绝码 RC_ALLOC_EXCEEDS_RECEIPT",
+      "pass": true,
+      "detail": "实际 \"RC_ALLOC_EXCEEDS_RECEIPT\" / 期望 \"RC_ALLOC_EXCEEDS_RECEIPT\""
+    },
+    {
+      "group": "S16 A07 / A10 —— 核销与红冲的边界",
+      "name": "A07 拒绝里带出了两个可核对的数（实收剩余 / 本次要核）",
+      "pass": true,
+      "detail": {
+        "receiptAmount": 100,
+        "remaining": 100,
+        "want": 1000,
+        "code": "RC_ALLOC_EXCEEDS_RECEIPT"
+      }
+    },
+    {
+      "group": "S16 A07 / A10 —— 核销与红冲的边界",
+      "name": "A07 被拒后一张收款单都没落库",
+      "pass": true,
+      "detail": "实际 0 / 期望 0"
+    },
+    {
+      "group": "S16 A07 / A10 —— 核销与红冲的边界",
+      "name": "A07 核销额 > 应收未核销余额 → 409",
+      "pass": true,
+      "detail": "实际 409 / 期望 409"
+    },
+    {
+      "group": "S16 A07 / A10 —— 核销与红冲的边界",
+      "name": "A07 拒绝码 RC_ALLOC_EXCEEDS_AR",
+      "pass": true,
+      "detail": "实际 \"RC_ALLOC_EXCEEDS_AR\" / 期望 \"RC_ALLOC_EXCEEDS_AR\""
+    },
+    {
+      "group": "S16 A07 / A10 —— 核销与红冲的边界",
+      "name": "A07 同一应收在一次核销里重复出现 → 400",
+      "pass": true,
+      "detail": "实际 400 / 期望 400"
+    },
+    {
+      "group": "S16 A07 / A10 —— 核销与红冲的边界",
+      "name": "A07 拒绝码 RC_ALLOC_DUPLICATE_AR",
+      "pass": true,
+      "detail": "实际 \"RC_ALLOC_DUPLICATE_AR\" / 期望 \"RC_ALLOC_DUPLICATE_AR\""
+    },
+    {
+      "group": "S16 A07 / A10 —— 核销与红冲的边界",
+      "name": "A07 造出一张 1000 的未结应收（重复抵样本）",
+      "pass": true,
+      "detail": 35
+    },
+    {
+      "group": "S16 A07 / A10 —— 核销与红冲的边界",
+      "name": "A07 两张草稿各自都能建（草稿不占额 —— 设计如此）",
+      "pass": true,
+      "detail": {
+        "一": 200,
+        "二": 200,
+        "code2": null
+      }
+    },
+    {
+      "group": "S16 A07 / A10 —— 核销与红冲的边界",
+      "name": "A07 第一张确认成功",
+      "pass": true,
+      "detail": {
+        "status": 200,
+        "code": null,
+        "msg": null
+      }
+    },
+    {
+      "group": "S16 A07 / A10 —— 核销与红冲的边界",
+      "name": "A07 第二张确认被拒（不得静默成功）",
+      "pass": true,
+      "detail": "实际 409 / 期望 409"
+    },
+    {
+      "group": "S16 A07 / A10 —— 核销与红冲的边界",
+      "name": "A07 拒绝码 AR_OVER_ALLOCATED",
+      "pass": true,
+      "detail": "实际 \"AR_OVER_ALLOCATED\" / 期望 \"AR_OVER_ALLOCATED\""
+    },
+    {
+      "group": "S16 A07 / A10 —— 核销与红冲的边界",
+      "name": "A07 第二张仍是草稿（没被偷偷确认）",
+      "pass": true,
+      "detail": "实际 \"draft\" / 期望 \"draft\""
+    },
+    {
+      "group": "S16 A07 / A10 —— 核销与红冲的边界",
+      "name": "A07 该应收的已确认核销额没有超过应收金额",
+      "pass": true,
+      "detail": {
+        "allocated_amount": 1000
+      }
+    },
+    {
+      "group": "S16 A07 / A10 —— 核销与红冲的边界",
+      "name": "A10 找到\"发票关联**订单级** SO 应收\"的样本（A10 说的就是这种共享应收）",
+      "pass": true,
+      "detail": {
+        "发票": "SI202610140002",
+        "票额": 84603.48,
+        "ar_id": 11,
+        "应收额": 84603.48,
+        "ar状态": "open",
+        "共享票数": 1
+      }
+    },
+    {
+      "group": "S16 A07 / A10 —— 核销与红冲的边界",
+      "name": "A10 该应收确实挂在销售订单上（source_type=SO，不是发票自建的 SI）",
+      "pass": true,
+      "detail": "实际 \"SO\" / 期望 \"SO\""
+    },
+    {
+      "group": "S16 A07 / A10 —— 核销与红冲的边界",
+      "name": "A10 红冲成功（共享应收不该成为\"红冲不了\"的理由）",
+      "pass": true,
+      "detail": {
+        "status": 200,
+        "code": null,
+        "msg": null
+      }
+    },
+    {
+      "group": "S16 A07 / A10 —— 核销与红冲的边界",
+      "name": "A10 共享的订单级应收**没有被作废**",
+      "pass": true,
+      "detail": "实际 \"open\" / 期望 \"open\""
+    },
+    {
+      "group": "S16 A07 / A10 —— 核销与红冲的边界",
+      "name": "A10 共享应收的金额没有被改动",
+      "pass": true,
+      "detail": "实际 84603.48 / 期望 84603.48"
+    },
+    {
+      "group": "S16 A07 / A10 —— 核销与红冲的边界",
+      "name": "A10 共享应收的已核销额没有被改动",
+      "pass": true,
+      "detail": "实际 0 / 期望 0"
+    },
+    {
+      "group": "S16 A07 / A10 —— 核销与红冲的边界",
+      "name": "A10 原票置红冲 + 生成一张负数红字票指回原票（红冲这件事本身是真的）",
+      "pass": true,
+      "detail": {
+        "status": "confirmed",
+        "red_chart_of_id": 4,
+        "amount": -74870.34
+      }
+    },
+    {
+      "group": "S17 A11 / A13 —— 跨批次成本 与 不可售批次闸门",
+      "name": "A11 找到一张\"生产中\"的生产订单（只有这个状态能领料）",
+      "pass": true,
+      "detail": {
+        "id": 5,
+        "doc_no": "MO202610160001",
+        "warehouse_id": 1
+      }
+    },
+    {
+      "group": "S17 A11 / A13 —— 跨批次成本 与 不可售批次闸门",
+      "name": "A11 找到一个在该仓零库存的 SKU（保证只有本用例的两批参与拣选）",
+      "pass": true,
+      "detail": {
+        "id": 9,
+        "sku_code": "SP10007-01"
+      }
+    },
+    {
+      "group": "S17 A11 / A13 —— 跨批次成本 与 不可售批次闸门",
+      "name": "A11 两个批次已入库（甲 5×10 / 乙 5×20）",
+      "pass": true,
+      "detail": {
+        "甲": {
+          "summary": "入库 5，结存 5，新均价 10",
+          "batchNo": "ACC-A11-甲-1792174598486",
+          "balance": 5,
+          "unitCost": 10,
+          "costAmount": 50,
+          "ownerOrgId": 1,
+          "currency": "CNY"
+        },
+        "乙": {
+          "summary": "入库 5，结存 5，新均价 20",
+          "batchNo": "ACC-A11-乙-1792174598486",
+          "balance": 5,
+          "unitCost": 20,
+          "costAmount": 100,
+          "ownerOrgId": 1,
+          "currency": "CNY"
+        }
+      }
+    },
+    {
+      "group": "S17 A11 / A13 —— 跨批次成本 与 不可售批次闸门",
+      "name": "A11 两批库存确实分开落账（成本不同）",
+      "pass": true,
+      "detail": [
+        {
+          "batch_no": "ACC-A11-乙-1792174598486",
+          "qty_on_hand": 5,
+          "cost_price": 20
+        },
+        {
+          "batch_no": "ACC-A11-甲-1792174598486",
+          "qty_on_hand": 5,
+          "cost_price": 10
+        }
+      ]
+    },
+    {
+      "group": "S17 A11 / A13 —— 跨批次成本 与 不可售批次闸门",
+      "name": "A11 领料单建出来了",
+      "pass": true,
+      "detail": {
+        "status": 200,
+        "code": null,
+        "msg": null
+      }
+    },
+    {
+      "group": "S17 A11 / A13 —— 跨批次成本 与 不可售批次闸门",
+      "name": "A11 领料单审批通过",
+      "pass": true,
+      "detail": {
+        "status": 200,
+        "code": null,
+        "msg": null
+      }
+    },
+    {
+      "group": "S17 A11 / A13 —— 跨批次成本 与 不可售批次闸门",
+      "name": "A11 确认出库成功",
+      "pass": true,
+      "detail": {
+        "status": 200,
+        "code": null,
+        "msg": null
+      }
+    },
+    {
+      "group": "S17 A11 / A13 —— 跨批次成本 与 不可售批次闸门",
+      "name": "A11 出库流水是**逐批**两行（甲 10 元批 + 乙 20 元批）",
+      "pass": true,
+      "detail": {
+        "doc_no": "MR202610170001",
+        "txs": [
+          {
+            "batch_no": "ACC-A11-甲-1792174598486",
+            "qty": 5,
+            "unit_cost": 10,
+            "doc_type": "MR"
+          },
+          {
+            "batch_no": "ACC-A11-乙-1792174598486",
+            "qty": 5,
+            "unit_cost": 20,
+            "doc_type": "MR"
+          }
+        ]
+      }
+    },
+    {
+      "group": "S17 A11 / A13 —— 跨批次成本 与 不可售批次闸门",
+      "name": "A11 行成本 = 各批次金额之和（5×10 + 5×20 = 150，而不是 10 × 末批价 20 = 200）",
+      "pass": true,
+      "detail": {
+        "行金额": 150,
+        "行单价": 15,
+        "逐批之和": 150
+      }
+    },
+    {
+      "group": "S17 A11 / A13 —— 跨批次成本 与 不可售批次闸门",
+      "name": "A11 行金额与逐批流水之和一致（没有一个数是\"另外算的\"）",
+      "pass": true,
+      "detail": {
+        "行": 150,
+        "逐批": 150
+      }
+    },
+    {
+      "group": "S17 A11 / A13 —— 跨批次成本 与 不可售批次闸门",
+      "name": "A11 加权平均单价让 `数量 × 单价` 恰好等于总额（上游就是这么算整行成本的）",
+      "pass": true,
+      "detail": {
+        "qty": 10,
+        "unit_cost": 15,
+        "amount": 150
+      }
+    },
+    {
+      "group": "S17 A11 / A13 —— 跨批次成本 与 不可售批次闸门",
+      "name": "A13 找到\"检验不合格\"且有库存的批次",
+      "pass": true,
+      "detail": {
+        "warehouse_id": 3,
+        "sku_id": 11,
+        "batch_no": "0008012608914",
+        "qty_on_hand": 303
+      }
+    },
+    {
+      "group": "S17 A11 / A13 —— 跨批次成本 与 不可售批次闸门",
+      "name": "A13 自动拣选跳过了不合格批次（它的库存 > 0，所以\"没拣到\"不是因为没货）",
+      "pass": true,
+      "detail": {
+        "qty_on_hand": 303,
+        "picks": 3,
+        "skippedUnusable": 1
+      }
+    },
+    {
+      "group": "S17 A11 / A13 —— 跨批次成本 与 不可售批次闸门",
+      "name": "A13 建一张\"指名不合格批次\"的领料单",
+      "pass": true,
+      "detail": {
+        "status": 200,
+        "code": null,
+        "msg": null
+      }
+    },
+    {
+      "group": "S17 A11 / A13 —— 跨批次成本 与 不可售批次闸门",
+      "name": "A13 显式指定不合格批次出库 → 409",
+      "pass": true,
+      "detail": "实际 409 / 期望 409"
+    },
+    {
+      "group": "S17 A11 / A13 —— 跨批次成本 与 不可售批次闸门",
+      "name": "A13 拒绝码 BATCH_NOT_SELLABLE",
+      "pass": true,
+      "detail": "实际 \"BATCH_NOT_SELLABLE\" / 期望 \"BATCH_NOT_SELLABLE\""
+    },
+    {
+      "group": "S17 A11 / A13 —— 跨批次成本 与 不可售批次闸门",
+      "name": "A13 被拒后该批次库存一个字节都没动",
+      "pass": true,
+      "detail": "实际 303 / 期望 303"
+    },
+    {
+      "group": "S17 A11 / A13 —— 跨批次成本 与 不可售批次闸门",
+      "name": "A13 找到\"待检\"且有库存的批次",
+      "pass": true,
+      "detail": {
+        "warehouse_id": 2,
+        "sku_id": 1,
+        "batch_no": "0001012412299",
+        "qty_on_hand": 32
+      }
+    },
+    {
+      "group": "S17 A11 / A13 —— 跨批次成本 与 不可售批次闸门",
+      "name": "A13 参数未开（block_pending_qc=0）时待检批次**参与**拣选（先证明默认是放行的）",
+      "pass": true,
+      "detail": {
+        "batch": "0001012412299",
+        "picks": [
+          "0001012412299"
+        ]
+      }
+    },
+    {
+      "group": "S17 A11 / A13 —— 跨批次成本 与 不可售批次闸门",
+      "name": "A13 参数确实被读到 1（否则下面那条\"被排除\"可能只是我改错了地方）",
+      "pass": true,
+      "detail": "实际 \"1\" / 期望 \"1\""
+    },
+    {
+      "group": "S17 A11 / A13 —— 跨批次成本 与 不可售批次闸门",
+      "name": "A13 参数置 1 后待检批次被排除出自动拣选",
+      "pass": true,
+      "detail": {
+        "batch": "0001012412299",
+        "picks": [],
+        "skippedUnusable": 1
+      }
+    },
+    {
+      "group": "S17 A11 / A13 —— 跨批次成本 与 不可售批次闸门",
+      "name": "A13 参数置 1 后显式指定待检批次做销售出库 → 409 BATCH_NOT_SELLABLE",
+      "pass": true,
+      "detail": {
+        "code": "BATCH_NOT_SELLABLE",
+        "message": "批次 0001012412299 不能用于「SAL_OUT」出库：尚在待检。本闸门只拦「把货当可售货消耗」的出库（生产领料出库 MR / 销售出库 SAL_OUT / 门店发货出库 SHP_OUT / 委外发料出库 WWS_OUT）；报废 / 退料 / 调拨 / 盘亏这类「把不可用的货弄出去、挪走」的出库不在其列。"
+      }
+    },
+    {
+      "group": "S17 A11 / A13 —— 跨批次成本 与 不可售批次闸门",
+      "name": "A13 用例自还原：参数回到原样（原来没有这一行就删掉），待检批次重新参与拣选",
+      "pass": true,
+      "detail": {
+        "参数": "(无此参数)"
+      }
+    },
+    {
+      "group": "S10 静态自证 —— 路由遮蔽（字面段必须排在参数段之前）",
+      "name": "没有\"存在但永远 404\"的接口",
+      "pass": true,
+      "detail": "路由遮蔽检查：扫描 44 个文件 / 640 条路由 | ✓ 没有发现被参数路由遮蔽的字面路由 | "
+    },
+    {
+      "group": "S9 收尾 —— 库副作用总核对",
+      "name": "没有负库存",
+      "pass": true,
+      "detail": "实际 0 / 期望 0"
+    },
+    {
+      "group": "S9 收尾 —— 库副作用总核对",
+      "name": "没有不平的凭证",
+      "pass": true,
+      "detail": "实际 0 / 期望 0"
+    },
+    {
+      "group": "S9 收尾 —— 库副作用总核对",
+      "name": "退货明细没有孤儿",
+      "pass": true,
+      "detail": "实际 0 / 期望 0"
+    }
+  ]
+}

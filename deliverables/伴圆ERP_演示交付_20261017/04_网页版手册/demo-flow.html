@@ -1,0 +1,316 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>完整演示手册 · 伴圆AI原生ERP系统</title>
+<meta name="description" content="按角色排的演示顺序：先讲什么、后讲什么、每一步点哪里" />
+<style>
+  :root{
+    --brand:#185fa5; --brand-600:#2b82c9; --tech:#06b6d4;
+    --ink-900:#0f172a; --ink-700:#334155; --ink-500:#64748b; --ink-300:#cbd5e1;
+    --bg:#f6f9fc; --line:#e2e8f0;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink-900);
+    font:15px/1.75 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",system-ui,sans-serif}
+  a{color:var(--brand);text-decoration:none}
+  a:hover{text-decoration:underline}
+  header.top{position:sticky;top:0;z-index:20;background:rgba(255,255,255,.92);
+    backdrop-filter:saturate(180%) blur(8px);border-bottom:1px solid var(--line)}
+  .top-in{max-width:1280px;margin:0 auto;padding:10px 20px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+  .logo{width:30px;height:30px;border-radius:8px;color:#fff;display:flex;align-items:center;justify-content:center;
+    font-weight:600;font-size:14px;background:linear-gradient(135deg,#185fa5 0%,#2b82c9 58%,#06b6d4 100%);
+    box-shadow:0 6px 16px rgba(24,95,165,.28)}
+  .brand{font-size:14.5px;font-weight:600}
+  .brand small{display:block;font-weight:400;font-size:11.5px;color:var(--ink-500)}
+  .tag{font-size:11px;padding:1px 7px;border-radius:999px;border:1px solid var(--line);color:var(--brand);
+    background:#eff6fd}
+  .spacer{flex:1}
+  .back{font-size:12.5px;color:var(--ink-500)}
+  .back:hover{color:var(--brand)}
+  .search{width:220px;border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-size:13px;
+    outline:none;background:#fff}
+  .search:focus{border-color:var(--brand-600);box-shadow:0 0 0 3px rgba(43,130,201,.12)}
+  .wrap{max-width:1280px;margin:0 auto;padding:20px;display:grid;grid-template-columns:270px minmax(0,1fr);gap:24px;align-items:start}
+  nav.toc{position:sticky;top:76px;max-height:calc(100vh - 96px);overflow:auto;
+    background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px 10px}
+  nav.toc .t{font-size:11.5px;letter-spacing:.08em;color:var(--ink-500);padding:0 8px 8px}
+  nav.toc a{display:block;padding:4px 8px;border-radius:7px;font-size:13px;color:var(--ink-700);line-height:1.5}
+  nav.toc a.toc-l3{font-size:12.3px;color:var(--ink-500);padding-left:20px}
+  nav.toc a:hover{background:#f1f6fc;color:var(--brand);text-decoration:none}
+  nav.toc a.active{background:#e8f2fd;color:var(--brand);font-weight:600}
+  main{background:#fff;border:1px solid var(--line);border-radius:14px;padding:28px 34px;min-width:0;
+    box-shadow:0 1px 2px rgba(15,23,42,.04)}
+  main h1{font-size:26px;line-height:1.35;margin:0 0 6px}
+  main h2{font-size:19px;margin:34px 0 10px;padding-top:14px;border-top:1px solid var(--line)}
+  main h2:first-of-type{border-top:0;padding-top:0;margin-top:22px}
+  main h3{font-size:15.5px;margin:22px 0 8px;color:#0b3d68}
+  main h4{font-size:14px;margin:18px 0 6px;color:var(--ink-700)}
+  main p{margin:9px 0;color:#1e293b}
+  main ul,main ol{margin:8px 0 8px 4px;padding-left:20px}
+  main li{margin:3px 0}
+  main blockquote{margin:12px 0;padding:10px 14px;background:#f3f8fe;border-left:3px solid var(--brand-600);
+    border-radius:0 8px 8px 0;color:#0b3d68}
+  main blockquote p{margin:0;color:inherit}
+  main code{background:#f1f5f9;border:1px solid #e2e8f0;border-radius:5px;padding:1px 5px;font-size:12.5px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  main pre{background:#0f2032;color:#dbeafe;border-radius:10px;padding:14px 16px;overflow:auto;font-size:12.5px;line-height:1.6}
+  main pre code{background:none;border:0;color:inherit;padding:0}
+  main hr{border:0;border-top:1px solid var(--line);margin:26px 0}
+  .table-wrap{overflow:auto;margin:12px 0;border:1px solid var(--line);border-radius:10px}
+  table{border-collapse:collapse;width:100%;font-size:13px}
+  th,td{border-bottom:1px solid var(--line);padding:7px 10px;text-align:left;vertical-align:top}
+  th{background:#f7fafc;color:var(--ink-700);font-weight:600;white-space:nowrap}
+  tr:last-child td{border-bottom:0}
+  tbody tr:hover{background:#fbfdff}
+  .foot{max-width:1280px;margin:0 auto;padding:0 20px 40px;color:var(--ink-500);font-size:12px}
+  @media (max-width:1000px){
+    .wrap{grid-template-columns:1fr}
+    nav.toc{position:static;max-height:none;order:2}
+    main{padding:20px}
+    .search{width:100%}
+  }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="top-in">
+    <div class="logo">伴</div>
+    <div class="brand">伴圆AI原生ERP系统<small>AI 伴你，企业信息化管理圆满</small></div>
+    <span class="tag">演示剧本</span>
+    <div class="spacer"></div>
+    <input class="search" id="q" placeholder="搜索目录…" />
+    <a class="back" href="/">← 返回系统</a>
+  </div>
+</header>
+<div class="wrap">
+  <nav class="toc" id="toc">
+    <div class="t">完整演示手册</div>
+    <a class="toc-l2" data-depth="2" href="#一演示前必须说清的三件事开场-30-秒">一、演示前必须说清的三件事（开场 30 秒）</a>
+<a class="toc-l2" data-depth="2" href="#二演示前准备5-分钟">二、演示前准备（5 分钟）</a>
+<a class="toc-l3" data-depth="3" href="#21-打开系统">2.1 打开系统</a>
+<a class="toc-l3" data-depth="3" href="#22-演示账号首页最下方也有同一张表可让客户自己看">2.2 演示账号（首页最下方也有同一张表，可让客户自己看）</a>
+<a class="toc-l3" data-depth="3" href="#23-演示数据里已经准备好的中间态">2.3 演示数据里已经准备好的「中间态」</a>
+<a class="toc-l3" data-depth="3" href="#24-演示前刷新数据可选">2.4 演示前刷新数据（可选）</a>
+<a class="toc-l3" data-depth="3" href="#25-投屏建议">2.5 投屏建议</a>
+<a class="toc-l2" data-depth="2" href="#三美妆连锁版演示脚本主线约-25-分钟">三、美妆连锁版演示脚本（主线，约 25 分钟）</a>
+<a class="toc-l3" data-depth="3" href="#31-第一步经营看板3-分钟admin-登录">3.1 第一步：经营看板（3 分钟，admin 登录）</a>
+<a class="toc-l3" data-depth="3" href="#32-第二步一张销售订单怎么走完8-分钟重点">3.2 第二步：一张销售订单怎么走完（8 分钟，重点）</a>
+<a class="toc-l3" data-depth="3" href="#33-第三步采购到入库5-分钟可切-scm-账号">3.3 第三步：采购到入库（5 分钟，可切 `scm` 账号）</a>
+<a class="toc-l3" data-depth="3" href="#34-第四步门店零售与日报5-分钟切-store01">3.4 第四步：门店零售与日报（5 分钟，切 `store01`）</a>
+<a class="toc-l3" data-depth="3" href="#35-第五步经销商与渠道3-分钟仅美妆服装">3.5 第五步：经销商与渠道（3 分钟，仅美妆/服装）</a>
+<a class="toc-l3" data-depth="3" href="#36-第六步财务与业财一体3-分钟可切-finance">3.6 第六步：财务与业财一体（3 分钟，可切 `finance`）</a>
+<a class="toc-l3" data-depth="3" href="#37-第七步ai-与-mcp收尾3-分钟">3.7 第七步：AI 与 MCP（收尾，3 分钟）</a>
+<a class="toc-l3" data-depth="3" href="#38-收尾一句话总结--留资料">3.8 收尾：一句话总结 + 留资料</a>
+<a class="toc-l2" data-depth="2" href="#四连锁餐饮版演示脚本约-15-分钟">四、连锁餐饮版演示脚本（约 15 分钟）</a>
+<a class="toc-l3" data-depth="3" href="#41-三处差异必须先说">4.1 三处差异必须先说</a>
+<a class="toc-l3" data-depth="3" href="#42-演示顺序与美妆相同的主线跳过经销商">4.2 演示顺序（与美妆相同的主线，跳过经销商）</a>
+<a class="toc-l3" data-depth="3" href="#43-餐饮演示的注意事项">4.3 餐饮演示的注意事项</a>
+<a class="toc-l2" data-depth="2" href="#五按角色的演示路径客户指定要自己点时用">五、按角色的演示路径（客户指定要「自己点」时用）</a>
+<a class="toc-l3" data-depth="3" href="#51-admin系统管理员">5.1 admin（系统管理员）</a>
+<a class="toc-l3" data-depth="3" href="#52-scm供应链主管">5.2 scm（供应链主管）</a>
+<a class="toc-l3" data-depth="3" href="#53-store01门店店长">5.3 store01（门店店长）</a>
+<a class="toc-l3" data-depth="3" href="#54-dealer01经销商">5.4 dealer01（经销商）</a>
+<a class="toc-l3" data-depth="3" href="#55-finance财务">5.5 finance（财务）</a>
+<a class="toc-l3" data-depth="3" href="#56-viewer只读访客">5.6 viewer（只读访客）</a>
+<a class="toc-l2" data-depth="2" href="#六常见追问与标准回答">六、常见追问与标准回答</a>
+<a class="toc-l2" data-depth="2" href="#七演示翻车急救">七、演示翻车急救</a>
+<a class="toc-l2" data-depth="2" href="#八演示节奏建议总时长-45-分钟版">八、演示节奏建议（总时长 45 分钟版）</a>
+  </nav>
+  <main id="doc">
+<h1 id="伴圆ai原生erp系统--完整演示手册">伴圆AI原生ERP系统 · 完整演示手册</h1>
+<blockquote><p><strong>AI 伴你，企业信息化管理圆满</strong> 面向：销售 / 售前 / 实施顾问 ｜ 用途：对客户做 20~60 分钟系统演示 适用行业：美妆连锁版、连锁餐饮版（服装版开发中，不在演示范围）</p></blockquote>
+<hr />
+<h2 id="一演示前必须说清的三件事开场-30-秒">一、演示前必须说清的三件事（开场 30 秒）</h2>
+<ol><li><strong>这是演示环境，数据全是虚构的。</strong></li></ol>
+<p>商品、客户、门店、供应商、单据都由程序生成，不含任何真实客户与商业数据。</p>
+<p>首页顶部有 <code>DEMO 演示系统</code> 标识，随时可以指着它说这句话 —— 主动说明比被追问出来强。</p>
+<ol><li><strong>这是一个「多行业、同一套内核」的 ERP。</strong></li></ol>
+<p>美妆连锁、连锁餐饮共用一套表结构与业务规则，登录时选行业即进入各自独立的数据库。</p>
+<ol><li><strong>它把「任何单据」都开放给了 AI。</strong></li></ol>
+<p>不是加了一个聊天框，而是 40 种单据、200 多条流转边都通过 MCP 暴露给 AI，</p>
+<p>能查、能读详情与留痕、能在安全边上推进；<strong>高危动作一律拒绝，必须由人确认</strong>。</p>
+<blockquote><p>一句话定位（可直接照念）： 「这是一套 AI 原生 ERP：业务照常做，但每一步都能被 AI 读懂和操作，而且 AI 做不了的事它会明确拒绝。」</p></blockquote>
+<hr />
+<h2 id="二演示前准备5-分钟">二、演示前准备（5 分钟）</h2>
+<h3 id="21-打开系统">2.1 打开系统</h3>
+<div class="table-wrap"><table><thead><tr><th>步骤</th><th>地址</th><th>说明</th></tr></thead><tbody><tr><td><strong>登录页（唯一）</strong></td><td><code>http://localhost:3001/login</code></td><td><strong>选行业 → 选角色 → 登录</strong>，全站只有这一个登录入口</td></tr>
+<tr><td>入口页（旧链接）</td><td><code>http://localhost:3001/enter.html</code></td><td>只做跳转，会把你带到 <code>/login</code>（旧书签不失效）</td></tr>
+<tr><td>门店收银</td><td><code>http://localhost:3001/pos</code></td><td>店长/收银员用的独立界面（建议投屏单独开一个浏览器标签）</td></tr></tbody></table></div>
+<blockquote><p>登录页上<strong>直接列出了 10 个演示角色</strong>：点一张角色卡片，账号密码自动填好，再点「登 录」即可。 不再需要记账号 —— 但也因此，<strong>演示时不要跳过选角色这一步</strong>：客户看到的第一个差异就是它。</p></blockquote>
+<h3 id="22-演示账号首页最下方也有同一张表可让客户自己看">2.2 演示账号（首页最下方也有同一张表，可让客户自己看）</h3>
+<div class="table-wrap"><table><thead><tr><th>角色</th><th>账号</th><th>密码</th><th>登进来能看到什么</th></tr></thead><tbody><tr><td>系统管理员</td><td><code>admin</code></td><td><code>12345</code></td><td>全部菜单 + 系统设置 + AI 与 MCP 控制台</td></tr>
+<tr><td>老板 / 总经理</td><td><code>boss</code></td><td><code>123456</code></td><td>全部数据只读 + 关键审批（无系统设置）</td></tr>
+<tr><td>供应链主管</td><td><code>scm</code></td><td><code>123456</code></td><td>采购 / 库存 / 生产 / 质检；销售与财务只读</td></tr>
+<tr><td>门店店长</td><td><code>store01</code></td><td><code>123456</code></td><td>本店 POS 收银 / 交班核款 / 库存 / 要货</td></tr>
+<tr><td>经销商</td><td><code>dealer01</code></td><td><code>123456</code></td><td>订货中心 + 对账单（只看自己的数据）</td></tr>
+<tr><td>财务</td><td><code>finance</code></td><td><code>123456</code></td><td>应收与收款核销 / 凭证 / 财务报表</td></tr>
+<tr><td>只读访客</td><td><code>viewer</code></td><td><code>123456</code></td><td>只看不改，适合让客户自己点</td></tr></tbody></table></div>
+<blockquote><p>⚠️ 连锁餐饮版<strong>没有经销商</strong>（总部直营门店 + 供应商），所以餐饮演示不要提 <code>dealer01</code>。 这是业务形态差异，不是权限没配 —— 菜单里也不会有「经销商管理」这一组。</p></blockquote>
+<h3 id="23-演示数据里已经准备好的中间态">2.3 演示数据里已经准备好的「中间态」</h3>
+<p>演示最容易翻车的地方是「点进去是空的」。这套库专门为此造了数据：</p>
+<div class="table-wrap"><table><thead><tr><th>想看什么</th><th>去哪看</th><th>数据形态</th></tr></thead><tbody><tr><td>零售日报每天有没有生意</td><td>线下门店 → POS 运营监控</td><td><strong>连续 22 个营业日</strong>，每家门店每天都有日结批次</td></tr>
+<tr><td>部分发货 / 部分开票 / 部分收款</td><td>销售管理 → 销售订单</td><td>4 张单：已发 60%、已开票 60%、已收 40%</td></tr>
+<tr><td>部分入库 / 在途未到 / 部分待检</td><td>采购管理 → 采购订单 / 收货单</td><td>3 张单：收 50% / 收 30% / 收满但分两张收货单</td></tr>
+<tr><td>长短款怎么处理</td><td>线下门店 → POS 运营监控</td><td>每周一笔现金短款、一笔微信渠道差异</td></tr>
+<tr><td>待发货 / 待收货 / 待质检</td><td>经营看板 → 待办事项</td><td>四类待办都有数</td></tr></tbody></table></div>
+<h3 id="24-演示前刷新数据可选">2.4 演示前刷新数据（可选）</h3>
+<p>如果上一场演示把单子点乱了，重建即可（约 10 秒，重建后所有账号密码恢复）：</p>
+<pre><code>cd &lt;系统目录&gt;
+npm run reseed</code></pre>
+<h3 id="25-投屏建议">2.5 投屏建议</h3>
+<ul><li>浏览器缩放 <strong>90%</strong>：一屏能看到完整看板，不用来回滚；</li><li>提前开好三个标签：<strong>主系统</strong>、<strong>门店 POS（/pos）</strong>、<strong>AI 与 MCP 控制台</strong>；</li><li>关掉其它标签页的通知，避免弹窗打断。</li></ul>
+<hr />
+<h2 id="三美妆连锁版演示脚本主线约-25-分钟">三、美妆连锁版演示脚本（主线，约 25 分钟）</h2>
+<blockquote><p>主线逻辑：<strong>先让客户看到「生意在跑」→ 再拆「一张单怎么走完」→ 最后讲「AI 与权限」</strong>。 不要一上来讲功能清单，客户记不住，也不关心。</p></blockquote>
+<h3 id="31-第一步经营看板3-分钟admin-登录">3.1 第一步：经营看板（3 分钟，admin 登录）</h3>
+<p><strong>做什么</strong>：用 <code>admin / 12345</code> 登录 → 默认落在「经营看板」。</p>
+<p><strong>怎么讲</strong>（按屏幕从上往下）：</p>
+<ol><li><strong>顶部横条</strong>：先指 <code>DEMO 演示系统</code> —— 主动说明数据虚构，建立信任。</li><li><strong>六个 KPI</strong>：本月销售额、订单、线上 GMV、库存金额、待回款、本月采购。</li></ol>
+<p>&gt; 话术：「这六个数字是老板每天早上会看的，点进去都能追到明细单。」</p>
+<ol><li><strong>待办事项</strong>：待发货订单 / 待收货采购 / 线上待发货 / 库存与效期预警。</li></ol>
+<p>&gt; 话术：「系统不只是报表，它每天会告诉你今天该干什么。」</p>
+<ol><li><strong>近 30 天销售趋势</strong>：线下与线上两条曲线分开 —— 强调「口径分开，不混着算」。</li><li><strong>渠道结构</strong>：各渠道销售额占比，回答「钱从哪来」。</li></ol>
+<p><strong>客户常问</strong>：「这些数据能改吗？」</p>
+<blockquote><p>答：演示环境随便改；真实部署时数据来自业务单据，不能手工填。</p></blockquote>
+<h3 id="32-第二步一张销售订单怎么走完8-分钟重点">3.2 第二步：一张销售订单怎么走完（8 分钟，重点）</h3>
+<p><strong>路径</strong>：销售管理 → 销售订单 → 找一张状态为「已确认」的单（列表里可以按状态筛选）。</p>
+<p><strong>要讲的四个动作</strong>（这四步就是销售的全部）：</p>
+<div class="table-wrap"><table><thead><tr><th>动作</th><th>点什么</th><th>单据变成什么</th><th>屏幕上要指的地方</th></tr></thead><tbody><tr><td>① 发货（部分）</td><td>订单详情 → 发货</td><td>订单仍是「已确认」，但明细里的<strong>已发数量</strong>变了</td><td>明细行「已发 / 未发」两列</td></tr>
+<tr><td>② 开票（部分）</td><td>发货单 → 开票</td><td>发货单的<strong>开票状态 = 部分开票</strong></td><td>开票状态 + 已开票数量</td></tr>
+<tr><td>③ 收款（部分）</td><td>财务应收 → 应收与收款核销 → 登记收款</td><td>应收单 = <strong>部分核销</strong>，余额还在</td><td>应收余额、已核销金额</td></tr>
+<tr><td>④ 退货（可选）</td><td>销售管理 → 销售退货</td><td>生成退货单，库存回冲、应收冲减</td><td>退货明细绑定的原订单行</td></tr></tbody></table></div>
+<blockquote><p><strong>这一段的杀手句</strong>： 「大部分系统只能演示『全发』或『没发』，而真实业务里 80% 是中间态。 你看这张单：发了 60%、开了 60% 的票、收了 40% 的钱 —— 三个状态同时存在，而且每一笔都能追溯。」</p></blockquote>
+<p><strong>再补一句</strong>：发货单上的开票状态是<strong>服务层算出来的</strong>，不是人手填的 ——</p>
+<p>所以不会出现「开了票但发货单还显示未开票」。</p>
+<h3 id="33-第三步采购到入库5-分钟可切-scm-账号">3.3 第三步：采购到入库（5 分钟，可切 <code>scm</code> 账号）</h3>
+<p><strong>路径</strong>：采购管理 → 采购订单 → 选状态「已审批」的单。</p>
+<p><strong>要讲的三条线</strong>：</p>
+<ol><li><strong>部分到货</strong>：订单上「已收数量 / 订单数量」不相等 ⇒ 剩下的还在路上。</li><li><strong>收货单</strong>：状态「已收货」= 待检；「已质检」= 检完；「已关闭」= 归档。</li><li><strong>质检</strong>：质量管理 → 质量中心 → 打开一张质检单，看「合格 / 让步 / 判退」三档数量，</li></ol>
+<p>判退会自动生成<strong>采购退货单</strong>并出库 —— 强调「一个有后果的动作，不是打个标记」。</p>
+<blockquote><p>话术：「采购最怕的不是没到货，是『到了但不知道能不能用』。 这三张单（订单、收货单、质检单）把这件事说清楚了。」</p></blockquote>
+<p><strong>顺带带出</strong>：采购结算 → 应付台账。指一下「退货抵减」这一列：</p>
+<blockquote><p>「退货要不要冲减应结，是贵司的会计政策。系统里做成了参数：默认不抵，打开才抵， 而且每一笔改动都留痕、要写理由。」</p></blockquote>
+<h3 id="34-第四步门店零售与日报5-分钟切-store01">3.4 第四步：门店零售与日报（5 分钟，切 <code>store01</code>）</h3>
+<p><strong>两个界面都要看</strong>：</p>
+<ol><li><strong>总部视角</strong>：线下门店 → POS 运营监控</li></ol>
+<p>- 「零售日报」按天列 —— <strong>连续 22 天每天都有数</strong>，不是只有今天；</p>
+<p>- 长短款：现金短款、微信渠道差异分开列（不同渠道的差异含义不同，不能合成一个总数）；</p>
+<p>- 缴款单：已接收 / 待接收两种状态都在。</p>
+<ol><li><strong>店长视角</strong>：新开标签打开 <code>/pos</code></li></ol>
+<p>- 收银开单（扫码/选商品 → 收款）；</p>
+<p>- 交班报数 → 店长核款 → 长短款归属（门店承担 / 收银员承担）；</p>
+<p>- 日结上传到总部。</p>
+<blockquote><p>话术：「门店最怕两件事：钱对不上、货对不上。这一页一天一结，把钱和货都钉住。」</p></blockquote>
+<h3 id="35-第五步经销商与渠道3-分钟仅美妆服装">3.5 第五步：经销商与渠道（3 分钟，仅美妆/服装）</h3>
+<p><strong>路径</strong>：经销商管理 → 经销商总览 / 返利管理 / 对账单。</p>
+<ul><li>经销商总览：每家经销商的销售额、回款率、信用占用；</li><li>返利管理：计提 → 确认 → 核销（核销会冲应收）；</li><li>对账单：出具 → 结清 / 作废。</li></ul>
+<p><strong>切 <code>dealer01</code> 登录</strong>：菜单只剩订货中心与对账 —— 让客户看到「同一个系统，经销商只看到自己的东西」。</p>
+<blockquote><p>话术：「这不是给他隐藏菜单，是数据范围就限定在他自己这家。」</p></blockquote>
+<h3 id="36-第六步财务与业财一体3-分钟可切-finance">3.6 第六步：财务与业财一体（3 分钟，可切 <code>finance</code>）</h3>
+<p><strong>路径</strong>：财务应收 → 应收与收款核销 → 财务中心（凭证 / 试算平衡）→ 财务报表。</p>
+<ul><li>应收：按客户、按单、按账龄；</li><li>凭证：<strong>由业务单生成</strong>（不是手工录），点开一张凭证能看到「来源单号」；</li><li>试算平衡：借贷必须平；</li><li>报表：资产负债表 / 利润表 / 现金流量表，口径可追溯。</li></ul>
+<blockquote><p>话术：「业财一体的意思是：凭证不是财务另录一遍，是业务单据自己长出来的。 所以业务和账永远对得上。」</p></blockquote>
+<h3 id="37-第七步ai-与-mcp收尾3-分钟">3.7 第七步：AI 与 MCP（收尾，3 分钟）</h3>
+<p><strong>路径</strong>：AI 与 MCP 控制台（仅 admin 可见）。</p>
+<p>按四个页签讲：</p>
+<ol><li><strong>单据矩阵</strong>：40 种单据全在，每种单据有哪些状态、哪些动作 AI 能推进、哪些必须人工。</li><li><strong>工具清单</strong>：4 个通用工具 + 36 个领域工具。</li><li><strong>安全边界</strong>：令牌、实体范围、边权限、高危确认、幂等、留痕 —— 六条。</li><li><strong>接入方式</strong>：把 MCP 端点与 Token 交给客户的技术团队。</li></ol>
+<blockquote><p>收尾话术： 「我们不是做了个 AI 聊天框。我们把<strong>每一张单据</strong>都开给了 AI —— 40 种单据、200 多条流转边。 但高危动作它做不了，会直接报 <code>EDGE_REQUIRES_HUMAN</code>，必须在界面上由人点。 这页上的数字不是写死的，是系统实时算出来的：你们以后自己加单据，它也会自动多一行。」</p></blockquote>
+<h3 id="38-收尾一句话总结--留资料">3.8 收尾：一句话总结 + 留资料</h3>
+<blockquote><p>「业务上它是一套完整的进销存 + 财务 + 门店 + 经销商系统； 架构上它是 AI 原生的 —— 单据、状态、权限都能被 AI 读懂，也都能被人管住。」</p></blockquote>
+<p>然后打开首页最下方的 <strong>完整演示手册 / 功能模块操作手册</strong>，说明「这两份资料留给你们，可以自己按图点」。</p>
+<hr />
+<h2 id="四连锁餐饮版演示脚本约-15-分钟">四、连锁餐饮版演示脚本（约 15 分钟）</h2>
+<p>餐饮与美妆<strong>共用一套内核</strong>，演示时不要重复讲功能，只讲<strong>差异</strong>。</p>
+<h3 id="41-三处差异必须先说">4.1 三处差异必须先说</h3>
+<div class="table-wrap"><table><thead><tr><th>维度</th><th>美妆连锁</th><th>连锁餐饮</th></tr></thead><tbody><tr><td>分销层</td><td>品牌方 → 经销商 → 门店</td><td>总部 → 直营门店（<strong>没有经销商</strong>）</td></tr>
+<tr><td>商品</td><td>规格 / 色号，效期以月计</td><td>杯型 × 冷热 × 加料，效期以<strong>天</strong>计</td></tr>
+<tr><td>门店数量</td><td>5 家（演示库）</td><td>20 家（演示库）</td></tr></tbody></table></div>
+<h3 id="42-演示顺序与美妆相同的主线跳过经销商">4.2 演示顺序（与美妆相同的主线，跳过经销商）</h3>
+<ol><li><strong>经营看板</strong>：门店数更多、单店产出更小 —— 强调「多门店汇总口径」。</li><li><strong>存货管理 → 库存预警 / 库龄</strong>：餐饮最关心临期。</li></ol>
+<p>&gt; 话术：「餐饮的效期是按天算的，所以预警阈值和批次策略跟美妆不是一套参数，</p>
+<p>&gt; 但这些参数是<strong>配置项</strong>，不是写死的代码。」</p>
+<ol><li><strong>采购 → 收货 → 质检</strong>：生鲜到货的让步接收（比如品相不好但可用）。</li><li><strong>门店 POS → 零售日报</strong>：20 家门店 × 连续 22 天，按天按店都能拉出来。</li><li><strong>AI 与 MCP 控制台</strong>：同样的 40 种单据 —— 强调「换行业不用换架构」。</li></ol>
+<h3 id="43-餐饮演示的注意事项">4.3 餐饮演示的注意事项</h3>
+<ul><li><strong>不要提经销商</strong>：菜单里没有，提了客户会问「为什么我没有」；</li><li><strong>不要说「暂缓」</strong>：服装版叫「开发中」；</li><li>餐饮门店多，POS 运营监控默认按天聚合，演示时先按「日」看，再切到单店。</li></ul>
+<hr />
+<h2 id="五按角色的演示路径客户指定要自己点时用">五、按角色的演示路径（客户指定要「自己点」时用）</h2>
+<h3 id="51-admin系统管理员">5.1 admin（系统管理员）</h3>
+<p><code>经营看板 → 销售订单 → 采购订单 → 库存 → 财务 → AI 与 MCP 控制台 → 系统管理</code></p>
+<p>重点：<strong>全链路</strong>与<strong>配置能力</strong>（系统参数、角色与权限、单据内核、编码规则）。</p>
+<h3 id="52-scm供应链主管">5.2 scm（供应链主管）</h3>
+<p><code>经营看板 → 采购工作台 → 采购订单（部分到货）→ 收货单 → 质检 → 库存查询 → 调拨 → 盘点</code></p>
+<p>重点：「一个人管采购 + 库存 + 生产 + 质检」—— 菜单里没有财务与系统设置。</p>
+<h3 id="53-store01门店店长">5.3 store01（门店店长）</h3>
+<p><code>/pos</code> 收银 → 交班报数 → （换 admin 核款）→ 缴款 → 日结 → 门店盘点</p>
+<p>重点：<strong>钱和货都对得上</strong>；菜单里没有采购、财务、经销商。</p>
+<h3 id="54-dealer01经销商">5.4 dealer01（经销商）</h3>
+<p><code>订货中心 → 我的订单 → 对账单</code></p>
+<p>重点：<strong>只看自己的数据</strong>；菜单里没有内部管理功能。</p>
+<h3 id="55-finance财务">5.5 finance（财务）</h3>
+<p><code>应收与收款核销 → 财务中心（凭证）→ 财务报表 → 报表口径</code></p>
+<p>重点：凭证由业务生成、借贷必平、口径改动留痕。</p>
+<h3 id="56-viewer只读访客">5.6 viewer（只读访客）</h3>
+<p><code>经营看板 → 库存 → 销售订单（看但不改）</code></p>
+<p>重点：让客户自己点，点坏了也不影响数据。</p>
+<hr />
+<h2 id="六常见追问与标准回答">六、常见追问与标准回答</h2>
+<div class="table-wrap"><table><thead><tr><th>客户会问</th><th>怎么答（可直接照念）</th></tr></thead><tbody><tr><td>数据是真实的吗？</td><td>不是。全部由程序生成，首页顶部有 DEMO 标识。真实部署时数据来自业务单据。</td></tr>
+<tr><td>能对接我们现有的系统吗？</td><td>有两层：REST 接口（<code>/api/*</code>，有完整 OpenAPI 契约）与 MCP（给 AI 用）。两边共用同一套领域服务与权限判据。</td></tr>
+<tr><td>AI 会不会乱改数据？</td><td>不会。AI 走 MCP，高危动作一律拒绝（<code>EDGE_REQUIRES_HUMAN</code>），安全边也必须过与界面同一份权限判据；每次调用全部留痕。</td></tr>
+<tr><td>支持多组织 / 多门店吗？</td><td>支持。组织树 + 数据范围（全部 / 本组织及下级 / 本组织 / 本经销商），门店、仓库、经销商都挂在组织上。</td></tr>
+<tr><td>权限能细到什么程度？</td><td>到权限点。137 个权限点，按角色分配；菜单只是界面收敛，接口层另有判据。</td></tr>
+<tr><td>能改业务流程吗？</td><td>单据状态机在内核表里（<code>doc_types</code> / <code>doc_states</code> / <code>doc_actions</code>），可以加状态与动作；参数类规则（会计政策、库存口径、退货抵减）做成了配置项，改完留痕。</td></tr>
+<tr><td>服装版呢？</td><td>开发中。技术上与另两个行业同构，演示入口暂时不展示。</td></tr>
+<tr><td>数据能导出吗？</td><td>列表页支持导出 Excel；接口层也有导出能力。</td></tr></tbody></table></div>
+<hr />
+<h2 id="七演示翻车急救">七、演示翻车急救</h2>
+<div class="table-wrap"><table><thead><tr><th>现象</th><th>原因</th><th>处理</th></tr></thead><tbody><tr><td>页面全空白 / 接口 401</td><td>登录态过期</td><td>重新登录；或清 localStorage 后重进</td></tr>
+<tr><td>列表是空的</td><td>筛选条件卡住了（比如状态选了「草稿」）</td><td>点「重置」清筛选</td></tr>
+<tr><td>数字跟手册对不上</td><td>上一场演示改过数据</td><td><code>npm run reseed</code> 重建（约 10 秒）</td></tr>
+<tr><td>POS 打不开</td><td>未选门店 / 账号不是店长</td><td>用 <code>store01</code> 登录，或从 <code>/pos</code> 直接进</td></tr>
+<tr><td>菜单比手册少</td><td>当前账号角色不同</td><td>看侧栏底部当前角色；对照 §5 的角色路径</td></tr>
+<tr><td>提示「高危动作需人工确认」</td><td>AI 或受限令牌尝试高危边</td><td>这是<strong>设计如此</strong>，正好用来讲安全边界</td></tr></tbody></table></div>
+<hr />
+<h2 id="八演示节奏建议总时长-45-分钟版">八、演示节奏建议（总时长 45 分钟版）</h2>
+<div class="table-wrap"><table><thead><tr><th>时间</th><th>内容</th><th>目的</th></tr></thead><tbody><tr><td>0–5 min</td><td>开场三句话 + 首页 DEMO 声明</td><td>建立信任、定调</td></tr>
+<tr><td>5–13 min</td><td>一张销售单的四步（部分发货/开票/收款）</td><td>证明「中间态」是真的</td></tr>
+<tr><td>13–18 min</td><td>采购到入库 + 质检</td><td>证明「有后果的动作」</td></tr>
+<tr><td>18–26 min</td><td>门店 POS + 零售日报（22 天）</td><td>证明「每天在跑」</td></tr>
+<tr><td>26–32 min</td><td>经销商 / 财务（按客户关心程度二选一）</td><td>证明「串得起来」</td></tr>
+<tr><td>32–40 min</td><td>AI 与 MCP 控制台</td><td>差异化卖点</td></tr>
+<tr><td>40–45 min</td><td>角色切换对比 + 留资料</td><td>收口</td></tr></tbody></table></div>
+<blockquote><p>只给 20 分钟时：删掉「经销商 / 财务」，保留销售、采购、门店、MCP 四段。</p></blockquote>
+  </main>
+</div>
+<div class="foot">
+  完整演示手册 · 伴圆AI原生ERP系统 · 演示环境说明：本文档中的数据均为虚构样例。
+</div>
+<script>
+  // 目录搜索：只在目录里过滤，不碰正文（正文里有大量"搜索"二字，进去会让人以为坏了）
+  var q = document.getElementById('q')
+  var links = [].slice.call(document.querySelectorAll('#toc a'))
+  q.addEventListener('input', function () {
+    var v = q.value.trim().toLowerCase()
+    links.forEach(function (a) {
+      a.style.display = !v || a.textContent.toLowerCase().indexOf(v) >= 0 ? '' : 'none'
+    })
+  })
+
+  // 滚动高亮：用 IntersectionObserver 而不是 scroll 事件（长文档滚动时前者更省）
+  var hs = [].slice.call(document.querySelectorAll('#doc h2, #doc h3'))
+  var map = new Map()
+  links.forEach(function (a) { map.set(decodeURIComponent(a.getAttribute('href').slice(1)), a) })
+  var io = new IntersectionObserver(function (entries) {
+    entries.forEach(function (e) {
+      if (!e.isIntersecting) return
+      links.forEach(function (a) { a.classList.remove('active') })
+      var a = map.get(e.target.id)
+      if (a) a.classList.add('active')
+    })
+  }, { rootMargin: '-72px 0px -70% 0px', threshold: 0 })
+  hs.forEach(function (h) { io.observe(h) })
+</script>
+</body>
+</html>

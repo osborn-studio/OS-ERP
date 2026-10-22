@@ -1,0 +1,20 @@
+# OS ERP development rules
+
+- Public-repository cutover on 2026-10-22: this is the NEW `osborn-studio/OS-ERP`, initialized from the reviewed current tree of private development candidate `0867d6c540d49156b140acc08e4edf7c4cf78cd3`, without importing its Git history. The previous repository is retained privately as `osborn-studio/os-erp-private-archive-20261022`. Never merge, fetch into this checkout, or push any retired repository history here; use reviewed content patches only. The current local checkout is `os-erp-public` under the task workspace. The user explicitly authorized creating this public MIT repository; this does not authorize production deployment or a release-readiness claim. Earlier publication-cleanup records below describe the private predecessor.
+
+- This repository is osborn-studio/os-erp; never push changes to the source GML repository.
+- Read handoff.md and docs/implementation/plan.md. Preserve attribution and source provenance.
+- Work on focused branches; do not overwrite unrelated work or force-push.
+- Tests and services must use fresh isolated data paths and loopback ports. Never operate on customer data or the audited gml-filtered checkout.
+- User platform routing: Python and Linux/Actions validation runs on the user's Linux server; macOS-specific and Swift validation runs on Mac Studio. Mac mini may perform source development and Node-focused development checks, but those results are not target-platform acceptance. Do not substitute a hosted runner or local Python for the requested hosts.
+- Confirmed target identities: Linux is `dmserver` (existing SSH alias `dmserver-ts`); Mac Studio is `eva`. Never assume an unavailable target passed validation.
+- Remote verification may use existing authenticated host connections and task-isolated directories. Do not change authentication, install system packages, register runners, or reconfigure production services without separate authorization.
+- Run focused regression tests for each change and the applicable isolated full regression before declaring a candidate validated. Report failures, skipped tests and unexecuted scope accurately.
+- Coordinate Codex and independent reviewers in separate writable worktrees; no shared test databases or ports. Read-only review may inspect the development worktree.
+- Keep versions, release notes and implementation status current. Do not claim commercial readiness until acceptance evidence supports it.
+- User has authorized creating this private repository and beginning development. Push task-related development commits and reviewable PRs here. Do not merge PRs, publish a release, change visibility, deploy, or use real paid/external business services without explicit authorization.
+- On 2026-10-22 the user explicitly authorized renaming this repository to os-erp, adopting MIT and making it public. This overrides the earlier visibility/license approval boundary for these actions. Preserve third-party notices and do not expose credentials or customer data. Historical sensitive artifacts must be handled before changing visibility; do not force-push history without explicit approval.
+- The user subsequently explicitly authorized private backups, the targeted history rewrite, and affected PR/Actions cleanup. This authorization is limited to that publication cleanup; it does not authorize arbitrary future force-pushes. Never merge or push pre-cleanup branches back into this repository. See docs/PUBLICATION_HISTORY.md.
+- Do not commit credentials, databases, customer data, node_modules, runtime artifacts or secret-bearing logs.
+
+The upstream AGENTS.md is preserved under docs/audit/GML-AGENTS.md as historical context, not this repository's publishing policy.

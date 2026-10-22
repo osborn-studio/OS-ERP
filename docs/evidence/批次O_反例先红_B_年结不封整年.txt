@@ -1,0 +1,79 @@
+# 批次 O 反例先红后证 · 反例 B：年结不封整年
+
+## 注入内容
+
+文件 server/lib/annual.js → carryForwardAnnual()
+
+    -  const closed = db.prepare("UPDATE accounting_periods SET status=*closed* ... WHERE substr(period,1,4)=? AND status<>*closed*").run(...)
+    +  const closed = { changes: 0 }   // 反例注入 B：不封整年
+
+含义：年结只生成凭证、不再把该年度所有期间置为已关账。
+后果：年结之后仍能往这一年塞凭证（"9 月还没关账"），
+而 4104 的金额是按**当时**的数据算出来的 —— 它再也不会对。
+关账封**一期**，年结封**一年**；这条注入把"一年"退化成"一期"。
+
+## 预期
+
+A4（年结把全年置为已关账）、A9（撤销年结不自动重开期间）、
+A9（撤销后不能直接重做，必须先反关账）这三处红。
+
+## 实际输出
+
+=== 年度结转与利润分配测试（cosmetic） ===
+
+[36mA0 基线：4104 存在且是权益叶子；分配目标科目规则[0m
+
+[36mA1 前置：漏一个月没结转就不许年结（否则是一笔永久错账）[0m
+
+[36mA2 年末月份记账与月结[0m
+
+[36mA3 其余前置检查各自会拦[0m
+
+[36mA4 年结（4103 → 4104）：四条恒等式[0m
+  [31m✗[0m 年结把该年度全部期间置为「已关账」：期望 0，实际 3
+  [31m✗[0m 年结把该年度全部期间置为「已关账」
+  [31m✗[0m 年结回报了被关闭的期间数（0）
+
+[36mA5 幂等：重复年结返回首次结果[0m
+
+[36mA6 反关账闸门：该年度已年结 → 必须先撤销年度结转[0m
+  [31m✗[0m 年结后反关账被拦（否则封账形同虚设：补一张 12 月凭证不会报错，只是 4104 再也不对了）：没有抛错
+  [31m✗[0m 年结后反关账被拦（否则封账形同虚设：补一张 12 月凭证不会报错，只是 4104 再也不对了）
+
+[36mA7 利润分配：前置与五类校验[0m
+
+[36mA8 利润分配（4104 → 4105 / 2232）[0m
+
+[36mA9 撤销必须反向：撤分配 → 撤年结 → 反关账[0m
+file:///Users/linxinlan/%E5%B7%A5%E4%BD%9C%E6%96%87%E6%A1%A3/gml/server/lib/report.js:342
+    throw new ReportError(
+          ^
+
+ReportError: 期间 2025-01 的报表自证不通过，不能关账：已年结的年度里仍有未关账的期间（2024：2024-10、2024-11、2024-12）：年结承诺"这一年定稿了"，而打开着的期间随时能被改
+    at Module.closePeriod (file:///Users/linxinlan/%E5%B7%A5%E4%BD%9C%E6%96%87%E6%A1%A3/gml/server/lib/report.js:342:11)
+    at file:///Users/linxinlan/%E5%B7%A5%E4%BD%9C%E6%96%87%E6%A1%A3/gml/scripts/test-annual.mjs:447:7
+    at ModuleJob.run (node:internal/modules/esm/module_job:343:25)
+    at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:665:26)
+    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:117:5) {
+  code: 'PERIOD_NOT_BALANCED',
+  http: 409,
+  status: 409,
+  detail: {
+    problems: [
+      {
+        code: 'ANNUAL_PERIODS_NOT_CLOSED',
+        message: '已年结的年度里仍有未关账的期间（2024：2024-10、2024-11、2024-12）：年结承诺"这一年定稿了"，而打开着的期间随时能被改',
+        detail: { items: [ [Object] ] }
+      }
+    ]
+  }
+}
+
+Node.js v22.22.2
+
+
+## 还原注入点后（应回绿）
+
+
+────────────────────────────────────────────────────────────────────────
+通过 119 / 失败 0

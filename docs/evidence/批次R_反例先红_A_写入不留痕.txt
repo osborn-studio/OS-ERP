@@ -1,0 +1,24 @@
+批次 R 反例先红后证 · A 组：writeSetting 不写日志（改了没记）
+=========================================================================
+【失效方式】唯一写入点只改 settings 的值，不写 setting_audit_log
+【注入点】server/lib/settings.js 的 writeSetting 内，把 logSettingChange 调用整段去掉
+          （`const entryId = logSettingChange(db, {...})` → `const entryId = null`）
+【期望被抓住】"值改了、历史没有" —— 这正是本批要根治的那件事
+
+【注入后】scripts/test-setting-audit.mjs cosmetic → 通过 146 / 失败 18
+变红的断言（前 6 条）：
+  · 日志 action = set：期望 "set"，实际 "baseline"
+  · 日志 value_before = 10：期望 "10"，实际 null
+  · 日志 value_after = 20：期望 "20"，实际 "10"
+  · 日志记了操作人：期望 "test-setting"，实际 null
+  · 危险项变更后日志带了理由
+  · 重放日志得到的就是新值
+（共 18 条 —— 覆盖 S4 写入留痕 / S5 reset 留痕 / S7 重放 / S9 探针 /
+  S13 历史条数 / S14 历史查询六个小节）
+
+【verify-seed cosmetic】报错 0 条
+说明：`verify-seed` 只读库、不调 writeSetting，所以抓不到这一组 ——
+      **复核脚本与测试套件的覆盖面不同，两个都要跑**，不能互相替代。
+
+【还原后】通过 164 / 失败 0  ✓ 立即回绿
+【库副作用】无（测试自带 BEGIN … ROLLBACK）

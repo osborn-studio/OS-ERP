@@ -1,0 +1,38 @@
+# 批次 Q 反例先红后证 · 反例 D：利润分配写了日志，但日志里没有凭证指针
+
+## 注入内容
+
+文件 server/lib/period-audit.js → PERIOD_ACTIONS
+
+    -  profit_distribution: { ..., effect: { dist_voucher_id: 'voucher' } }
+    +  profit_distribution: { ..., effect: { dist_voucher_id: null } }   // 反例注入 D
+
+含义：分配凭证照生成、期间指针照落、日志照写、金额也照记 ——
+但日志里的 `dist_voucher_id` 是空的。
+于是"**这张分配凭证是谁生成的**"在日志里查不到。它是本批里"日志看起来有、
+实际认不出是哪张票"的第二种形态（另一种是反例 B：结转丢指针）。
+
+## 预期
+
+  · PERIOD_AUDIT_DESYNC         —— 重放得到"未分配"，而期间表上是"已分配"
+  · PERIOD_AUDIT_VOUCHER_ORPHAN —— 那张分配凭证没有任何日志认领
+
+## 实际输出（注入状态下，3 项失败）
+
+```
+  [31m✗[0m 分配日志记下凭证指针：期望 16，实际 null
+  [31m✗[0m 分配日志记下凭证指针
+  [31m✗[0m 重放得到"已分配"：期望 16，实际 null
+  [31m✗[0m 重放得到"已分配"
+  [31m✗[0m 分配链自证通过  → PERIOD_AUDIT_DESYNC,PERIOD_AUDIT_VOUCHER_ORPHAN
+通过 133 / 失败 3
+```
+
+## 还原注入点后（应回绿）
+
+```
+
+
+────────────────────────────────────────────────────────────────────────
+通过 136 / 失败 0
+```

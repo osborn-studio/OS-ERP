@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>开发说明手册 · 伴圆AI原生ERP系统</title>
+<meta name="description" content="面向程序员的接手手册：架构分层、目录职责、单据内核、改造任务清单" />
+<style>
+  :root{
+    --brand:#185fa5; --brand-600:#2b82c9; --tech:#06b6d4;
+    --ink-900:#0f172a; --ink-700:#334155; --ink-500:#64748b; --ink-300:#cbd5e1;
+    --bg:#f6f9fc; --line:#e2e8f0;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink-900);
+    font:15px/1.75 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",system-ui,sans-serif}
+  a{color:var(--brand);text-decoration:none}
+  a:hover{text-decoration:underline}
+  header.top{position:sticky;top:0;z-index:20;background:rgba(255,255,255,.92);
+    backdrop-filter:saturate(180%) blur(8px);border-bottom:1px solid var(--line)}
+  .top-in{max-width:1280px;margin:0 auto;padding:10px 20px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+  .logo{width:30px;height:30px;border-radius:8px;color:#fff;display:flex;align-items:center;justify-content:center;
+    font-weight:600;font-size:14px;background:linear-gradient(135deg,#185fa5 0%,#2b82c9 58%,#06b6d4 100%);
+    box-shadow:0 6px 16px rgba(24,95,165,.28)}
+  .brand{font-size:14.5px;font-weight:600}
+  .brand small{display:block;font-weight:400;font-size:11.5px;color:var(--ink-500)}
+  .tag{font-size:11px;padding:1px 7px;border-radius:999px;border:1px solid var(--line);color:var(--brand);
+    background:#eff6fd}
+  .spacer{flex:1}
+  .back{font-size:12.5px;color:var(--ink-500)}
+  .back:hover{color:var(--brand)}
+  .search{width:220px;border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-size:13px;
+    outline:none;background:#fff}
+  .search:focus{border-color:var(--brand-600);box-shadow:0 0 0 3px rgba(43,130,201,.12)}
+  .wrap{max-width:1280px;margin:0 auto;padding:20px;display:grid;grid-template-columns:270px minmax(0,1fr);gap:24px;align-items:start}
+  nav.toc{position:sticky;top:76px;max-height:calc(100vh - 96px);overflow:auto;
+    background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px 10px}
+  nav.toc .t{font-size:11.5px;letter-spacing:.08em;color:var(--ink-500);padding:0 8px 8px}
+  nav.toc a{display:block;padding:4px 8px;border-radius:7px;font-size:13px;color:var(--ink-700);line-height:1.5}
+  nav.toc a.toc-l3{font-size:12.3px;color:var(--ink-500);padding-left:20px}
+  nav.toc a:hover{background:#f1f6fc;color:var(--brand);text-decoration:none}
+  nav.toc a.active{background:#e8f2fd;color:var(--brand);font-weight:600}
+  main{background:#fff;border:1px solid var(--line);border-radius:14px;padding:28px 34px;min-width:0;
+    box-shadow:0 1px 2px rgba(15,23,42,.04)}
+  main h1{font-size:26px;line-height:1.35;margin:0 0 6px}
+  main h2{font-size:19px;margin:34px 0 10px;padding-top:14px;border-top:1px solid var(--line)}
+  main h2:first-of-type{border-top:0;padding-top:0;margin-top:22px}
+  main h3{font-size:15.5px;margin:22px 0 8px;color:#0b3d68}
+  main h4{font-size:14px;margin:18px 0 6px;color:var(--ink-700)}
+  main p{margin:9px 0;color:#1e293b}
+  main ul,main ol{margin:8px 0 8px 4px;padding-left:20px}
+  main li{margin:3px 0}
+  main blockquote{margin:12px 0;padding:10px 14px;background:#f3f8fe;border-left:3px solid var(--brand-600);
+    border-radius:0 8px 8px 0;color:#0b3d68}
+  main blockquote p{margin:0;color:inherit}
+  main code{background:#f1f5f9;border:1px solid #e2e8f0;border-radius:5px;padding:1px 5px;font-size:12.5px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  main pre{background:#0f2032;color:#dbeafe;border-radius:10px;padding:14px 16px;overflow:auto;font-size:12.5px;line-height:1.6}
+  main pre code{background:none;border:0;color:inherit;padding:0}
+  main hr{border:0;border-top:1px solid var(--line);margin:26px 0}
+  .table-wrap{overflow:auto;margin:12px 0;border:1px solid var(--line);border-radius:10px}
+  table{border-collapse:collapse;width:100%;font-size:13px}
+  th,td{border-bottom:1px solid var(--line);padding:7px 10px;text-align:left;vertical-align:top}
+  th{background:#f7fafc;color:var(--ink-700);font-weight:600;white-space:nowrap}
+  tr:last-child td{border-bottom:0}
+  tbody tr:hover{background:#fbfdff}
+  .foot{max-width:1280px;margin:0 auto;padding:0 20px 40px;color:var(--ink-500);font-size:12px}
+  @media print{
+    header.top,nav.toc,.foot{display:none}
+    body{background:#fff;font-size:11pt}
+    .wrap{display:block;padding:0}
+    main{border:0;border-radius:0;box-shadow:none;padding:0}
+    pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f3f4f6!important;color:#111!important}
+    pre code{color:#111!important}
+    h2,h3{break-after:avoid}
+    tr{break-inside:avoid}
+    .table-wrap{overflow:visible}
+  }
+  @media (max-width:1000px){
+    .wrap{grid-template-columns:1fr}
+    nav.toc{position:static;max-height:none;order:2}
+    main{padding:20px}
+    .search{width:100%}
+  }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="top-in">
+    <div class="logo">伴</div>
+    <div class="brand">伴圆AI原生ERP系统<small>AI 伴你，企业信息化管理圆满</small></div>
+    <span class="tag">开发文档</span>
+    <div class="spacer"></div>
+    <input class="search" id="q" placeholder="搜索目录…" />
+    <a class="back" href="install.html">安装</a>
+    <a class="back" href="manual.html">操作</a>
+    <a class="back" href="demo-flow.html">演示</a>
+    <a class="back" href="dev.html">开发与MCP</a>
+    <a class="back" href="security.html">安全说明</a>
+    <a class="back" href="http://127.0.0.1:3001/login">返回系统</a>
+  </div>
+</header>
+<div class="wrap">
+  <nav class="toc" id="toc">
+    <div class="t">开发说明手册</div>
+    <a class="toc-l2" data-depth="2" href="#一-架构和源码入口">一 架构和源码入口</a>
+<a class="toc-l2" data-depth="2" href="#二-开发环境重建">二 开发环境重建</a>
+<a class="toc-l2" data-depth="2" href="#三-数据与密钥">三 数据与密钥</a>
+<a class="toc-l2" data-depth="2" href="#四-身份和接口">四 身份和接口</a>
+<a class="toc-l2" data-depth="2" href="#五-mcp调用示例">五 MCP调用示例</a>
+<a class="toc-l2" data-depth="2" href="#六-写入及人工确认">六 写入及人工确认</a>
+<a class="toc-l2" data-depth="2" href="#七-测试和修改纪律">七 测试和修改纪律</a>
+<a class="toc-l2" data-depth="2" href="#八-重新打包和交付">八 重新打包和交付</a>
+  </nav>
+  <main id="doc">
+<h1 id="伴圆ai原生erp-开发与mcp接手">伴圆AI原生ERP 开发与MCP接手</h1>
+<p>本手册帮助接收方 IT 定位完整源码、重建前端、验证接口及接入智能体。它不是生产部署安全认证，也不授予未约定的源码再分发许可。依赖遵循各自许可证。</p>
+<h2 id="一-架构和源码入口">一 架构和源码入口</h2>
+<div class="table-wrap"><table><thead><tr><th>层次</th><th>入口</th><th>职责</th></tr></thead><tbody><tr><td>前端</td><td>src/App.tsx、src/pages、src/components</td><td>路由、业务界面、公共组件</td></tr>
+<tr><td>服务入口</td><td>server/index.js</td><td>Express 中间件、行业上下文、业务路由、MCP、静态前端</td></tr>
+<tr><td>业务API</td><td>server/routes</td><td>接收 REST 请求，检查身份、权限及范围</td></tr>
+<tr><td>领域服务</td><td>server/lib</td><td>状态流转、库存、结算、凭证等业务判据</td></tr>
+<tr><td>数据库</td><td>server/db</td><td>SQLite 结构、迁移、独立行业库及虚构数据</td></tr>
+<tr><td>MCP</td><td>server/mcp</td><td>JSON-RPC、Agent Token、工具定义、参数检查和审计</td></tr>
+<tr><td>回归</td><td>scripts/test-*.mjs、scripts/accept</td><td>功能、权限、异常及反例验证</td></tr>
+<tr><td>发行</td><td>scripts/package-release.mjs</td><td>构建、筛选文件、生成启动器和校验清单</td></tr></tbody></table></div>
+<p>前后端源码和测试均随包，不只包含 dist。未包含 Git 历史、原机依赖和原机数据库。MANIFEST 记录基线提交及包含本地未提交修复这一事实，不应把基线提交误当完整交付版本。</p>
+<h2 id="二-开发环境重建">二 开发环境重建</h2>
+<p>在独立开发副本中使用 Node.js 22.x，执行：</p>
+<pre><code>npm ci --include=dev --registry=https://registry.npmjs.org
+npm run docs:build
+npx tsc --noEmit
+npm run build</code></pre>
+<p>开发启动用 npm run dev，或分别运行 dev:api、dev:web；API 端口和 Vite 代理见 scripts/dev.mjs 与 vite.config.ts。不要在本地安装工具正在占用的端口再起第二份服务。</p>
+<p>安装工具 start 会校验原始发行清单，手工改源码后校验不通过属于预期。开发者使用开发启动命令，修改完成后重新打包产生新清单，不以删除校验错误代替测试。</p>
+<h2 id="三-数据与密钥">三 数据与密钥</h2>
+<p>SQLite 分行业存储，行业码为 cosmetic、food、apparel；业务范围只验收前两者。服务启动会初始化结构、迁移及空库样本。直接运行 server/index.js 时默认数据位置由 server/db/index.js 决定，自定义通过 GML_DATA_DIR；GML_DB 为旧的单库覆盖变量，不要误继承。</p>
+<p>本地工具将数据固定到本副本 data，密钥固定到本副本 .local/config.json，强制 HOST=127.0.0.1 和 NODE_ENV=production。直接部署服务需显式配置强随机 GML_JWT_SECRET，不能用内置演示值。不要把本地 .local 或备份目录打进下一份发行包。</p>
+<h2 id="四-身份和接口">四 身份和接口</h2>
+<p>网页登录调用 /api/auth/login，取得面向后台的 JWT，后续 REST 使用 Authorization: Bearer 加 JWT。用户角色及实体绑定从数据库检查，不能只依赖前端菜单。行业与令牌绑定，门店和经销商须有有效实体范围。</p>
+<p>AI 使用单独 Agent Token，通常以 gml_ 开头，由管理员在 /system/mcp 或 /api/mcp/tokens 创建。新令牌只返回一次明文，数据库存摘要；可设置行业、scope、工具白名单、限频及过期，再吊销。首先签发只读最小权限令牌，避免给所有智能体全权。</p>
+<h2 id="五-mcp调用示例">五 MCP调用示例</h2>
+<p>默认地址 http://127.0.0.1:3001/mcp，请求使用 HTTP POST、Content-Type: application/json、Authorization: Bearer 加 Agent Token，消息为 JSON-RPC 2.0。当前实现是项目自定义无状态 HTTP 传输；并非所有 MCP 客户端都能零配置接入，标准协议及传输兼容性须用目标客户端联调，不能仅凭名称宣称全面兼容。</p>
+<p>随包工具不需要第三方智能体即可验证端点和只读调用。先在页面创建只读令牌，再在终端设置环境变量，不要把令牌写入源码或录屏字幕。</p>
+<pre><code># macOS / Linux
+export GML_AGENT_TOKEN='在本机粘贴一次性令牌'
+node scripts/mcp-readonly-demo.mjs
+unset GML_AGENT_TOKEN</code></pre>
+<pre><code># Windows PowerShell
+$env:GML_AGENT_TOKEN='在本机粘贴一次性令牌'
+node scripts/mcp-readonly-demo.mjs
+Remove-Item Env:GML_AGENT_TOKEN</code></pre>
+<p>换端口可设置 GML_MCP_URL。脚本执行 tools/list 和 doc.list_types，不发起写操作；输出不回显令牌。</p>
+<p>以下是工具发现消息体，无需预设工具数量：</p>
+<pre><code>{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;id&quot;:1,&quot;method&quot;:&quot;tools/list&quot;,&quot;params&quot;:{}}</code></pre>
+<p>以下是单据类型发现消息体，具体字段和工具名以 tools/list 返回为准：</p>
+<pre><code>{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;id&quot;:2,&quot;method&quot;:&quot;tools/call&quot;,&quot;params&quot;:{&quot;name&quot;:&quot;doc.list_types&quot;,&quot;arguments&quot;:{}}}</code></pre>
+<p>接入完整智能体时，先 initialize，按服务返回处理后续方法，读取工具模式并逐项验证。模型调用服务、工具参数组织、授权、确认交互、超时和重试由客户端实现，不在本包中预装外部模型 Key。</p>
+<h2 id="六-写入及人工确认">六 写入及人工确认</h2>
+<p>read 工具按令牌范围查询；write 工具要求幂等键，同键同参复用结果，同键异参拒绝。danger 领域工具需先生成待确认单，由具备权限且非申请人的用户确认，再由原令牌按绑定参数执行。确认与幂等控制不能代替领域服务的余额、数量及状态检查。</p>
+<p>通用 doc.transition 对被标记为高危的流转边直接拒绝，不能假设有 confirm_token 就能推进所有边。参数应为对象，数值须有限、布尔须为真正布尔值，未知字段及非法实体范围按当前模式拒绝。</p>
+<p>权限、工具黑白名单和实体范围也要约束 resources/read，不能把资源接口当成绕过工具授权的另一条通道。调用结果可能在 result.isError 中表达业务错误，不能只检查 HTTP 200。</p>
+<h2 id="七-测试和修改纪律">七 测试和修改纪律</h2>
+<p>业务状态、金额数量判据应复用 server/lib，不在 MCP handler 和页面另写平行规则。修改实体范围要覆盖列表、详情、汇总、写入、资源以及旧令牌场景；管理员路径通过不等于门店和经销商路径通过。</p>
+<p>先安装开发依赖，再在 macOS/Linux 独立回归副本执行：</p>
+<pre><code>node scripts/regress-isolated.mjs --rounds=3 --industries=cosmetic,food --output=./test-evidence</code></pre>
+<p>该入口复制源码并生成新样本，运行数据不指向原演示库。输出日志可能包含测试样本及临时接入信息，按内部测试材料管理，不混入对外安装包。Windows 回归执行方式未实机验证。</p>
+<p>上一轮2026年10月21日业务审查曾完成连续三轮全量回归，每轮111项；本地发行工具新增后仍须单独完成解压安装、首次建库、登录、静态前端、MCP、备份和二次启动检查，不能仅引用旧业务测试替代安装验收。</p>
+<h2 id="八-重新打包和交付">八 重新打包和交付</h2>
+<pre><code>npm run release</code></pre>
+<p>打包工具构建手册及前端，将完整源码、锁文件、可复用模块、测试、启动器和手册生成到 release 下的全新目录及 ZIP。不会重建或读取当前业务数据库，也不会删除旧发行包。需要指定位置可传 --output=绝对路径。</p>
+<p>第三方首次安装需联网，程序不捆绑 Node 运行时和跨平台原生依赖；若客户要求断网首装，需另按具体操作系统和 CPU 构建离线依赖及运行时发行版并验收，不能把本包称为通用离线安装器。</p>
+<p>生产部署、TLS、访问入口、短信支付、模型供应商、数据政策及真实 ERP/IM 连接器需另行配置验证。SQLite 并发、可用性、运维及规模适配应做专项测试，不因本地演示通过就默认满足客户生产要求。</p>
+  </main>
+</div>
+<div class="foot">
+  开发说明手册 · 伴圆AI原生ERP系统 · 演示环境说明：本文档中的数据均为虚构样例。
+</div>
+<script>
+  // 目录搜索：只在目录里过滤，不碰正文（正文里有大量"搜索"二字，进去会让人以为坏了）
+  var q = document.getElementById('q')
+  var links = [].slice.call(document.querySelectorAll('#toc a'))
+  q.addEventListener('input', function () {
+    var v = q.value.trim().toLowerCase()
+    links.forEach(function (a) {
+      a.style.display = !v || a.textContent.toLowerCase().indexOf(v) >= 0 ? '' : 'none'
+    })
+  })
+
+  // 滚动高亮：用 IntersectionObserver 而不是 scroll 事件（长文档滚动时前者更省）
+  var hs = [].slice.call(document.querySelectorAll('#doc h2, #doc h3'))
+  var map = new Map()
+  links.forEach(function (a) { map.set(decodeURIComponent(a.getAttribute('href').slice(1)), a) })
+  var io = new IntersectionObserver(function (entries) {
+    entries.forEach(function (e) {
+      if (!e.isIntersecting) return
+      links.forEach(function (a) { a.classList.remove('active') })
+      var a = map.get(e.target.id)
+      if (a) a.classList.add('active')
+    })
+  }, { rootMargin: '-72px 0px -70% 0px', threshold: 0 })
+  hs.forEach(function (h) { io.observe(h) })
+</script>
+</body>
+</html>

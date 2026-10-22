@@ -1,0 +1,72 @@
+目标文件 server/middleware/audit.js（原文 sha256:358ad3c16228）
+
+────────────────────────────────────────────────────────────────────────
+【① 去掉 JSON.stringify（对象原样绑库）⇒ 留痕静默丢失】
+  基线：留痕落库守卫（三库）：通过 109 / 失败 0
+  改坏后：留痕落库守卫（三库）：通过 89 / 失败 20
+  变红的断言（17 条，列前 6 条，**带行数**）：
+    - 对象 detail 的 detail：期望 "{\"code\":\"1001\",\"qty\":2}"，实际 null
+    - 对象 detail 的 detail
+    - 循环引用 detail（明细退化，但**行必须在**） 的 detail：期望 "{\"__unserializable__\":true}"，实际 null
+    - 循环引用 detail（明细退化，但**行必须在**） 的 detail
+    - BigInt detail（同样序列化不了） 的 detail：期望 "{\"__unserializable__\":true}"，实际 null
+    - BigInt detail（同样序列化不了） 的 detail
+  还原后：留痕落库守卫（三库）：通过 109 / 失败 0｜ 与原文一致：true
+
+────────────────────────────────────────────────────────────────────────
+【② 去掉"序列化失败也留一条"的兜底 ⇒ 循环引用时整条丢失】
+  基线：留痕落库守卫（三库）：通过 109 / 失败 0
+  改坏后：留痕落库守卫（三库）：通过 94 / 失败 9
+  变红的断言（4 条，列前 6 条，**带行数**）：
+    - 循环引用 detail（明细退化，但**行必须在**） → **真的落库了**（行数 0，应为 1）  → 0
+    - BigInt detail（同样序列化不了） → **真的落库了**（行数 0，应为 1）  → 0
+    - 八种形状一条都没丢（落库 6 条 / 应 8 条）：期望 8，实际 6
+    - 八种形状一条都没丢（落库 6 条 / 应 8 条）
+    - 循环引用 detail（明细退化，但**行必须在**） → **真的落库了**（行数 0，应为 1）  → 0
+    - BigInt detail（同样序列化不了） → **真的落库了**（行数 0，应为 1）  → 0
+  还原后：留痕落库守卫（三库）：通过 109 / 失败 0｜ 与原文一致：true
+
+────────────────────────────────────────────────────────────────────────
+【③ 摘掉 target 单点兼容 ⇒ 16 处旧写法的 entity/entity_id 变回空】
+  基线：留痕落库守卫（三库）：通过 109 / 失败 0
+  改坏后：留痕落库守卫（三库）：通过 90 / 失败 19
+  变红的断言（21 条，列前 6 条，**带行数**）：
+    - target 别名 period:2026-10 的 entity：期望 "period"，实际 null
+    - target 别名 period:2026-10 的 entity
+    - target 别名 period:2026-10 的 entity_id：期望 "2026-10"，实际 null
+    - target 别名 period:2026-10 的 entity_id
+    - target 无冒号（整体当 entity） 的 entity：期望 "voucher"，实际 null
+    - target 无冒号（整体当 entity） 的 entity
+  还原后：留痕落库守卫（三库）：通过 109 / 失败 0｜ 与原文一致：true
+
+────────────────────────────────────────────────────────────────────────
+【④ 完整复原修前行为（detail 原样绑库 + 无第二次机会）⇒ 传对象的调用点全部丢行】
+  基线：留痕落库守卫（三库）：通过 109 / 失败 0
+  改坏后：留痕落库守卫（三库）：通过 41 / 失败 24
+  变红的断言（13 条，列前 6 条，**带行数**）：
+    - 对象 detail → **真的落库了**（行数 0，应为 1）  → 0
+    - 循环引用 detail（明细退化，但**行必须在**） → **真的落库了**（行数 0，应为 1）  → 0
+    - BigInt detail（同样序列化不了） → **真的落库了**（行数 0，应为 1）  → 0
+    - target 别名 period:2026-10 → **真的落库了**（行数 0，应为 1）  → 0
+    - 八种形状一条都没丢（落库 4 条 / 应 8 条）：期望 8，实际 4
+    - 八种形状一条都没丢（落库 4 条 / 应 8 条）
+  其中**端到端**变红的（5 条，即"修前该 action 新增 0 行"）：
+    * POST /accounting/subjects（finance.subject.save，accounting.js:56，target 写法） → 留痕落库（HTTP 200，该 action 新增行数 0）  → {"http":200,"action":"finance.subject.save"}
+    * POST /accounting/subjects/:id/status（finance.subject.status，accounting.js:72，target 写法） → 留痕落库（HTTP 200，该 action 新增行数 0）  → {"http":200,"action":"finance.subject.status"}
+    * PUT /reports/opening（finance.opening.save，report.js:292，target 写法） → 留痕落库（HTTP 200，该 action 新增行数 0）  → {"http":200,"action":"finance.opening.save"}
+    * POST /reports/periods/:period/close（finance.period.close，report.js:167，target 写法） → 留痕落库（HTTP 200，该 action 新增行数 0）  → {"http":200,"action":"finance.period.close"}
+    * POST /accounting/vouchers/:id/post（finance.voucher.post，accounting.js:121，target 写法） → 留痕落库（HTTP 200，该 action 新增行数 0）  → {"http":200,"action":"finance.voucher.post"}
+  还原后：留痕落库守卫（三库）：通过 109 / 失败 0｜ 与原文一致：true
+
+════════════════════════════════════════════════════════════════════════
+反例先红后证汇总
+  ✓ ① 去掉 JSON.stringify（对象原样绑库）⇒ 留痕静默丢失　变红 17 条
+      例：对象 detail 的 detail：期望 "{\"code\":\"1001\",\"qty\":2}"，实际 null
+  ✓ ② 去掉"序列化失败也留一条"的兜底 ⇒ 循环引用时整条丢失　变红 4 条
+      例：循环引用 detail（明细退化，但**行必须在**） → **真的落库了**（行数 0，应为 1）  → 0
+  ✓ ③ 摘掉 target 单点兼容 ⇒ 16 处旧写法的 entity/entity_id 变回空　变红 21 条
+      例：target 别名 period:2026-10 的 entity：期望 "period"，实际 null
+  ✓ ④ 完整复原修前行为（detail 原样绑库 + 无第二次机会）⇒ 传对象的调用点全部丢行　变红 13 条
+      例：对象 detail → **真的落库了**（行数 0，应为 1）  → 0
+  最终 sha256:358ad3c16228（原文 358ad3c16228）
+  4 组反例全部先红后绿

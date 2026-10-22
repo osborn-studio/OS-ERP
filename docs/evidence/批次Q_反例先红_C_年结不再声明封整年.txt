@@ -1,0 +1,51 @@
+# 批次 Q 反例先红后证 · 反例 C：年结不再声明"封整年"
+
+## 注入内容
+
+文件 server/lib/period-audit.js → PERIOD_ACTIONS
+
+    -  annual_carry: { ..., effect: { annual_voucher_id: 'voucher', period_status: 'closed', spread_year: true } }
+    +  annual_carry: { ..., effect: { annual_voucher_id: 'voucher' } }   // 反例注入 C
+
+含义：日志照写、凭证照生成、**整年也确实被 closed 了**（那段 `UPDATE` 一行没动），
+只是**动作表里不再声明"这个动作会扩散到整年"** ⇒ 重放不再把这一年的其它期间置为 closed。
+
+这正是本批"效果只声明一次"要防的那类缺陷：改的是**声明**，账上一切正常 ——
+它唯一的症状是"日志解释不出这一年的 3 月为什么是已关账的"。
+
+## 预期
+
+PERIOD_AUDIT_DESYNC 必须在**非 12 月**的期间上响；Q6 的"1 月也被年结封成已关账"红；
+Q1 的"只有年度结转会扩散到整年"也应当红（动作表本身被改坏了）。
+
+## 实际输出（注入状态下，9 项失败）
+
+```
+  [31m✗[0m 只有年度结转会扩散到整年：期望 ["annual_carry"]，实际 []
+  [31m✗[0m 只有年度结转会扩散到整年
+  [31m✗[0m 重放：12 月已关账且挂着年结指针：期望 ["closed",19]，实际 ["open",19]
+  [31m✗[0m 重放：12 月已关账且挂着年结指针
+  [31m✗[0m 年结后每一期的重放都等于现状：期望 true，实际 false
+  [31m✗[0m 年结后每一期的重放都等于现状
+  [31m✗[0m 完整年结链自证通过  → PERIOD_AUDIT_DESYNC
+  [31m✗[0m 分配链自证通过  → PERIOD_AUDIT_DESYNC
+  [31m✗[0m 2024-12 撤销后重放 = 现状：期望 {"period_status":"closed","closing_voucher_id":null,"annual_voucher_id":null,"dist_voucher_id":null}，实际 {"period_status":"open","closing_voucher_id":null,"annual_voucher_id":null,"dist_voucher_id":null}
+  [31m✗[0m 2024-12 撤销后重放 = 现状
+  [31m✗[0m 撤销链自证通过  → PERIOD_AUDIT_DESYNC
+  [31m✗[0m 年结后自洽（整年都关着）
+  [31m✗[0m 嵌套事务回滚后恢复自洽
+通过 127 / 失败 9
+```
+
+注意红项里有一条 **Q1 的"只有年度结转会扩散到整年"** ——
+它证明"动作表被改坏"这件事**在动作表自检这一层**就被拦住了，
+不必等到重放核对；两层覆盖的是不同的失效时间点。
+
+## 还原注入点后（应回绿）
+
+```
+
+
+────────────────────────────────────────────────────────────────────────
+通过 136 / 失败 0
+```

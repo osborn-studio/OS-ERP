@@ -1,0 +1,63 @@
+# 批次 Q 反例先红后证 · 反例 A：关账改了状态却不写审计日志
+
+## 注入内容
+
+文件 server/lib/report.js → closePeriod()
+
+    -  logPeriodChange(db, { period: p, action: 'period_close', statusBefore, statusAfter: 'closed', remark, actor })
+    +  /* 反例注入 A：关账不写审计日志 */
+
+含义：期间表被改成 closed，但日志里没有这一笔。
+这是本批要防的那一类缺陷的最小形态 —— 界面上「已关账」显示得好好的，
+`closed_by` / `closed_at` 也都在（它们本来就在期间表上），
+**只有把日志重放一遍才会发现"这一期不可能变成已关账"**。
+
+## 本次跑出来的第一个红：探针确实响了
+
+    ✗ 这条链自证通过（重放日志 = 期间表现状）  → PERIOD_AUDIT_DESYNC
+    ✗ auditReport（含第⑩条）通过  → PERIOD_AUDIT_DESYNC
+      detail: { items: [ '2024-01 的 period_status：重放日志得到 open，期间表上是 closed' ] }
+
+## 顺带暴露的一个测试自身问题（已修）
+
+第一次跑时测试**崩在 Q4 的 `l1.action`**（`l1` 是 undefined）——
+日志缺失时 `.action` 直接抛异常，于是 **DESYNC 探针根本没跑到**，证据没取到。
+
+已修两处，并把探针断言**提到最前面**：
+  · `.pop()` / 末位取值一律 `|| {}`；
+  · `Q.auditPeriodTrail` / `R.auditReport` 的断言紧跟三次动作，不再排在细节断言之后。
+**教训：反例注入时，测试必须给出"可读的红"，而不是崩在无关的位置 ——
+崩在无关位置等于把最重要的证据丢掉了。**
+
+## 实际输出（注入状态下，共 19 处红 + 下游中断）
+
+
+```
+  [31m✗[0m 关账写了 1 条日志：期望 1，实际 0
+  [31m✗[0m 关账写了 1 条日志
+  [31m✗[0m 动作名与状态迁移：期望 ["period_close","open","closed"]，实际 [null,null,null]
+  [31m✗[0m 动作名与状态迁移
+  [31m✗[0m 关账备注落进日志（不只在期间表上）：期望 "第一次关账"，实际 undefined
+  [31m✗[0m 关账备注落进日志（不只在期间表上）
+  [31m✗[0m 关账动作不涉及金额（与"结了 0 元"是两件事）：期望 null，实际 undefined
+  [31m✗[0m 关账动作不涉及金额（与"结了 0 元"是两件事）
+  [31m✗[0m 三次动作 → 三条日志（历史不被覆盖）：期望 3，实际 1
+  [31m✗[0m 三次动作 → 三条日志（历史不被覆盖）
+  [31m✗[0m 状态链首尾相接：期望 ["open→closed","closed→open","open→closed"]，实际 ["closed→open"]
+  [31m✗[0m 状态链首尾相接
+  [31m✗[0m 这条链自证通过（重放日志 = 期间表现状）  → PERIOD_AUDIT_DESYNC
+  [31m✗[0m auditReport（含第⑩条）通过  → PERIOD_AUDIT_DESYNC
+  [31m✗[0m 两次关账在日志里都能看到：期望 2，实际 0
+  [31m✗[0m 两次关账在日志里都能看到
+  [31m✗[0m 重放得到的 = 期间表现状：期望 {"period_status":"closed","closing_voucher_id":null,"annual_voucher_id":null,"dist_voucher_id":null}，实际 {"period_status":"open","closing_voucher_id":null,"annual_voucher_id":null,"dist_voucher_id":null}
+  [31m✗[0m 重放得到的 = 期间表现状
+  [31m✗[0m 但"谁关的账"在日志里查得到
+```
+
+## 还原注入点后（应回绿）
+
+```
+
+────────────────────────────────────────────────────────────────────────
+通过 135 / 失败 0
+```

@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>伴圆AI原生ERP系统 · 登录</title>
+    <meta http-equiv="refresh" content="1;url=/login" />
+    <style>
+      * { box-sizing: border-box; }
+      body {
+        margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+        background: linear-gradient(150deg, #0b3d68 0%, #185fa5 55%, #2b82c9 100%);
+        font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+        color: #fff;
+      }
+      .box { text-align: center; padding: 0 24px; }
+      .logo {
+        width: 46px; height: 46px; border-radius: 12px; margin: 0 auto 16px;
+        background: rgba(255, 255, 255, .16); border: 1px solid rgba(134, 188, 237, .5);
+        font: 500 16px/44px -apple-system, sans-serif; text-align: center;
+      }
+      h1 { font-size: 17px; font-weight: 600; margin: 0 0 6px; letter-spacing: .2px; }
+      p { font-size: 12.5px; color: rgba(255, 255, 255, .68); margin: 0 0 18px; line-height: 1.9; }
+      a { display: inline-block; font-size: 13px; color: #fff; text-decoration: none;
+          border: 1px solid rgba(255, 255, 255, .45); border-radius: 8px; padding: 8px 18px; }
+      a:hover { background: rgba(255, 255, 255, .12); }
+      .bar { width: 120px; height: 2px; margin: 0 auto 18px; background: rgba(255,255,255,.2); overflow: hidden; }
+      .bar i { display: block; width: 40%; height: 100%; background: #67e8f9; animation: run 1s linear infinite; }
+      @keyframes run { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
+    </style>
+  </head>
+  <body>
+    <!--
+      ==========================================================================
+      这个页面**不再登录**，只做跳转。
+      ---------------------------------------------------------------------------
+      以前这里是一个"选行业 → 自动用 admin 登录"的启动台，与 `/login` 并存。
+      后果有两个，都很难在现场解释：
+        ① 无论谁点入口页，都以 admin 进去 —— 客户看不到"不同角色菜单不同"；
+        ② 两套登录逻辑各写一遍（密码规则、行业落地、错误处理），改一处漏一处。
+      现在全站只有一个登录页 `/login`：选行业 → 选角色 → 登录。
+      本页面保留只为**旧链接不 404**（书签、文档、桌面快捷方式里都还写着 /enter.html）。
+      ==========================================================================
+    -->
+    <div class="box">
+      <div class="logo">伴</div>
+      <h1>伴圆AI原生ERP系统</h1>
+      <p>AI 伴你，企业信息化管理圆满<br />正在进入登录页，请选择行业版本与角色…</p>
+      <div class="bar"><i></i></div>
+      <a id="go" href="/login">立即进入</a>
+    </div>
+    <script>
+      // 保留历史行业选择：登录页会读 localStorage 的 gml_industry 作为默认选中项。
+      // 旧链接里可能带 ?industry=food，一并接受（避免书签里的参数失效）。
+      try {
+        var q = new URLSearchParams(location.search).get('industry')
+        if (q && ['cosmetic', 'food', 'apparel'].indexOf(q) >= 0) {
+          localStorage.setItem('gml_industry', q)
+          document.getElementById('go').href = '/login?industry=' + q
+        }
+      } catch (e) {
+        /* 老浏览器不支持 URLSearchParams 时直接跳默认登录页 */
+      }
+      // meta refresh 是兜底：禁 JS 的环境也能走；这里再快一点。
+      setTimeout(function () {
+        location.replace(document.getElementById('go').href)
+      }, 300)
+    </script>
+  </body>
+</html>

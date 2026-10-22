@@ -1,0 +1,58 @@
+{
+  "host": "dmserver",
+  "os": "Ubuntu 22.04.5 LTS",
+  "platform": "linux",
+  "architecture": "x64",
+  "node": "v22.22.1",
+  "npm": "10.9.4",
+  "python": {
+    "version": "3.10.12",
+    "openpyxl": "3.1.5",
+    "isolated_venv": true
+  },
+  "unzip": {
+    "version": "6.0-26ubuntu3.2",
+    "upstream_version_banner": "UnZip 6.00 of 20 April 2009, by Debian. Original by Info-ZIP.",
+    "download_url": "https://archive.ubuntu.com/ubuntu/pool/main/u/unzip/unzip_6.0-26ubuntu3.2_amd64.deb",
+    "sha256": "4f274ffc6774d52878322ef1e3eb6d185003e1607448e62893849825bfae347d",
+    "install_method": "dpkg-deb --extract into task directory; no maintainer scripts executed; system package state unchanged"
+  },
+  "node_distribution": {
+    "node_download_url": "https://nodejs.org/dist/v22.22.1/node-v22.22.1-linux-x64.tar.xz",
+    "node_shasums_url": "https://nodejs.org/dist/v22.22.1/SHASUMS256.txt",
+    "node_sha256": "9a6bc82f9b491279147219f6a18add1e18424dce90d41d2a5fcd69d4924ba3aa"
+  },
+  "python_packages": [
+    {
+      "package": "pip",
+      "version": "25.3",
+      "metadata_url": "https://pypi.org/pypi/pip/25.3/json",
+      "url": "https://files.pythonhosted.org/packages/44/3c/d717024885424591d5376220b5e836c2d5293ce2011523c9de23ff7bf068/pip-25.3-py3-none-any.whl",
+      "filename": "pip-25.3-py3-none-any.whl",
+      "sha256": "9655943313a94722b7774661c21049070f6bbb0a1516bf02f7c8d5d9201514cd"
+    },
+    {
+      "package": "et_xmlfile",
+      "version": "2.0.0",
+      "metadata_url": "https://pypi.org/pypi/et_xmlfile/2.0.0/json",
+      "url": "https://files.pythonhosted.org/packages/c1/8b/5fe2cc11fee489817272089c4203e679c63b570a5aaeb18d852ae3cbba6a/et_xmlfile-2.0.0-py3-none-any.whl",
+      "filename": "et_xmlfile-2.0.0-py3-none-any.whl",
+      "sha256": "7a91720bc756843502c3b7504c77b8fe44217c85c537d85037f0f536151b2caa"
+    },
+    {
+      "package": "openpyxl",
+      "version": "3.1.5",
+      "metadata_url": "https://pypi.org/pypi/openpyxl/3.1.5/json",
+      "url": "https://files.pythonhosted.org/packages/c0/da/977ded879c29cbd04de313843e76868e6e13408a94ed6b987245dc7c8506/openpyxl-3.1.5-py2.py3-none-any.whl",
+      "filename": "openpyxl-3.1.5-py2.py3-none-any.whl",
+      "sha256": "5282c12b107bffeef825f4617dc029afaf41d0ea60823bbb665ef3079dc79de2"
+    }
+  ],
+  "native_dependencies": {
+    "better-sqlite3": "11.10.0",
+    "esbuild": "0.25.12"
+  },
+  "dependency_install": "npm ci --ignore-scripts --no-audit --no-fund; npm rebuild better-sqlite3 esbuild --no-audit --no-fund; both exit 0",
+  "reuse_rule": "Linux dependencies reused only after package-lock SHA256 equality; no Mac native modules transferred",
+  "system_changes": "No sudo, system package installation, authentication changes, firewall changes or Actions runner registration"
+}

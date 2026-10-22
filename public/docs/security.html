@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>依赖安全说明 · 伴圆AI原生ERP系统</title>
+<meta name="description" content="已修复依赖、剩余高危告警及运行限制" />
+<style>
+  :root{
+    --brand:#185fa5; --brand-600:#2b82c9; --tech:#06b6d4;
+    --ink-900:#0f172a; --ink-700:#334155; --ink-500:#64748b; --ink-300:#cbd5e1;
+    --bg:#f6f9fc; --line:#e2e8f0;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink-900);
+    font:15px/1.75 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",system-ui,sans-serif}
+  a{color:var(--brand);text-decoration:none}
+  a:hover{text-decoration:underline}
+  header.top{position:sticky;top:0;z-index:20;background:rgba(255,255,255,.92);
+    backdrop-filter:saturate(180%) blur(8px);border-bottom:1px solid var(--line)}
+  .top-in{max-width:1280px;margin:0 auto;padding:10px 20px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+  .logo{width:30px;height:30px;border-radius:8px;color:#fff;display:flex;align-items:center;justify-content:center;
+    font-weight:600;font-size:14px;background:linear-gradient(135deg,#185fa5 0%,#2b82c9 58%,#06b6d4 100%);
+    box-shadow:0 6px 16px rgba(24,95,165,.28)}
+  .brand{font-size:14.5px;font-weight:600}
+  .brand small{display:block;font-weight:400;font-size:11.5px;color:var(--ink-500)}
+  .tag{font-size:11px;padding:1px 7px;border-radius:999px;border:1px solid var(--line);color:var(--brand);
+    background:#eff6fd}
+  .spacer{flex:1}
+  .back{font-size:12.5px;color:var(--ink-500)}
+  .back:hover{color:var(--brand)}
+  .search{width:220px;border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-size:13px;
+    outline:none;background:#fff}
+  .search:focus{border-color:var(--brand-600);box-shadow:0 0 0 3px rgba(43,130,201,.12)}
+  .wrap{max-width:1280px;margin:0 auto;padding:20px;display:grid;grid-template-columns:270px minmax(0,1fr);gap:24px;align-items:start}
+  nav.toc{position:sticky;top:76px;max-height:calc(100vh - 96px);overflow:auto;
+    background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px 10px}
+  nav.toc .t{font-size:11.5px;letter-spacing:.08em;color:var(--ink-500);padding:0 8px 8px}
+  nav.toc a{display:block;padding:4px 8px;border-radius:7px;font-size:13px;color:var(--ink-700);line-height:1.5}
+  nav.toc a.toc-l3{font-size:12.3px;color:var(--ink-500);padding-left:20px}
+  nav.toc a:hover{background:#f1f6fc;color:var(--brand);text-decoration:none}
+  nav.toc a.active{background:#e8f2fd;color:var(--brand);font-weight:600}
+  main{background:#fff;border:1px solid var(--line);border-radius:14px;padding:28px 34px;min-width:0;
+    box-shadow:0 1px 2px rgba(15,23,42,.04)}
+  main h1{font-size:26px;line-height:1.35;margin:0 0 6px}
+  main h2{font-size:19px;margin:34px 0 10px;padding-top:14px;border-top:1px solid var(--line)}
+  main h2:first-of-type{border-top:0;padding-top:0;margin-top:22px}
+  main h3{font-size:15.5px;margin:22px 0 8px;color:#0b3d68}
+  main h4{font-size:14px;margin:18px 0 6px;color:var(--ink-700)}
+  main p{margin:9px 0;color:#1e293b}
+  main ul,main ol{margin:8px 0 8px 4px;padding-left:20px}
+  main li{margin:3px 0}
+  main blockquote{margin:12px 0;padding:10px 14px;background:#f3f8fe;border-left:3px solid var(--brand-600);
+    border-radius:0 8px 8px 0;color:#0b3d68}
+  main blockquote p{margin:0;color:inherit}
+  main code{background:#f1f5f9;border:1px solid #e2e8f0;border-radius:5px;padding:1px 5px;font-size:12.5px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  main pre{background:#0f2032;color:#dbeafe;border-radius:10px;padding:14px 16px;overflow:auto;font-size:12.5px;line-height:1.6}
+  main pre code{background:none;border:0;color:inherit;padding:0}
+  main hr{border:0;border-top:1px solid var(--line);margin:26px 0}
+  .table-wrap{overflow:auto;margin:12px 0;border:1px solid var(--line);border-radius:10px}
+  table{border-collapse:collapse;width:100%;font-size:13px}
+  th,td{border-bottom:1px solid var(--line);padding:7px 10px;text-align:left;vertical-align:top}
+  th{background:#f7fafc;color:var(--ink-700);font-weight:600;white-space:nowrap}
+  tr:last-child td{border-bottom:0}
+  tbody tr:hover{background:#fbfdff}
+  .foot{max-width:1280px;margin:0 auto;padding:0 20px 40px;color:var(--ink-500);font-size:12px}
+  @media print{
+    header.top,nav.toc,.foot{display:none}
+    body{background:#fff;font-size:11pt}
+    .wrap{display:block;padding:0}
+    main{border:0;border-radius:0;box-shadow:none;padding:0}
+    pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f3f4f6!important;color:#111!important}
+    pre code{color:#111!important}
+    h2,h3{break-after:avoid}
+    tr{break-inside:avoid}
+    .table-wrap{overflow:visible}
+  }
+  @media (max-width:1000px){
+    .wrap{grid-template-columns:1fr}
+    nav.toc{position:static;max-height:none;order:2}
+    main{padding:20px}
+    .search{width:100%}
+  }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="top-in">
+    <div class="logo">伴</div>
+    <div class="brand">伴圆AI原生ERP系统<small>AI 伴你，企业信息化管理圆满</small></div>
+    <span class="tag">安全状态</span>
+    <div class="spacer"></div>
+    <input class="search" id="q" placeholder="搜索目录…" />
+    <a class="back" href="install.html">安装</a>
+    <a class="back" href="manual.html">操作</a>
+    <a class="back" href="demo-flow.html">演示</a>
+    <a class="back" href="dev.html">开发与MCP</a>
+    <a class="back" href="security.html">安全说明</a>
+    <a class="back" href="http://127.0.0.1:3001/login">返回系统</a>
+  </div>
+</header>
+<div class="wrap">
+  <nav class="toc" id="toc">
+    <div class="t">依赖安全说明</div>
+    <a class="toc-l2" data-depth="2" href="#一-本轮处理">一 本轮处理</a>
+<a class="toc-l2" data-depth="2" href="#二-剩余高危告警">二 剩余高危告警</a>
+<a class="toc-l2" data-depth="2" href="#三-检查方法与口径">三 检查方法与口径</a>
+<a class="toc-l2" data-depth="2" href="#四-权威来源">四 权威来源</a>
+  </nav>
+  <main id="doc">
+<h1 id="伴圆ai原生erp-依赖安全说明">伴圆AI原生ERP 依赖安全说明</h1>
+<p>版本：1.0.1，日期：2026年10月21日。本文解释GitHub依赖告警、本轮修复和剩余风险。安全告警代表第三方库存在已知漏洞，不等于系统已被攻击，也不能把功能测试通过理解为没有安全风险。</p>
+<h2 id="一-本轮处理">一 本轮处理</h2>
+<p>升级前GitHub共有12条开放告警，覆盖6类依赖。以下11条有官方修复版本，已在本轮升级到不受对应公告影响的版本；braces仍没有官方补丁，告警保留，不以关闭或忽略告警代替修复。</p>
+<div class="table-wrap"><table><thead><tr><th>依赖</th><th>原版本</th><th>本轮版本</th><th>处理范围</th></tr></thead><tbody><tr><td>Vite</td><td>5.4.21</td><td>6.4.5</td><td>路径访问限制、Windows编辑器调用等6条公告</td></tr>
+<tr><td>esbuild</td><td>0.21.5</td><td>随Vite升级至0.25系列</td><td>开发服务器跨站读取公告</td></tr>
+<tr><td>React Router</td><td>6.30.6</td><td>7.18.4</td><td>跳转及SSR解析2条原有公告，并避开7.18.0新增受影响范围</td></tr>
+<tr><td>fflate</td><td>0.8.2</td><td>0.8.3</td><td>畸形ZIP64触发解压死循环公告</td></tr>
+<tr><td>postcss-selector-parser</td><td>6.1.4</td><td>7.1.7</td><td>特制选择器导致CPU消耗公告，以npm override固定</td></tr>
+<tr><td>braces</td><td>3.0.3</td><td>3.0.3</td><td>暂无官方补丁，保留高危告警并限制使用场景</td></tr></tbody></table></div>
+<p>Vite开发服务器显式监听127.0.0.1。没有升级业务数据库和业务规则，没有更换现有Tailwind 3样式体系。React Router涉及主版本升级，因此需额外验证真实页面登录、跳转及角色入口，不能只看编译通过。</p>
+<h2 id="二-剩余高危告警">二 剩余高危告警</h2>
+<p>公告：GHSA-vfj7-8cjw-p6xm，CVE-2026-93687。GitHub公告将braces 3.0.3及以下版本列为受影响，修复版本为None。特制的深层嵌套花括号匹配模式可能耗尽调用栈，使Node进程退出，属于拒绝服务风险。</p>
+<p>本项目由Tailwind的文件匹配及监听依赖间接引入braces。现有文件匹配模式写在受维护者控制的tailwind.config.js中，普通业务表单没有被设计为接收并执行任意构建glob。基于当前调用方式，主要暴露在开发和构建链，而不是普通业务API；这是对当前代码路径的风险判断，不是漏洞已经修复的结论。</p>
+<p>暂行限制：</p>
+<ul><li>不把开发服务器开放到公网，也不将npm run dev作为客户生产运行方式。</li><li>不把用户上传内容、业务字段或外部传入的字符串拼进Tailwind文件匹配模式。</li><li>仅在可信源码目录构建，不监听未知来源目录、上传目录或可由外部人员修改的源码。</li><li>普通本地安装采用已构建dist和npm ci --omit=dev，运行依赖中不安装Tailwind或braces。</li><li>保留GitHub告警，持续以官方公告和修复版本为准，不标记为“误报”或“已解决”。</li></ul>
+<p>彻底移除该依赖需要迁移样式构建链或等待上游补丁。迁移Tailwind主版本会影响全站生成样式和兼容性，需要独立安排界面回归，未在本轮仓促实施。</p>
+<h2 id="三-检查方法与口径">三 检查方法与口径</h2>
+<pre><code>node scripts/test-dependency-security.mjs
+npm audit --json --registry=https://registry.npmjs.org
+npm audit --omit=dev --json --registry=https://registry.npmjs.org</code></pre>
+<p>新增依赖回归检查锁定版本、ZIP中文往返、畸形ZIP64及时退出、路由匹配及CSS解析兼容性。构建后的样式按PostCSS解析并规范化无意义空白后比较，1294条声明一致。</p>
+<p>全依赖npm audit仍会显示braces及chokidar、fast-glob、micromatch、tailwindcss共5个受影响包。这些条目源于同一条未修复公告，不应描述为额外修复了5个独立漏洞。只审计运行依赖时未发现已知公告，不代表已证明业务代码、浏览器包和部署环境绝对安全。</p>
+<p>完整业务回归、实际浏览器检查及新版安装验收结果以本次交付记录为准。GitHub依赖分析为异步处理，远程告警关闭状态需在推送后复核，不预先声称平台已经清零。</p>
+<h2 id="四-权威来源">四 权威来源</h2>
+<ul><li>Vite及编辑器调用：https://github.com/advisories/GHSA-587h-7wmj-h5pm</li><li>React Router跳转：https://github.com/advisories/GHSA-wrjc-x8rr-h8h6</li><li>React Router后续补丁：https://github.com/advisories/GHSA-qwww-vcr4-c8h2</li><li>fflate ZIP64：https://github.com/advisories/GHSA-px8p-9vwx-vf98</li><li>braces剩余漏洞：https://github.com/advisories/GHSA-vfj7-8cjw-p6xm</li></ul>
+<p>正式对外或生产上线前，应结合部署操作系统、对外入口、真实数据及权限重新评估，不能将本地依赖升级视为完整安全测评。</p>
+  </main>
+</div>
+<div class="foot">
+  依赖安全说明 · 伴圆AI原生ERP系统 · 演示环境说明：本文档中的数据均为虚构样例。
+</div>
+<script>
+  // 目录搜索：只在目录里过滤，不碰正文（正文里有大量"搜索"二字，进去会让人以为坏了）
+  var q = document.getElementById('q')
+  var links = [].slice.call(document.querySelectorAll('#toc a'))
+  q.addEventListener('input', function () {
+    var v = q.value.trim().toLowerCase()
+    links.forEach(function (a) {
+      a.style.display = !v || a.textContent.toLowerCase().indexOf(v) >= 0 ? '' : 'none'
+    })
+  })
+
+  // 滚动高亮：用 IntersectionObserver 而不是 scroll 事件（长文档滚动时前者更省）
+  var hs = [].slice.call(document.querySelectorAll('#doc h2, #doc h3'))
+  var map = new Map()
+  links.forEach(function (a) { map.set(decodeURIComponent(a.getAttribute('href').slice(1)), a) })
+  var io = new IntersectionObserver(function (entries) {
+    entries.forEach(function (e) {
+      if (!e.isIntersecting) return
+      links.forEach(function (a) { a.classList.remove('active') })
+      var a = map.get(e.target.id)
+      if (a) a.classList.add('active')
+    })
+  }, { rootMargin: '-72px 0px -70% 0px', threshold: 0 })
+  hs.forEach(function (h) { io.observe(h) })
+</script>
+</body>
+</html>

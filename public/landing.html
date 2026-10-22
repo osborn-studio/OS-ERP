@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>伴圆AI原生ERP系统 · AI 伴你，企业信息化管理圆满</title>
+<meta name="description" content="伴圆AI原生ERP系统 · AI 伴你，企业信息化管理圆满。美妆 / 连锁餐饮 / 服装多行业，单据全链贯通，任何单据都能被 AI（MCP）读、写、控制。" />
+<style>
+  :root{
+    --green:#245b4a; --green-d:#14332b; --green-l:#3f7a66;
+    --gold:#b58a4a; --gold-l:#d6bc8d; --gold-ll:#f4ebda;
+    --bg:#f7f7f4; --surface:#fff; --line:#e6e2d9; --ink:#24231f; --ink2:#45453f; --muted:#6f726d;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;line-height:1.65;-webkit-font-smoothing:antialiased}
+  .serif{font-family:"Songti SC","STSong","Noto Serif SC",serif;letter-spacing:.02em}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 24px}
+  header{position:sticky;top:0;z-index:20;background:rgba(247,247,244,.9);backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
+  header .bar{display:flex;align-items:center;justify-content:space-between;height:64px}
+  .brand{display:flex;align-items:center;gap:10px}
+  .logo{width:32px;height:32px;border-radius:8px;background:linear-gradient(135deg,var(--green),var(--gold));color:#fff;display:grid;place-items:center;font-size:14px}
+  .brand b{font-size:15px;font-weight:600}
+  .brand span{font-size:12px;color:var(--muted);display:block}
+  .nav{display:flex;gap:20px;font-size:13px}
+  .nav a{color:var(--ink2);text-decoration:none}
+  .nav a:hover{color:var(--green)}
+  .btn{display:inline-flex;align-items:center;gap:6px;height:38px;padding:0 18px;border-radius:8px;font-size:13px;font-weight:500;text-decoration:none;border:1px solid transparent;transition:.18s}
+  .btn-primary{background:var(--green);color:#fff}
+  .btn-primary:hover{background:var(--green-d)}
+  .btn-ghost{background:#fff;color:var(--ink);border-color:#d8d4cb}
+  .btn-ghost:hover{border-color:#bebbb3}
+
+  .hero{padding:76px 0 56px;position:relative;overflow:hidden}
+  .hero .line{width:56px;height:2px;background:linear-gradient(90deg,var(--gold),transparent);margin-bottom:22px}
+  .hero h1{font-size:42px;line-height:1.35;font-weight:500;margin-bottom:18px}
+  .hero h1 em{font-style:normal;color:var(--green)}
+  .hero p.lead{font-size:15px;color:var(--ink2);max-width:640px;margin-bottom:28px}
+  .actions{display:flex;gap:12px;flex-wrap:wrap}
+  .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-top:44px}
+  .stat{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:16px;position:relative;overflow:hidden}
+  .stat::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:linear-gradient(180deg,var(--green),var(--gold));opacity:.8}
+  .stat b{display:block;font-size:24px;font-weight:600;color:var(--green)}
+  .stat span{font-size:12px;color:var(--muted)}
+
+  section{padding:56px 0}
+  .sec-head{margin-bottom:28px}
+  .sec-head .line{width:40px;height:2px;background:linear-gradient(90deg,var(--gold),transparent);margin-bottom:14px}
+  .sec-head h2{font-size:24px;font-weight:500;margin-bottom:8px}
+  .sec-head p{font-size:13px;color:var(--muted);max-width:660px}
+
+  .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:20px}
+  .card h3{font-size:15px;font-weight:600;margin-bottom:8px;display:flex;align-items:center;gap:8px}
+  .card h3 i{width:22px;height:22px;border-radius:6px;background:var(--gold-ll);color:var(--gold);display:grid;place-items:center;font-size:11px;font-style:normal;font-weight:600}
+  .card p{font-size:13px;color:var(--ink2)}
+  .card ul{margin-top:10px;padding-left:16px;font-size:12.5px;color:var(--muted)}
+  .card ul li{margin-bottom:3px}
+
+  .flow{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;align-items:stretch}
+  .step{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:16px;text-align:center;position:relative}
+  .step b{display:block;font-size:13px;margin-bottom:4px}
+  .step span{font-size:11.5px;color:var(--muted)}
+  .step.no::after{content:"";position:absolute;right:-9px;top:50%;width:8px;height:1px;background:var(--gold-l)}
+
+  .dark{background:linear-gradient(150deg,var(--green-d),var(--green) 60%,var(--green-l));color:#fff;border-radius:14px;padding:36px}
+  .dark h2{font-size:22px;font-weight:500;margin-bottom:10px}
+  .dark p{font-size:13.5px;color:rgba(255,255,255,.78);max-width:720px}
+  .dark .chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:20px}
+  .chip{font-size:12px;padding:5px 12px;border-radius:999px;border:1px solid rgba(214,188,141,.4);background:rgba(255,255,255,.06);color:var(--gold-l)}
+
+  footer{border-top:1px solid var(--line);padding:28px 0;font-size:12px;color:var(--muted)}
+  footer .bar{display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap}
+
+  @media (max-width:900px){
+    .grid{grid-template-columns:1fr}
+    .stats{grid-template-columns:repeat(2,1fr)}
+    .flow{grid-template-columns:1fr 1fr}
+    .hero h1{font-size:30px}
+    .nav{display:none}
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap bar">
+    <div class="brand">
+      <div class="logo serif">G</div>
+      <div><b class="serif">伴圆AI原生ERP系统</b><span>AI 伴你，企业信息化管理圆满</span></div>
+    </div>
+    <nav class="nav">
+      <a href="#modules">功能模块</a>
+      <a href="#flow">业务链路</a>
+      <a href="#ai">AI 承接</a>
+      <a href="#deploy">部署方式</a>
+    </nav>
+    <a class="btn btn-primary" href="/">进入演示系统</a>
+  </div>
+</header>
+
+<div class="hero wrap">
+  <div class="line"></div>
+  <h1 class="serif">从线上订单到仓库发货，<br />一条链路跑通<em>多行业供应链</em></h1>
+  <p class="lead">
+    线上 OMS 平台对接、采购闭环、多渠道销售、批次效期存货、线下门店与经销商政策对账，
+    全部运行在同一套轻量系统里。同时开放结构化语义接口，可直接作为 AI 场景的数据承接底座。
+  </p>
+  <div class="actions">
+    <a class="btn btn-primary" href="/">进入演示系统 →</a>
+    <a class="btn btn-ghost" href="/api/openapi.json" target="_blank" rel="noreferrer">查看接口文档</a>
+    <a class="btn btn-ghost" href="/api/ai/manifest" target="_blank" rel="noreferrer">AI 能力清单</a>
+  </div>
+  <div class="stats">
+    <div class="stat"><b>9</b><span>业务模块</span></div>
+    <div class="stat"><b>36</b><span>业务数据表</span></div>
+    <div class="stat"><b>11</b><span>AI 查询意图</span></div>
+    <div class="stat"><b>8</b><span>角色与数据范围</span></div>
+  </div>
+</div>
+
+<section id="modules" class="wrap">
+  <div class="sec-head">
+    <div class="line"></div>
+    <h2 class="serif">功能模块</h2>
+    <p>按化妆品行业的真实经营场景组织：线上接单、线下分销、仓配履约、渠道政策与库存管控。</p>
+  </div>
+  <div class="grid">
+    <div class="card">
+      <h3><i>01</i>线上 OMS</h3>
+      <p>平台店铺授权、订单拉取、批量转单、发货回传、退款受理、可售库存推送。</p>
+      <ul><li>天猫 / 京东 / 抖音 / 美团闪购 / 自营商城</li><li>转单即占用库存，避免超卖</li><li>同步日志可回溯每一笔异常</li></ul>
+    </div>
+    <div class="card">
+      <h3><i>02</i>采购闭环</h3>
+      <p>采购订单 → 审批 → 收货入库 → 采购退货，全流程事务化。</p>
+      <ul><li>收货自动生成批次与到期日</li><li>收货进度实时回写订单</li><li>按供应商维度统计在途</li></ul>
+    </div>
+    <div class="card">
+      <h3><i>03</i>多渠道销售</h3>
+      <p>经销商分销、门店零售、平台电商统一订单中心。</p>
+      <ul><li>经销商自动套用等级折扣</li><li>确认占库、发货出库、回款登记</li><li>退货冲减应收与返利基数</li></ul>
+    </div>
+    <div class="card">
+      <h3><i>04</i>存货管理</h3>
+      <p>库存、流水、收发存台账、调拨、盘点与四类预警。</p>
+      <ul><li>可售库存 = 现存量 − 占用 − 安全库存</li><li>批次先进先出、同批次临期优先</li><li>低于安全库存 / 临期 / 零库存 / 呆滞</li></ul>
+    </div>
+    <div class="card">
+      <h3><i>05</i>经销商管理</h3>
+      <p>等级政策、信用额度、批次返利、对账单一体化。</p>
+      <ul><li>360 画像：趋势、畅销款、采购结构</li><li>返利按净额自动核算并支持发放</li><li>对账单期初 + 销售 − 回款 = 期末</li></ul>
+    </div>
+    <div class="card">
+      <h3><i>06</i>经营看板与系统管理</h3>
+      <p>经营 KPI、待办清单、排行与库存分布；用户权限与审计留痕。</p>
+      <ul><li>8 类角色，经销商 / 门店数据隔离</li><li>主数据变更与单据操作全留痕</li><li>枚举字典前后端共用同一口径</li></ul>
+    </div>
+  </div>
+</section>
+
+<section id="flow" class="wrap">
+  <div class="sec-head">
+    <div class="line"></div>
+    <h2 class="serif">核心业务链路</h2>
+    <p>以一笔线上订单为例，从平台到仓库再到财务回款，全程留痕、口径一致。</p>
+  </div>
+  <div class="flow">
+    <div class="step no"><b>平台下单</b><span>天猫 / 京东 / 抖音</span></div>
+    <div class="step no"><b>拉取转单</b><span>生成销售订单</span></div>
+    <div class="step no"><b>确认占库</b><span>可用量校验</span></div>
+    <div class="step no"><b>批次拣货</b><span>先进先出 / 临期优先</span></div>
+    <div class="step"><b>出库回传</b><span>运单号回平台</span></div>
+  </div>
+</section>
+
+<section class="wrap">
+  <div class="dark" id="ai">
+    <h2 class="serif">面向 AI FDE 的数据承接底座</h2>
+    <p>
+      系统把业务数据结构化暴露给智能体：能力清单自描述、意图查询只读安全、数据结构可发现、调用全程留痕。
+      Agent 无需理解底层表结构，即可用自然语言意图拿到可信的业务数据。
+    </p>
+    <div class="chips">
+      <span class="chip">能力清单 /api/ai/manifest</span>
+      <span class="chip">意图查询 /api/ai/query</span>
+      <span class="chip">数据结构 /api/ai/schema</span>
+      <span class="chip">查询日志 /api/ai/logs</span>
+      <span class="chip">OpenAPI /api/openapi.json</span>
+      <span class="chip">11 个预置意图</span>
+      <span class="chip">只读查询，不写业务单据</span>
+    </div>
+  </div>
+</section>
+
+<section id="deploy" class="wrap">
+  <div class="sec-head">
+    <div class="line"></div>
+    <h2 class="serif">部署方式</h2>
+    <p>单机一条命令即可运行，可挂官网子路径或独立子域，也可作为纯静态 Demo 展示。</p>
+  </div>
+  <div class="grid">
+    <div class="card">
+      <h3><i>A</i>Docker</h3>
+      <p>免装数据库，镜像内自带 SQLite，数据挂载卷持久化。</p>
+      <ul><li>docker compose up -d</li><li>默认端口 3001</li></ul>
+    </div>
+    <div class="card">
+      <h3><i>B</i>本机 Node</h3>
+      <p>Node 20+ 环境，安装依赖后构建启动。</p>
+      <ul><li>npm install &amp;&amp; npm run build</li><li>npm run seed &amp;&amp; npm start</li></ul>
+    </div>
+    <div class="card">
+      <h3><i>C</i>挂官网</h3>
+      <p>内网端口 + 官网反向代理，或独立子域跳转。</p>
+      <ul><li>Nginx location 反代</li><li>静态包可单独托管</li></ul>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap bar">
+    <span>伴圆AI原生ERP系统 · 演示环境</span>
+    <span>演示数据由程序随机生成，不含任何真实客户信息、价格与成本</span>
+  </div>
+</footer>
+
+</body>
+</html>

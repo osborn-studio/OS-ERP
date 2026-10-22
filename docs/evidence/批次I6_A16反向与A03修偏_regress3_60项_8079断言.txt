@@ -1,0 +1,200 @@
+
+████████████████████████████████████████████████████████████████
+█ 第 1 / 3 轮
+████████████████████████████████████████████████████████████████
+  ✓ test:test-approval.mjs [cosmetic]              通过 45 / 失败 0           0.5s
+  ✓ test:test-approval.mjs [food]                  通过 45 / 失败 0           0.5s
+  ✓ test:test-approval.mjs [apparel]               通过 45 / 失败 0           0.5s
+  ✓ test:test-ar.mjs [cosmetic]                    通过（无计数）                0.2s
+  ✓ test:test-ar.mjs [food]                        通过（无计数）                0.2s
+  ✓ test:test-ar.mjs [apparel]                     通过（无计数）                0.1s
+  ✓ test:test-costing.mjs [cosmetic]               通过（无计数）                0.2s
+  ✓ test:test-costing.mjs [food]                   通过（无计数）                0.2s
+  ✓ test:test-costing.mjs [apparel]                通过（无计数）                0.3s
+  ✓ test:test-docflow.mjs                          通过（无计数）                0.3s
+  ✓ test:test-flows.mjs [cosmetic]                 通过（无计数）                1.8s
+  ✓ test:test-flows.mjs [food]                     通过（无计数）                1.8s
+  ✓ test:test-flows.mjs [apparel]                  通过（无计数）                1.8s
+  ✓ test:test-guards.mjs [cosmetic]                通过 212 / 失败 0          2.9s
+  ✓ test:test-guards.mjs [food]                    通过 213 / 失败 0          2.9s
+  ✓ test:test-guards.mjs [apparel]                 通过 213 / 失败 0          2.9s
+  ✓ test:test-invoice.mjs [cosmetic]               通过（无计数）                0.2s
+  ✓ test:test-invoice.mjs [food]                   通过（无计数）                0.2s
+  ✓ test:test-invoice.mjs [apparel]                通过（无计数）                0.2s
+  ✓ test:test-mcp.mjs                              通过 39 / 失败 0           2.3s
+  ✓ test:test-metrics.mjs [cosmetic]               通过（无计数）                0.2s
+  ✓ test:test-metrics.mjs [food]                   通过（无计数）                0.2s
+  ✓ test:test-metrics.mjs [apparel]                通过（无计数）                0.2s
+  ✓ test:test-mfg.mjs [cosmetic]                   通过 160 / 失败 0          0.2s
+  ✓ test:test-mfg.mjs [food]                       通过 160 / 失败 0          0.2s
+  ✓ test:test-mfg.mjs [apparel]                    通过 160 / 失败 0          0.2s
+  ✓ test:test-notify.mjs [cosmetic]                通过 45 / 失败 0           0.4s
+  ✓ test:test-notify.mjs [food]                    通过 45 / 失败 0           0.4s
+  ✓ test:test-notify.mjs [apparel]                 通过 45 / 失败 0           0.4s
+  ✓ test:test-oc.mjs [cosmetic]                    通过 69 / 失败 0           0.3s
+  ✓ test:test-oc.mjs [food]                        通过 70 / 失败 0           0.3s
+  ✓ test:test-oc.mjs [apparel]                     通过 69 / 失败 0           0.3s
+  ✓ test:test-org-perm.mjs                         通过 13 / 失败 0           3.1s
+  ✓ test:test-pos2.mjs [cosmetic]                  通过 105 / 失败 0          0.2s
+  ✓ test:test-pos2.mjs [food]                      通过 105 / 失败 0          0.2s
+  ✓ test:test-pos2.mjs [apparel]                   通过 105 / 失败 0          0.2s
+  ✓ test:test-pricing.mjs                          通过 35 / 失败 0           0.1s
+  ✓ test:test-promo.mjs [cosmetic]                 通过 114 / 失败 0          0.1s
+  ✓ test:test-promo.mjs [food]                     通过 114 / 失败 0          0.1s
+  ✓ test:test-promo.mjs [apparel]                  通过 114 / 失败 0          0.1s
+  ✓ test:test-promotion.mjs                        通过 44 / 失败 0           0.1s
+  ✓ test:test-purchase.mjs [cosmetic]              通过 103 / 失败 0          0.2s
+  ✓ test:test-purchase.mjs [food]                  通过 103 / 失败 0          0.2s
+  ✓ test:test-purchase.mjs [apparel]               通过 103 / 失败 0          0.2s
+  ✓ test:test-qc.mjs [cosmetic]                    通过（无计数）                0.2s
+  ✓ test:test-qc.mjs [food]                        通过（无计数）                0.2s
+  ✓ test:test-qc.mjs [apparel]                     通过（无计数）                0.2s
+  ✓ test:test-qc2.mjs [cosmetic]                   通过（无计数）                0.2s
+  ✓ test:test-qc2.mjs [food]                       通过（无计数）                0.2s
+  ✓ test:test-qc2.mjs [apparel]                    通过（无计数）                0.2s
+  ✓ test:test-quote-credit.mjs [cosmetic]          通过（无计数）                0.2s
+  ✓ test:test-quote-credit.mjs [food]              通过（无计数）                0.2s
+  ✓ test:test-quote-credit.mjs [apparel]           通过（无计数）                0.1s
+  ✓ test:test-stock-v2.mjs                         通过（无计数）                0.3s
+  ✓ verify-seed(all)                               通过（无计数）                0.2s
+  ✓ verify-migrations                              通过（无计数）                0.1s
+  ✓ check:api                                      通过（无计数）                0.3s
+  ✓ smoke-api                                      通过（无计数）                2.4s
+  ✓ tsc --noEmit                                   通过                     4.2s
+  ✓ vite build                                     通过                     8.4s
+
+████████████████████████████████████████████████████████████████
+█ 第 2 / 3 轮
+████████████████████████████████████████████████████████████████
+  ✓ test:test-approval.mjs [cosmetic]              通过 45 / 失败 0           0.7s
+  ✓ test:test-approval.mjs [food]                  通过 45 / 失败 0           0.4s
+  ✓ test:test-approval.mjs [apparel]               通过 45 / 失败 0           0.4s
+  ✓ test:test-ar.mjs [cosmetic]                    通过（无计数）                0.2s
+  ✓ test:test-ar.mjs [food]                        通过（无计数）                0.1s
+  ✓ test:test-ar.mjs [apparel]                     通过（无计数）                0.1s
+  ✓ test:test-costing.mjs [cosmetic]               通过（无计数）                0.2s
+  ✓ test:test-costing.mjs [food]                   通过（无计数）                0.2s
+  ✓ test:test-costing.mjs [apparel]                通过（无计数）                0.3s
+  ✓ test:test-docflow.mjs                          通过（无计数）                0.3s
+  ✓ test:test-flows.mjs [cosmetic]                 通过（无计数）                2.2s
+  ✓ test:test-flows.mjs [food]                     通过（无计数）                2.2s
+  ✓ test:test-flows.mjs [apparel]                  通过（无计数）                2.2s
+  ✓ test:test-guards.mjs [cosmetic]                通过 212 / 失败 0          2.9s
+  ✓ test:test-guards.mjs [food]                    通过 213 / 失败 0          2.9s
+  ✓ test:test-guards.mjs [apparel]                 通过 213 / 失败 0          2.9s
+  ✓ test:test-invoice.mjs [cosmetic]               通过（无计数）                0.2s
+  ✓ test:test-invoice.mjs [food]                   通过（无计数）                0.2s
+  ✓ test:test-invoice.mjs [apparel]                通过（无计数）                0.2s
+  ✓ test:test-mcp.mjs                              通过 39 / 失败 0           2.6s
+  ✓ test:test-metrics.mjs [cosmetic]               通过（无计数）                0.2s
+  ✓ test:test-metrics.mjs [food]                   通过（无计数）                0.2s
+  ✓ test:test-metrics.mjs [apparel]                通过（无计数）                0.2s
+  ✓ test:test-mfg.mjs [cosmetic]                   通过 160 / 失败 0          0.2s
+  ✓ test:test-mfg.mjs [food]                       通过 160 / 失败 0          0.2s
+  ✓ test:test-mfg.mjs [apparel]                    通过 160 / 失败 0          0.2s
+  ✓ test:test-notify.mjs [cosmetic]                通过 45 / 失败 0           0.4s
+  ✓ test:test-notify.mjs [food]                    通过 45 / 失败 0           0.4s
+  ✓ test:test-notify.mjs [apparel]                 通过 45 / 失败 0           0.4s
+  ✓ test:test-oc.mjs [cosmetic]                    通过 69 / 失败 0           0.2s
+  ✓ test:test-oc.mjs [food]                        通过 70 / 失败 0           0.3s
+  ✓ test:test-oc.mjs [apparel]                     通过 69 / 失败 0           0.2s
+  ✓ test:test-org-perm.mjs                         通过 13 / 失败 0           2.8s
+  ✓ test:test-pos2.mjs [cosmetic]                  通过 105 / 失败 0          0.2s
+  ✓ test:test-pos2.mjs [food]                      通过 105 / 失败 0          0.2s
+  ✓ test:test-pos2.mjs [apparel]                   通过 105 / 失败 0          0.2s
+  ✓ test:test-pricing.mjs                          通过 35 / 失败 0           0.2s
+  ✓ test:test-promo.mjs [cosmetic]                 通过 114 / 失败 0          0.2s
+  ✓ test:test-promo.mjs [food]                     通过 114 / 失败 0          0.1s
+  ✓ test:test-promo.mjs [apparel]                  通过 114 / 失败 0          0.1s
+  ✓ test:test-promotion.mjs                        通过 44 / 失败 0           0.1s
+  ✓ test:test-purchase.mjs [cosmetic]              通过 103 / 失败 0          0.2s
+  ✓ test:test-purchase.mjs [food]                  通过 103 / 失败 0          0.2s
+  ✓ test:test-purchase.mjs [apparel]               通过 103 / 失败 0          0.2s
+  ✓ test:test-qc.mjs [cosmetic]                    通过（无计数）                0.2s
+  ✓ test:test-qc.mjs [food]                        通过（无计数）                0.2s
+  ✓ test:test-qc.mjs [apparel]                     通过（无计数）                0.2s
+  ✓ test:test-qc2.mjs [cosmetic]                   通过（无计数）                0.2s
+  ✓ test:test-qc2.mjs [food]                       通过（无计数）                0.2s
+  ✓ test:test-qc2.mjs [apparel]                    通过（无计数）                0.2s
+  ✓ test:test-quote-credit.mjs [cosmetic]          通过（无计数）                0.2s
+  ✓ test:test-quote-credit.mjs [food]              通过（无计数）                0.2s
+  ✓ test:test-quote-credit.mjs [apparel]           通过（无计数）                0.2s
+  ✓ test:test-stock-v2.mjs                         通过（无计数）                0.3s
+  ✓ verify-seed(all)                               通过（无计数）                0.2s
+  ✓ verify-migrations                              通过（无计数）                0.1s
+  ✓ check:api                                      通过（无计数）                0.3s
+  ✓ smoke-api                                      通过（无计数）                3.3s
+  ✓ tsc --noEmit                                   通过                     4.5s
+  ✓ vite build                                     通过                     8.7s
+
+████████████████████████████████████████████████████████████████
+█ 第 3 / 3 轮
+████████████████████████████████████████████████████████████████
+  ✓ test:test-approval.mjs [cosmetic]              通过 45 / 失败 0           0.4s
+  ✓ test:test-approval.mjs [food]                  通过 45 / 失败 0           0.4s
+  ✓ test:test-approval.mjs [apparel]               通过 45 / 失败 0           0.4s
+  ✓ test:test-ar.mjs [cosmetic]                    通过（无计数）                0.1s
+  ✓ test:test-ar.mjs [food]                        通过（无计数）                0.2s
+  ✓ test:test-ar.mjs [apparel]                     通过（无计数）                0.1s
+  ✓ test:test-costing.mjs [cosmetic]               通过（无计数）                0.2s
+  ✓ test:test-costing.mjs [food]                   通过（无计数）                0.2s
+  ✓ test:test-costing.mjs [apparel]                通过（无计数）                0.3s
+  ✓ test:test-docflow.mjs                          通过（无计数）                0.3s
+  ✓ test:test-flows.mjs [cosmetic]                 通过（无计数）                1.8s
+  ✓ test:test-flows.mjs [food]                     通过（无计数）                2.2s
+  ✓ test:test-flows.mjs [apparel]                  通过（无计数）                2.2s
+  ✓ test:test-guards.mjs [cosmetic]                通过 212 / 失败 0          2.9s
+  ✓ test:test-guards.mjs [food]                    通过 213 / 失败 0          2.9s
+  ✓ test:test-guards.mjs [apparel]                 通过 213 / 失败 0          2.9s
+  ✓ test:test-invoice.mjs [cosmetic]               通过（无计数）                0.2s
+  ✓ test:test-invoice.mjs [food]                   通过（无计数）                0.2s
+  ✓ test:test-invoice.mjs [apparel]                通过（无计数）                0.2s
+  ✓ test:test-mcp.mjs                              通过 39 / 失败 0           2.3s
+  ✓ test:test-metrics.mjs [cosmetic]               通过（无计数）                0.2s
+  ✓ test:test-metrics.mjs [food]                   通过（无计数）                0.2s
+  ✓ test:test-metrics.mjs [apparel]                通过（无计数）                0.2s
+  ✓ test:test-mfg.mjs [cosmetic]                   通过 160 / 失败 0          0.2s
+  ✓ test:test-mfg.mjs [food]                       通过 160 / 失败 0          0.2s
+  ✓ test:test-mfg.mjs [apparel]                    通过 160 / 失败 0          0.2s
+  ✓ test:test-notify.mjs [cosmetic]                通过 45 / 失败 0           0.4s
+  ✓ test:test-notify.mjs [food]                    通过 45 / 失败 0           0.4s
+  ✓ test:test-notify.mjs [apparel]                 通过 45 / 失败 0           0.4s
+  ✓ test:test-oc.mjs [cosmetic]                    通过 69 / 失败 0           0.3s
+  ✓ test:test-oc.mjs [food]                        通过 70 / 失败 0           0.3s
+  ✓ test:test-oc.mjs [apparel]                     通过 69 / 失败 0           0.2s
+  ✓ test:test-org-perm.mjs                         通过 13 / 失败 0           2.8s
+  ✓ test:test-pos2.mjs [cosmetic]                  通过 105 / 失败 0          0.2s
+  ✓ test:test-pos2.mjs [food]                      通过 105 / 失败 0          0.2s
+  ✓ test:test-pos2.mjs [apparel]                   通过 105 / 失败 0          0.2s
+  ✓ test:test-pricing.mjs                          通过 35 / 失败 0           0.1s
+  ✓ test:test-promo.mjs [cosmetic]                 通过 114 / 失败 0          0.1s
+  ✓ test:test-promo.mjs [food]                     通过 114 / 失败 0          0.2s
+  ✓ test:test-promo.mjs [apparel]                  通过 114 / 失败 0          0.1s
+  ✓ test:test-promotion.mjs                        通过 44 / 失败 0           0.1s
+  ✓ test:test-purchase.mjs [cosmetic]              通过 103 / 失败 0          0.2s
+  ✓ test:test-purchase.mjs [food]                  通过 103 / 失败 0          0.3s
+  ✓ test:test-purchase.mjs [apparel]               通过 103 / 失败 0          0.3s
+  ✓ test:test-qc.mjs [cosmetic]                    通过（无计数）                0.2s
+  ✓ test:test-qc.mjs [food]                        通过（无计数）                0.3s
+  ✓ test:test-qc.mjs [apparel]                     通过（无计数）                0.2s
+  ✓ test:test-qc2.mjs [cosmetic]                   通过（无计数）                0.2s
+  ✓ test:test-qc2.mjs [food]                       通过（无计数）                0.2s
+  ✓ test:test-qc2.mjs [apparel]                    通过（无计数）                0.2s
+  ✓ test:test-quote-credit.mjs [cosmetic]          通过（无计数）                0.2s
+  ✓ test:test-quote-credit.mjs [food]              通过（无计数）                0.2s
+  ✓ test:test-quote-credit.mjs [apparel]           通过（无计数）                0.2s
+  ✓ test:test-stock-v2.mjs                         通过（无计数）                0.3s
+  ✓ verify-seed(all)                               通过（无计数）                0.2s
+  ✓ verify-migrations                              通过（无计数）                0.1s
+  ✓ check:api                                      通过（无计数）                0.3s
+  ✓ smoke-api                                      通过（无计数）                2.4s
+  ✓ tsc --noEmit                                   通过                     4.4s
+  ✓ vite build                                     通过                     8.1s
+
+──────────────────────────────────────────────────────────────────────
+  第 1 轮：60 项通过 / 0 项失败
+  第 2 轮：60 项通过 / 0 项失败
+  第 3 轮：60 项通过 / 0 项失败
+  断言累计通过 8079 条；跑批项 180 个
+
+[32m全量回归通过（3 轮 × 串行）[0m

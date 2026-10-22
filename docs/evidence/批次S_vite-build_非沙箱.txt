@@ -1,0 +1,4 @@
+=== vite build（非沙箱，沙箱内会因读不到 public/enter.html 而失败）===
+- Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+✓ built in 1.92s

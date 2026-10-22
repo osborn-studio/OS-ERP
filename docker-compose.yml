@@ -1,0 +1,28 @@
+services:
+  gml:
+    build: .
+    image: gml-supply-chain:1.0.0
+    container_name: gml
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    environment:
+      PORT: 3001
+      HOST: 0.0.0.0
+      GML_DATA_DIR: /data
+      # A20：这里原来写的是 `JWT_SECRET`，而程序读的是 `GML_JWT_SECRET` ——
+      # 两个名字对不上，于是容器里**一直在用内置的演示回退密钥**，且不会报任何错。
+      # 现在统一为程序与 README 都在用的名字（`GML_JWT_SECRET`）。
+      #
+      # 本文件是**本地 / 演示栈**；生产请用编排平台（k8s / 云上 Composer）并显式给密钥。
+      # 密钥**必须显式提供**：用 `:?` 而不是 `:-默认值` —— 缺变量时 compose **自己就拒绝解析**，
+      # 报出来的那句话本身就是修复命令。为什么不兜一个默认值：任何一个写进仓库的默认密钥
+      # 都是"公开已知值"，等于没有认证；而这个文件名太普通，很容易被直接搬到有公网 IP 的机器上。
+      # （第二道闸门在程序侧、判据不同：变量**给了**但等于公开已知值 ⇒ production 下拒绝启动，
+      #   见 `server/middleware/auth.js` 的 `PUBLIC_DEFAULT_SECRETS`。）
+      GML_JWT_SECRET: ${GML_JWT_SECRET:?GML_JWT_SECRET 必须显式提供 —— 生成并启动：GML_JWT_SECRET=$(openssl rand -hex 32) docker compose up}
+    volumes:
+      - gml-data:/data
+
+volumes:
+  gml-data:

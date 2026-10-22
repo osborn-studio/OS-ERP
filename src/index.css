@@ -1,0 +1,197 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+  /* 视觉体系：深苔绿 + 香槟金 + 暖白（高端美妆视觉体系） */
+  --gml-bg: #f7f7f4;
+  --gml-surface: #ffffff;
+  --gml-line: #e6e2d9;
+  --gml-line-soft: #f0eee8;
+  --gml-ink: #24231f;
+  --gml-ink-2: #45453f;
+  --gml-muted: #6f726d;
+  --gml-green: #245b4a;
+  --gml-gold: #b58a4a;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--gml-bg);
+  color: var(--gml-ink);
+  -webkit-font-smoothing: antialiased;
+  letter-spacing: 0.01em;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: #d8d4cb;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #bebbb3;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@layer components {
+  .card {
+    @apply bg-white rounded-lg border;
+    border-color: var(--gml-line);
+    box-shadow: 0 1px 2px rgba(36, 35, 31, 0.03);
+  }
+  .card-pad {
+    @apply p-4;
+  }
+  /* 标题使用宋体，呼应品牌文档的衬线调性 */
+  .title-serif {
+    @apply font-serif;
+    letter-spacing: 0.02em;
+  }
+  .label {
+    @apply block text-[13px] text-ink-700 mb-1;
+  }
+  .input {
+    @apply w-full h-9 px-3 text-[13px] bg-white border rounded-md outline-none transition;
+    border-color: #d8d4cb;
+    color: var(--gml-ink-2);
+  }
+  .input:focus {
+    border-color: var(--gml-green);
+    box-shadow: 0 0 0 3px rgba(36, 91, 74, 0.1);
+  }
+  .input-sm {
+    @apply h-8 text-[13px];
+  }
+  /* 详情弹窗里的只读值：长得像输入框，但不能改 —— 变的是数据，不是人的手 */
+  .input-disabled {
+    @apply w-full min-h-9 px-3 py-2 text-[13px] rounded-md border border-dashed;
+    background: #faf9f7;
+    border-color: var(--gml-line);
+    color: var(--gml-ink-2);
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-1.5 h-9 px-3.5 text-[13px] font-medium rounded-md
+      border transition select-none disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap;
+  }
+  .btn-primary {
+    @apply btn text-white;
+    background: var(--gml-green);
+    border-color: var(--gml-green);
+  }
+  .btn-primary:hover {
+    background: #1d4a3d;
+    border-color: #1d4a3d;
+  }
+  .btn-ghost {
+    @apply btn bg-white text-ink-800 hover:bg-ink-50;
+    border-color: #d8d4cb;
+  }
+  .btn-ghost:hover {
+    border-color: #bebbb3;
+  }
+  .btn-gold {
+    @apply btn bg-white;
+    color: var(--gml-gold);
+    border-color: #d6bc8d;
+  }
+  .btn-gold:hover {
+    background: #faf7f0;
+  }
+  .btn-danger {
+    @apply btn bg-white text-red-700 border-red-200 hover:bg-red-50;
+  }
+  .btn-sm {
+    @apply h-7 px-2.5 text-[12px];
+  }
+  .table-wrap {
+    @apply w-full overflow-x-auto;
+  }
+  .tbl {
+    @apply w-full text-[13px] border-collapse;
+  }
+  .tbl thead th {
+    @apply text-left font-medium px-3 py-2.5 whitespace-nowrap;
+    color: #6f726d;
+    background: #faf9f7;
+    border-bottom: 1px solid var(--gml-line);
+  }
+  .tbl tbody td {
+    @apply px-3 py-2.5 align-middle;
+    border-bottom: 1px solid var(--gml-line-soft);
+    color: var(--gml-ink-2);
+  }
+  .tbl tbody tr:hover {
+    background: #f6f8f6;
+  }
+  .tag {
+    @apply inline-flex items-center px-2 py-0.5 rounded text-[12px] font-medium whitespace-nowrap;
+  }
+  .tab {
+    @apply px-3.5 h-9 inline-flex items-center text-[13px] font-medium border-b-2 border-transparent cursor-pointer whitespace-nowrap;
+    color: var(--gml-muted);
+  }
+  .tab:hover {
+    color: var(--gml-green);
+  }
+  .tab-active {
+    color: var(--gml-green);
+    border-color: var(--gml-green);
+  }
+  .kpi {
+    @apply card p-4 flex flex-col gap-1 relative overflow-hidden;
+  }
+  .kpi::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 3px;
+    height: 100%;
+    background: linear-gradient(180deg, var(--gml-green) 0%, var(--gml-gold) 100%);
+    opacity: 0.75;
+  }
+  .kpi-label {
+    @apply text-[12px];
+    color: var(--gml-muted);
+    letter-spacing: 0.04em;
+  }
+  .kpi-value {
+    @apply text-[24px] leading-8 font-medium tabular-nums;
+    color: var(--gml-ink);
+  }
+  .kpi-sub {
+    @apply text-[12px];
+    color: #8f8d86;
+  }
+  .link {
+    @apply cursor-pointer;
+    color: var(--gml-green);
+  }
+  .link:hover {
+    color: #1d4a3d;
+    text-decoration: underline;
+  }
+  .form-row {
+    @apply flex flex-col;
+  }
+  .divider-gold {
+    height: 2px;
+    background: linear-gradient(90deg, var(--gml-green) 0%, var(--gml-gold) 60%, transparent 100%);
+  }
+}

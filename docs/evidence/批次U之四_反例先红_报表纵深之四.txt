@@ -1,0 +1,104 @@
+# 批次 U 之四 · 报表纵深（导出 Excel / 累计同比 / 会计年度起点 / 跨年度）—— 反例先红后证（9 组）
+# 生成命令：node scripts/accept/reversal-report-deepening.mjs
+# 生成时点：2026-10-16 20:54:39（北京时间）
+# 被跑脚本 sha256（前16位）：8f87bab9b1966a41
+# 结果：计数 通过 9 / 失败 0（退出码 0）
+# ⚠️ 以下为脚本原始 stdout，未做任何编辑 —— 报告里的每个数都能用上面这条命令复算。
+# ---------------------------------------------------------------------------
+注入式「先红后证」：批次 U 之四 · 报表纵深之四（③-a/③-b/③-c）+ ④ 跨年度报表（9 组反例）
+  源 /Users/linxinlan/工作文档/gml
+  证据配对 docs/evidence/批次U之四_反例先红_报表纵深之四.txt
+  尺子 3a→test-export-excel.mjs ｜ 3b→test-ytd-compare.mjs ｜ 3c→test-fiscal-year.mjs ｜ 3d→test-export-excel.mjs ｜ 3e→test-export-excel.mjs ｜ 3f→test-export-excel.mjs ｜ 3g→test-xlsx.mjs ｜ 3h→test-fiscal-year.mjs ｜ 4→test-multi-year.mjs
+  组数 9｜并行度 1
+[3a] 让 xlsx 的表头写成列键（而不是 columnsOf 的中文名）（尺子 test-export-excel.mjs）
+     注入点 server/lib/report.js:2481 ｜ 失败 15 条（套件口径 通过 87 / 失败 15） ｜ 期望命中断言 2/2 ｜ 还原后失败 0 条 ｜ 还原后 sha256 ✓ 与注入前一致（e3972c02496b）
+      ✗ 表头单元格逐字 == columnsOf 的 label（列定义只有一个出处）
+      ✗ 表头与 CSV 的表头逐字相同（两种格式同一份列定义）
+      ✗ bs xlsx 的表头 == 该报表的 columns label
+      ✗ cf xlsx 的表头 == 该报表的 columns label
+      ✗ 表头里有「本年累计」且带区间
+      …还有 10 条
+[3b] 累计同比的基期错一个月（delta 从 -12 改成 -1）（尺子 test-ytd-compare.mjs）
+     注入点 server/lib/report.js:1893 ｜ 失败 27 条（套件口径 通过 66 / 失败 27） ｜ 期望命中断言 2/2 ｜ 还原后失败 0 条 ｜ 还原后 sha256 ✓ 与注入前一致（e3972c02496b）
+      ✗ 基期期间 = 本期往前 12 个月
+      ✗ 基期窗口**字面**等于 [上年年初, 上年同月]
+      ✗ 模式标签自己说清窗口（读的人不必自己推）
+      ✗ 列名带两个累计窗口
+      ✗ 基期列 == 单独打开基期累计（逐行）
+      …还有 22 条
+[3c] 摘掉"非自然年度不做年结"的闸门（尺子 test-fiscal-year.mjs）
+     注入点 server/lib/report.js:1008 ｜ 失败 6 条（套件口径 通过 78 / 失败 6） ｜ 期望命中断言 2/2 ｜ 还原后失败 0 条 ｜ 还原后 sha256 ✓ 与注入前一致（e3972c02496b）
+      ✗ 年结被明确拒绝（不是静默按自然年结）
+      ✗ 利润分配被明确拒绝
+      ✗ 年结被明确拒绝（不是静默按自然年结）
+      ✗ 利润分配被明确拒绝
+      ✗ 年结被明确拒绝（不是静默按自然年结）
+      …还有 1 条
+[3d] 样本期退化：恒取第一个候选期间（金额断言退化成比 0.00 与 0）（尺子 test-export-excel.mjs）
+     注入点 scripts/test-export-excel.mjs:166 ｜ 失败 3 条（套件口径 通过 99 / 失败 3） ｜ 期望命中断言 1/1 ｜ 还原后失败 0 条 ｜ 还原后 sha256 ✓ 与注入前一致（30191476e0fc）
+      ✗ 本次核对用的样本期（2026-10）里至少有一个非零金额
+      ✗ 本次核对用的样本期（2026-10）里至少有一个非零金额
+      ✗ 本次核对用的样本期（2026-10）里至少有一个非零金额
+[3e] 第三方读取器找不到（去掉已知可用的候选解释器）（尺子 test-export-excel.mjs）
+     注入点 scripts/test-export-excel.mjs:56 ｜ 失败 52 条（套件口径 通过 50 / 失败 52） ｜ 期望命中断言 2/2 ｜ 还原后失败 0 条 ｜ 还原后 sha256 ✓ 与注入前一致（30191476e0fc）
+      ✗ 工作表名（第三方读取器的读数）
+      ✗ 表头单元格逐字 == columnsOf 的 label（列定义只有一个出处）
+      ✗ 表头与 CSV 的表头逐字相同（两种格式同一份列定义）
+      ✗ 数据行数 = 报表行数（不含表头 / 空行 / 元信息）
+      ✗ 第 1 行金额：openpyxl 的读数 == 报表金额
+      …还有 47 条
+[3f] 静默跳过一库（跳过与通过同形 ⇒ 计数变小但仍然全绿）（尺子 test-export-excel.mjs）
+     注入点 scripts/test-export-excel.mjs:239 ｜ 失败 1 条（套件口径 通过 70 / 失败 1） ｜ 期望命中断言 1/1 ｜ 还原后失败 0 条 ｜ 还原后 sha256 ✓ 与注入前一致（30191476e0fc）
+      ✗ 应到 102 条断言，实到 71 条（增删断言必须同步改文件里的 EXPECTED_TOTAL）
+[3g] xlsx inlineStr 的 `&` 转义被去掉（XML 不再合法）（尺子 test-xlsx.mjs）
+     注入点 server/lib/xlsx.js:70 ｜ 失败 21 条（套件口径 通过 30 / 失败 21） ｜ 期望命中断言 2/2 ｜ 还原后失败 0 条 ｜ 还原后 sha256 ✓ 与注入前一致（7ab493a28931）
+      ✗ Python·ElementTree 能解析 xl/worksheets/sheet1.xml（XML 合法）  → ParseError('not well-formed (invalid token): line 2, column 691')
+      ✗ openpyxl·第三方读取器能打开该工作簿  → openpyxl 打开失败：ParseError('not well-formed (invalid token): line 2, column 691')
+      ✗ openpyxl·sheet 名与顺序正确（中文名原样）  → openpyxl 打开失败：ParseError('not well-formed (invalid token): line 2, column 691')
+      ✗ openpyxl·数字读成 int/float（真正的数值单元格，能求和）  → openpyxl 打开失败：ParseError('not well-formed (invalid token): line 2, column 691')
+      ✗ openpyxl·字符串读回原值（含 & < > " 与剔控后文本）  → openpyxl 打开失败：ParseError('not well-formed (invalid token): line 2, column 691')
+      …还有 16 条
+[3h] fiscalYearOf 的起始月边界（`mm >= m` 改成 `mm > m`：正好落在起始月的那一期被算进上一年度）（尺子 test-fiscal-year.mjs）
+     注入点 server/lib/report.js:978 ｜ 失败 3 条（套件口径 通过 81 / 失败 3） ｜ 期望命中断言 1/1 ｜ 还原后失败 0 条 ｜ 还原后 sha256 ✓ 与注入前一致（e3972c02496b）
+      ✗ 八组（期间 × 起始月）的字面预期全部命中，且标签写出跨自然年窗口
+      ✗ 八组（期间 × 起始月）的字面预期全部命中，且标签写出跨自然年窗口
+      ✗ 八组（期间 × 起始月）的字面预期全部命中，且标签写出跨自然年窗口
+[4] 同期多年对比的期间序列错一个月（-12k 改成 -11k）（尺子 test-multi-year.mjs）
+     注入点 server/lib/report.js:2164 ｜ 失败 36 条（套件口径 通过 72 / 失败 36） ｜ 期望命中断言 2/2 ｜ 还原后失败 0 条 ｜ 还原后 sha256 ✓ 与注入前一致（e3972c02496b）
+      ✗ years=2 的期间序列（字面算出的期望值）
+      ✗ years=3 的期间序列（字面算出的期望值）
+      ✗ years=4 的期间序列（字面算出的期望值）
+      ✗ years=5 的期间序列（字面算出的期望值）
+      ✗ 默认 years=3
+      …还有 31 条
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+组 | 尺子 | 注入点 | 变红 | 命中期望 | 还原回绿 | 还原后 sha256 | 结论
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+3a | test-export-excel.mjs | server/lib/report.js:2481 | 15 条 | 2 | 是 | 一致 | ✅ 通过
+3b | test-ytd-compare.mjs | server/lib/report.js:1893 | 27 条 | 2 | 是 | 一致 | ✅ 通过
+3c | test-fiscal-year.mjs | server/lib/report.js:1008 | 6 条 | 2 | 是 | 一致 | ✅ 通过
+3d | test-export-excel.mjs | scripts/test-export-excel.mjs:166 | 3 条 | 1 | 是 | 一致 | ✅ 通过
+3e | test-export-excel.mjs | scripts/test-export-excel.mjs:56 | 52 条 | 2 | 是 | 一致 | ✅ 通过
+3f | test-export-excel.mjs | scripts/test-export-excel.mjs:239 | 1 条 | 1 | 是 | 一致 | ✅ 通过
+3g | test-xlsx.mjs | server/lib/xlsx.js:70 | 21 条 | 2 | 是 | 一致 | ✅ 通过
+3h | test-fiscal-year.mjs | server/lib/report.js:978 | 3 条 | 1 | 是 | 一致 | ✅ 通过
+4 | test-multi-year.mjs | server/lib/report.js:2164 | 36 条 | 2 | 是 | 一致 | ✅ 通过
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+通过 9 / 失败 0（共 9 组）
+  「注入后压根没变红」0 组：无  ← 只说"本次这把尺子量不到"，不等于"没有断言在守"
+  「注入后崩、没有可读的红」0 组：无  ← 铁律 21：崩不算变红（还原后全绿 ⇒ 崩由注入引起）
+  「环境/竞态类失败，非断言失败」0 组：无
+
+工作区自证（脚本只写 /tmp 副本）：
+  ✓ 本次创建的 9 份临时副本，收工时仍存在 0 份
+  ✓ 未变 server/lib/report.js（sha256 e3972c02496b → e3972c02496b）
+  ✓ 未变 scripts/test-export-excel.mjs（sha256 30191476e0fc → 30191476e0fc）
+  ✓ 未变 server/lib/xlsx.js（sha256 7ab493a28931 → 7ab493a28931）
+  ✓ 本次改动数据库（两栏口径不同，**都要显式报**，没碰也要打 0）：
+      工作区 实测 0 条（按表 COUNT(*) 46429 → 46429）；本脚本对 data/ 只以 readonly 打开做只读计数 —— 受控实验：只读打开前后 sha256 逐字节不变
+        三库 sha256 本次未变
+      副本内快照 0 条（9 份副本各数一遍求和；四把尺子对副本的 data/ 快照跑，test-fiscal-year 的写落在 BEGIN…ROLLBACK 里）
+  ✓ git status --porcelain 与开跑前一致（开跑前 7 行 / 收工 7 行）
+
+计数 通过 9 / 失败 0

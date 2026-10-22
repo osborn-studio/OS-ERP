@@ -1,0 +1,46 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>dev login</title>
+  </head>
+  <body style="font:14px/1.7 -apple-system,'PingFang SC',sans-serif;padding:36px;color:#1f2937">
+    <div id="msg">正在登录…</div>
+    <script>
+      // 仅用于本地演示/截图：用演示账号 + 指定行业登录，写入登录态后跳转目标页
+      // 用法：/_dev_login.html?u=admin&p=12345&ind=apparel&next=/
+      // 注意：默认密码必须与 seed 里 admin 的实际密码一致，否则会静默失败后被踢回登录页。
+      ;(async () => {
+        const q = new URLSearchParams(location.search)
+        const msg = document.getElementById('msg')
+        const ind = q.get('ind') || 'cosmetic'
+        try {
+          const r = await fetch('/api/auth/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              username: q.get('u') || 'admin',
+              password: q.get('p') || '12345',
+              industry: ind
+            })
+          }).then((x) => x.json())
+          if (r && r.data && r.data.token) {
+            localStorage.setItem('gml_token', r.data.token)
+            localStorage.setItem('gml_user', JSON.stringify(r.data.user))
+            localStorage.setItem('gml_industry', r.data.industry || ind)
+            localStorage.setItem('gml_last_industry', r.data.industry || ind)
+            location.replace(q.get('next') || '/')
+            return
+          }
+          msg.innerHTML =
+            '登录失败：' +
+            ((r && r.message) || (r && r.detail && r.detail.message) || '账号或密码不正确') +
+            '<br><a href="/enter.html">点此进入启动台</a>'
+        } catch (e) {
+          msg.innerHTML =
+            '登录请求失败：' + (e && e.message) + '<br><a href="/enter.html">点此进入启动台</a>'
+        }
+      })()
+    </script>
+  </body>
+</html>

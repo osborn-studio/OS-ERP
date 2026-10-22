@@ -1,0 +1,161 @@
+name: OS ERP Linux validation
+
+# Manual only: do not execute unreviewed pull-request code on a private host.
+on:
+  workflow_dispatch:
+    inputs:
+      linux_runner_label:
+        description: Confirmed custom label of the dedicated Linux validation runner
+        required: true
+        type: string
+      source_reviewed:
+        description: The selected ref has been reviewed for execution on this runner
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+# Legacy tests use fixed loopback ports. Serialize all runs, including other refs.
+concurrency:
+  group: os-erp-linux-validation
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: github.repository == 'osborn-studio/OS-ERP' && inputs.source_reviewed
+    runs-on: [self-hosted, Linux, '${{ inputs.linux_runner_label }}']
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    env:
+      CI: 'true'
+      HOST: 127.0.0.1
+      GML_RUNTIME_MODE: test
+      GML_VERIFY_PLATFORM: linux
+      GML_DB: ''
+      # Configure this repository variable only after checking the Linux host.
+      GML_PYTHON: ${{ vars.OS_ERP_LINUX_PYTHON || vars.OS_EGP_LINUX_PYTHON || 'python3' }}
+      RAW_ROOT: ${{ runner.temp }}/os-erp-${{ github.run_id }}-${{ github.run_attempt }}
+
+    steps:
+      - name: Check out reviewed ref without persistent credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Check Linux runtime prerequisites
+        id: prerequisites
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p "$RAW_ROOT" artifacts/ci-summary
+          test "$(uname -s)" = Linux
+          command -v git >/dev/null
+          command -v npm >/dev/null
+          command -v unzip >/dev/null
+          node -e "if (process.versions.node.split('.')[0] !== '22') process.exit(1)"
+          "$GML_PYTHON" - <<'PY' > "$RAW_ROOT/python-version.txt"
+          import sys, openpyxl, zipfile, xml.etree.ElementTree
+          from importlib.metadata import version
+          from pathlib import Path
+          assert sys.version_info.major == 3
+          for line in Path('requirements-test.txt').read_text().splitlines():
+              line = line.strip()
+              if line and not line.startswith('#'):
+                  package, expected = line.split('==')
+                  assert version(package) == expected, 'Test dependency differs from requirements-test.txt'
+          print(sys.version.split()[0], openpyxl.__version__)
+          PY
+          node --input-type=module <<'NODE'
+          import { randomBytes } from 'node:crypto';
+          import { writeFileSync } from 'node:fs';
+          writeFileSync(`${process.env.RAW_ROOT}/jwt-secret`, randomBytes(32).toString('hex'), { mode: 0o600 });
+          NODE
+
+      - name: Install locked dependencies and selected native build hooks
+        id: dependencies
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts --no-audit --no-fund > "$RAW_ROOT/npm-ci.log" 2>&1
+          npm rebuild better-sqlite3 esbuild --no-audit --no-fund > "$RAW_ROOT/native-build.log" 2>&1
+
+      - name: Run three isolated regression rounds
+        id: regression
+        run: |
+          set -euo pipefail
+          export GML_JWT_SECRET="$(cat "$RAW_ROOT/jwt-secret")"
+          # The isolated runner includes tests/*.test.mjs, tsc and Vite build.
+          # Do not stream raw test logs: inherited tests can print test credentials.
+          node scripts/regress-isolated.mjs --rounds=3 --industries=cosmetic,food --output="$RAW_ROOT/regression" > "$RAW_ROOT/runner.log" 2>&1
+
+      - name: Produce allowlisted validation evidence
+        if: always()
+        env:
+          PREREQUISITES_OUTCOME: ${{ steps.prerequisites.outcome }}
+          DEPENDENCIES_OUTCOME: ${{ steps.dependencies.outcome }}
+          REGRESSION_OUTCOME: ${{ steps.regression.outcome }}
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/ci-summary
+          node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from 'node:fs';
+          const outcomes = new Set(['success', 'failure', 'cancelled', 'skipped']);
+          const outcome = value => outcomes.has(value) ? value : 'unknown';
+          let manifest = {};
+          try { manifest = JSON.parse(readFileSync(`${process.env.RAW_ROOT}/regression/manifest.json`, 'utf8')); } catch {}
+          let python = null, openpyxl = null;
+          try {
+            const versions = readFileSync(`${process.env.RAW_ROOT}/python-version.txt`, 'utf8').trim().match(/^(\d+\.\d+\.\d+) (\d+\.\d+\.\d+)$/);
+            if (versions) [, python, openpyxl] = versions;
+          } catch {}
+          const sha = /^[0-9a-f]{40}$/.test(manifest.source_head || '') ? manifest.source_head : null;
+          const hashes = Object.fromEntries(Object.entries(manifest.hashes || {}).filter(([name, hash]) =>
+            !name.startsWith('/') && !name.split('/').includes('..') && !name.includes('\n') &&
+            /^[0-9a-f]{64}$/.test(hash)));
+          const summary = {
+            schema_version: 1,
+            repository: process.env.GITHUB_REPOSITORY,
+            commit: process.env.GITHUB_SHA,
+            source_head: sha,
+            platform: process.platform,
+            node: process.version,
+            python,
+            openpyxl,
+            run_id: process.env.GITHUB_RUN_ID,
+            run_attempt: process.env.GITHUB_RUN_ATTEMPT,
+            generated_at: new Date().toISOString(),
+            requested_rounds: 3,
+            industries: ['cosmetic', 'food'],
+            prerequisites: outcome(process.env.PREREQUISITES_OUTCOME),
+            dependencies: outcome(process.env.DEPENDENCIES_OUTCOME),
+            regression: outcome(process.env.REGRESSION_OUTCOME),
+            manifest_result: ['passed', 'failed'].includes(manifest.result) ? manifest.result : 'unavailable',
+            evidence_scope: 'isolated source regression; not release-package acceptance or production readiness'
+          };
+          writeFileSync('artifacts/ci-summary/summary.json', JSON.stringify(summary, null, 2) + '\n');
+          writeFileSync('artifacts/ci-summary/source-hashes.json', JSON.stringify(hashes, null, 2) + '\n');
+          console.log(`Validation: prerequisites=${summary.prerequisites}, dependencies=${summary.dependencies}, regression=${summary.regression}`);
+          if (summary.regression === 'success' && (summary.manifest_result !== 'passed' || sha !== process.env.GITHUB_SHA || Object.keys(hashes).length === 0)) {
+            console.error('Successful regression lacks a matching completed source manifest');
+            process.exitCode = 1;
+          }
+          NODE
+
+      - name: Upload summary and hashes only
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: os-erp-linux-summary-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            artifacts/ci-summary/summary.json
+            artifacts/ci-summary/source-hashes.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Remove this run's transient JWT secret
+        if: always()
+        run: rm -f -- "$RAW_ROOT/jwt-secret"

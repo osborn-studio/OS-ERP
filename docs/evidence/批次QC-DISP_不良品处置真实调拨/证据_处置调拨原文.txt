@@ -1,0 +1,613 @@
+# 让步接收 / 返工 → 自动生成调拨单的原文证据（含客户要的『类型』列）
+# 数据落点：/tmp/w-disp-ev（data/gml_cosmetic.db 的纯文件拷贝副本；先经 reseed-all --force 重建过）
+# 复现：GML_DATA_DIR=/tmp/w-disp-ev node /tmp/w-disp-ev/evidence-disp.mjs cosmetic concession|rework
+# 客户口径：「出库单一定会有多种类型的，所以你的出入库单上一定要加一个类型，比如报废出库就是一种类型。」
+
+########## 零、三库隔离仓实测（三库各一套，名字中性）##########
+
+===== [cosmetic] =====
+SELECT id,code,name,type,org_id,default_owner_org_id FROM warehouses WHERE type IN ('defect','quarantine') ORDER BY type,id;
+[
+  {
+    "id": 9,
+    "code": "QC01",
+    "name": "不合格品仓",
+    "type": "defect",
+    "org_id": 45,
+    "default_owner_org_id": 1
+  },
+  {
+    "id": 10,
+    "code": "QC02",
+    "name": "待检品仓",
+    "type": "quarantine",
+    "org_id": 46,
+    "default_owner_org_id": 1
+  }
+]
+SELECT type, COUNT(*) c FROM warehouses GROUP BY type ORDER BY type;
+[{"type":"central","c":1},{"type":"defect","c":1},{"type":"ecom","c":1},{"type":"quarantine","c":1},{"type":"region","c":1},{"type":"store","c":5}]
+隔离仓是否会被「选发货仓」的查询选中（应全部为 null/0）： {"默认central":1,"含隔离仓的central_region候选数":2,"隔离仓货量行数":3}
+
+===== [food] =====
+SELECT id,code,name,type,org_id,default_owner_org_id FROM warehouses WHERE type IN ('defect','quarantine') ORDER BY type,id;
+[
+  {
+    "id": 25,
+    "code": "QC01",
+    "name": "不合格品仓",
+    "type": "defect",
+    "org_id": 83,
+    "default_owner_org_id": 1
+  },
+  {
+    "id": 26,
+    "code": "QC02",
+    "name": "待检品仓",
+    "type": "quarantine",
+    "org_id": 84,
+    "default_owner_org_id": 1
+  }
+]
+SELECT type, COUNT(*) c FROM warehouses GROUP BY type ORDER BY type;
+[{"type":"central","c":1},{"type":"defect","c":1},{"type":"ecom","c":1},{"type":"kitchen","c":1},{"type":"quarantine","c":1},{"type":"region","c":1},{"type":"store","c":20}]
+隔离仓是否会被「选发货仓」的查询选中（应全部为 null/0）： {"默认central":1,"含隔离仓的central_region候选数":2,"隔离仓货量行数":5}
+
+===== [apparel] =====
+SELECT id,code,name,type,org_id,default_owner_org_id FROM warehouses WHERE type IN ('defect','quarantine') ORDER BY type,id;
+[
+  {
+    "id": 9,
+    "code": "QC01",
+    "name": "不合格品仓",
+    "type": "defect",
+    "org_id": 44,
+    "default_owner_org_id": 1
+  },
+  {
+    "id": 10,
+    "code": "QC02",
+    "name": "待检品仓",
+    "type": "quarantine",
+    "org_id": 45,
+    "default_owner_org_id": 1
+  }
+]
+SELECT type, COUNT(*) c FROM warehouses GROUP BY type ORDER BY type;
+[{"type":"central","c":1},{"type":"defect","c":1},{"type":"ecom","c":1},{"type":"quarantine","c":1},{"type":"region","c":1},{"type":"store","c":5}]
+隔离仓是否会被「选发货仓」的查询选中（应全部为 null/0）： {"默认central":1,"含隔离仓的central_region候选数":2,"隔离仓货量行数":3}
+
+
+########## 一、让步接收（concession → 不合格品仓）##########
+
+== 本库隔离仓（SELECT id,code,name,type FROM warehouses WHERE type IN ('defect','quarantine')）==
+[
+  {
+    "id": 9,
+    "code": "QC01",
+    "name": "不合格品仓",
+    "type": "defect"
+  },
+  {
+    "id": 10,
+    "code": "QC02",
+    "name": "待检品仓",
+    "type": "quarantine"
+  }
+]
+
+== 处置单（草稿）==
+{
+  "id": 52,
+  "doc_no": "DH202610160052",
+  "mode": "concession",
+  "qty": 10,
+  "batch_no": "0001012610701",
+  "stock_direction": "out",
+  "status": "draft"
+}
+
+== confirmHandling 返回体（原文，去掉 events 数组便于阅读）==
+{
+  "id": 52,
+  "doc_no": "DH202610160052",
+  "inspection_id": 42,
+  "inspection_no": "QCI202610160037",
+  "request_id": 55,
+  "source_type": "purchase_receipt",
+  "source_id": 36,
+  "warehouse_id": 1,
+  "supplier_id": 1,
+  "sku_id": 38,
+  "sku_code": "RM90001-01",
+  "sku_name": "焕活系列精华基底料 25kg/桶",
+  "batch_no": "0001012610701",
+  "qty": 10,
+  "mode": "concession",
+  "defect_code": "spec",
+  "reason": "客户交期紧急，外观瑕疵不影响使用，经品质与销售会签降级接收",
+  "stock_direction": "out",
+  "out_doc_type": "TF",
+  "out_doc_id": 38,
+  "out_doc_no": "TR202610160004",
+  "status": "confirmed",
+  "approved_by": null,
+  "approved_by_name": "证据脚本",
+  "approved_at": "2026-10-16 23:33:35",
+  "remark": "【证据】concession",
+  "created_by": null,
+  "created_by_name": "证据脚本",
+  "created_at": "2026-10-16 23:33:35",
+  "updated_at": "2026-10-16 23:33:35",
+  "warehouse_name": "上海中心总仓",
+  "supplier_name": "晨曦美妆原料",
+  "mode_label": "让步接收",
+  "source_label": "采购到货",
+  "stock_effect": {
+    "outDocType": "TF",
+    "outDocId": 38,
+    "outDocNo": "TR202610160004"
+  }
+}
+stock_effect = {
+  "outDocType": "TF",
+  "outDocId": 38,
+  "outDocNo": "TR202610160004"
+}
+
+== 处置单表行（库内原文）==
+{
+  "id": 52,
+  "doc_no": "DH202610160052",
+  "inspection_no": "QCI202610160037",
+  "mode": "concession",
+  "qty": 10,
+  "batch_no": "0001012610701",
+  "stock_direction": "out",
+  "status": "confirmed",
+  "out_doc_type": "TF",
+  "out_doc_id": 38,
+  "out_doc_no": "TR202610160004",
+  "approved_by_name": "证据脚本",
+  "approved_at": "2026-10-16 23:33:35"
+}
+
+== doc_events（DH 的留痕原文，含 payload_json）==
+[
+  {
+    "id": 1068,
+    "doc_type": "DH",
+    "doc_id": 52,
+    "doc_no": "DH202610160052",
+    "action": "confirm",
+    "action_name": "执行处理",
+    "from_state": "draft",
+    "to_state": "confirmed",
+    "actor_name": "证据脚本",
+    "source": "api",
+    "remark": "让步接收 10（TR202610160004）",
+    "payload_json": "{\"out_doc_type\":\"TF\",\"out_doc_id\":38,\"out_doc_no\":\"TR202610160004\"}"
+  }
+]
+
+== 自动生成的调拨单（stock_transfers 原文）==
+{
+  "id": 38,
+  "doc_no": "TR202610160004",
+  "from_warehouse_id": 1,
+  "to_warehouse_id": 9,
+  "transfer_date": "2026-10-16",
+  "type": "qc_disposition",
+  "status": "received",
+  "total_qty": 10,
+  "total_amount": 200,
+  "applicant": "证据脚本",
+  "remark": "质检让步接收（QCI202610160037）处置单 DH202610160052 → 不合格品仓",
+  "created_by": null,
+  "created_at": "2026-10-16 23:33:35"
+}
+>>> 客户要的那一列：stock_transfers.type = "qc_disposition"
+== 调拨明细（stock_transfer_items 原文）==
+[
+  {
+    "id": 83,
+    "transfer_id": 38,
+    "sku_id": 38,
+    "batch_no": "0001012610701",
+    "qty": 10,
+    "cost_price": 20,
+    "amount": 200
+  }
+]
+== 调拨单留痕（doc_events TF）==
+[
+  {
+    "action": "ship",
+    "action_name": "调拨出库",
+    "from_state": "draft",
+    "to_state": "shipped",
+    "actor_name": "证据脚本",
+    "remark": "调拨出库"
+  },
+  {
+    "action": "receive",
+    "action_name": "调拨入库",
+    "from_state": "shipped",
+    "to_state": "received",
+    "actor_name": "证据脚本",
+    "remark": "调拨入库"
+  }
+]
+
+== 库存流水（inventory_transactions，本次调拨两条）==
+[
+  {
+    "doc_type": "TR_OUT",
+    "direction": "out",
+    "doc_id": 38,
+    "doc_no": "TR202610160004",
+    "warehouse_id": 1,
+    "qty": 10,
+    "unit_cost": 20,
+    "amount": 200,
+    "balance_qty": 0,
+    "batch_no": "0001012610701",
+    "remark": "质检让步接收（QCI202610160037）处置单 DH202610160052：调拨出库 → 不合格品仓"
+  },
+  {
+    "doc_type": "TR_IN",
+    "direction": "in",
+    "doc_id": 38,
+    "doc_no": "TR202610160004",
+    "warehouse_id": 9,
+    "qty": 10,
+    "unit_cost": 20,
+    "amount": 200,
+    "balance_qty": 10,
+    "batch_no": "0001012610701",
+    "remark": "质检让步接收（QCI202610160037）处置单 DH202610160052：调拨入库（不合格品仓）"
+  }
+]
+>>> 按 type=qc_disposition 反查流水（一条 JOIN）：
+[
+  {
+    "doc_type": "TR_OUT",
+    "direction": "out",
+    "doc_id": 38,
+    "doc_no": "TR202610160004",
+    "qty": 10,
+    "remark": "质检让步接收（QCI202610160037）处置单 DH202610160052：调拨出库 → 不合格品仓",
+    "transfer_type": "qc_disposition"
+  },
+  {
+    "doc_type": "TR_IN",
+    "direction": "in",
+    "doc_id": 38,
+    "doc_no": "TR202610160004",
+    "qty": 10,
+    "remark": "质检让步接收（QCI202610160037）处置单 DH202610160052：调拨入库（不合格品仓）",
+    "transfer_type": "qc_disposition"
+  }
+]
+
+== 结存变化（净可用量）==
+{
+  "源仓": {
+    "before": 10,
+    "after": 0,
+    "delta": -10
+  },
+  "不合格仓": {
+    "before": 0,
+    "after": 10,
+    "delta": 10
+  },
+  "待检仓": {
+    "before": 0,
+    "after": 0,
+    "delta": 0
+  },
+  "合计": {
+    "before": 10,
+    "after": 10
+  },
+  "处置数量": 10
+}
+
+== 批次可用性结论（qc_status 原文）==
+{
+  "sku_id": 38,
+  "batch_no": "0001012610701",
+  "before": "rejected",
+  "after": {
+    "qc_status": "rejected",
+    "status": "active"
+  }
+}
+
+== auditQc ==
+{
+  "ok": true,
+  "checked": [
+    "badLineQty",
+    "badVerdict",
+    "headDrift",
+    "inspDrift",
+    "overHandle",
+    "staleHandle",
+    "closedWithDraft",
+    "shortHandle",
+    "orphan",
+    "missingStockEffect",
+    "transferNotPosted"
+  ],
+  "missingStockEffect": 0,
+  "transferNotPosted": 0
+}
+
+########## 二、返工（rework → 待检品仓）##########
+
+== 本库隔离仓（SELECT id,code,name,type FROM warehouses WHERE type IN ('defect','quarantine')）==
+[
+  {
+    "id": 9,
+    "code": "QC01",
+    "name": "不合格品仓",
+    "type": "defect"
+  },
+  {
+    "id": 10,
+    "code": "QC02",
+    "name": "待检品仓",
+    "type": "quarantine"
+  }
+]
+
+== 处置单（草稿）==
+{
+  "id": 53,
+  "doc_no": "DH202610160053",
+  "mode": "rework",
+  "qty": 588,
+  "batch_no": "0012022606280",
+  "stock_direction": "out",
+  "status": "draft"
+}
+
+== confirmHandling 返回体（原文，去掉 events 数组便于阅读）==
+{
+  "id": 53,
+  "doc_no": "DH202610160053",
+  "inspection_id": 43,
+  "inspection_no": "QCI202610160038",
+  "request_id": 56,
+  "source_type": "purchase_receipt",
+  "source_id": 18,
+  "warehouse_id": 2,
+  "supplier_id": 6,
+  "sku_id": 22,
+  "sku_code": "SP10012-02",
+  "sku_name": "沁润深层卸妆膏 200g",
+  "batch_no": "0012022606280",
+  "qty": 588,
+  "mode": "rework",
+  "defect_code": "spec",
+  "reason": "客户交期紧急，外观瑕疵不影响使用，经品质与销售会签降级接收",
+  "stock_direction": "out",
+  "out_doc_type": "TF",
+  "out_doc_id": 39,
+  "out_doc_no": "TR202610160005",
+  "status": "confirmed",
+  "approved_by": null,
+  "approved_by_name": "证据脚本",
+  "approved_at": "2026-10-16 23:33:44",
+  "remark": "【证据】rework",
+  "created_by": null,
+  "created_by_name": "证据脚本",
+  "created_at": "2026-10-16 23:33:44",
+  "updated_at": "2026-10-16 23:33:44",
+  "warehouse_name": "广州区域仓",
+  "supplier_name": "东方美妆经销",
+  "mode_label": "返工",
+  "source_label": "采购到货",
+  "stock_effect": {
+    "outDocType": "TF",
+    "outDocId": 39,
+    "outDocNo": "TR202610160005"
+  }
+}
+stock_effect = {
+  "outDocType": "TF",
+  "outDocId": 39,
+  "outDocNo": "TR202610160005"
+}
+
+== 处置单表行（库内原文）==
+{
+  "id": 53,
+  "doc_no": "DH202610160053",
+  "inspection_no": "QCI202610160038",
+  "mode": "rework",
+  "qty": 588,
+  "batch_no": "0012022606280",
+  "stock_direction": "out",
+  "status": "confirmed",
+  "out_doc_type": "TF",
+  "out_doc_id": 39,
+  "out_doc_no": "TR202610160005",
+  "approved_by_name": "证据脚本",
+  "approved_at": "2026-10-16 23:33:44"
+}
+
+== doc_events（DH 的留痕原文，含 payload_json）==
+[
+  {
+    "id": 1075,
+    "doc_type": "DH",
+    "doc_id": 53,
+    "doc_no": "DH202610160053",
+    "action": "confirm",
+    "action_name": "执行处理",
+    "from_state": "draft",
+    "to_state": "confirmed",
+    "actor_name": "证据脚本",
+    "source": "api",
+    "remark": "返工 588（TR202610160005）",
+    "payload_json": "{\"out_doc_type\":\"TF\",\"out_doc_id\":39,\"out_doc_no\":\"TR202610160005\"}"
+  }
+]
+
+== 自动生成的调拨单（stock_transfers 原文）==
+{
+  "id": 39,
+  "doc_no": "TR202610160005",
+  "from_warehouse_id": 2,
+  "to_warehouse_id": 10,
+  "transfer_date": "2026-10-16",
+  "type": "qc_disposition",
+  "status": "received",
+  "total_qty": 588,
+  "total_amount": 25666.2,
+  "applicant": "证据脚本",
+  "remark": "质检返工（QCI202610160038）处置单 DH202610160053 → 待检品仓",
+  "created_by": null,
+  "created_at": "2026-10-16 23:33:44"
+}
+>>> 客户要的那一列：stock_transfers.type = "qc_disposition"
+== 调拨明细（stock_transfer_items 原文）==
+[
+  {
+    "id": 84,
+    "transfer_id": 39,
+    "sku_id": 22,
+    "batch_no": "0012022606280",
+    "qty": 588,
+    "cost_price": 43.65,
+    "amount": 25666.2
+  }
+]
+== 调拨单留痕（doc_events TF）==
+[
+  {
+    "action": "ship",
+    "action_name": "调拨出库",
+    "from_state": "draft",
+    "to_state": "shipped",
+    "actor_name": "证据脚本",
+    "remark": "调拨出库"
+  },
+  {
+    "action": "receive",
+    "action_name": "调拨入库",
+    "from_state": "shipped",
+    "to_state": "received",
+    "actor_name": "证据脚本",
+    "remark": "调拨入库"
+  }
+]
+
+== 库存流水（inventory_transactions，本次调拨两条）==
+[
+  {
+    "doc_type": "TR_OUT",
+    "direction": "out",
+    "doc_id": 39,
+    "doc_no": "TR202610160005",
+    "warehouse_id": 2,
+    "qty": 588,
+    "unit_cost": 43.65,
+    "amount": 25666.2,
+    "balance_qty": 0,
+    "batch_no": "0012022606280",
+    "remark": "质检返工（QCI202610160038）处置单 DH202610160053：调拨出库 → 待检品仓"
+  },
+  {
+    "doc_type": "TR_IN",
+    "direction": "in",
+    "doc_id": 39,
+    "doc_no": "TR202610160005",
+    "warehouse_id": 10,
+    "qty": 588,
+    "unit_cost": 43.65,
+    "amount": 25666.2,
+    "balance_qty": 588,
+    "batch_no": "0012022606280",
+    "remark": "质检返工（QCI202610160038）处置单 DH202610160053：调拨入库（待检品仓）"
+  }
+]
+>>> 按 type=qc_disposition 反查流水（一条 JOIN）：
+[
+  {
+    "doc_type": "TR_OUT",
+    "direction": "out",
+    "doc_id": 39,
+    "doc_no": "TR202610160005",
+    "qty": 588,
+    "remark": "质检返工（QCI202610160038）处置单 DH202610160053：调拨出库 → 待检品仓",
+    "transfer_type": "qc_disposition"
+  },
+  {
+    "doc_type": "TR_IN",
+    "direction": "in",
+    "doc_id": 39,
+    "doc_no": "TR202610160005",
+    "qty": 588,
+    "remark": "质检返工（QCI202610160038）处置单 DH202610160053：调拨入库（待检品仓）",
+    "transfer_type": "qc_disposition"
+  }
+]
+
+== 结存变化（净可用量）==
+{
+  "源仓": {
+    "before": 588,
+    "after": 0,
+    "delta": -588
+  },
+  "不合格仓": {
+    "before": 0,
+    "after": 0,
+    "delta": 0
+  },
+  "待检仓": {
+    "before": 0,
+    "after": 588,
+    "delta": 588
+  },
+  "合计": {
+    "before": 588,
+    "after": 588
+  },
+  "处置数量": 588
+}
+
+== 批次可用性结论（qc_status 原文）==
+{
+  "sku_id": 22,
+  "batch_no": "0012022606280",
+  "before": "rejected",
+  "after": {
+    "qc_status": "pending",
+    "status": "active"
+  }
+}
+
+== auditQc ==
+{
+  "ok": true,
+  "checked": [
+    "badLineQty",
+    "badVerdict",
+    "headDrift",
+    "inspDrift",
+    "overHandle",
+    "staleHandle",
+    "closedWithDraft",
+    "shortHandle",
+    "orphan",
+    "missingStockEffect",
+    "transferNotPosted"
+  ],
+  "missingStockEffect": 0,
+  "transferNotPosted": 0
+}

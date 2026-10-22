@@ -1,0 +1,20 @@
+批次 R 反例先红后证 · D 组：值域校验（assertRange）被摘掉
+=========================================================================
+【失效方式】任何数字都能写进任何键 —— 配置退化成一个没有约束的口袋
+          （`quote.valid_days = 0`、`promo_points_per_yuan = -1`、税率 = 999 都进得去）
+【注入点】server/lib/settings.js 的 assertRange 函数体首行插入 `if (1) return`
+【期望被抓住】gt / min / max 三类值域全部失守
+
+【注入后】scripts/test-setting-audit.mjs cosmetic → 通过 155 / 失败 9
+变红的断言（前 6 条）：
+  · quote.valid_days 必须 > 0（报价有效期不能是 0 天）：没有抛错
+  · promo_points_per_yuan 必须 > 0：没有抛错
+  · promo_points_per_yuan_deduct 必须 > 0（配成 0 会让抵扣除零）：没有抛错
+  · voucher_default_tax_rate 不能超过 100：没有抛错
+  · promo_points_deduct_max 不能超过 10000：没有抛错
+  · pos_variance_limit 不能为负：没有抛错
+（共 9 条 —— 覆盖 S2 值域 / S4 非法值写入 / S8 现状值非法探针）
+
+【verify-seed cosmetic】报错 0 条（演示库里的值全都合法）
+【还原后】通过 164 / 失败 0  ✓ 立即回绿
+【库副作用】无

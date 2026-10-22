@@ -1,0 +1,35 @@
+批次 R 反例先红后证 · F 组：ensureSettings 不把登记的键补进库（幽灵配置复活）
+=========================================================================
+【失效方式】登记表里声明了 16 项，但库里只有 13 项 ——
+          另外 3 项（`credit.overdue_block_days` / `quote.approval_amount` / `quote.valid_days`）
+          读不到就永远走默认值，界面上看不见它们。**这正是批次 R 修掉的那个缺口。**
+【注入点】server/lib/settings.js 的 ensureSettings 内，
+          把 `const info = insSetting.run(key, def.default)` 改成 `const info = { changes: 0 }`
+          （于是"补齐缺失键"这一步静默不发生）
+【期望被抓住】S10 的补齐断言 + 重放与现状分叉
+
+【注入后】scripts/test-setting-audit.mjs cosmetic → 通过 157 / 失败 7
+变红的断言（前 6 条）：
+  · 缺失的键被补齐：期望 1，实际 0
+  · 值就是登记表里的默认值：期望 "10"，实际 undefined
+  · 补回后重放与现状仍一致（它原本就没被改过）：
+      期望 []，实际 ["backup_keep: 重放=10 / 现状=undefined"]
+  · 历史清空后每个键补一条基线
+  · 补完仍然自证通过
+  · 补完重放零差异
+（共 7 条）
+
+【第一次跑这组时是"崩在无关位置"】
+`.get().value` 在行不存在时抛 `TypeError: Cannot read properties of undefined`，
+把前面那两条已经红了的断言（"缺失的键被补齐"）埋在了栈里。
+**铁律：反例必须给出可读的红。** 修法是把取值统一收敛到一个 `valOf(key)` 辅助函数，
+内部 `|| {}` 兜底 —— 于是"读不到行"变成一句可读的"期望 10，实际 undefined"，
+而不是一句指向无关行号的 TypeError。
+
+【第一次跑完之后还有一件事】本组反例**没有污染库**（savepoint 回滚），
+但 B 组有 —— 见 `批次R_反例先红_B_事务断言失效.txt` 里的完整记录。
+
+【verify-seed cosmetic】报错 0 条（第 24 节会报，但本轮验证跑的是注入后的
+                        `test-setting-audit`；`verify-seed` 走的是另一条调用路径）
+【还原后】通过 164 / 失败 0  ✓ 立即回绿
+【库副作用】无

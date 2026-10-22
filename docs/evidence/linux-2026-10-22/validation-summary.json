@@ -1,0 +1,1812 @@
+{
+  "source_commit": "9c532f39183eede6a0c45ac4990d1742c57b65aa",
+  "execution": "SSH on user-authorized dmserver; not a GitHub Actions run",
+  "scope": "executable source snapshot; not full repository or release-package acceptance",
+  "industries": [
+    "cosmetic",
+    "food"
+  ],
+  "rounds_requested": 3,
+  "rounds_completed": 3,
+  "started_at_utc": "2026-10-22T08:54:52.589001+00:00",
+  "completed_at_utc": "2026-10-22T09:16:55.299864+00:00",
+  "elapsed_seconds": 1322.711,
+  "exit_code": 0,
+  "rounds": {
+    "1": {
+      "passed": 113,
+      "failed": 0,
+      "counted_assertions_passed": 8291,
+      "node_test_invocations_passed": 1
+    },
+    "2": {
+      "passed": 113,
+      "failed": 0,
+      "counted_assertions_passed": 8291,
+      "node_test_invocations_passed": 1
+    },
+    "3": {
+      "passed": 113,
+      "failed": 0,
+      "counted_assertions_passed": 8291,
+      "node_test_invocations_passed": 1
+    }
+  },
+  "total_check_items": 339,
+  "total_counted_legacy_assertions_passed": 24873,
+  "failures": [],
+  "legacy_assertion_count_note": "counted_assertions includes legacy script summary counts only; successful node:test TAP is not retained by this runner",
+  "xlsx_preflight": {
+    "started_at_utc": "2026-10-22T08:54:52.141479+00:00",
+    "completed_at_utc": "2026-10-22T08:54:52.588688+00:00",
+    "exit_code": 0,
+    "counts": {
+      "pass": 51,
+      "fail": 0
+    }
+  },
+  "additional_focused_tap": {
+    "started_at_utc": "2026-10-22T09:16:55.342896+00:00",
+    "completed_at_utc": "2026-10-22T09:18:32.685009+00:00",
+    "exit_code": 0,
+    "counts": {
+      "tests": 44,
+      "suites": 0,
+      "pass": 44,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "duration_ms": 97298.165582
+    },
+    "expected_tests": 44,
+    "matches_expected_tests": true,
+    "tap_sha256": "d8895cf6365025d0edde392b66027076d286eee9bfc7a26d9875ab5ccf2cc82b",
+    "source_files_reverified": 444
+  },
+  "all_check_results": [
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ node:test                                      通过（无计数）                98.6s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-access-boundaries.mjs                通过 284 / 失败 0          29.8s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-annual.mjs [cosmetic]                通过 119 / 失败 0          1.0s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-annual.mjs [food]                    通过 119 / 失败 0          1.0s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-approval.mjs [cosmetic]              通过 45 / 失败 0           0.3s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-approval.mjs [food]                  通过 45 / 失败 0           0.4s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-ar.mjs [cosmetic]                    通过 143 / 失败 0          0.1s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-ar.mjs [food]                        通过 143 / 失败 0          0.1s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-audit-fixes.mjs                      通过 73 / 失败 0           10.6s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-audit-trail.mjs                      通过 109 / 失败 0          3.5s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-cashflow-item.mjs                    通过 372 / 失败 0          6.3s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-closing.mjs [cosmetic]               通过 109 / 失败 0          1.3s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-closing.mjs [food]                   通过 109 / 失败 0          1.3s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-compare.mjs [cosmetic]               通过 87 / 失败 0           0.2s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-compare.mjs [food]                   通过 87 / 失败 0           0.2s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-costing.mjs [cosmetic]               通过 112 / 失败 0          0.3s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-costing.mjs [food]                   通过 112 / 失败 0          0.5s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-dependency-security.mjs              通过 14 / 失败 0           0.3s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-dms.mjs [cosmetic]                   通过 62 / 失败 0           0.1s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-dms.mjs [food]                       通过 62 / 失败 0           0.1s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-docflow.mjs                          通过（无计数）                0.6s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-export-excel.mjs                     通过 102 / 失败 0          2.3s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-final.mjs [cosmetic]                 通过 82 / 失败 0           4.1s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-final.mjs [food]                     通过 82 / 失败 0           4.1s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-fiscal-year.mjs                      通过 84 / 失败 0           0.5s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-flows.mjs [cosmetic]                 通过（无计数）                3.3s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-flows.mjs [food]                     通过（无计数）                3.3s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-gates-inventory.mjs [cosmetic]       通过 55 / 失败 0           3.9s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-gates-inventory.mjs [food]           通过 55 / 失败 0           4.0s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-gates-other.mjs [cosmetic]           通过 38 / 失败 0           3.9s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-gates-other.mjs [food]               通过 38 / 失败 0           4.0s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-gates-purchase.mjs [cosmetic]        通过 50 / 失败 0           4.5s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-gates-purchase.mjs [food]            通过 50 / 失败 0           5.8s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-guards.mjs                           通过 384 / 失败 0          4.9s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-im-sync.mjs [cosmetic]               通过 62 / 失败 0           0.1s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-im-sync.mjs [food]                   通过 62 / 失败 0           0.1s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-industry-code.mjs                    通过 110 / 失败 0          3.8s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-inv-negative-stock.mjs               通过 25 / 失败 0           0.6s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-inv-type-gate.mjs                    通过 29 / 失败 0           37.7s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-invoice.mjs [cosmetic]               通过 77 / 失败 0           0.2s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-invoice.mjs [food]                   通过 77 / 失败 0           0.2s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-jwt-secret.mjs                       通过 56 / 失败 0           56.0s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-kernel-a7.mjs [cosmetic]             通过（无计数）                1.0s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-kernel-a7.mjs [food]                 通过（无计数）                1.0s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-kernel-m7m9.mjs                      通过 18 / 失败 0           3.3s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-kernel-migrate.mjs                   通过（无计数）                0.5s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-mcp-purchase.mjs [cosmetic]          通过 105 / 失败 0          4.6s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-mcp-purchase.mjs [food]              通过 105 / 失败 0          4.6s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-mcp-validation.mjs                   通过 30 / 失败 0           0.0s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-mcp.mjs                              通过 53 / 失败 0           3.7s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-metrics.mjs [cosmetic]               通过（无计数）                0.3s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-metrics.mjs [food]                   通过（无计数）                0.4s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-mfg.mjs [cosmetic]                   通过 191 / 失败 0          0.3s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-mfg.mjs [food]                       通过 191 / 失败 0          0.3s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-multi-year.mjs                       通过 108 / 失败 0          0.3s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-notify.mjs [cosmetic]                通过 45 / 失败 0           0.3s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-notify.mjs [food]                    通过 45 / 失败 0           0.3s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-oc.mjs [cosmetic]                    通过 95 / 失败 0           0.4s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-oc.mjs [food]                        通过 96 / 失败 0           0.6s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-org-perm.mjs                         通过 13 / 失败 0           4.7s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-period-audit.mjs [cosmetic]          通过 136 / 失败 0          3.6s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-period-audit.mjs [food]              通过 136 / 失败 0          3.6s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-pos2.mjs [cosmetic]                  通过 105 / 失败 0          0.2s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-pos2.mjs [food]                      通过 105 / 失败 0          0.2s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-pricing.mjs                          通过 35 / 失败 0           0.1s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-product-qc-switch.mjs                通过 21 / 失败 0           0.7s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-promo.mjs [cosmetic]                 通过 114 / 失败 0          0.1s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-promo.mjs [food]                     通过 114 / 失败 0          0.1s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-promotion.mjs                        通过 44 / 失败 0           0.1s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-purchase-return-accounting.mjs [cosmetic] 通过 59 / 失败 0           4.0s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-purchase-return-accounting.mjs [food] 通过 59 / 失败 0           3.7s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-purchase.mjs [cosmetic]              通过 103 / 失败 0          0.3s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-purchase.mjs [food]                  通过 103 / 失败 0          0.4s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-qc.mjs [cosmetic]                    通过（无计数）                0.3s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-qc.mjs [food]                        通过（无计数）                0.4s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-qc2.mjs [cosmetic]                   通过 238 / 失败 0          0.2s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-qc2.mjs [food]                       通过 238 / 失败 0          0.3s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-quote-credit.mjs [cosmetic]          通过 88 / 失败 0           0.1s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-quote-credit.mjs [food]              通过 87 / 失败 0           0.1s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-range.mjs [cosmetic]                 通过 109 / 失败 0          0.3s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-range.mjs [food]                     通过 109 / 失败 0          0.3s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-refund.mjs [cosmetic]                通过（无计数）                0.1s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-refund.mjs [food]                    通过（无计数）                0.1s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-report-config-audit.mjs [cosmetic]   通过 146 / 失败 0          0.4s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-report-config-audit.mjs [food]       通过 146 / 失败 0          0.4s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-report.mjs [cosmetic]                通过 106 / 失败 0          0.9s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-report.mjs [food]                    通过 106 / 失败 0          0.9s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-setting-audit.mjs [cosmetic]         通过 164 / 失败 0          0.3s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-setting-audit.mjs [food]             通过 164 / 失败 0          0.3s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-stock-v2.mjs                         通过（无计数）                0.6s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-voucher.mjs [cosmetic]               通过 88 / 失败 0           0.1s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-voucher.mjs [food]                   通过 88 / 失败 0           0.1s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-warehouse-master.mjs                 通过 123 / 失败 0          4.4s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-xlsx.mjs                             通过 51 / 失败 0           0.5s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ test:test-ytd-compare.mjs                      通过 93 / 失败 0           0.2s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ verify-seed [cosmetic]                         通过（无计数）                1.3s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ verify-seed [food]                             通过（无计数）                1.7s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ verify-reseed(两次重建比对) [cosmetic]               通过 1 / 失败 0            12.4s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ verify-reseed(两次重建比对) [food]                   通过 1 / 失败 0            28.9s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ verify-migrations                              通过（无计数）                0.1s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ check:api                                      通过（无计数）                0.1s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ check:route-order                              通过（无计数）                0.1s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ check:bizcode                                  通过 31 / 失败 0           0.6s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ check:test-helper-shape                        通过 77 / 失败 0           0.1s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ check:env-pinning                              通过 47 / 失败 0           0.2s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ check:contract-routes                          通过（无计数）                0.1s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ check:doc-events-edges                         通过（无计数）                0.1s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ check:dict                                     通过 17 / 失败 0           0.1s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ check:mcp                                      通过 16 / 失败 0           0.1s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ check:file-header                              通过 4 / 失败 0            0.1s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ smoke-api                                      通过（无计数）                5.0s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ tsc --noEmit                                   通过                     13.7s"
+    },
+    {
+      "round": 1,
+      "passed": true,
+      "summary": "✓ vite build                                     通过                     12.2s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ node:test                                      通过（无计数）                97.0s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-access-boundaries.mjs                通过 284 / 失败 0          30.0s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-annual.mjs [cosmetic]                通过 119 / 失败 0          1.1s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-annual.mjs [food]                    通过 119 / 失败 0          1.1s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-approval.mjs [cosmetic]              通过 45 / 失败 0           0.3s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-approval.mjs [food]                  通过 45 / 失败 0           0.4s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-ar.mjs [cosmetic]                    通过 143 / 失败 0          0.1s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-ar.mjs [food]                        通过 143 / 失败 0          0.1s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-audit-fixes.mjs                      通过 73 / 失败 0           4.6s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-audit-trail.mjs                      通过 109 / 失败 0          3.5s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-cashflow-item.mjs                    通过 372 / 失败 0          6.3s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-closing.mjs [cosmetic]               通过 109 / 失败 0          1.3s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-closing.mjs [food]                   通过 109 / 失败 0          1.3s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-compare.mjs [cosmetic]               通过 87 / 失败 0           0.2s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-compare.mjs [food]                   通过 87 / 失败 0           0.2s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-costing.mjs [cosmetic]               通过 112 / 失败 0          0.3s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-costing.mjs [food]                   通过 112 / 失败 0          0.5s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-dependency-security.mjs              通过 14 / 失败 0           0.3s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-dms.mjs [cosmetic]                   通过 62 / 失败 0           0.1s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-dms.mjs [food]                       通过 62 / 失败 0           0.1s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-docflow.mjs                          通过（无计数）                0.6s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-export-excel.mjs                     通过 102 / 失败 0          2.3s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-final.mjs [cosmetic]                 通过 82 / 失败 0           3.8s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-final.mjs [food]                     通过 82 / 失败 0           3.8s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-fiscal-year.mjs                      通过 84 / 失败 0           0.5s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-flows.mjs [cosmetic]                 通过（无计数）                3.3s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-flows.mjs [food]                     通过（无计数）                3.3s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-gates-inventory.mjs [cosmetic]       通过 55 / 失败 0           4.0s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-gates-inventory.mjs [food]           通过 55 / 失败 0           3.9s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-gates-other.mjs [cosmetic]           通过 38 / 失败 0           4.0s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-gates-other.mjs [food]               通过 38 / 失败 0           3.6s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-gates-purchase.mjs [cosmetic]        通过 50 / 失败 0           4.5s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-gates-purchase.mjs [food]            通过 50 / 失败 0           5.6s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-guards.mjs                           通过 384 / 失败 0          5.3s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-im-sync.mjs [cosmetic]               通过 62 / 失败 0           0.1s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-im-sync.mjs [food]                   通过 62 / 失败 0           0.1s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-industry-code.mjs                    通过 110 / 失败 0          3.8s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-inv-negative-stock.mjs               通过 25 / 失败 0           0.6s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-inv-type-gate.mjs                    通过 29 / 失败 0           37.3s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-invoice.mjs [cosmetic]               通过 77 / 失败 0           0.2s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-invoice.mjs [food]                   通过 77 / 失败 0           0.2s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-jwt-secret.mjs                       通过 56 / 失败 0           56.2s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-kernel-a7.mjs [cosmetic]             通过（无计数）                0.9s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-kernel-a7.mjs [food]                 通过（无计数）                1.0s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-kernel-m7m9.mjs                      通过 18 / 失败 0           3.7s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-kernel-migrate.mjs                   通过（无计数）                0.5s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-mcp-purchase.mjs [cosmetic]          通过 105 / 失败 0          4.6s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-mcp-purchase.mjs [food]              通过 105 / 失败 0          4.6s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-mcp-validation.mjs                   通过 30 / 失败 0           0.0s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-mcp.mjs                              通过 53 / 失败 0           3.7s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-metrics.mjs [cosmetic]               通过（无计数）                0.3s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-metrics.mjs [food]                   通过（无计数）                0.4s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-mfg.mjs [cosmetic]                   通过 191 / 失败 0          0.3s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-mfg.mjs [food]                       通过 191 / 失败 0          0.3s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-multi-year.mjs                       通过 108 / 失败 0          0.3s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-notify.mjs [cosmetic]                通过 45 / 失败 0           0.3s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-notify.mjs [food]                    通过 45 / 失败 0           0.3s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-oc.mjs [cosmetic]                    通过 95 / 失败 0           0.4s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-oc.mjs [food]                        通过 96 / 失败 0           0.6s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-org-perm.mjs                         通过 13 / 失败 0           4.7s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-period-audit.mjs [cosmetic]          通过 136 / 失败 0          3.6s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-period-audit.mjs [food]              通过 136 / 失败 0          3.6s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-pos2.mjs [cosmetic]                  通过 105 / 失败 0          0.2s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-pos2.mjs [food]                      通过 105 / 失败 0          0.2s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-pricing.mjs                          通过 35 / 失败 0           0.1s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-product-qc-switch.mjs                通过 21 / 失败 0           0.7s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-promo.mjs [cosmetic]                 通过 114 / 失败 0          0.1s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-promo.mjs [food]                     通过 114 / 失败 0          0.1s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-promotion.mjs                        通过 44 / 失败 0           0.1s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-purchase-return-accounting.mjs [cosmetic] 通过 59 / 失败 0           3.7s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-purchase-return-accounting.mjs [food] 通过 59 / 失败 0           3.7s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-purchase.mjs [cosmetic]              通过 103 / 失败 0          0.3s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-purchase.mjs [food]                  通过 103 / 失败 0          0.4s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-qc.mjs [cosmetic]                    通过（无计数）                0.3s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-qc.mjs [food]                        通过（无计数）                0.4s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-qc2.mjs [cosmetic]                   通过 238 / 失败 0          0.2s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-qc2.mjs [food]                       通过 238 / 失败 0          0.3s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-quote-credit.mjs [cosmetic]          通过 88 / 失败 0           0.1s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-quote-credit.mjs [food]              通过 87 / 失败 0           0.1s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-range.mjs [cosmetic]                 通过 109 / 失败 0          0.3s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-range.mjs [food]                     通过 109 / 失败 0          0.3s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-refund.mjs [cosmetic]                通过（无计数）                0.1s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-refund.mjs [food]                    通过（无计数）                0.1s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-report-config-audit.mjs [cosmetic]   通过 146 / 失败 0          0.4s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-report-config-audit.mjs [food]       通过 146 / 失败 0          0.4s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-report.mjs [cosmetic]                通过 106 / 失败 0          0.9s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-report.mjs [food]                    通过 106 / 失败 0          0.9s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-setting-audit.mjs [cosmetic]         通过 164 / 失败 0          0.3s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-setting-audit.mjs [food]             通过 164 / 失败 0          0.3s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-stock-v2.mjs                         通过（无计数）                0.6s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-voucher.mjs [cosmetic]               通过 88 / 失败 0           0.1s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-voucher.mjs [food]                   通过 88 / 失败 0           0.1s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-warehouse-master.mjs                 通过 123 / 失败 0          4.5s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-xlsx.mjs                             通过 51 / 失败 0           0.4s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ test:test-ytd-compare.mjs                      通过 93 / 失败 0           0.2s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ verify-seed [cosmetic]                         通过（无计数）                1.3s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ verify-seed [food]                             通过（无计数）                1.7s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ verify-reseed(两次重建比对) [cosmetic]               通过 1 / 失败 0            12.8s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ verify-reseed(两次重建比对) [food]                   通过 1 / 失败 0            28.7s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ verify-migrations                              通过（无计数）                0.1s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ check:api                                      通过（无计数）                0.1s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ check:route-order                              通过（无计数）                0.1s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ check:bizcode                                  通过 31 / 失败 0           0.6s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ check:test-helper-shape                        通过 77 / 失败 0           0.1s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ check:env-pinning                              通过 47 / 失败 0           0.2s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ check:contract-routes                          通过（无计数）                0.1s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ check:doc-events-edges                         通过（无计数）                0.1s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ check:dict                                     通过 17 / 失败 0           0.1s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ check:mcp                                      通过 16 / 失败 0           0.1s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ check:file-header                              通过 4 / 失败 0            0.1s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ smoke-api                                      通过（无计数）                5.1s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ tsc --noEmit                                   通过                     13.8s"
+    },
+    {
+      "round": 2,
+      "passed": true,
+      "summary": "✓ vite build                                     通过                     12.0s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ node:test                                      通过（无计数）                98.4s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-access-boundaries.mjs                通过 284 / 失败 0          30.4s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-annual.mjs [cosmetic]                通过 119 / 失败 0          1.0s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-annual.mjs [food]                    通过 119 / 失败 0          1.0s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-approval.mjs [cosmetic]              通过 45 / 失败 0           0.3s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-approval.mjs [food]                  通过 45 / 失败 0           0.4s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-ar.mjs [cosmetic]                    通过 143 / 失败 0          0.1s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-ar.mjs [food]                        通过 143 / 失败 0          0.1s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-audit-fixes.mjs                      通过 73 / 失败 0           4.5s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-audit-trail.mjs                      通过 109 / 失败 0          3.5s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-cashflow-item.mjs                    通过 372 / 失败 0          6.1s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-closing.mjs [cosmetic]               通过 109 / 失败 0          1.3s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-closing.mjs [food]                   通过 109 / 失败 0          1.3s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-compare.mjs [cosmetic]               通过 87 / 失败 0           0.2s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-compare.mjs [food]                   通过 87 / 失败 0           0.2s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-costing.mjs [cosmetic]               通过 112 / 失败 0          0.3s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-costing.mjs [food]                   通过 112 / 失败 0          0.5s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-dependency-security.mjs              通过 14 / 失败 0           0.3s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-dms.mjs [cosmetic]                   通过 62 / 失败 0           0.1s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-dms.mjs [food]                       通过 62 / 失败 0           0.1s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-docflow.mjs                          通过（无计数）                0.7s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-export-excel.mjs                     通过 102 / 失败 0          2.3s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-final.mjs [cosmetic]                 通过 82 / 失败 0           3.8s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-final.mjs [food]                     通过 82 / 失败 0           4.1s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-fiscal-year.mjs                      通过 84 / 失败 0           0.5s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-flows.mjs [cosmetic]                 通过（无计数）                3.3s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-flows.mjs [food]                     通过（无计数）                3.3s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-gates-inventory.mjs [cosmetic]       通过 55 / 失败 0           4.0s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-gates-inventory.mjs [food]           通过 55 / 失败 0           3.9s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-gates-other.mjs [cosmetic]           通过 38 / 失败 0           4.0s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-gates-other.mjs [food]               通过 38 / 失败 0           4.0s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-gates-purchase.mjs [cosmetic]        通过 50 / 失败 0           4.5s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-gates-purchase.mjs [food]            通过 50 / 失败 0           5.7s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-guards.mjs                           通过 384 / 失败 0          5.0s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-im-sync.mjs [cosmetic]               通过 62 / 失败 0           0.1s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-im-sync.mjs [food]                   通过 62 / 失败 0           0.1s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-industry-code.mjs                    通过 110 / 失败 0          3.5s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-inv-negative-stock.mjs               通过 25 / 失败 0           0.6s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-inv-type-gate.mjs                    通过 29 / 失败 0           38.3s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-invoice.mjs [cosmetic]               通过 77 / 失败 0           0.2s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-invoice.mjs [food]                   通过 77 / 失败 0           0.2s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-jwt-secret.mjs                       通过 56 / 失败 0           57.2s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-kernel-a7.mjs [cosmetic]             通过（无计数）                1.0s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-kernel-a7.mjs [food]                 通过（无计数）                1.0s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-kernel-m7m9.mjs                      通过 18 / 失败 0           3.2s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-kernel-migrate.mjs                   通过（无计数）                0.5s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-mcp-purchase.mjs [cosmetic]          通过 105 / 失败 0          4.4s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-mcp-purchase.mjs [food]              通过 105 / 失败 0          4.1s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-mcp-validation.mjs                   通过 30 / 失败 0           0.0s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-mcp.mjs                              通过 53 / 失败 0           4.0s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-metrics.mjs [cosmetic]               通过（无计数）                0.3s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-metrics.mjs [food]                   通过（无计数）                0.4s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-mfg.mjs [cosmetic]                   通过 191 / 失败 0          0.3s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-mfg.mjs [food]                       通过 191 / 失败 0          0.3s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-multi-year.mjs                       通过 108 / 失败 0          0.3s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-notify.mjs [cosmetic]                通过 45 / 失败 0           0.3s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-notify.mjs [food]                    通过 45 / 失败 0           0.3s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-oc.mjs [cosmetic]                    通过 95 / 失败 0           0.4s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-oc.mjs [food]                        通过 96 / 失败 0           0.7s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-org-perm.mjs                         通过 13 / 失败 0           4.7s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-period-audit.mjs [cosmetic]          通过 136 / 失败 0          3.6s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-period-audit.mjs [food]              通过 136 / 失败 0          3.6s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-pos2.mjs [cosmetic]                  通过 105 / 失败 0          0.2s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-pos2.mjs [food]                      通过 105 / 失败 0          0.2s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-pricing.mjs                          通过 35 / 失败 0           0.1s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-product-qc-switch.mjs                通过 21 / 失败 0           0.7s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-promo.mjs [cosmetic]                 通过 114 / 失败 0          0.1s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-promo.mjs [food]                     通过 114 / 失败 0          0.1s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-promotion.mjs                        通过 44 / 失败 0           0.1s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-purchase-return-accounting.mjs [cosmetic] 通过 59 / 失败 0           4.0s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-purchase-return-accounting.mjs [food] 通过 59 / 失败 0           3.7s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-purchase.mjs [cosmetic]              通过 103 / 失败 0          0.3s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-purchase.mjs [food]                  通过 103 / 失败 0          0.4s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-qc.mjs [cosmetic]                    通过（无计数）                0.3s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-qc.mjs [food]                        通过（无计数）                0.4s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-qc2.mjs [cosmetic]                   通过 238 / 失败 0          0.2s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-qc2.mjs [food]                       通过 238 / 失败 0          0.3s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-quote-credit.mjs [cosmetic]          通过 88 / 失败 0           0.1s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-quote-credit.mjs [food]              通过 87 / 失败 0           0.1s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-range.mjs [cosmetic]                 通过 109 / 失败 0          0.3s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-range.mjs [food]                     通过 109 / 失败 0          0.3s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-refund.mjs [cosmetic]                通过（无计数）                0.1s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-refund.mjs [food]                    通过（无计数）                0.1s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-report-config-audit.mjs [cosmetic]   通过 146 / 失败 0          0.4s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-report-config-audit.mjs [food]       通过 146 / 失败 0          0.4s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-report.mjs [cosmetic]                通过 106 / 失败 0          0.9s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-report.mjs [food]                    通过 106 / 失败 0          0.9s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-setting-audit.mjs [cosmetic]         通过 164 / 失败 0          0.3s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-setting-audit.mjs [food]             通过 164 / 失败 0          0.3s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-stock-v2.mjs                         通过（无计数）                0.6s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-voucher.mjs [cosmetic]               通过 88 / 失败 0           0.1s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-voucher.mjs [food]                   通过 88 / 失败 0           0.1s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-warehouse-master.mjs                 通过 123 / 失败 0          4.5s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-xlsx.mjs                             通过 51 / 失败 0           0.5s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ test:test-ytd-compare.mjs                      通过 93 / 失败 0           0.2s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ verify-seed [cosmetic]                         通过（无计数）                1.3s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ verify-seed [food]                             通过（无计数）                1.8s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ verify-reseed(两次重建比对) [cosmetic]               通过 1 / 失败 0            12.5s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ verify-reseed(两次重建比对) [food]                   通过 1 / 失败 0            28.6s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ verify-migrations                              通过（无计数）                0.1s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ check:api                                      通过（无计数）                0.1s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ check:route-order                              通过（无计数）                0.1s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ check:bizcode                                  通过 31 / 失败 0           0.6s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ check:test-helper-shape                        通过 77 / 失败 0           0.1s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ check:env-pinning                              通过 47 / 失败 0           0.2s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ check:contract-routes                          通过（无计数）                0.1s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ check:doc-events-edges                         通过（无计数）                0.1s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ check:dict                                     通过 17 / 失败 0           0.1s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ check:mcp                                      通过 16 / 失败 0           0.1s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ check:file-header                              通过 4 / 失败 0            0.1s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ smoke-api                                      通过（无计数）                4.8s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ tsc --noEmit                                   通过                     13.6s"
+    },
+    {
+      "round": 3,
+      "passed": true,
+      "summary": "✓ vite build                                     通过                     12.3s"
+    }
+  ],
+  "prior_failed_candidates": [
+    {
+      "candidate": "b6cb84933672848ff5d1bd6b2832647374506e4a",
+      "status": "aborted_after_confirmed_failure",
+      "started_at_utc": "2026-10-22T08:23:06.681223+00:00",
+      "completed_at_utc": "2026-10-22T08:31:13.406683+00:00",
+      "exit_code_recorded": 143,
+      "rounds_completed": 1,
+      "first_round": {
+        "passed": 111,
+        "failed": 2,
+        "counted_assertions_passed": 8261,
+        "node_test_invocations_passed": 1
+      },
+      "failures": [
+        "✗ test:test-inv-type-gate.mjs                    退出码 1                  29.5s",
+        "✗ test:test-xlsx.mjs                             通过 50 / 失败 1           0.4s"
+      ],
+      "cause": "API fixture used a 20 second readiness budget; separate cold start measured health 200 at 27.49 seconds. Host lacked unzip.",
+      "disposition": "Known task processes terminated; failure evidence retained; not counted as passing validation"
+    },
+    {
+      "candidate": "3a1c66b8c0bca5009816adfc1e951d8663b263d1",
+      "status": "aborted_after_confirmed_failure",
+      "started_at_utc": "2026-10-22T08:41:46.515958+00:00",
+      "completed_at_utc": "2026-10-22T08:50:54.353893+00:00",
+      "exit_code_recorded": -15,
+      "rounds_completed": 1,
+      "first_round": {
+        "passed": 112,
+        "failed": 1,
+        "counted_assertions_passed": 8290,
+        "node_test_invocations_passed": 1
+      },
+      "failures": [
+        "✗ test:test-xlsx.mjs                             通过 50 / 失败 1           0.4s"
+      ],
+      "cause": "XLSX test hardcoded /usr/bin/unzip and received ENOENT, whereas preflight resolved task-local unzip via PATH.",
+      "disposition": "Known task processes terminated; failure evidence retained; not counted as passing validation"
+    }
+  ],
+  "limits": [
+    "No full repository / distribution-package acceptance: historical docs and deliverables archives excluded.",
+    "Some legacy fixtures use fixed /tmp names; validation ran sequentially on this host, not in an OS filesystem namespace.",
+    "No browser UI, real payment, external business connector, load/capacity, or production deployment validation.",
+    "Successful node:test results in each full round prove invocation exit status; complete TAP case counts come only from the separate authorized run.",
+    "Passing regression does not establish licensing clearance or commercial production readiness."
+  ]
+}

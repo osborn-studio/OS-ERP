@@ -1,0 +1,63 @@
+{
+  "name": "os-erp",
+  "version": "0.1.0-alpha.1",
+  "private": true,
+  "type": "module",
+  "description": "OS ERP 简易 ERP：商业部署能力建设中的 MIT 项目",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "dev:api": "node server/index.js",
+    "dev:web": "vite",
+    "build": "vite build",
+    "start": "node server/index.js",
+    "seed": "node server/db/seed.js",
+    "reset": "node server/db/seed.js --reset",
+    "reseed": "node scripts/reseed-all.mjs --force",
+    "gen:api": "node scripts/gen-api-types.mjs",
+    "check:api": "node scripts/check-api-contract.mjs",
+    "check:dict": "node scripts/check-inv-txn-dict.mjs",
+    "migrate": "node scripts/migrate.mjs",
+    "check:mcp": "node scripts/check-mcp-coverage.mjs",
+    "check:file-header": "node scripts/check-file-header.mjs",
+    "docs:build": "node scripts/build-docs-wiki.mjs",
+    "release": "node scripts/package-release.mjs",
+    "test:runtime": "node --test tests/runtime-isolation.test.mjs",
+    "bootstrap:admin": "node scripts/bootstrap-admin.mjs",
+    "test:bootstrap": "node --test tests/admin-bootstrap.test.mjs",
+    "test:focused": "node --test --test-concurrency=1 tests/*.test.mjs"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "better-sqlite3": "^11.5.0",
+    "cors": "^2.8.5",
+    "dayjs": "^1.11.13",
+    "express": "^4.21.1",
+    "jsonwebtoken": "^9.0.2",
+    "nanoid": "^5.0.9",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.3",
+    "autoprefixer": "^10.4.20",
+    "concurrently": "^9.1.0",
+    "fflate": "0.8.3",
+    "lucide-react": "^0.460.0",
+    "postcss": "^8.4.49",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "7.18.4",
+    "recharts": "^2.13.3",
+    "tailwindcss": "^3.4.15",
+    "typescript": "^5.6.3",
+    "vite": "6.4.5"
+  },
+  "overrides": {
+    "postcss-selector-parser": "7.1.7"
+  },
+  "engines": {
+    "node": ">=22 <23"
+  },
+  "license": "MIT"
+}

@@ -1,0 +1,97 @@
+服务已启动 :44011  data=/tmp/fix-ar-db4 industry=cosmetic
+
+[36mS-5 /api/ar/documents/generate 应返回 200（坏列名 dealer_name/store_name 会 500）[0m
+  [31m✗ POST /api/ar/documents/generate → 200（实测 500）  → {"code":1,"success":false,"message":"no such column: dealer_name","error":"SQLITE_ERROR","detail":{"code":"SQLITE_ERROR"}}[0m
+
+[36mS-8 对账单应把同一个经销商的 dealer 主体与 oc 主体合并[0m
+    华南经销丙（dealer#8）：dealer 主体 63666.1 + oc 主体 13253.1 = 76919.2
+  [31m✗ 对账单余额并入 oc 主体（期望 76919.2，实测 63666.1）  → statement 返回 63666.1[0m
+  [32m✓[0m 账龄榜按主体合并（期望 >= 63666.1）
+
+[36mS-2 同一订单只应有一笔应收（开票 + 订单回款不得各建一张）[0m
+  [32m✓[0m 由发货单开票并确认
+  [32m✓[0m 订单回款
+  [31m✗ 该订单的应收单数 = 1（实测 2：AR202610160006/SO, AR202610160005/SI）  → 合计应收 400[0m
+  [31m✗ 该订单累计应收未被翻倍（订单应收 200，累计 400.00）  → 翻倍后 400[0m
+
+[36mS-3 红冲后剩余可开量应回到 2（不得变成 4），且不得真开出 4 件[0m
+  [32m✓[0m 发货 2 件全部开票并确认
+  [32m✓[0m 红冲成功
+    发货 2 / 开票 2 / 红冲 → 剩余可开 4
+  [31m✗ 红冲后剩余可开量 = 2（实测 4）  → 实测 4[0m
+  [31m✗ 对"剩余 2 件"强行开 4 件应被拒（实测 200）  → {"code":0,"success":true,"data":{"id":32,"doc_no":"SI202610160022","org_id":null,"subject_type":"store","subject_id":1,"subject_name":"华东体验中心","source_type":"DL","source_id":180,"source_doc_no":"SD202610160002","order_id[0m
+
+[36mS-1① 该订单有应收、一分未收 ⇒ 退货应退 0，且应收被冲减[0m
+  [32m✓[0m 夹具：开票并确认（SO 口径下应收落在订单上）
+    夹具：该订单应收 AR202610160008/SI/200（已收 0）
+  [32m✓[0m 退货单创建成功
+    退 1 件（100 元）→ refund_due=100  ar_offset=0  ar_id=null
+  [31m✗ 未收款退货的 refund_due = 0（实测 100）  → refund_due=100[0m
+  [31m✗ 原应收被冲减（实测 offset=0）  → offset=0[0m
+  [31m✗ 应收金额确实变小（减少额 ≈ 退货额）  → 200 → 200（退 1 件 100 元）[0m
+    拿这张退货单去退款：POST /api/refunds → 200 / confirm → 200
+  [31m✗ 未收款退货**不能退出现金**（退款请求应被拒，实测 200）  → 退款被创建（200 且确认 200 ⇒ 钱真的出账）[0m
+
+[36mS-1② 该订单根本没有应收 ⇒ 退货 refund_due 必须恒为 0[0m
+  [32m✓[0m 找到一张有已发行、且完全没有应收的订单（样本）
+  [32m✓[0m 退货单创建成功
+    SO202607190001 无应收退 1 件 → refund_due=228
+  [31m✗ 无应收时 refund_due = 0（实测 228）  → refund_due=228[0m
+
+[36mS-4 部分退货不得把整单打成终态 returned（剩余欠发还要能走完）[0m
+  [32m✓[0m 找到一张多行已发订单（样本）
+  [32m✓[0m 部分退货成功
+    SO202607200002（2 行已发 / 共 148 件）只退第 1 行 1 件 → 订单状态 returned
+  [31m✗ 部分退货后订单不应变 returned（实测 returned）  → 被推成 returned（终态，链断）[0m
+  [31m✗ 之后"完成"应可执行（实测 409）  → {"code":1,"success":false,"message":"状态已变化：期望 shipped，实际 returned","error":"STATE_CONFLICT","detail":{"code":"STATE_CONFLICT"}}[0m
+
+[36mS-10 冲减应收 / 红冲作废应收都要在 doc_events 留痕[0m
+  [32m✓[0m 找到"已发 + 挂着未结 SO 应收"的订单行（样本）
+  [32m✓[0m 退货（含应收冲减）成功
+  [32m✓[0m 确实发生了冲减
+    应收 AR202610040001 冲减前后 doc_events 条数：0 → 0
+  [31m✗ 应收冲减留下了 doc_events 痕迹（实测新增 0）  → 新增 0[0m
+  [32m✓[0m 手工开票（草稿）
+  [32m✓[0m 手工票确认（新建 SI 应收）
+  [32m✓[0m 红冲成功
+  [32m✓[0m 红冲把该应收置 voided
+    应收 AR202610160009 红冲作废前后 doc_events 条数：0 → 0
+  [31m✗ 应收作废留下了 doc_events 痕迹（实测新增 0）  → 新增 0[0m
+
+[36mSX-a 出库流水的 counterparty 不是订单号（存量/门店日结形状）时，应按 doc_id 结构化追溯[0m
+    夹具：出库流水 counterparty=门店零售 doc_id=182（不是订单号 SO202610160016）
+  [32m✓[0m 退货单创建成功
+    cost_sources=["current_fallback"]  cost_trace=null
+  [31m✗ 应按 doc_id 追溯到原出库批次（cost_source 应为 source_out，实测 ["current_fallback"]）  → ["current_fallback"][0m
+  [31m✗ 追溯来源应报出 delivery（实测 undefined）  → null[0m
+
+[36mSX-b 完全追溯不到时，必须**可见**（不再静默按当前成本计价）[0m
+  [32m✓[0m 退货单创建成功
+    cost_sources=["current_fallback"]  warning=undefined
+  [31m✗ 追溯失败应标成 lot_trace_failed（实测 ["current_fallback"]）  → ["current_fallback"][0m
+  [31m✗ 追溯失败应带出可读原因[0m
+    入库流水 remark="销售退货入库 SRT202610160011"
+  [31m✗ 追溯失败的原因要留在**入库流水**里（查库存就能看见）  → 销售退货入库 SRT202610160011[0m
+
+通过 20　失败 20
+失败清单：
+ - POST /api/ar/documents/generate → 200（实测 500）
+ - 对账单余额并入 oc 主体（期望 76919.2，实测 63666.1）
+ - 该订单的应收单数 = 1（实测 2：AR202610160006/SO, AR202610160005/SI）
+ - 该订单累计应收未被翻倍（订单应收 200，累计 400.00）
+ - 红冲后剩余可开量 = 2（实测 4）
+ - 对"剩余 2 件"强行开 4 件应被拒（实测 200）
+ - 未收款退货的 refund_due = 0（实测 100）
+ - 原应收被冲减（实测 offset=0）
+ - 应收金额确实变小（减少额 ≈ 退货额）
+ - 未收款退货**不能退出现金**（退款请求应被拒，实测 200）
+ - 无应收时 refund_due = 0（实测 228）
+ - 部分退货后订单不应变 returned（实测 returned）
+ - 之后"完成"应可执行（实测 409）
+ - 应收冲减留下了 doc_events 痕迹（实测新增 0）
+ - 应收作废留下了 doc_events 痕迹（实测新增 0）
+ - 应按 doc_id 追溯到原出库批次（cost_source 应为 source_out，实测 ["current_fallback"]）
+ - 追溯来源应报出 delivery（实测 undefined）
+ - 追溯失败应标成 lot_trace_failed（实测 ["current_fallback"]）
+ - 追溯失败应带出可读原因
+ - 追溯失败的原因要留在**入库流水**里（查库存就能看见）

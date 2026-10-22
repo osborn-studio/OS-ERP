@@ -1,0 +1,68 @@
+{
+  "kind": "reversal-before-after",
+  "batch": "T · IM 组织与审批同步",
+  "industry": "cosmetic",
+  "at": "2026-10-16T12:20:28.578Z",
+  "baseline": {
+    "passed": 62,
+    "failed": 0,
+    "names": [],
+    "crashed": false,
+    "tail": "  ✓ 流水最大 id 没变（防\"删几条又插几条\"） |   ✓ 冲突最大 id 没变 |   ✓ 测试造的假审批实例没留下 |   ✓ 收尾：探针仍然自洽 |  | ──────────────────────────────────────────────────────────────────────── | 通过 62 / 失败 0 | "
+  },
+  "groups": [
+    {
+      "id": "A",
+      "title": "拆掉「只在完整快照下做缺失判定」这道闸门",
+      "expect": "不完整快照也会把不在列表里的人标记为 missing（真实世界里的表现：一次网络抖动 = 全公司离职）",
+      "red_failed": 2,
+      "red_crashed": false,
+      "red_names": [
+        "不完整快照：一个都不标记为 missing  → \"实际 2 / 期望 0\"",
+        "不完整快照留下 SNAPSHOT_INCOMPLETE 冲突（而不是静默）  → []"
+      ],
+      "restored_failed": 0,
+      "restored_passed": 62
+    },
+    {
+      "id": "B",
+      "title": "去掉「外部审批人未映射到本地用户就不签字」这道闸门",
+      "expect": "拿一个不存在的本地用户 id 去决策 —— 审批记录里会出现一个从没点过同意的人",
+      "red_failed": 2,
+      "red_crashed": false,
+      "red_names": [
+        "审批人没映射 → APPROVER_UNMAPPED  → \"实际 0 / 期望 1\"",
+        "审批人没映射 → 一条决策都不产生（不代替签字）  → \"实际 1 / 期望 0\""
+      ],
+      "restored_failed": 0,
+      "restored_passed": 62
+    },
+    {
+      "id": "C",
+      "title": "映射不再记「来自哪一次同步」（sync_batch 写空）",
+      "expect": "事后看见一行映射，答不出谁写的、该不该删（探针 ② 同时要能抓到\"批次为空\"）",
+      "red_failed": 3,
+      "red_crashed": false,
+      "red_names": [
+        "日志有流水号与批次号  → null",
+        "部门映射都能答出\"我属于哪一次同步\"  → [null]",
+        "自证探针在自造数据上仍然自洽  → [{\"code\":\"IM_MAP_WITHOUT_RUN\",\"message\":\"有 7 行映射找不到它"
+      ],
+      "restored_failed": 0,
+      "restored_passed": 62
+    },
+    {
+      "id": "D",
+      "title": "冲突码不再校验是否在封闭字典内",
+      "expect": "绕过唯一写入点写进一个字典外的码，探针一声不吭 —— 冲突码从此失去约束力",
+      "red_failed": 1,
+      "red_crashed": false,
+      "red_names": [
+        "字典外的冲突码被抓到  → []"
+      ],
+      "restored_failed": 0,
+      "restored_passed": 62
+    }
+  ],
+  "all_red_then_green": true
+}

@@ -1,0 +1,74 @@
+# 批次 O 反例先红后证 · 反例 D：摘掉「撤销必须反向」的顺序检查
+
+## 注入内容
+
+文件 server/lib/annual.js → reverseAnnual()
+
+    -  if (row.dist_voucher_id) {
+    +  if (false && row.dist_voucher_id) {   // 反例注入 D
+
+含义：允许"还有利润分配"时就撤销年度结转。
+分配的金额（"从 4104 里拿多少"）是**按年结转进来的那笔钱**算出来的 ——
+先撤上游，下游那笔凭证就失去了依据，而它仍然留在账上、仍然平。
+
+## 预期
+
+A9 的"还有分配时撤年结 → 拒"红。
+
+## 实际输出
+
+=== 年度结转与利润分配测试（cosmetic） ===
+
+[36mA0 基线：4104 存在且是权益叶子；分配目标科目规则[0m
+
+[36mA1 前置：漏一个月没结转就不许年结（否则是一笔永久错账）[0m
+
+[36mA2 年末月份记账与月结[0m
+
+[36mA3 其余前置检查各自会拦[0m
+
+[36mA4 年结（4103 → 4104）：四条恒等式[0m
+
+[36mA5 幂等：重复年结返回首次结果[0m
+
+[36mA6 反关账闸门：该年度已年结 → 必须先撤销年度结转[0m
+
+[36mA7 利润分配：前置与五类校验[0m
+
+[36mA8 利润分配（4104 → 4105 / 2232）[0m
+
+[36mA9 撤销必须反向：撤分配 → 撤年结 → 反关账[0m
+  [31m✗[0m 还有分配时撤年结 → 拒（先撤上游会让下游的金额失去依据）：没有抛错
+  [31m✗[0m 还有分配时撤年结 → 拒（先撤上游会让下游的金额失去依据）
+file:///Users/linxinlan/%E5%B7%A5%E4%BD%9C%E6%96%87%E6%A1%A3/gml/server/lib/report.js:342
+    throw new ReportError(
+          ^
+
+ReportError: 期间 2025-01 的报表自证不通过，不能关账：有 1 个年度做了利润分配却没有年度结转（2024-12）：分掉的钱没有"本年利润转入"这个来源
+    at Module.closePeriod (file:///Users/linxinlan/%E5%B7%A5%E4%BD%9C%E6%96%87%E6%A1%A3/gml/server/lib/report.js:342:11)
+    at file:///Users/linxinlan/%E5%B7%A5%E4%BD%9C%E6%96%87%E6%A1%A3/gml/scripts/test-annual.mjs:447:7
+    at ModuleJob.run (node:internal/modules/esm/module_job:343:25)
+    at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:665:26)
+    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:117:5) {
+  code: 'PERIOD_NOT_BALANCED',
+  http: 409,
+  status: 409,
+  detail: {
+    problems: [
+      {
+        code: 'DISTRIBUTION_WITHOUT_ANNUAL',
+        message: '有 1 个年度做了利润分配却没有年度结转（2024-12）：分掉的钱没有"本年利润转入"这个来源',
+        detail: { periods: [ '2024-12' ] }
+      }
+    ]
+  }
+}
+
+Node.js v22.22.2
+
+
+## 还原注入点后（应回绿）
+
+
+────────────────────────────────────────────────────────────────────────
+通过 119 / 失败 0

@@ -1,0 +1,89 @@
+整库重建：美妆连锁版、连锁餐饮版、服装行业（暂缓）（强制）
+  「美妆连锁版」按请求整库重建，正在生成演示数据...
+[seed:cosmetic] 用户 6 个
+[seed:cosmetic] 品牌 %d / 品类 %d 8 14
+[seed:cosmetic] 商品 %d / SKU %d 26 41
+[seed:cosmetic] 仓库 %d / 门店 %d 8 5
+[seed:cosmetic] 门店店员 %d 个 5
+[seed:cosmetic] 供应商 %d / 经销商 %d 8 20
+[seed:cosmetic] 平台 %d（含奇门适配配置） 10
+[seed:cosmetic] 货位 %d 个 64
+[seed:cosmetic] 绑定演示账号 dealer01 / store01~store05
+[seed:cosmetic] 期初库存 %d 条 119
+[seed:cosmetic] 采购订单 %d 单（已收货 %d） 36 31
+[seed:cosmetic] 门店铺货 %d 条库存 78
+[seed:cosmetic] 销售订单 %d 单（已发货 %d） 246 110
+[seed:cosmetic] 销售退货 %d 单 18
+[seed:cosmetic] 线上订单 %d 笔 362
+[seed:cosmetic] 线上订单转单 %d 笔 15
+[seed:cosmetic] 调拨单 %d 单 21
+[seed:cosmetic] 返利记录 %d 条 57
+[seed:cosmetic] 对账单 %d 份 39
+[seed:cosmetic] 返点政策 %d 种 6
+[seed:cosmetic] 序列号 %d 个 766
+[seed:cosmetic] 组合装 %d 个 3
+[seed:cosmetic] 组装/拆卸单 3 张
+[seed:cosmetic] H5 会员 %d 个 4
+[seed:cosmetic] 门店要货单 %d 张 15
+[seed:cosmetic] 门店发货单 %d 张（已收货 %d 行） 10 7
+[seed:cosmetic] 经销商要货申请 %d 张 26
+[seed:cosmetic] 经销商要货计划 %d 行 502
+[seed:cosmetic] 委外订单 %d 张（含发料 %d / 收货 %d） 0 3 2
+[seed:cosmetic] 生产订单 %d 张（状态至「生产中」，完工由模块 10B 链路产生） 6
+[seed:cosmetic] 净需求汇总记录 %d 条 2
+[seed:cosmetic] 完成： {
+  "users": 12,
+  "store_requisitions": 15,
+  "store_shipments": 10,
+  "outsourcing_orders": 6,
+  "dealer_requisitions": 26,
+  "dealer_plans": 502,
+  "production_orders": 6,
+  "brands": 8,
+  "products": 26,
+  "skus": 41,
+  "warehouses": 8,
+  "stores": 5,
+  "suppliers": 8,
+  "dealers": 20,
+  "platforms": 10,
+  "purchase_orders": 36,
+  "receipts": 31,
+  "sales_orders": 261,
+  "deliveries": 110,
+  "sales_returns": 18,
+  "oms_orders": 362,
+  "inventory_rows": 375,
+  "transactions": 775,
+  "transfers": 21,
+  "statements": 39,
+  "rebates": 57,
+  "rebate_policies": 6,
+  "serials": 766,
+  "bundles": 3,
+  "assembly_orders": 2,
+  "locations": 64,
+  "orphan_events_removed": 0
+}
+  「美妆连锁版」演示数据生成完成
+[orgs:cosmetic] 组织 45 个（总部 1 / 区域 2 / 门店 5 / 仓 8 / 经销商 20），回填货主 1150 行
+file:///Users/linxinlan/%E5%B7%A5%E4%BD%9C%E6%96%87%E6%A1%A3/gml/server/lib/pos2.js:118
+  const e = new Error(message)
+            ^
+
+Error: SKU#40 单价异常
+    at bad (file:///Users/linxinlan/%E5%B7%A5%E4%BD%9C%E6%96%87%E6%A1%A3/gml/server/lib/pos2.js:118:13)
+    at posQuote (file:///Users/linxinlan/%E5%B7%A5%E4%BD%9C%E6%96%87%E6%A1%A3/gml/server/lib/pos2.js:643:33)
+    at createPosOrder (file:///Users/linxinlan/%E5%B7%A5%E4%BD%9C%E6%96%87%E6%A1%A3/gml/server/lib/pos2.js:704:16)
+    at sell (file:///Users/linxinlan/%E5%B7%A5%E4%BD%9C%E6%96%87%E6%A1%A3/gml/server/db/pos-seed.js:109:11)
+    at seedPos (file:///Users/linxinlan/%E5%B7%A5%E4%BD%9C%E6%96%87%E6%A1%A3/gml/server/db/pos-seed.js:166:5)
+    at file:///Users/linxinlan/%E5%B7%A5%E4%BD%9C%E6%96%87%E6%A1%A3/gml/server/db/boot.js:98:7
+    at AsyncLocalStorage.run (node:internal/async_local_storage/async_hooks:91:14)
+    at runWithIndustry (file:///Users/linxinlan/%E5%B7%A5%E4%BD%9C%E6%96%87%E6%A1%A3/gml/server/db/index.js:33:14)
+    at bootIndustry (file:///Users/linxinlan/%E5%B7%A5%E4%BD%9C%E6%96%87%E6%A1%A3/gml/server/db/boot.js:67:10)
+    at file:///Users/linxinlan/%E5%B7%A5%E4%BD%9C%E6%96%87%E6%A1%A3/gml/server/db/boot.js:139:48 {
+  status: 400,
+  code: 'PRICE_INVALID'
+}
+
+Node.js v22.22.2

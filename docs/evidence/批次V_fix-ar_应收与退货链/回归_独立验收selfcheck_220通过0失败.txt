@@ -1,0 +1,481 @@
+独立验收台
+  被测源码 /Users/linxinlan/工作文档/gml  （工作区（在 git 仓库内，无哨兵））
+  提交 cb94210823588200a461b30ad33e2f419128dcc5（来源 git：实测 rev-parse）（工作区有 62 处改动）
+  临时数据目录 /var/folders/xk/g22b7_y50056ywygj6pb57kc0000gn/T/gml-accept-JaQm7e/data
+  端口 44015
+[seed:cosmetic] 用户 6 个
+[seed:cosmetic] 品牌 %d / 品类 %d 8 14
+[seed:cosmetic] 商品 %d / SKU %d 26 41
+[seed:cosmetic] 仓库 %d / 门店 %d 8 5
+[seed:cosmetic] 门店店员 %d 个 5
+[seed:cosmetic] 供应商 %d / 经销商 %d 8 20
+[seed:cosmetic] 平台 %d（含奇门适配配置） 10
+[seed:cosmetic] 货位 %d 个 64
+[seed:cosmetic] 绑定演示账号 dealer01 / store01~store05
+[seed:cosmetic] 期初库存 %d 条 119
+[seed:cosmetic] 采购订单 %d 单（已收货 %d） 36 31
+[seed:cosmetic] 门店铺货 %d 条库存 78
+[seed:cosmetic] 销售订单 %d 单（已发货 %d） 246 110
+[seed:cosmetic] 销售退货 %d 单 18
+[seed:cosmetic] 线上订单 %d 笔 362
+[seed:cosmetic] 线上订单转单 %d 笔 15
+[seed:cosmetic] 调拨单 %d 单 21
+[seed:cosmetic] 返利记录 %d 条 58
+[seed:cosmetic] 对账单 %d 份 38
+[seed:cosmetic] 返点政策 %d 种 6
+[seed:cosmetic] 序列号 %d 个 766
+[seed:cosmetic] 组合装 %d 个 3
+[seed:cosmetic] 组装/拆卸单 3 张
+[seed:cosmetic] H5 会员 %d 个 4
+[seed:cosmetic] 门店要货单 %d 张 15
+[seed:cosmetic] 门店发货单 %d 张（已收货 %d 行） 10 7
+[seed:cosmetic] 经销商要货申请 %d 张 26
+[seed:cosmetic] 经销商要货计划 %d 行 502
+[seed:cosmetic] 委外订单 %d 张（含发料 %d / 收货 %d） 0 3 2
+[seed:cosmetic] 生产订单 %d 张（状态至「生产中」，完工由模块 10B 链路产生） 6
+[seed:cosmetic] 净需求汇总记录 %d 条 2
+[seed:cosmetic] 完成： {
+  "users": 12,
+  "store_requisitions": 15,
+  "store_shipments": 10,
+  "outsourcing_orders": 6,
+  "dealer_requisitions": 26,
+  "dealer_plans": 502,
+  "production_orders": 6,
+  "brands": 8,
+  "products": 26,
+  "skus": 41,
+  "warehouses": 8,
+  "stores": 5,
+  "suppliers": 8,
+  "dealers": 20,
+  "platforms": 10,
+  "purchase_orders": 36,
+  "receipts": 31,
+  "sales_orders": 261,
+  "deliveries": 110,
+  "sales_returns": 18,
+  "oms_orders": 362,
+  "inventory_rows": 375,
+  "transactions": 775,
+  "transfers": 21,
+  "statements": 38,
+  "rebates": 58,
+  "rebate_policies": 6,
+  "serials": 766,
+  "bundles": 3,
+  "assembly_orders": 2,
+  "locations": 64,
+  "orphan_events_removed": 0
+}
+[orgs:cosmetic] 组织 45 个（总部 1 / 区域 2 / 门店 5 / 仓 8 / 经销商 20），回填货主 1150 行
+[seed:food] 用户 6 个
+[seed:food] 品牌 %d / 品类 %d 3 33
+[seed:food] 商品 %d / SKU %d 78 92
+[seed:food] 仓库 %d / 门店 %d 24 20
+[seed:food] 门店店员 %d 个 20
+[seed:food] 供应商 %d / 经销商 %d 10 20
+[seed:food] 平台 %d（含奇门适配配置） 7
+[seed:food] 货位 %d 个 192
+[seed:food] 绑定演示账号 dealer01 / store01~store05
+[seed:food] 期初库存 %d 条 281
+[seed:food] 采购订单 %d 单（已收货 %d） 38 36
+[seed:food] 门店铺货 %d 条库存 300
+[seed:food] 销售订单 %d 单（已发货 %d） 254 51
+[seed:food] 销售退货 %d 单 18
+[seed:food] 线上订单 %d 笔 353
+[seed:food] 线上订单转单 %d 笔 3
+[seed:food] 调拨单 %d 单 20
+[seed:food] 返利记录 %d 条 49
+[seed:food] 对账单 %d 份 34
+[seed:food] 返点政策 %d 种 6
+[seed:food] 序列号 %d 个 0
+[seed:food] 组合装 %d 个 4
+[seed:food] 组装/拆卸单 3 张
+[seed:food] H5 会员 %d 个 4
+[seed:food] 门店要货单 %d 张 67
+[seed:food] 门店发货单 %d 张（已收货 %d 行） 10 6
+[seed:food] 经销商要货申请 %d 张 26
+[seed:food] 经销商要货计划 %d 行 519
+[seed:food] 委外订单 %d 张（含发料 %d / 收货 %d） 0 0 0
+[seed:food] 生产订单 %d 张（状态至「生产中」，完工由模块 10B 链路产生） 6
+[seed:food] 净需求汇总记录 %d 条 2
+[seed:food] 完成： {
+  "users": 27,
+  "store_requisitions": 67,
+  "store_shipments": 10,
+  "outsourcing_orders": 0,
+  "dealer_requisitions": 26,
+  "dealer_plans": 519,
+  "production_orders": 6,
+  "brands": 3,
+  "products": 78,
+  "skus": 92,
+  "warehouses": 24,
+  "stores": 20,
+  "suppliers": 10,
+  "dealers": 20,
+  "platforms": 7,
+  "purchase_orders": 38,
+  "receipts": 36,
+  "sales_orders": 257,
+  "deliveries": 51,
+  "sales_returns": 18,
+  "oms_orders": 353,
+  "inventory_rows": 788,
+  "transactions": 991,
+  "transfers": 20,
+  "statements": 34,
+  "rebates": 49,
+  "rebate_policies": 6,
+  "serials": 0,
+  "bundles": 4,
+  "assembly_orders": 2,
+  "locations": 192,
+  "orphan_events_removed": 0
+}
+[orgs:food] 组织 83 个（总部 1 / 区域 6 / 央厨 1 / 门店 20 / 仓 24 / 经销商 20），回填货主 1779 行
+[seed:apparel] 用户 6 个
+[seed:apparel] 品牌 %d / 品类 %d 8 15
+[seed:apparel] 商品 %d / SKU %d 32 244
+[seed:apparel] 仓库 %d / 门店 %d 8 5
+[seed:apparel] 门店店员 %d 个 5
+[seed:apparel] 供应商 %d / 经销商 %d 8 20
+[seed:apparel] 平台 %d（含奇门适配配置） 10
+[seed:apparel] 货位 %d 个 64
+[seed:apparel] 绑定演示账号 dealer01 / store01~store05
+[seed:apparel] 期初库存 %d 条 718
+[seed:apparel] 采购订单 %d 单（已收货 %d） 38 32
+[seed:apparel] 门店铺货 %d 条库存 80
+[seed:apparel] 销售订单 %d 单（已发货 %d） 240 48
+[seed:apparel] 销售退货 %d 单 18
+[seed:apparel] 线上订单 %d 笔 377
+[seed:apparel] 线上订单转单 %d 笔 8
+[seed:apparel] 调拨单 %d 单 20
+[seed:apparel] 返利记录 %d 条 52
+[seed:apparel] 对账单 %d 份 37
+[seed:apparel] 返点政策 %d 种 6
+[seed:apparel] 序列号 %d 个 1133
+[seed:apparel] 组合装 %d 个 3
+[seed:apparel] 组装/拆卸单 3 张
+[seed:apparel] H5 会员 %d 个 4
+[seed:apparel] 门店要货单 %d 张 17
+[seed:apparel] 门店发货单 %d 张（已收货 %d 行） 8 4
+[seed:apparel] 经销商要货申请 %d 张 26
+[seed:apparel] 经销商要货计划 %d 行 565
+[seed:apparel] 委外订单 %d 张（含发料 %d / 收货 %d） 0 3 2
+[seed:apparel] 生产订单 %d 张（状态至「生产中」，完工由模块 10B 链路产生） 6
+[seed:apparel] 净需求汇总记录 %d 条 2
+[seed:apparel] 完成： {
+  "users": 12,
+  "store_requisitions": 17,
+  "store_shipments": 8,
+  "outsourcing_orders": 6,
+  "dealer_requisitions": 26,
+  "dealer_plans": 565,
+  "production_orders": 6,
+  "brands": 8,
+  "products": 32,
+  "skus": 244,
+  "warehouses": 8,
+  "stores": 5,
+  "suppliers": 8,
+  "dealers": 20,
+  "platforms": 10,
+  "purchase_orders": 38,
+  "receipts": 32,
+  "sales_orders": 248,
+  "deliveries": 48,
+  "sales_returns": 18,
+  "oms_orders": 377,
+  "inventory_rows": 968,
+  "transactions": 1168,
+  "transfers": 20,
+  "statements": 37,
+  "rebates": 52,
+  "rebate_policies": 6,
+  "serials": 1133,
+  "bundles": 3,
+  "assembly_orders": 2,
+  "locations": 64,
+  "orphan_events_removed": 0
+}
+[orgs:apparel] 组织 44 个（总部 1 / 区域 1 / 门店 5 / 仓 8 / 经销商 20），回填货主 2136 行
+  全新三库就绪，6.9s
+
+── S1 环境自证 —— 这套东西到底跑在哪
+  ✓ 数据目录不是开发库
+  ✓ 服务健康
+  ✓ 临时库结构完整（新表在）
+  ✓ 三库都建起来了
+  ✓ admin 拿到真实令牌
+  ✓ 其余演示账号可登录
+
+── S2 A01 残留 —— 通用流转入口有没有绕过领域副作用
+  ✓ 找到一张已发货销售订单作为样本
+  ✓ SO 走通用入口被拒（HTTP 409）
+  ✓ 拒绝码是 EFFECT_REQUIRES_BUSINESS_API
+  ✓ SO 状态一个字节都没动
+  ✓ 找到一张采购结算单作为样本
+  ✓ viewer 结算采购结算单被拒（403）
+  ✓ 结算单状态未变
+  ✓ viewer 付款被拒（403）
+  ✓ 付款单状态未变
+  ✓ 门店账号动别家门店的单被拒
+  ✓ 外部主体（门店）为内部单据提交审批被拒
+  ✓ 对不存在的单据提交审批被拒（404，而不是凭空建一条实例）
+  ✓ 未知单据类型被拒（400）
+  ✓ 被拒的提交没有留下审批实例
+
+── S3 A16 反向 —— 两套凭据双向隔离 + 行业钉死
+  ✓ C 端登录拿到令牌
+  ✓ C 端令牌打 MCP 端点被拒（-32001 Agent Token 无效）
+  ✓ C 端令牌打 ERP 采购接口被拒（401）
+  ✓ ERP 令牌打 C 端接口被拒（401）
+  ✓ 带不一致的 x-industry 仍能正常响应（行业被令牌钉死）
+  ✓ （钉死判据）响应里带上当前行业
+
+── S4 A20 —— 撤权 / 停用是否即时生效
+  ✓ 停用前 viewer 令牌可用
+  ✓ admin 停用 viewer 成功
+  ✓ 同一枚旧令牌立刻失效（HTTP 403）
+  ✓ 失效原因是"账号已停用"而不是令牌过期
+  ✓ 停用后连登录都进不来
+  ✓ 恢复后旧令牌又可用（说明刚才拒的是状态，不是令牌）
+
+── S5 D1 销售退货闭环
+  ✓ 找到一条已发货、且挂着应收的订单行
+  ✓ 该订单确实挂着应收
+  ✓ 超退被拒（409）
+  ✓ 拒绝码 RETURN_EXCEEDS_SHIPPED
+  ✓ 拒绝里带出了可退量的算法依据
+  ✓ 有单退货缺 order_item_id 被拒（400）
+  ✓ 拒绝码 SOURCE_REQUIRED
+  ✓ 正常退一行成功
+  ✓ 入库成本流水确实写了
+  ✓ 客户端传的成本 0.01 没有落进库
+  ✓ 成本来源被如实报出（不是客户端价）
+  ✓ 退货单上记了应收冲减金额 > 0
+  ✓ 应收被同步冲减（金额变小或已冲平）
+  ✓ 库存确实增加 1
+  ✓ 同幂等键重放返回首次那张单
+  ✓ 重放没有多建一张单
+
+── S6 D5 MCP 是否复用领域服务
+  ✓ 建出 MCP 令牌（明文只此一次）
+  ✓ 高危工具要求人工确认
+  ✓ 发起者自己批准被拒（403）
+  ✓ 拒绝理由说明是"自批"而不是权限不足
+  ✓ 他人（finance）确认成功
+  ✓ 已发货订单经 MCP 作废被拒
+  ✓ 拒绝码是域内状态机给的 ORDER_NOT_CANCELLABLE（不是裸 SQL 放行）
+  ✓ 订单状态一个字节都没动
+  ✓ 只读令牌调写型工具被拒
+  ✓ 拒绝码来自范围闸门
+  ✓ 每次调用都进了 mcp_call_logs（成功与失败都记）
+  ✓ 失败调用也被记下来
+
+── S7 G 渠道协议价与返利核销
+  ✓ 找到经销商样本
+  ✓ 查价接口可用
+  ✓ 无已确认返利时核销被拒（409）
+  ✓ 拒绝码 NO_CONFIRMED_REBATE
+  ✓ 返利域自证接口可用
+  ✓ （记录现状）一次核销的结果
+
+── S8 H 业财一体凭证
+  ✓ 找到一张已发货发货单
+  ✓ 试算可用
+  ✓ 试算借贷相等
+  ✓ 生成凭证成功
+  ✓ 同来源再生成返回同一张（幂等）
+  ✓ 凭证落库且借贷平衡
+  ✓ 作废不给理由被拒
+  ✓ 凭证没被作废
+
+── S11 IM（钉钉/飞书）组织与审批同步 —— 真实 HTTP
+  ✓ meta 可用
+  ✓ 契约如实写着"真实租户调用未实现"
+  ✓ 冲突码字典是一本封闭字典且每条带人话
+  ✓ status 可用
+  ✓ 登记了两个平台
+  ✓ **默认停用**（同步会改组织与审批状态，必须是显式打开的）
+  ✓ 未配置时明确拒绝（409）而不是"成功 0 条"
+  ✓ 拒绝码 IM_NOT_CONFIGURED
+  ✓ 拒绝消息是一句人话（指出要填哪个环境变量）
+  ✓ 全链路自检可用
+  ✓ 自检在一个会回滚的事务里跑完（库里一行都不多）
+  ✓ 自检真的跑到了"幂等"这一步（第二次新建 0 条）
+  ✓ 自检真的跑到了"不完整快照不做缺失判定"这一步
+  ✓ 自检真的跑到了"认不出的审批状态不猜"这一步
+  ✓ 自检前后：同步流水条数一致
+  ✓ 自检前后：冲突条数一致
+  ✓ 自检前后：部门映射一致
+  ✓ 自检前后：成员映射一致
+  ✓ 同步链自证全绿
+  ✓ viewer 发起同步被拒（403）
+
+── S12 端到端 HTTP 清单（URL / 期望码 / 实际码，含负向对照）
+  ✓ （负）C 端令牌打 MCP：HTTP 200 但 JSON-RPC 里报 -32001
+  ✓ 清单里每一条的实际码都等于期望码
+  ✓ 清单覆盖了正向与负向两类
+
+── S13 A14 / A15 / A17b / A18 —— 四条验收缺陷的独立复现
+  ✓ A14 商城会员登录成功
+  ✓ A14 存在可售库存
+  ✓ A14 返回里带 points_earned（说明结算走的是 checkout）
+  ✓ A14 送分 == 会员账户积分增量（只有一个写入点）
+  ✓ A14 送分口径不是"1 元 1 分"（旧口径会等于 floor(实付元)）
+  ✓ A14 送分与"每元 N 分"（N≥10）吻合
+  ✓ A14 送分在流水里只有一条
+  ✓ A14 累计消费按实付计入（分）
+  ✓ A14 冗余展示列与账户余额同源（没有第二套写入）
+  ✓ A15 抵扣的积分如实回显
+  ✓ A15 下单后积分 = 期初 − 抵扣 + 送分
+  ✓ A15 撤单成功
+  ✓ A15 撤单后积分回到期初（抵扣被退回、送分被扣回）
+  ✓ A15 撤单后累计消费回到期初
+  ✓ A15 撤单写入了回退流水
+  ✓ A15 重复撤单被拒（409，不会退两遍）
+  ✓ A15 重复撤单后积分没再变
+  ✓ A15 重复撤单没有新增回退流水（幂等落点）
+  ✓ A17b 找到草稿销售订单
+  ✓ A17b 改草稿数量为 0 被拒
+  ✓ A17b 只改运费成功
+  ✓ A17b 应收随运费重算
+  ✓ A17b MCP 传未知字段被拒（不是静默接受）
+  ✓ A17b 拒绝码来自参数校验 ARG_UNKNOWN
+  ✓ A17b MCP 负出库被拒（不是"成功但什么都没做"）
+  ✓ A17b 拒绝理由说清是数量非法（一句人话）
+  ✓ A17b 负出库没有反向加库存
+  ✓ A18 找到两张不同供应商的可核销结算单
+  ✓ A18 拒绝码 PAY_ALLOC_SUPPLIER_MISMATCH
+  ✓ A18 拒绝码 PAY_ALLOC_OVER_OPEN
+  ✓ A18 拒绝码 PAY_BAD_CURRENCY
+  ✓ A18 两张草稿各自都能建（草稿不占额 —— 设计如此，已如实记录）
+  ✓ A18 第一张草稿可以生效
+  ✓ A18 第二张生效被拒（不会重复占用同一笔余额）
+  ✓ A18 拒绝码指明超未付余额
+  ✓ A18 该结算单实付额没有超过面额
+
+── S14 A19 / A12 —— 干净库上遍历公开只读 MCP 工具 + 库存参数缓存按库分区
+  ✓ A19 代码里不再引用不存在的列 sales_orders.total_amount
+  ✓ A19 代码里不再引用不存在的列 approval_instances.finished_at
+  ✓ A19 approval.approve 改调领域服务 decideApproval（代码里不再裸 UPDATE）
+  ✓ A19 至少真实调用了 5 个只读工具（否则本节是空跑）
+  ✓ A19 没有任何只读工具因"列/表不存在"失败
+  ✓ A19/D5c approval.approve 未经人工确认不得执行
+  ✓ A19 动态：找到可发起审批的采购订单（夹具前提）
+  ✓ A19 动态：待审实例已建立并留下 submit 留痕
+  ✓ A19 动态：代签待审实例同样要求人工确认
+  ✓ A19 动态：他人（finance）完成了二次确认
+  ✓ A19 动态：确认后执行成功（领域服务放行，不是 MCP 自己放行）
+  ✓ A19 动态：**approval_records 里多了一条 approve 记录**（裸 UPDATE 永远不写这张表）
+  ✓ A19 动态：签字人落的是真人（不是空、也不是令牌名）
+  ✓ A19 动态：实例状态被状态机推进到 approved
+  ✓ A12 库存参数缓存按 db 分区（WeakMap keyed by db），不是全局单例
+  ✓ A12 没有退回"模块级 new Map() 当参数缓存"的写法
+
+── S15 A06 / A08 —— 授信与应收的"来源"必须对得上
+  ✓ A06 找到"有授信额度"的经销商账户
+  ✓ A06 找到可下单的"仓 × SKU"（否则确认订单会卡在占库）
+  ✓ A06 读到授信快照（可用额度是一个数）
+  ✓ A06 草稿订单建出来了
+  ✓ A06 该订单确实有应收金额（> 0 才谈得上占用）
+  ✓ A06 确认订单成功
+  ✓ A06 订单上记下了占用额（占用真的发生了）
+  ✓ A06 占用后可用额度确实减少（减少额 = 该单应收）
+  ✓ A06 为该订单生成应收（来源 SO#341）
+  ✓ A06 建收款单并把核销指定到这张应收
+  ✓ A06 确认收款成功
+  ✓ A06 收款核销后可用额度回到占用前（旧缺陷：按 RCP 释放 ⇒ 一条流水都写不出 ⇒ 额度只减不增）
+  ✓ A06 台账里占用与释放都挂在同一个 `SO+orderId` 上（释放没有跑到 `RCP+receiptId`）
+  ✓ A08 造出同主体的两张未结应收（甲 1000 / 乙 2000）
+  ✓ A08 收款单建出来了
+  ✓ A08 核销只落在**显式指定**的那张（乙）上（旧缺陷：被 FIFO 抵到同主体的甲）
+  ✓ A08 另一张（甲）一个字节都没被抵
+  ✓ A08 确认收款成功（甲仍未结、乙已结清）
+  ✓ A08 乙应收已结清
+  ✓ A08 甲应收仍是未结
+
+── S16 A07 / A10 —— 核销与红冲的边界
+  ✓ A07 找到往来对象（复用 A06 的那家经销商）
+  ✓ A07 造出一张 1000 的未结应收
+  ✓ A07 核销额 > 实收额 → 409（不是截平后静默成功）
+  ✓ A07 拒绝码 RC_ALLOC_EXCEEDS_RECEIPT
+  ✓ A07 拒绝里带出了两个可核对的数（实收剩余 / 本次要核）
+  ✓ A07 被拒后一张收款单都没落库
+  ✓ A07 核销额 > 应收未核销余额 → 409
+  ✓ A07 拒绝码 RC_ALLOC_EXCEEDS_AR
+  ✓ A07 同一应收在一次核销里重复出现 → 400
+  ✓ A07 拒绝码 RC_ALLOC_DUPLICATE_AR
+  ✓ A07 造出一张 1000 的未结应收（重复抵样本）
+  ✓ A07 两张草稿各自都能建（草稿不占额 —— 设计如此）
+  ✓ A07 第一张确认成功
+  ✓ A07 第二张确认被拒（不得静默成功）
+  ✓ A07 拒绝码 AR_OVER_ALLOCATED
+  ✓ A07 第二张仍是草稿（没被偷偷确认）
+  ✓ A07 该应收的已确认核销额没有超过应收金额
+  ✓ A10 找到"发票关联**订单级** SO 应收"的样本（A10 说的就是这种共享应收）
+  ✓ A10 该应收确实挂在销售订单上（source_type=SO，不是发票自建的 SI）
+  ✓ A10 红冲成功（共享应收不该成为"红冲不了"的理由）
+  ✓ A10 共享的订单级应收**没有被作废**
+  ✓ A10 共享应收的金额没有被改动
+  ✓ A10 共享应收的已核销额没有被改动
+  ✓ A10 原票置红冲 + 生成一张负数红字票指回原票（红冲这件事本身是真的）
+
+── S17 A11 / A13 —— 跨批次成本 与 不可售批次闸门
+  ✓ A11 找到一张"生产中"的生产订单（只有这个状态能领料）
+  ✓ A11 找到一个在该仓零库存的 SKU（保证只有本用例的两批参与拣选）
+  ✓ A11 两个批次已入库（甲 5×10 / 乙 5×20）
+  ✓ A11 两批库存确实分开落账（成本不同）
+  ✓ A11 领料单建出来了
+  ✓ A11 领料单审批通过
+  ✓ A11 确认出库成功
+  ✓ A11 出库流水是**逐批**两行（甲 10 元批 + 乙 20 元批）
+  ✓ A11 行成本 = 各批次金额之和（5×10 + 5×20 = 150，而不是 10 × 末批价 20 = 200）
+  ✓ A11 行金额与逐批流水之和一致（没有一个数是"另外算的"）
+  ✓ A11 加权平均单价让 `数量 × 单价` 恰好等于总额（上游就是这么算整行成本的）
+  ✓ A13 找到"检验不合格"且有库存的批次
+  ✓ A13 自动拣选跳过了不合格批次（它的库存 > 0，所以"没拣到"不是因为没货）
+  ✓ A13 建一张"指名不合格批次"的领料单
+  ✓ A13 显式指定不合格批次出库 → 409
+  ✓ A13 拒绝码 BATCH_NOT_SELLABLE
+  ✓ A13 被拒后该批次库存一个字节都没动
+  ✓ A13 找到"待检"且有库存的批次
+  ✓ A13 参数未开（block_pending_qc=0）时待检批次**参与**拣选（先证明默认是放行的）
+  ✓ A13 参数确实被读到 1（否则下面那条"被排除"可能只是我改错了地方）
+  ✓ A13 参数置 1 后待检批次被排除出自动拣选
+  ✓ A13 参数置 1 后显式指定待检批次做销售出库 → 409 BATCH_NOT_SELLABLE
+  ✓ A13 用例自还原：参数回到原样（原来没有这一行就删掉），待检批次重新参与拣选
+
+── S10 静态自证 —— 路由遮蔽（字面段必须排在参数段之前）
+  ✓ 没有"存在但永远 404"的接口
+
+── S9 收尾 —— 库副作用总核对
+  ✓ 没有负库存
+  ✓ 没有不平的凭证
+  ✓ 退货明细没有孤儿
+
+────────────────────────────────────────────────────────────────────────
+独立验收（自查）结果：通过 220 / 失败 0（共 220 项）
+  ✓ S1 环境自证 —— 这套东西到底跑在哪  6/6
+  ✓ S2 A01 残留 —— 通用流转入口有没有绕过领域副作用  14/14
+  ✓ S3 A16 反向 —— 两套凭据双向隔离 + 行业钉死  6/6
+  ✓ S4 A20 —— 撤权 / 停用是否即时生效  6/6
+  ✓ S5 D1 销售退货闭环  16/16
+  ✓ S6 D5 MCP 是否复用领域服务  12/12
+  ✓ S7 G 渠道协议价与返利核销  6/6
+  ✓ S8 H 业财一体凭证  8/8
+  ✓ S11 IM（钉钉/飞书）组织与审批同步 —— 真实 HTTP  20/20
+  ✓ S12 端到端 HTTP 清单（URL / 期望码 / 实际码，含负向对照）  3/3
+  ✓ S13 A14 / A15 / A17b / A18 —— 四条验收缺陷的独立复现  36/36
+  ✓ S14 A19 / A12 —— 干净库上遍历公开只读 MCP 工具 + 库存参数缓存按库分区  16/16
+  ✓ S15 A06 / A08 —— 授信与应收的"来源"必须对得上  20/20
+  ✓ S16 A07 / A10 —— 核销与红冲的边界  24/24
+  ✓ S17 A11 / A13 —— 跨批次成本 与 不可售批次闸门  23/23
+  ✓ S10 静态自证 —— 路由遮蔽（字面段必须排在参数段之前）  1/1
+  ✓ S9 收尾 —— 库副作用总核对  3/3
+HTTP 清单：/Users/linxinlan/工作文档/gml/docs/evidence/独立验收_端到端HTTP清单.md
+
+证据：/Users/linxinlan/工作文档/gml/docs/evidence/独立验收_必打反例_20261016.json
