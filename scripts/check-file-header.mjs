@@ -47,6 +47,10 @@ const DECLARED = [
   'scripts/db-backup.mjs',
   'server/db/migrations/runner.js',
   'server/lib/backup-dir.js',
+  // 恢复 / 升级回退演练（ADR-0016）：共用底座 + 两个演练入口
+  'scripts/lib/drill-common.mjs',
+  'scripts/db-restore-drill.mjs',
+  'scripts/upgrade-rollback-drill.mjs',
   'src/App.tsx',
   'src/api/client.ts',
   'src/components/Layout.tsx',
