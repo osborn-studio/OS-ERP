@@ -419,7 +419,8 @@ r.post(
           operator: { id: currentUser(req).uid || currentUser(req).id || null, name: currentUser(req).name || currentUser(req).username || null },
           remark: credit.result === 'force' ? `订单确认占用（超信特批：${req.body?.credit_reason || ''}）` : '订单确认占用授信'
         })
-        db.prepare("UPDATE sales_orders SET credit_hold=?, credit_checked_at=datetime('now','localtime') WHERE id=?").run(hold, id)
+        // `credit_hold` 由 occupy 在台账写入时投影（ADR-0014），这里只记"何时校验过"
+        db.prepare("UPDATE sales_orders SET credit_checked_at=datetime('now','localtime') WHERE id=?").run(id)
       }
     })
     tx()

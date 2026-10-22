@@ -30,7 +30,7 @@
 //   ④ 特批放行要署名            —— 同一张单带 force+reason 再转一次，留痕 result='force'
 
 import { requireDemoDatabase } from './runtime-policy.js'
-import { ensureAccount, updateAccount, occupy, settle, creditSnapshot } from '../lib/credit.js'
+import { ensureAccount, updateAccount, occupy, settle, creditSnapshot, reprojectOrderHolds } from '../lib/credit.js'
 import { createQuote, priceQuote, transitionQuote, convertQuote, expireQuotes, copyQuote } from '../lib/quote.js'
 import { pruneOrphanEvents } from '../lib/docflow.js'
 import { seedNow } from './seed-clock.js'
@@ -49,7 +49,11 @@ function clear(db) {
   resetSequences(db, tables)
   // 销售订单上的授信占用列也一并归零：整批信用数据重灌后，
   // 上一代订单还记着「我占了 8 万」，对账会立刻报出差额。
-  try { db.prepare('UPDATE sales_orders SET credit_hold=0, credit_checked_at=NULL').run() } catch { /* 列可能尚未加 */ }
+  // 台账已清，按台账重投影自然全部归零（投影的唯一写入者在 credit.js，ADR-0014）。
+  try {
+    db.prepare('UPDATE sales_orders SET credit_checked_at=NULL').run()
+    reprojectOrderHolds(db)
+  } catch { /* 列可能尚未加 */ }
   pruneOrphanEvents(db)
 }
 
@@ -117,7 +121,8 @@ export function seedQuoteCredit(db, { industry = 'food', silent = false, log } =
 
   // ---------- 2. 占用流水：用已经发货/完成的销售订单补历史占用 ----------
   // 为什么不直接 INSERT 台账：占用必须能与「单据认为占了多少」对上，
-  // 否则 audit 立刻报出差额。这里占多少就同步写回 sales_orders.credit_hold。
+  // 否则 audit 立刻报出差额。`sales_orders.credit_hold` 由 occupy / settle 在台账写入时
+  // 自动投影（ADR-0014）—— 这里**不再**另写一遍，后面 ar-seed 的收款核销 / 作废才能跟着同步。
   // 已确认的订单同样占着授信：货还没发、钱更没到，额度不能当成没用。
   // （seed 里的订单是直接以这些状态落库的，没走过确认动作，所以这里补上占用）
   const openOrders = db
@@ -147,7 +152,7 @@ export function seedQuoteCredit(db, { industry = 'food', silent = false, log } =
       remark: '历史应收占用（演示数据）'
     })
     stat.ledger += row ? 1 : 0
-    db.prepare("UPDATE sales_orders SET credit_hold=?, credit_checked_at=datetime('now','localtime') WHERE id=?").run(hold, o.id)
+    db.prepare("UPDATE sales_orders SET credit_checked_at=datetime('now','localtime') WHERE id=?").run(o.id)
 
     // 第一笔做成「已逾期」：真实业务里逾期是常态，界面上必须能看到逾期天数与金额。
     // due_date 只能由账期从今天往后推，所以这里显式回写一个历史到期日 —— seed 特权，
@@ -168,7 +173,6 @@ export function seedQuoteCredit(db, { industry = 'food', silent = false, log } =
         remark: '演示回款核销'
       })
       stat.ledger += 1
-      db.prepare('UPDATE sales_orders SET credit_hold=? WHERE id=?').run(Number((hold - paid).toFixed(2)), o.id)
     }
   })
 

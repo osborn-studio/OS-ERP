@@ -57,7 +57,9 @@ const DECLARED = [
   // 授信释放台账（ADR-0013）：释放/逆向的唯一实现、建表迁移与守卫测试
   'server/lib/credit-release.js',
   'server/db/migrations/052_credit_release_ledger.cjs',
-  'tests/credit-reversal.test.mjs'
+  'tests/credit-reversal.test.mjs',
+  // 授信投影（ADR-0014）：credit_hold 的唯一写入者与对账守卫
+  'tests/credit-hold-projection.test.mjs'
 ]
 
 /** 参与覆盖率统计的源文件（**排除** node_modules / dist / data） */
