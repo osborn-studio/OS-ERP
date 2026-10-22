@@ -7,6 +7,8 @@
 import bcrypt from 'bcryptjs'
 import { validateNewPassword } from './password-policy.js'
 import { auditStrictRow } from './audit-trail.js'
+// ADR-0011：停用账号时在同一事务里吊销其名下全部 Agent Token（委托随所有者一起失效）。
+import { revokeOwnerTokens } from '../mcp/tokens.js'
 
 const error = (code, message, status = 400) => Object.assign(new Error(message), { code, status })
 const SECURITY_FIELDS = new Set(['role', 'is_super', 'status', 'org_id', 'data_scope', 'dealer_id', 'store_id'])
@@ -125,8 +127,9 @@ export async function updateAccount(db, actor, id, input, { ip } = {}) {
       db.prepare('DELETE FROM user_orgs WHERE user_id=?').run(id)
       if (patch.org_id) db.prepare("INSERT INTO user_orgs (user_id,org_id,relation) VALUES (?,?,'member')").run(id, patch.org_id)
     }
-    auditStrict(db, currentActor, 'ACCOUNT_UPDATE', 'user', id, { changed, passwordChanged: hasPassword, sessionsRevoked: revoke }, ip)
-    return { id, sessionsRevoked: revoke }
+    const agentTokensRevoked = changed.includes('status') && patch.status === 'inactive' ? revokeOwnerTokens(db, id) : 0
+    auditStrict(db, currentActor, 'ACCOUNT_UPDATE', 'user', id, { changed, passwordChanged: hasPassword, sessionsRevoked: revoke, agentTokensRevoked }, ip)
+    return { id, sessionsRevoked: revoke, agentTokensRevoked }
   })
 }
 

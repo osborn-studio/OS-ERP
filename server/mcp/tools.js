@@ -49,6 +49,15 @@ import {
 // 金额/数量与权限点的**唯一判据**（与 HTTP 入口同一个）
 import { numAmount, numQty, permContext, hasPerm } from '../middleware/auth.js'
 
+/**
+ * `perms`（ADR-0011）：有主令牌调用该工具时，**令牌所有者此刻**必须持有其中任一权限点
+ * （判据 = HTTP 的 `permContext` / `hasPerm`，由 `mcp/delegation.js` 统一执行，本文件不自判）。
+ *   · 与 HTTP 入口对齐：入库 = `purchase.inbound`、出库 = `sales.outbound`、调拨 / 货权 / 调整 =
+ *     `inventory.*`、采购建单 = 工具内已有的那一个码、调价 = `master.price.edit`……
+ *   · `[]` = 不设额外权限点（字典 / 看板 / 组织树，以及边权限在工具内按状态机判定的 `advance_*`
+ *     与 `doc.transition`）—— 它们仍受令牌级别、数据范围交集与工具内自己的闸门约束。
+ *   · 无主令牌不过此门（它没有所有者可对照），其写能力仍由 `AGENT_OWNER_REQUIRED` 等工具内判据限制。
+ */
 export const LEVELS = { read: 'read', write: 'write', danger: 'danger' }
 
 const S = {
@@ -460,6 +469,7 @@ export const TOOLS = [
   {
     name: 'master.search_products',
     level: 'read',
+    perms: ['master.product.view'],
     title: '搜索商品',
     description: '按关键词搜索商品（SPU）及其 SKU，返回价格与库存汇总。用于回答「某商品还有多少货」「某商品卖多少钱」类问题。',
     inputSchema: {
@@ -492,6 +502,7 @@ export const TOOLS = [
   {
     name: 'master.get_product_360',
     level: 'read',
+    perms: ['master.product.view'],
     title: '商品全景',
     description: '给一个商品或 SKU，返回它的 SKU 明细、各仓库库存分布、近期出入库与采购/销售情况，用于回答「这个商品从采购到销售的全链路」。',
     inputSchema: {
@@ -539,6 +550,7 @@ export const TOOLS = [
   {
     name: 'master.list_partners',
     level: 'read',
+    perms: ['master.partner.view'],
     title: '往来单位',
     description: '统一查询供应商 / 经销商 / 门店等往来单位档案（第三轮已定统一往来单位模型）。',
     inputSchema: {
@@ -576,6 +588,7 @@ export const TOOLS = [
   {
     name: 'inventory.query_stock',
     level: 'read',
+    perms: ['inventory.stock.view'],
     title: '查询库存',
     description: '按商品/仓库/批次/货主/币种查询五维现存量与成本。这是库存类问题的首选工具。',
     inputSchema: {
@@ -623,6 +636,7 @@ export const TOOLS = [
   {
     name: 'inventory.list_batches',
     level: 'read',
+    perms: ['inventory.batch.view'],
     title: '批次与效期',
     description: '查询批次主档与效期（支持小时级），回答「哪些批次临期」「这个批次还有多少」。',
     inputSchema: {
@@ -659,6 +673,7 @@ export const TOOLS = [
   {
     name: 'inventory.get_cost',
     level: 'read',
+    perms: ['inventory.cost.view'],
     title: '结存成本',
     description: '查询指定维度的结存数量与移动加权成本、结存金额（第三轮新增：成本改移动加权）。',
     inputSchema: {
@@ -690,6 +705,7 @@ export const TOOLS = [
   {
     name: 'inventory.pick_suggestion',
     level: 'read',
+    perms: ['inventory.stock.query'],
     title: '批次拣选建议',
     description: '按当前拣选规则（FEFO/FIFO）给出出货批次建议，并提示过保跳过情况。不写库，只做建议。',
     inputSchema: {
@@ -712,6 +728,7 @@ export const TOOLS = [
   {
     name: 'inventory.list_transactions',
     level: 'read',
+    perms: ['inventory.stock.query'],
     title: '出入库流水',
     description: '查询库房收发存流水（含货主、币种、成本维度）。',
     inputSchema: {
@@ -750,6 +767,7 @@ export const TOOLS = [
   {
     name: 'inventory.stock_alert',
     level: 'read',
+    perms: ['inventory.stock.view'],
     title: '库存预警',
     description: '返回低于安全库存、超储、以及临期（含过保）的库存清单。',
     inputSchema: {
@@ -788,6 +806,7 @@ export const TOOLS = [
   {
     name: 'purchase.list_orders',
     level: 'read',
+    perms: ['purchase.order.view', 'purchase.inbound', 'purchase.return'],
     title: '采购订单',
     description: '查询采购订单及在途情况。',
     inputSchema: {
@@ -816,6 +835,7 @@ export const TOOLS = [
   {
     name: 'sales.list_orders',
     level: 'read',
+    perms: ['sales.order.view'],
     title: '销售订单',
     description: '查询销售订单（含渠道、门店、经销商维度）。',
     inputSchema: {
@@ -846,6 +866,7 @@ export const TOOLS = [
   {
     name: 'order.trace_document',
     level: 'read',
+    perms: ['sales.order.view', 'purchase.order.view', 'inventory.stock.view'],
     title: '单据全链路追溯',
     description: '给一个单据号，回溯它的上下游单据与库存流水，回答「这张单走到哪一步了」。',
     inputSchema: {
@@ -894,6 +915,7 @@ export const TOOLS = [
   {
     name: 'report.sales_summary',
     level: 'read',
+    perms: ['sales.order.view'],
     title: '销售汇总',
     description: '按时间/渠道/门店汇总销售额、订单数、毛利（成本取移动加权）。',
     inputSchema: {
@@ -930,6 +952,7 @@ export const TOOLS = [
   {
     name: 'report.dashboard_kpi',
     level: 'read',
+    perms: [],
     title: '经营看板',
     description: '返回核心 KPI：库存总值、在途采购、待发货、库存预警数等。',
     inputSchema: { type: 'object', properties: { currency: S.str('币种，默认 CNY') } },
@@ -956,6 +979,7 @@ export const TOOLS = [
   {
     name: 'org.tree',
     level: 'read',
+    perms: [],
     title: '组织树',
     description: '返回组织主体树（总部→区域→门店→仓/央厨），含货主与币种。',
     inputSchema: { type: 'object', properties: { type: S.str('按类型过滤：group/region/store/warehouse/kitchen/dealer') } },
@@ -980,6 +1004,7 @@ export const TOOLS = [
   {
     name: 'inventory.stock_in',
     level: 'write',
+    perms: ['purchase.inbound'],
     title: '入库',
     description: '对指定仓库/SKU/批次执行入库，成本按移动加权重算。写操作，必须提供幂等键。',
     inputSchema: {
@@ -1026,6 +1051,7 @@ export const TOOLS = [
   {
     name: 'inventory.stock_out',
     level: 'write',
+    perms: ['sales.outbound'],
     title: '出库',
     description: '对指定仓库/SKU/批次执行出库，按移动加权均价结转成本。写操作，必须提供幂等键。',
     inputSchema: {
@@ -1072,6 +1098,7 @@ export const TOOLS = [
   {
     name: 'inventory.transfer',
     level: 'write',
+    perms: ['inventory.transfer'],
     title: '调拨',
     description: '仓库间调拨。货主相同为内部调拨（成本平移）；货主不同必须改用 ownership_transfer。写操作，必须提供幂等键。',
     inputSchema: {
@@ -1112,6 +1139,7 @@ export const TOOLS = [
   {
     name: 'inventory.ownership_transfer',
     level: 'write',
+    perms: ['inventory.transfer.ownership'],
     title: '货权转移',
     description: '跨货主的货权转移（如中央厨房 → 加盟店，加盟店是独立主体）。一步完成原货主出库与新货主入库。写操作，必须提供幂等键。',
     inputSchema: {
@@ -1150,6 +1178,7 @@ export const TOOLS = [
   {
     name: 'inventory.adjust',
     level: 'danger',
+    perms: ['inventory.adjust'],
     title: '库存调整（盘盈亏）',
     description: '直接调整库存数量（盘盈/盘亏），会影响账面与成本。高危操作，需人工二次确认。',
     inputSchema: {
@@ -1179,6 +1208,7 @@ export const TOOLS = [
   {
     name: 'pricing.update_price',
     level: 'danger',
+    perms: ['master.price.edit'],
     title: '调价',
     description: '修改商品或 SKU 的零售价/经销价/会员价。高危操作（影响所有渠道报价），需人工二次确认。',
     inputSchema: {
@@ -1246,6 +1276,7 @@ export const TOOLS = [
   {
     name: 'sales.cancel_order',
     level: 'danger',
+    perms: ['sales.order.edit'],
     title: '作废订单',
     description: '作废销售订单并释放已占用库存与授信。高危操作，需人工二次确认。',
     inputSchema: {
@@ -1281,6 +1312,7 @@ export const TOOLS = [
   {
     name: 'approval.approve',
     level: 'danger',
+    perms: ['approval.instance.act'],
     title: '审批通过',
     description: '对审批实例执行通过动作。高危操作（等同于代表人签字），需人工二次确认。',
     inputSchema: {
@@ -1362,6 +1394,7 @@ export const TOOLS = [
   {
     name: 'purchase.create_requisition',
     level: 'write',
+    perms: ['purchase.req.edit'],
     title: '创建请购单',
     description: '创建一张请购单（草稿）。未给价的行会走采购取价链（协议价 → 该供应商最近成交价 → 历史订单价 → 标准成本）并回报价格来源。事务类操作，必须提供幂等键。',
     inputSchema: {
@@ -1442,6 +1475,7 @@ export const TOOLS = [
   {
     name: 'purchase.create_order',
     level: 'write',
+    perms: ['purchase.order.edit'],
     title: '创建采购订单',
     description: '创建一张采购订单（草稿）。支持直运门店（fulfill_type=direct）。事务类操作，必须提供幂等键。',
     inputSchema: {
@@ -1496,6 +1530,7 @@ export const TOOLS = [
   {
     name: 'purchase.create_invoice',
     level: 'write',
+    perms: ['purchase.invoice.edit'],
     title: '录入采购发票',
     description: '录入一张采购发票（草稿，不涉及库存）。票号在同一供应商下不可重复。事务类操作，必须提供幂等键。',
     inputSchema: {
@@ -1555,6 +1590,7 @@ export const TOOLS = [
   {
     name: 'purchase.build_settlement',
     level: 'write',
+    perms: ['purchase.settle.edit'],
     title: '生成采购结算单',
     description: '按供应商（可限定期间）汇总入库与发票，生成一张采购结算单（草稿）。差异 = 入库暂估 − 发票，不抹平。事务类操作，必须提供幂等键。',
     inputSchema: {
@@ -1595,6 +1631,7 @@ export const TOOLS = [
   {
     name: 'purchase.create_payment',
     level: 'write',
+    perms: ['purchase.payment.edit'],
     title: '登记付款单',
     description: '登记一张付款单（草稿）。核销目标不传则按 FIFO 自动分配到未结清结算单；传给则逐条过四道闸（主体/状态/金额/未付余额）。事务类操作，必须提供幂等键。',
     inputSchema: {
@@ -1648,6 +1685,7 @@ export const TOOLS = [
   {
     name: 'purchase.create_return',
     level: 'write',
+    perms: ['purchase.return'],
     title: '登记采购退货',
     description: '对供应商登记一张采购退货单并**立即出库**（退货是真出库，所以不留在草稿）。事务类操作，必须提供幂等键。',
     inputSchema: {
@@ -1691,6 +1729,7 @@ export const TOOLS = [
   {
     name: 'purchase.advance_requisition',
     level: 'danger',
+    perms: [],
     title: '请购单流转',
     description: '推进请购单状态：submit 提交 / approve 审批通过 / reject 驳回 / close 关闭 / cancel 取消。转单请用 purchase.convert_requisition（要指定行与供应商/仓）。高危操作，需人工二次确认；确认人必须有该动作的权限。',
     inputSchema: {
@@ -1717,6 +1756,7 @@ export const TOOLS = [
   {
     name: 'purchase.convert_requisition',
     level: 'danger',
+    perms: [],
     title: '请购单转采购订单',
     description: '把请购单转成采购订单（支持只转部分行）。不传 lines 则转全部未转行。高危操作，需人工二次确认；确认人需 purchase.order.edit 权限。',
     inputSchema: {
@@ -1753,6 +1793,7 @@ export const TOOLS = [
   {
     name: 'purchase.advance_order',
     level: 'danger',
+    perms: [],
     title: '采购订单流转',
     description: '推进采购订单状态：submit 提交 / approve 审批 / close 关闭 / cancel 取消。**收货请用 purchase.receive_order**（收货要写库存与成本，简化入口做不了）。高危操作，需人工二次确认。',
     inputSchema: {
@@ -1780,6 +1821,7 @@ export const TOOLS = [
   {
     name: 'purchase.receive_order',
     level: 'danger',
+    perms: [],
     title: '采购收货入库',
     description: '按采购订单收货：生成收货单 → 批次入库（写库存与成本流水）→ 推进订单状态。不传 items 则按订单未收数量全额收货。高危操作（动库存），需人工二次确认。',
     inputSchema: {
@@ -1824,6 +1866,7 @@ export const TOOLS = [
   {
     name: 'purchase.advance_invoice',
     level: 'danger',
+    perms: [],
     title: '采购发票流转',
     description: '推进采购发票状态：submit 提交 / verify 发票校验（三单匹配，超开票会被拒）/ post 入账 / void 作废。高危操作，需人工二次确认。',
     inputSchema: {
@@ -1849,6 +1892,7 @@ export const TOOLS = [
   {
     name: 'purchase.advance_settlement',
     level: 'danger',
+    perms: [],
     title: '采购结算流转',
     description: '推进采购结算单状态：submit 提交 / audit 审核 / settle 结清 / void 作废。高危操作，需人工二次确认。',
     inputSchema: {
@@ -1874,6 +1918,7 @@ export const TOOLS = [
   {
     name: 'purchase.advance_payment',
     level: 'danger',
+    perms: [],
     title: '付款单流转（含核销）',
     description: '推进付款单状态：submit 提交审批 / pay 执行付款（**同时核销结算单**，重算已付金额，足额自动结清）/ void 作废。高危操作（动钱），需人工二次确认。',
     inputSchema: {
@@ -1919,6 +1964,7 @@ export const TOOLS = [
   {
     name: 'doc.list_types',
     level: 'read',
+    perms: [],
     title: '单据类型字典（AI 的入口地图）',
     description:
       '列出系统里全部单据类型：每种单据有哪些状态、在什么状态下能做哪些动作、哪些动作是高危（需人工确认）。'
@@ -1950,6 +1996,7 @@ export const TOOLS = [
   {
     name: 'doc.query',
     level: 'read',
+    perms: [],
     title: '查任意单据列表',
     description:
       '按单据类型（`doc.list_types` 里的 code）查单据列表，可按状态与关键词过滤。'
@@ -2007,6 +2054,7 @@ export const TOOLS = [
   {
     name: 'doc.get',
     level: 'read',
+    perms: [],
     title: '查任意单据详情 + 流转留痕',
     description:
       '给单据类型与 id（或单号），返回单头字段与**完整流转留痕**（谁、什么时候、从哪个状态到哪个状态）。'
@@ -2058,6 +2106,7 @@ export const TOOLS = [
   {
     name: 'doc.transition',
     level: 'write',
+    perms: [],
     title: '推进任意单据（高危边拒收）',
     description:
       '按内核状态机推进任意单据：先看 `doc.list_types` 里这个类型在该状态下的 safe_actions。'

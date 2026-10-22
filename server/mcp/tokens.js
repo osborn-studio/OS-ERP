@@ -98,14 +98,18 @@ export function createToken(db, {
     throw tokenFieldError(field, v, '字符串 / 字符串数组 / null')
   }
 
+  // 有主令牌 = 所有者的委托（ADR-0011）：所有者此刻必须存在且 active，并把其当前
+  // `auth_version` 记进令牌 —— 之后所有者任何一次撤权事件（版本递增）都会让这张令牌失效。
+  const owner = ownerAtIssue(db, ownerUserId)
+
   const { raw, hash, prefix } = generateToken()
   const scopeStr = asCsv('scopes', scopes, 'read')
   const info = db.prepare(`
-    INSERT INTO agent_tokens (name, token_hash, token_prefix, owner_user_id, org_id, industry, scopes,
+    INSERT INTO agent_tokens (name, token_hash, token_prefix, owner_user_id, owner_auth_version, org_id, industry, scopes,
                               allow_tools, deny_tools, rate_limit, expires_at, remark)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
   `).run(
-    name, hash, prefix, ownerUserId, orgId, boundIndustry, scopeStr,
+    name, hash, prefix, owner?.id ?? null, owner?.auth_version ?? null, orgId, boundIndustry, scopeStr,
     asCsv('allowTools', allowTools),
     asCsv('denyTools', denyTools),
     rateLimit, expiresAt, remark
@@ -113,12 +117,55 @@ export function createToken(db, {
   return { id: Number(info.lastInsertRowid), token: raw, prefix, name, scopes: scopeStr }
 }
 
-/** 从请求头/参数提取 Token 原文 */
+/**
+ * 从请求提取 Agent Token 原文：**只认 `Authorization: Bearer`**（ADR-0011 / F13）。
+ *
+ * 原来还收 `x-agent-token` 头、`?token=` 查询串与 `body.token`。查询串会原样落进访问日志、
+ * 代理日志与浏览器历史 —— 一张长期有效的写型凭据就这样被"记"在各处。
+ * 不收 header 之外的任何位置，也不做兼容回退：回退就是把洞留着。
+ */
 export function extractToken(req) {
-  const h = req.headers.authorization || req.headers['x-agent-token'] || ''
-  if (String(h).startsWith('Bearer ')) return String(h).slice(7).trim()
-  if (h) return String(h).trim()
-  return req.query?.token || req.body?.token || null
+  const h = String(req.headers?.authorization || '')
+  if (!/^Bearer\s/i.test(h)) return null
+  const raw = h.slice(7).trim()
+  return raw || null
+}
+
+/** 所有者相关的稳定业务码（签发侧 400；调用侧见 `delegation.js`） */
+export const TOKEN_OWNER_INVALID = 'TOKEN_OWNER_INVALID'
+export const TOKEN_OWNER_INACTIVE = 'TOKEN_OWNER_INACTIVE'
+
+/**
+ * 签发时对所有者的**唯一**判据：存在且 active，并取其当前 `auth_version` 记进令牌。
+ * 停用账号不能再被签新令牌 —— 否则"停用联动吊销"可以被"再签一张"绕过。
+ */
+function ownerAtIssue(db, ownerUserId) {
+  if (ownerUserId == null) return null
+  const u = db.prepare('SELECT id, status, auth_version FROM users WHERE id=?').get(Number(ownerUserId))
+  if (!u) {
+    const e = new Error(`令牌所有者 #${showValue(ownerUserId)} 不存在`)
+    e.status = 400
+    e.code = TOKEN_OWNER_INVALID
+    throw e
+  }
+  if (u.status !== 'active') {
+    const e = new Error(`令牌所有者 #${u.id} 已停用，不能签发委托令牌`)
+    e.status = 400
+    e.code = TOKEN_OWNER_INACTIVE
+    throw e
+  }
+  return u
+}
+
+/**
+ * 吊销某所有者名下**全部**仍有效的令牌（ADR-0011）。由账号停用在同一事务里调用；
+ * 返回吊销条数。不吞错：事务内抛错就让整笔账号变更一起回滚。
+ */
+export function revokeOwnerTokens(db, ownerUserId, remark = '所有者已停用，令牌随之吊销') {
+  if (ownerUserId == null) return 0
+  return db
+    .prepare("UPDATE agent_tokens SET status='revoked', remark=? WHERE owner_user_id=? AND status='active'")
+    .run(remark, Number(ownerUserId)).changes
 }
 
 /** 校验 Token，返回 { token } 或 { error } */
@@ -191,4 +238,4 @@ export function ensureDemoTokens(db, { industry = 'cosmetic', orgId = null } = {
   return created
 }
 
-export default { createToken, verifyToken, revokeToken, extractToken, tokenScopes, tokenAllow, tokenDeny, touchToken, ensureDemoTokens, SCOPE_LABEL }
+export default { createToken, verifyToken, revokeToken, revokeOwnerTokens, extractToken, tokenScopes, tokenAllow, tokenDeny, touchToken, ensureDemoTokens, SCOPE_LABEL }
