@@ -50,7 +50,11 @@ const DECLARED = [
   'src/constants/brand.ts',
   'src/constants/capabilities.ts',
   'src/pages/system/McpCenter.tsx',
-  'tailwind.config.js'
+  'tailwind.config.js',
+  // 授信释放台账（ADR-0013）：释放/逆向的唯一实现、建表迁移与守卫测试
+  'server/lib/credit-release.js',
+  'server/db/migrations/052_credit_release_ledger.cjs',
+  'tests/credit-reversal.test.mjs'
 ]
 
 /** 参与覆盖率统计的源文件（**排除** node_modules / dist / data） */

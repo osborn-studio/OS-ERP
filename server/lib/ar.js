@@ -27,24 +27,24 @@
  *   ② **核销生效点 = 收款单确认**。草稿上的核销明细只是「打算怎么抵」，
  *      确认后才真正抵减应收、才释放授信。钱没到账，额度就得继续占着。
  *
- * 与信用的接缝：确认收款 → credit.settle 释放占用；作废收款 → 重新计算，
- * 被释放的额度不会自动回来（要显式 release），因为作废本身是一次会计事件，
- * 由调用方决定要不要补一笔反向占用。
+ * 与信用的接缝（唯一实现在 `lib/credit-release.js`，本文件只调用）：
+ *   确认收款 / 预收抵扣 → 按核销明细映射到占用所在来源（SI → 其 SO）释放，
+ *   并把**实际释放额**逐笔记进 `credit_release_ledger`；
+ *   作废收款 → **只按这些台账行**逐笔恢复（不按总额猜）；重复逆向 / 跨客户 / 超来源占用一律拒绝。
+ *   原口径"作废不自动回收授信"已废止：AR 债务恢复而额度不恢复，等于白送授信（ADR-0013）。
  */
 import { nextDocNoAuto } from './docno.js'
 // S-10：改一笔应收（冲减金额 / 作废）必须留痕，与流转同一套 `logEvent`。
 import { applyTransition, logEvent } from './docflow.js'
-import { settle as creditSettle } from './credit.js'
 // 「今天」只有一个出处，详见 dates.js 的模块注释。
 // 本模块曾经用 `new Date().toISOString().slice(0,10)`（**UTC 日期**）算账龄，
 // 而 v_ar_aging_detail 视图用的是 `date('now','localtime')` ——
 // 东八区本地 00:00–08:00 之间两者差一天，一张「本地今天到期」的应收单
 // 在逐笔账龄里算逾期、在汇总账龄里不算，合计对不上且不报错。
 import { localDate, localNow, addDays } from './dates.js'
-// 订货中心的授信占用存在另一本台账（oc_credit_ledger），回款时要同步释放。
-// 两本台账的分工：credit_accounts 是「全公司授信」（模块 08），
-// oc_credit_ledger 是「订货中心专用占用」（模块 12A）；一张 OC 订单只占后者。
-import { releaseByOrder as ocReleaseByOrder, reoccupyByOrder as ocReoccupyByOrder } from './oc-credit.js'
+// 授信释放与逆向的唯一实现：统一授信（credit_ledger）与订货中心台账（oc_credit_ledger）
+// 都在那里按来源释放 / 恢复，并记 `credit_release_ledger`。本文件不再直接写任何一本授信台账。
+import { releaseForReceipt, reverseForReceipt } from './credit-release.js'
 
 /** 应收来源类型：SO 销售订单 / OC 订货单 / SI 销售发票 / MANUAL 手工补账 */
 export const AR_SOURCE_SO = 'SO'
@@ -231,16 +231,8 @@ export function arOfOrder(db, orderId) {
     .all(AR_SOURCE_SO, id, AR_SOURCE_SI, id)
 }
 
-/** An invoice can own the receivable while its sales order owns the credit hold. */
-function creditSourceOfAr(db, ar) {
-  if (ar.source_type === AR_SOURCE_SI && ar.source_id) {
-    const order = db.prepare(`SELECT so.id, so.doc_no
-      FROM sales_invoices si JOIN sales_orders so ON so.id=si.order_id
-      WHERE si.id=?`).get(ar.source_id)
-    if (order) return { sourceType: AR_SOURCE_SO, sourceId: order.id, docNo: order.doc_no }
-  }
-  return { sourceType: ar.source_type, sourceId: ar.source_id, docNo: ar.source_doc_no || ar.doc_no }
-}
+// 「发票名下的债权属于它的销售订单」这条映射（SI → SO）已收敛到 `credit-release.js` 的
+// `creditSourceOfAr`：释放与恢复必须读同一份归属，这里不再另写一遍。
 
 /** 重算一张应收单的已收与状态：明细是唯一真相，状态由它推导 */
 export function recalcAr(db, arId) {
@@ -653,52 +645,16 @@ export function confirmReceipt(db, { id, actor = null, releaseCredit = true, sou
       })
     }
 
-    if (releaseCredit) {
-      // 释放授信：只有确认收款才释放（口径见文件头 ②）
-      //
-      // ⚠️ A06：**占用在哪里，释放就在哪里。**
-      // 授信占用是在「订单确认」那一刻按 `sourceType='SO'` 写进台账的（sales.js / order-center）
-      // 而这里原来按 `sourceType='RCP'` 去释放 —— 那张收款单名下从来没有占用过，
-      // `openAmountOf(…,'RCP',id)` 恒为 0 ⇒ 一条释放流水都写不出来 ⇒
-      // **额度只减不增**：客户还了钱，可用额度却不回来。
-      // 所以释放必须按**这笔核销对应应收单的来源**（SO / OC / 或没有来源）分别走。
-      const acc = db
-        .prepare('SELECT id FROM credit_accounts WHERE subject_type=? AND subject_id=?')
-        .get(r.subject_type, r.subject_id)
-      if (acc) {
-        // 没有来源的应收（例如按发票新建）仍然按收款单本身释放，保留旧口径不误伤
-        let releasedByRcp = 0
-        for (const a of db.prepare('SELECT * FROM receipt_allocations WHERE receipt_id=?').all(id)) {
-          const ar = db.prepare('SELECT * FROM ar_documents WHERE id=?').get(a.ar_id)
-          if (ar?.source_type === AR_SOURCE_OC && ar.source_id) continue // 订货中心在下面的循环里释放自己那本台账
-          if (ar?.source_type && ar.source_id) {
-            // SI invoice debt is part of its SO's credit obligation. Release only this
-            // allocation amount; creditSettle additionally caps it at remaining hold.
-            const creditSource = creditSourceOfAr(db, ar)
-            creditSettle(db, {
-              account: acc.id,
-              amount: a.amount,
-              ...creditSource,
-              operator: actor,
-              remark: `收款核销释放授信（对应 ${ar.doc_no}）`
-            })
-          } else {
-            releasedByRcp += Number(a.amount || 0)
-          }
-        }
-        if (releasedByRcp > 0.005) {
-          creditSettle(db, {
-            account: acc.id,
-            amount: releasedByRcp,
-            sourceType: 'RCP',
-            sourceId: id,
-            docNo: r.doc_no,
-            operator: actor,
-            remark: '收款核销释放授信（无来源应收）'
-          })
-        }
-      }
-    }
+    // 释放授信：只有确认收款才释放（口径见文件头 ②）。
+    //
+    // ⚠️ A06：**占用在哪里，释放就在哪里。** 占用按 SO（或 OC 自己那本台账）写入，
+    // 释放就按核销明细映射回 SO / OC；发票（SI）的债权属于它的 SO。
+    // 映射、封顶、记台账（credit_release_ledger）都在 `releaseForReceipt` 一处 ——
+    // 作废时按台账逐笔恢复，所以这里**不能**绕过它直接写台账。
+    // `releaseCredit=false` 只跳过统一授信（旧口径），订货中心台账照常释放。
+    const creditReleased = releaseForReceipt(db, {
+      receipt: r, allocations: allocs, trigger: 'confirm', actor, unified: releaseCredit !== false
+    })
     // 顺带把关联销售订单的已收金额对齐（订单侧仍保留 paid_amount，用于旧界面与报表）
     for (const a of allocs) {
       const ar = db.prepare('SELECT * FROM ar_documents WHERE id=?').get(a.ar_id)
@@ -706,26 +662,16 @@ export function confirmReceipt(db, { id, actor = null, releaseCredit = true, sou
         db.prepare('UPDATE sales_orders SET paid_amount = ? WHERE id=?').run(ar.allocated_amount, ar.source_id)
       }
     }
-    // 订货中心订单（模块 12A）：回款必须同步释放它那本台账上的占用，
-    // 否则订货中心看到的可用额度永远不回来 —— 这是「同一个客户两个数字」的根源
-    for (const a of allocs) {
-      const ar = db.prepare('SELECT * FROM ar_documents WHERE id=?').get(a.ar_id)
-      if (ar?.source_type === AR_SOURCE_OC && ar.source_id) {
-        ocReleaseByOrder(db, {
-          orderId: ar.source_id,
-          amount: a.amount,
-          changeType: 'repay',
-          operator: actor?.name || null,
-          remark: `回款核销释放（${ar.source_doc_no || ar.doc_no}）`
-        })
-      }
-    }
-    return db.prepare('SELECT * FROM receipts WHERE id=?').get(id)
+    return { ...db.prepare('SELECT * FROM receipts WHERE id=?').get(id), credit_released: creditReleased }
   })
   return tx()
 }
 
-/** 作废收款：核销失效并重算应收（作废本身不自动回收额度，避免静默改账） */
+/**
+ * 作废收款：核销失效并重算应收，**按释放台账逐笔恢复授信**。
+ * 债务回来了额度就必须回来 —— 原来只回补 OC、统一授信不动，等于每作废一次就白送一笔授信。
+ * 恢复的判据与拒绝条件全在 `reverseForReceipt`；整段在一个事务里，中途失败整体回滚。
+ */
 export function voidReceipt(db, { id, actor = null, reason = null } = {}) {
   const r = db.prepare('SELECT * FROM receipts WHERE id=?').get(id)
   if (!r) throw new ArError('RC_NOT_FOUND', '收款单不存在', 404)
@@ -754,24 +700,17 @@ export function voidReceipt(db, { id, actor = null, reason = null } = {}) {
       })
     }
     // 订单侧已收金额跟着回退（核销失效了，订单就不能再显示已收）
-    // 这里必须读核销明细的原始金额：recalcAr 之后 ar.allocated_amount 已经是新的余额，
-    // 用它去回退订单会算错（作废不掉、或回退过头）
-    for (const a of db.prepare('SELECT ar_id, amount FROM receipt_allocations WHERE receipt_id=?').all(id)) {
+    const allocs = db.prepare('SELECT ar_id, amount FROM receipt_allocations WHERE receipt_id=?').all(id)
+    for (const a of allocs) {
       const ar = db.prepare('SELECT * FROM ar_documents WHERE id=?').get(a.ar_id)
       if (ar?.source_type === 'SO' && ar.source_id) {
         db.prepare('UPDATE sales_orders SET paid_amount=? WHERE id=?').run(ar.allocated_amount, ar.source_id)
       }
-      // 订货中心：作废收款 = 账又欠回去了，额度要占回来（不占回来等于白送授信）
-      if (ar?.source_type === AR_SOURCE_OC && ar.source_id) {
-        ocReoccupyByOrder(db, {
-          orderId: ar.source_id,
-          amount: a.amount,
-          operator: actor?.name || null,
-          remark: `核销作废恢复占用（${ar.source_doc_no || ar.doc_no}）`
-        })
-      }
     }
-    return db.prepare('SELECT * FROM receipts WHERE id=?').get(id)
+    // 授信恢复：只按 credit_release_ledger 的行逐笔占回（统一授信 + 订货中心台账）。
+    // `allocations` 只给"迁移前没有台账行"的旧收款单退回旧口径用（见 credit-release.js）。
+    const creditReversal = reverseForReceipt(db, { receipt: r, allocations: allocs, actor, reason })
+    return { ...db.prepare('SELECT * FROM receipts WHERE id=?').get(id), credit_reversal: creditReversal }
   })
   return tx()
 }
@@ -1253,18 +1192,13 @@ export function applyPrepay(db, { receiptId, arId = null, amount = null, auto = 
     db.prepare('UPDATE receipts SET allocated_amount=?, updated_at=? WHERE id=?').run(allocTotal, nowText(), receiptId)
     for (const p of plan) recalcAr(db, p.ar_id)
 
-    // 抵账同样要放授信 / 回写订单已收 —— 与确认收款走同一套口径
+    // 抵账同样要放授信 / 回写订单已收 —— 与确认收款**同一份实现**（原来这里只释放 OC，
+    // SO / SI 对应的统一授信滞留不放；现在按来源释放、封顶并记台账，作废时逐笔恢复）。
+    const creditReleased = releaseForReceipt(db, {
+      receipt: r, allocations: plan.map((p) => ({ ar_id: p.ar_id, amount: p.amount })), trigger: 'prepay', actor
+    })
     for (const p of plan) {
       const ar = db.prepare('SELECT * FROM ar_documents WHERE id=?').get(p.ar_id)
-      if (ar?.source_type === AR_SOURCE_OC && ar.source_id) {
-        ocReleaseByOrder(db, {
-          orderId: ar.source_id,
-          amount: p.amount,
-          changeType: 'repay',
-          operator: actor?.name || null,
-          remark: `预收抵账释放（${ar.source_doc_no || ar.doc_no}）`
-        })
-      }
       if (ar?.source_type === 'SO' && ar.source_id) {
         db.prepare('UPDATE sales_orders SET paid_amount=? WHERE id=?').run(ar.allocated_amount, ar.source_id)
       }
@@ -1274,7 +1208,8 @@ export function applyPrepay(db, { receiptId, arId = null, amount = null, auto = 
       receipt: db.prepare('SELECT * FROM receipts WHERE id=?').get(receiptId),
       plan,
       applied: money(plan.reduce((s, p) => s + p.amount, 0)),
-      remaining: money(money(r.amount) - allocTotal)
+      remaining: money(money(r.amount) - allocTotal),
+      credit_released: creditReleased
     }
   })
   return tx()
