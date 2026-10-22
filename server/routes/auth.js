@@ -16,7 +16,7 @@
 import { Router } from 'express'
 import bcrypt from 'bcryptjs'
 import { getDb, getDbFor, INDUSTRIES, DEFAULT_INDUSTRY, normalizeIndustry } from '../db/index.js'
-import { ok, fail, wrap, pageParams, paged, failFromError } from '../lib/http.js'
+import { ok, fail, bizFail, wrap, pageParams, paged, failFromError } from '../lib/http.js'
 import { signToken, requireAuth, requireRole, ROLES, userPermissions, resolveOrgScope } from '../middleware/auth.js'
 import { audit } from '../middleware/audit.js'
 import { createAccount, updateAccount, changePassword, logoutAll, replaceRolePermissions } from '../lib/account-security.js'
@@ -25,7 +25,7 @@ import { consumeLoginAttempt } from '../lib/login-throttle.js'
 const r = Router()
 // Public dummy verifier, never attached to an account; avoids the no-user fast path.
 const DUMMY_PASSWORD_HASH = '$2a$12$Xue8lAEQUVLpH1eO2tZGU.4I/1wDNa4HP3PDE.pPntUqsau1FikYq'
-const loginFailed = res => fail(res, '账号或密码无效', 401, 'AUTH_INVALID_CREDENTIALS', { code: 'AUTH_INVALID_CREDENTIALS' })
+const loginFailed = res => bizFail(res, { status: 401, code: 'AUTH_INVALID_CREDENTIALS', message: '账号或密码无效' })
 
 r.post(
   '/login',
