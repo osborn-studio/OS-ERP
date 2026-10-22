@@ -2,6 +2,10 @@
 
 更新：2026-10-22。全新公开仓库：[osborn-studio/OS-ERP](https://github.com/osborn-studio/OS-ERP)，采用 MIT，仅导入清理后的当前文件快照。旧仓库保留为私有归档，其 PR/Actions/历史对象不导入本仓库。未发布正式 Release、未部署。来源及旧 checkout 使用限制见 [PUBLICATION_HISTORY](../PUBLICATION_HISTORY.md)，MIT 决策不替代第三方权属核验。
 
+## 第四批当前状态（2026-10-22）
+
+第四批 4 路 subagent 并行，已合入 `integration`（PR #2）：授信占用投影单一写入者与对账守卫（ADR-0014，修复 `test-quote-credit` 原有两项失败）；待办接口权限/范围与 Agent Token 有效状态（ADR-0015，迁移 055，新增 `/api/mcp/tokens/:id` 与 `sweep`）；恢复演练与升级失败回退演练脚本及恢复手册（ADR-0016，`docs/operations/restore-runbook.md`）；托管 CI 新增 `docker` job（linux/amd64 构建 + `scripts/docker-smoke.mjs` 冒烟）。验证结果以 PR #2 的托管 CI 为准。
+
 ## 第三批当前状态（2026-10-22）
 
 第三批由 6 路 Claude Code subagent 在独立工作树并行实现，主执行器集成到 `integration` 分支：F05/F08/F09 通知加固（ADR-0008）、F12 备份校验与迁移校验和（ADR-0009）、F13 审计与错误脱敏（ADR-0010）、F07 MCP 委托授权（ADR-0011）、F14/F16 容器最小化与版本契约（ADR-0012）、授信逆向台账（ADR-0013）。新增迁移 052、053；新增 9 个 `tests/*.test.mjs` 专项。集成后 Mac mini 开发检查：`npm run test:focused` 全绿、`tsc`、Vite 构建、bizcode/file-header/api-contract 守卫全绿；两处原有守卫失败（SESSION_REVOKED/AUTH_INVALID_CREDENTIALS 未经 `bizFail`、SessionBoundary 头缺分隔线）已修。
