@@ -14,7 +14,9 @@
  */
 
 import { getDb } from '../db/index.js'
-import { bizFail, statusOf } from '../lib/http.js'
+import { bizFail, statusOf, newIncidentId } from '../lib/http.js'
+import { insertAuditRow, auditStrictRow } from '../lib/audit-trail.js'
+import { redactUrl } from '../lib/redact.js'
 
 // ===========================================================================
 // 留痕：**存在性优先于明细**
@@ -33,20 +35,10 @@ import { bizFail, statusOf } from '../lib/http.js'
 //      BigInt、`toJSON` 里抛），那时把明细退化成一句标记串。
 //      为什么不做成"失败就整条不写"：**明细丢了可以补（事件本身在别处还能查），
 //      记录没了就永久没了** —— 审计链断一环，比链上少一条备注严重得多。
-const UNSERIALIZABLE_DETAIL = '{"__unserializable__":true}'
-
-/** `detail` → TEXT 列能收的字符串（唯一一处归一化） */
-function normalizeDetail(detail) {
-  if (detail === null || detail === undefined) return null
-  // 已经是字符串就**原样**用：调用点自己拼好的 JSON / 人话都不该被再包一层引号
-  if (typeof detail === 'string') return detail
-  try {
-    return JSON.stringify(detail)
-  } catch {
-    // 明细退化成"存不进"的标记，但**记录照写**（见上面口径 ②）
-    return UNSERIALIZABLE_DETAIL
-  }
-}
+// 口径 ①② 的实现现在住在 `lib/audit-trail.js`（`normalizeDetail` / `insertAuditRow`）：
+//   那是 `audit_logs` 的**唯一 INSERT 点**，`lib/account-security.js` 的严格安全审计也走它。
+//   明细在那里统一**脱敏**（凭据键遮盖、手机号部分遮盖，见 `lib/redact.js`）—— 请求体原样进审计表
+//   曾让密码 / 手机号落库（F13），所以脱敏不放在调用点，放在落库点。
 
 /**
  * `entity` / `entityId` 的**单点兼容**：早年的调用点传的是 `target: 'period:2026-10'`。
@@ -75,6 +67,22 @@ function entityOf(payload) {
   return i > 0 ? { entity: t.slice(0, i), entityId: t.slice(i + 1) } : { entity: t, entityId: null }
 }
 
+/** `req` + 调用点载荷 → `lib/audit-trail.js` 认的行（唯一一处映射，`audit` / `auditStrict` 共用） */
+function rowOf(req, payload) {
+  const u = req.user || {}
+  const { entity, entityId } = entityOf(payload)
+  return {
+    userId: u.uid || null,
+    userName: u.name || 'anonymous',
+    action: payload.action,
+    module: payload.module || null,
+    entity,
+    entityId,
+    detail: payload.detail,
+    ip: req.ip || null
+  }
+}
+
 /**
  * 记一条留痕。**调用方不需要 try/catch** —— 本函数保证不抛（留痕失败不该打断业务），
  * 但失败会打日志（`console.error('[audit]', ...)`），不会静默。
@@ -82,24 +90,9 @@ function entityOf(payload) {
 export function audit(req, payload = {}) {
   try {
     const db = getDb()
-    const u = req.user || {}
-    const { entity, entityId } = entityOf(payload)
-    const stmt = db.prepare(
-      `INSERT INTO audit_logs (user_id, user_name, action, module, entity, entity_id, detail, ip)
-       VALUES (?,?,?,?,?,?,?,?)`
-    )
-    const args = [
-      u.uid || null,
-      u.name || 'anonymous',
-      payload.action,
-      payload.module || null,
-      entity,
-      entityId,
-      normalizeDetail(payload.detail),
-      req.ip || null
-    ]
+    const row = rowOf(req, payload)
     try {
-      stmt.run(...args)
+      insertAuditRow(db, row)
     } catch (e) {
       // 第二次机会：**去掉明细再写一次**。第一次失败可能是 detail 之外的任何原因
       // （列超长、库被锁、老库缺列…），但"记录必须存在"这条口径不变 ——
@@ -107,7 +100,7 @@ export function audit(req, payload = {}) {
       // 注意：单条 INSERT 是原子的，第一次失败不会留下半条，重试不会造成重复。
       console.error('[audit] 首次写入失败，去掉明细重试：', e.message)
       try {
-        stmt.run(...args.slice(0, 6), null, args[7])
+        insertAuditRow(db, row, { withDetail: false })
       } catch (e2) {
         console.error('[audit]', e2.message)
       }
@@ -116,6 +109,18 @@ export function audit(req, payload = {}) {
     // 连 getDb() 都拿不到（例如行业上下文没进请求）—— 同样只报不抛
     console.error('[audit]', e.message)
   }
+}
+
+/**
+ * **严格**留痕：给安全相关的变更（配置、信用额度、账号/权限…）用，**必须在业务事务内调用**。
+ *
+ * 与 `audit()` 的区别只有一条：写不进去就**抛**（503 `SECURITY_AUDIT_UNAVAILABLE`），
+ * 由包着它的 `db.transaction` 把业务写入一起回滚 —— "动作成功了但审计上不存在"对这类操作不可接受。
+ * 不在事务里调用会抛 `AUDIT_OUTSIDE_TX`（编码错误，不是运行时不可用）。
+ * 载荷形状与 `audit()` 完全相同；明细同样经过脱敏。实现见 `lib/audit-trail.js`。
+ */
+export function auditStrict(req, payload = {}) {
+  return auditStrictRow(getDb(), rowOf(req, payload))
 }
 
 export function auditMiddleware(req, res, next) {
@@ -129,8 +134,11 @@ export function errorHandler(err, req, res, _next) {
   // 自己算会把这类错误算成 500 → **日志记 500、响应实发 400/404**，报障时被日志带偏。
   // 判据由 `scripts/check-bizcode-shape.mjs` 的动态断言守着（响应码 === 日志里的码）。
   const status = statusOf(err)
-  if (status >= 500) console.error('[error]', req.method, req.originalUrl, err)
+  // 5xx：先发一个事件号，日志与响应都带它 —— 生产环境响应体不再回显 `err.message`（见 `bizFail`），
+  // 运维凭事件号到日志里找完整错误。URL 先脱敏（查询串里的 token= 之类不进日志）。
+  const incidentId = status >= 500 ? newIncidentId() : null
+  if (incidentId) console.error('[error]', incidentId, req.method, redactUrl(req.originalUrl), err)
   // 形状构造只有一处（http.js 的 bizFail）：这里曾经自己拼对象，结果是业务码只落在顶层
   // `error`、`detail` 里没有，与路由层的读法对不上。
-  bizFail(res, err)
+  bizFail(res, err, incidentId)
 }

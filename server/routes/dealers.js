@@ -18,7 +18,7 @@ import { getDb } from '../db/index.js'
 import { localDate } from '../lib/dates.js'
 import { ok, fail, wrap, pageParams, paged } from '../lib/http.js'
 import { requireAuth, requireRole, requirePerm, requireInternal, currentUser } from '../middleware/auth.js'
-import { audit } from '../middleware/audit.js'
+import { audit, auditStrict } from '../middleware/audit.js'
 import { nextDocNo } from '../lib/docno.js'
 // 返利计算与核销的**唯一实现**（批次 G）。本文件只保留端点，不再自带一份算法。
 import * as Rebate from '../lib/rebate.js'
@@ -388,9 +388,10 @@ r.put(
           })
         }
       }
+      // 返利发放 / 作废是资金相关动作：留痕**严格**且与改动同一个事务（写不进就一起回滚，见 ADR-0010）
+      auditStrict(req, { action: 'UPDATE', module: 'dealer', entity: 'dealer_rebates', entityId: id, detail: { status: next, status_before: row.status, rebate_rate: rebate_rate ?? null } })
     })
     exec()
-    audit(req, { action: 'UPDATE', module: 'dealer', entity: 'dealer_rebates', entityId: id, detail: status })
     return ok(res, db.prepare('SELECT * FROM dealer_rebates WHERE id=?').get(id))
   })
 )
@@ -580,12 +581,21 @@ r.post(
     const dealer = db.prepare('SELECT * FROM dealers WHERE id=?').get(id)
     if (!dealer) return fail(res, '经销商不存在', 404)
     const { credit_limit, credit_used, level, discount_rate, rebate_rate, status, settle_type } = req.body || {}
-    db.prepare(
-      `UPDATE dealers SET credit_limit=COALESCE(?,credit_limit), credit_used=COALESCE(?,credit_used), level=COALESCE(?,level),
-        discount_rate=COALESCE(?,discount_rate), rebate_rate=COALESCE(?,rebate_rate), status=COALESCE(?,status), settle_type=COALESCE(?,settle_type)
-       WHERE id=?`
-    ).run(credit_limit ?? null, credit_used ?? null, level ?? null, discount_rate ?? null, rebate_rate ?? null, status ?? null, settle_type ?? null, id)
-    audit(req, { action: 'UPDATE', module: 'dealer', entity: 'dealers', entityId: id, detail: 'credit' })
+    // 信用额度 / 折扣 / 启停是高风险主数据变更：改动与**严格**留痕同一个事务，审计写不进就不改（ADR-0010）
+    db.transaction(() => {
+      db.prepare(
+        `UPDATE dealers SET credit_limit=COALESCE(?,credit_limit), credit_used=COALESCE(?,credit_used), level=COALESCE(?,level),
+          discount_rate=COALESCE(?,discount_rate), rebate_rate=COALESCE(?,rebate_rate), status=COALESCE(?,status), settle_type=COALESCE(?,settle_type)
+         WHERE id=?`
+      ).run(credit_limit ?? null, credit_used ?? null, level ?? null, discount_rate ?? null, rebate_rate ?? null, status ?? null, settle_type ?? null, id)
+      auditStrict(req, {
+        action: 'DEALER_CREDIT_UPDATE', module: 'dealer', entity: 'dealers', entityId: id,
+        detail: {
+          before: { credit_limit: dealer.credit_limit, credit_used: dealer.credit_used, level: dealer.level, discount_rate: dealer.discount_rate, rebate_rate: dealer.rebate_rate, status: dealer.status, settle_type: dealer.settle_type },
+          patch: { credit_limit, credit_used, level, discount_rate, rebate_rate, status, settle_type }
+        }
+      })
+    })()
     return ok(res, db.prepare('SELECT * FROM dealers WHERE id=?').get(id))
   })
 )

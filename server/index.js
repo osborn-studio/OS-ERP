@@ -133,7 +133,8 @@ app.use((req, res, next) => {
     let industry = normalizeIndustry(req.headers['x-industry'])
     // ② 令牌里的行业（签发时确定）优先于头
     const raw = String(req.headers.authorization || req.headers['x-mall-token'] || '')
-    const token = raw.replace(/^Bearer\s+/i, '') || req.query.token || ''
+    // 只认受控头：`?token=` 不再是凭据来源（与 `requireAuth` 同一口径，F13）
+    const token = raw.replace(/^Bearer\s+/i, '')
     if (token) {
       try {
         const payload = jwt.verify(String(token), JWT_SECRET)

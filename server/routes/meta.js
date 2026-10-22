@@ -17,6 +17,7 @@ import { Router } from 'express'
 import { getDb } from '../db/index.js'
 import { ok, wrap, fail, failFromError } from '../lib/http.js'
 import { requireAuth, requireRole } from '../middleware/auth.js'
+import { auditStrict } from '../middleware/audit.js'
 import { DOC_TYPE_LABEL } from '../lib/stock.js'
 // 仓库类型文案的**唯一出处**在 `lib/warehouse.js`（与"新建/改仓"接口的取值域同一份）——
 // 分两份的后果实测过：餐饮线的 `kitchen` 不在字典里 ⇒ 界面上显示裸串 `kitchen`。
@@ -172,7 +173,14 @@ r.put(
     try {
       // 返回值里带 `changed`：值没变时不写日志、如实回答"这次没有变更"。
       // 界面上"点了一次保存但没改"是正常操作，所以不做成错误。
-      return ok(res, writeSetting(db, { key, value, reason, actor: actorOf(req) }))
+      // 配置是会计政策 / 业务口径：`setting_audit_log` 之外再进操作审计，且**严格**（写不进就连配置一起回滚）。
+      // 外层事务包住 `writeSetting` 自己的事务（嵌套为 savepoint），`auditStrict` 必须在这个事务里。
+      const out = db.transaction(() => {
+        const r = writeSetting(db, { key, value, reason, actor: actorOf(req) })
+        if (r.changed) auditStrict(req, { action: 'SETTING_SET', module: 'settings', entity: 'settings', entityId: key, detail: { setting: key, value_before: r.value_before, value_after: r.value, reason: reason ?? null } })
+        return r
+      })()
+      return ok(res, out)
     } catch (e) {
       // `failFromError` 只认 `{ code, status }` —— `SettingError` 两个都有
       if (failFromError(res, e)) return
@@ -191,7 +199,12 @@ r.post(
     const { key, reason } = req.body || {}
     if (!key) return fail(res, '缺少 key')
     try {
-      return ok(res, resetSetting(db, { key, reason, actor: actorOf(req) }))
+      const out = db.transaction(() => {
+        const r = resetSetting(db, { key, reason, actor: actorOf(req) })
+        if (r.changed) auditStrict(req, { action: 'SETTING_RESET', module: 'settings', entity: 'settings', entityId: key, detail: { setting: key, value_before: r.value_before, value_after: r.value, reason: reason ?? null } })
+        return r
+      })()
+      return ok(res, out)
     } catch (e) {
       if (failFromError(res, e)) return
       throw e

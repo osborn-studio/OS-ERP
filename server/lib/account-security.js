@@ -6,6 +6,7 @@
  */
 import bcrypt from 'bcryptjs'
 import { validateNewPassword } from './password-policy.js'
+import { auditStrictRow } from './audit-trail.js'
 
 const error = (code, message, status = 400) => Object.assign(new Error(message), { code, status })
 const SECURITY_FIELDS = new Set(['role', 'is_super', 'status', 'org_id', 'data_scope', 'dealer_id', 'store_id'])
@@ -27,14 +28,10 @@ function actorInTransaction(db, actor, admin = false) {
   if (admin && current.role !== 'admin') throw error('ACCOUNT_ADMIN_REQUIRED', '需要管理员权限', 403)
   return current
 }
+// 严格安全审计：INSERT 与"0 行也算失败"的判据在 `lib/audit-trail.js`（`audit_logs` 唯一写入点，含明细脱敏），
+// 失败抛 503 `SECURITY_AUDIT_UNAVAILABLE`，由 `atomic` 的事务回滚本次变更。
 function auditStrict(db, actor, action, entity, entityId, detail, ip) {
-  try {
-    const inserted = db.prepare(`INSERT INTO audit_logs (user_id,user_name,action,module,entity,entity_id,detail,ip)
-      VALUES (?, ?, ?, 'auth', ?, ?, ?, ?)`).run(actor.id, actor.name, action, entity, String(entityId), JSON.stringify(detail), ip || null)
-    if (inserted.changes !== 1) throw new Error('Security audit insert did not create a row')
-  } catch {
-    throw error('SECURITY_AUDIT_UNAVAILABLE', '安全审计暂不可用，变更未提交', 503)
-  }
+  auditStrictRow(db, { userId: actor.id, userName: actor.name, action, module: 'auth', entity, entityId, detail, ip: ip || null })
 }
 function atomic(db, fn) {
   try { return db.transaction(fn).immediate() } catch (e) {
