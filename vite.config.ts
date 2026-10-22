@@ -19,7 +19,9 @@ export default defineConfig({
     host: '127.0.0.1',
     port: 5173,
     proxy: {
-      '/api': { target: 'http://localhost:3001', changeOrigin: true }
+      '/api': { target: 'http://localhost:3001', changeOrigin: true },
+      // MCP 协议端点（JSON-RPC）在 demo/test 模式可用；开发态同源代理，否则页面上的 MCP 自检只在打包后正常
+      '/mcp': { target: 'http://localhost:3001', changeOrigin: true }
     }
   },
   build: {
