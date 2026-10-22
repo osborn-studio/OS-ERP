@@ -2,6 +2,15 @@
 
 状态：工作流配置已编写；尚未在 Linux Actions runner 上执行。创建配置不等于 CI 已通过。
 
+## 2026-10-22 托管 Actions 决定
+
+用户决定：仓库公开且尚未开始收费期间，Linux/Node/Python 验证使用 GitHub 托管 runner（`.github/workflows/ci.yml`，`ubuntu-latest`）。触发方式：push 到 main、pull request、手动 dispatch（可指定回归轮数）。工作流分两段：
+
+1. `checks`：锁文件安装、显式重建 better-sqlite3/esbuild、`tsc --noEmit`、Vite 构建、`npm run test:focused`。
+2. `regression`：在独立 venv 安装 `requirements-test.txt` 固定版本的 openpyxl，执行 `scripts/regress-isolated.mjs`（PR/push 默认 1 轮；手动 dispatch 默认 3 轮），只打印白名单汇总行并上传 `summary.json`，原始日志不上传。
+
+开始收费后切回专用 Linux 主机 `dmserver`（下文 `linux-validation.yml`）。托管 runner 的通过只代表对应提交的隔离源码回归，不是发行包验收或生产就绪。
+
 ## 平台边界
 
 用户明确要求：Python 和 Linux 的 Actions 验证使用 Linux 服务器；macOS 与 Swift 构建/测试使用 Mac Studio。Mac mini 可以进行本项目的源码开发和集成，但其结果不能标为 Linux 或 Mac Studio 平台验收。
