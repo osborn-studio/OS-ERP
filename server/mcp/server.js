@@ -36,6 +36,7 @@ import { extractToken, verifyToken, tokenScopes, tokenAllow, tokenDeny, touchTok
 import { resolveDelegation, effectiveScope, ownerToolDenied } from './delegation.js'
 import { requireAuth, requirePerm } from '../middleware/auth.js'
 import * as engine from '../lib/stock.js'
+import { versionInfo } from '../version.js'
 
 const r = Router()
 
@@ -43,7 +44,8 @@ const PROTOCOL_VERSION = '2026-07-28'
 const SERVER_INFO = {
   name: 'gml-supply-chain',
   title: 'GML 供应链协同系统',
-  version: '1.0.0',
+  // 与 /api、/api/meta/health、AI manifest 同一份版本与构建 SHA
+  ...versionInfo(),
   description: '原生 MCP：业务能力从系统内核直接暴露，而非外挂在传统 ERP 之上。'
 }
 

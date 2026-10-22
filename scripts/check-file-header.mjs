@@ -35,6 +35,7 @@ const DECLARED = [
   'server/lib/audit-trail.js',
   'server/lib/redact.js',
   'server/middleware/audit.js',
+  'server/version.js',
   'server/mcp/catalog.js',
   'server/mcp/delegation.js',
   'server/mcp/tokens.js',

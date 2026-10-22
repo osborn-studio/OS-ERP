@@ -79,6 +79,8 @@ import mcpRoutes from './mcp/server.js'
 import mcpAdminRoutes from './mcp/admin.js'
 import { buildOpenApi } from './openapi.js'
 import { installCapabilityGates, runtimeCapabilities } from './capabilities.js'
+// 版本与构建 SHA 的唯一出处（F16）：/api、health、AI manifest、MCP serverInfo 都从这里取
+import { versionInfo } from './version.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const PORT = Number(process.env.PORT || 3001)
@@ -175,7 +177,7 @@ app.get('/api', (_req, res) => {
     success: true,
     data: {
       name: 'GML 供应链协同系统',
-      version: '1.2.0',
+      ...versionInfo(),
       industries: Object.values(INDUSTRIES).map((x) => ({ code: x.code, name: x.name, label: x.label })),
       default_industry: DEFAULT_INDUSTRY,
       capabilities: runtimeCapabilities(),

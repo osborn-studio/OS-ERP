@@ -22,6 +22,8 @@ import { DOC_TYPE_LABEL } from '../lib/stock.js'
 // 仓库类型文案的**唯一出处**在 `lib/warehouse.js`（与"新建/改仓"接口的取值域同一份）——
 // 分两份的后果实测过：餐饮线的 `kitchen` 不在字典里 ⇒ 界面上显示裸串 `kitchen`。
 import { WAREHOUSE_TYPES } from '../lib/warehouse.js'
+// 版本 / 构建 SHA 只有一处（`server/version.js`）：健康检查是运维判断发布版本的落点，不能再写字面量
+import { versionInfo } from '../version.js'
 import { ROLES } from '../middleware/auth.js'
 // 配置的唯一出处与唯一写入点（批次 R）：
 //   · `SETTING_RULES` 定义全部键（标签 / 类型 / 默认值 / 值域 / 是否危险）；
@@ -81,7 +83,7 @@ r.get(
     return ok(res, {
       status: 'ok',
       service: 'gml-supply-chain',
-      version: '1.0.0',
+      ...versionInfo(),
       time: new Date().toISOString(),
       database: { tables, products, seeded: products > 0 }
     })

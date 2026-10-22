@@ -19,6 +19,7 @@ import { ok, fail, wrap, pageParams, paged } from '../lib/http.js'
 import { requireAuth, requirePerm, requireGlobalData } from '../middleware/auth.js'
 import { DOC_TYPE_LABEL } from '../lib/stock.js'
 import { metricDefinitions } from '../lib/metrics.js'
+import { versionInfo } from '../version.js'
 
 const r = Router()
 
@@ -30,7 +31,8 @@ r.get(
       system: {
         name: 'GML 供应链协同系统',
         industry: '化妆品 / 美妆零售',
-        version: '1.0.0',
+        // 版本与构建 SHA 与 /api、/api/meta/health 同源（server/version.js）
+        ...versionInfo(),
         description:
           '化妆品行业轻量级供应链协同系统，覆盖线上 OMS 平台对接、采购、销售、存货、线下门店与经销商管理。可作为 AI FDE 场景的数据承接底座。',
         base_path: '/api',

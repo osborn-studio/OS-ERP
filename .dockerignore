@@ -1,16 +1,33 @@
+# 构建上下文只需要：package*.json、index.html、src/、server/、public/、reusable/、前端/样式配置。
+# 规则由 tests/dockerfile-policy.test.mjs 静态守卫（必列项见该测试）。
 node_modules
 dist
 data
 .git
 .github
-*.log
-.DS_Store
-coverage
+.claude
 .vscode
 .idea
 .local
+.test-data
+.workbuddy
+_ref
 backups
 release
 test-evidence
+artifacts
+deliverables
+docs
+tests
+scripts
+coverage
+*.log
+*.db
+*.db-*
+.DS_Store
 .env
 .env.*
+*.md
+Dockerfile
+docker-compose.yml
+.dockerignore
