@@ -699,8 +699,8 @@ export function buildOpenApi() {
       post: { tags: ['应收与收款'], summary: '登记收款单（草稿 + 计划核销；不传 allocations 按到期日 FIFO 自动摊）', requestBody: body('ReceiptCreate'), responses: { 200: jsonResp(null) } }
     },
     '/api/ar/receipts/{id}': { get: { tags: ['应收与收款'], summary: '收款单详情（含核销明细）', parameters: [idParam], responses: { 200: jsonResp(null), 404: jsonResp(null) } } },
-    '/api/ar/receipts/{id}/confirm': { post: { tags: ['应收与收款'], summary: '确认收款：核销生效（抵减应收）+ 释放授信占用。这是本模块唯一有后果的动作', parameters: [idParam], requestBody: body('ReceiptConfirm'), responses: { 200: jsonResp(null) } } },
-    '/api/ar/receipts/{id}/void': { post: { tags: ['应收与收款'], summary: '作废收款：核销失效并重算应收（不自动回收已释放的授信）', parameters: [idParam], requestBody: body('ReceiptVoid'), responses: { 200: jsonResp(null) } } },
+    '/api/ar/receipts/{id}/confirm': { post: { tags: ['应收与收款'], summary: '确认收款：核销生效（抵减应收）+ 按来源释放授信占用并记释放台账（响应含 credit_released）。这是本模块唯一有后果的动作', parameters: [idParam], requestBody: body('ReceiptConfirm'), responses: { 200: jsonResp(null) } } },
+    '/api/ar/receipts/{id}/void': { post: { tags: ['应收与收款'], summary: '作废收款：核销失效并重算应收，并按授信释放台账逐笔恢复统一授信与订货占用（响应含 credit_reversal；重复作废 409 RC_ALREADY_VOID，跨客户 409 CREDIT_REVERSAL_SUBJECT_MISMATCH）', parameters: [idParam], requestBody: body('ReceiptVoid'), responses: { 200: jsonResp(null) } } },
     '/api/ar/aging': { get: { tags: ['应收与收款'], summary: '账龄分析（未到期 / 1-30 / 31-60 / 60+；by_subject=1 时按客户汇总）', parameters: [{ name: 'by_subject', in: 'query', schema: { type: 'string' } }], responses: { 200: jsonResp(null) } } },
     '/api/ar/statement': { get: { tags: ['应收与收款'], summary: '客户对账单（应收明细 + 收款明细 + 核销明细 + 期末余额）', parameters: [{ name: 'subject_type', in: 'query', required: true, schema: { type: 'string' } }, { name: 'subject_id', in: 'query', required: true, schema: { type: 'integer' } }, { name: 'from', in: 'query', schema: { type: 'string' } }, { name: 'to', in: 'query', schema: { type: 'string' } }], responses: { 200: jsonResp(null) } } },
     '/api/ar/audit': { get: { tags: ['应收与收款'], summary: '应收自洽审计（已收 = 核销明细 SUM、状态与金额相符、无超额核销）', responses: { 200: jsonResp(null) } } },
@@ -709,7 +709,7 @@ export function buildOpenApi() {
     '/api/ar/aging/subjects': { get: { tags: ['应收与收款'], summary: '客户级逐笔汇总（催收风险榜，含最长逾期天数）', responses: { 200: jsonResp(null) } } },
     '/api/ar/prepay': { get: { tags: ['应收与收款'], summary: '预收余额清单（按往来对象；预收 = 已确认收款单金额 − 其核销明细之和）', parameters: [q('subject_type', '往来对象类型'), q('subject_id', '往来对象 id'), q('keyword', '客户名称关键字')], responses: { 200: jsonResp(null) } } },
     '/api/ar/prepay/detail': { get: { tags: ['应收与收款'], summary: '预收明细：哪些收款单付多了，以及该客户可抵的未结应收', parameters: [{ name: 'subject_type', in: 'query', required: true, schema: { type: 'string' } }, { name: 'subject_id', in: 'query', required: true, schema: { type: 'integer' } }], responses: { 200: jsonResp(null), 400: jsonResp(null) } } },
-    '/api/ar/prepay/apply': { post: { tags: ['应收与收款'], summary: '预收转应收：指定应收单抵扣，或传 auto 按到期日 FIFO 自动抵（同对象校验，禁止跨客户）', requestBody: body('PrepayApply'), responses: { 200: jsonResp(null), 409: jsonResp(null) } } },
+    '/api/ar/prepay/apply': { post: { tags: ['应收与收款'], summary: '预收转应收：指定应收单抵扣，或传 auto 按到期日 FIFO 自动抵（同对象校验，禁止跨客户；按来源释放统一授信并记释放台账，响应含 credit_released）', requestBody: body('PrepayApply'), responses: { 200: jsonResp(null), 409: jsonResp(null) } } },
     '/api/ar/oc/pending': { get: { tags: ['应收与收款'], summary: '订货中心待并入应收的订货单（已收货/发货但未生成应收，口径取自视图 v_oc_ar_pending）', parameters: [q('customer_id', '订货客户 id'), q('keyword', '单号 / 客户关键字')], responses: { 200: jsonResp(null) } } },
     '/api/ar/oc/sync': { post: { tags: ['应收与收款'], summary: '批量把待并入的订货单生成应收（幂等，可重复跑）', requestBody: body('ArOcSync'), responses: { 200: jsonResp(null) } } },
 

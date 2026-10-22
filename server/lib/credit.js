@@ -423,10 +423,52 @@ export function settle(db, { account, amount, sourceType, sourceId, docNo, opera
   const open = openAmountOf(db, acc.id, sourceType, sourceId)
   const amt = Math.min(round2(amount), round2(open))
   if (!(amt > 0)) return null
-  return writeLedger(db, {
+  // 回报 **实际释放额**（已按剩余占用封顶）：调用方要把它记进释放台账，
+  // 作废时按这个数恢复 —— 不能按"核销了多少"恢复，那会把封顶掉的部分凭空占回来。
+  const row = writeLedger(db, {
     accountId: acc.id, changeType: 'settle', sourceType, sourceId, docNo,
     amount: -amt, operator, remark: remark || '回款核销，释放授信'
   })
+  return { ...row, amount: amt }
+}
+
+/**
+ * 逆向恢复占用（作废收款 / 撤销预收抵扣）：把一笔已记录的释放按原来源占回去。
+ *
+ * 判据只有一处：**恢复额 ≤ 该来源历史占用总额 − 当前仍占用额**。
+ * 超过说明别的路径已经把额度占回来了（或台账被改过），此时**拒绝而不是截平**（A07 同一条原则）。
+ * 写成 `occupy` 行而不另立类型：快照的逾期统计、界面的类型字典都只认四类；
+ * 到期日沿用该来源最近一条占用行的 due_date —— 作废收款不能把逾期"洗白"。
+ */
+export function reoccupy(db, { account, amount, sourceType, sourceId, docNo, operator = null, remark = null }) {
+  const acc = ensureAcc(db, account)
+  const amt = round2(amount)
+  if (!(amt > 0)) return null
+  const occupied = round2(
+    db.prepare(
+      `SELECT COALESCE(SUM(amount),0) s FROM credit_ledger
+        WHERE account_id=? AND source_type=? AND source_id=? AND amount>0`
+    ).get(acc.id, sourceType, sourceId)?.s || 0
+  )
+  const room = round2(occupied - openAmountOf(db, acc.id, sourceType, sourceId))
+  if (amt > room + 0.005) {
+    throw new CreditError(
+      `${sourceType}#${sourceId} 可恢复占用只有 ${room}，本次要恢复 ${amt}（历史占用 ${occupied}）`,
+      { code: 'CREDIT_REVERSAL_EXCEEDS_SOURCE', httpStatus: 409, detail: { sourceType, sourceId, occupied, room, amount: amt } }
+    )
+  }
+  const last = db
+    .prepare(
+      `SELECT due_date FROM credit_ledger
+        WHERE account_id=? AND source_type=? AND source_id=? AND change_type='occupy' AND amount>0
+        ORDER BY id DESC LIMIT 1`
+    )
+    .get(acc.id, sourceType, sourceId)
+  const row = writeLedger(db, {
+    accountId: acc.id, changeType: 'occupy', sourceType, sourceId, docNo,
+    amount: amt, dueDate: last?.due_date || null, operator, remark: remark || '核销作废，恢复占用'
+  })
+  return { ...row, amount: amt }
 }
 
 /** 人工调整占用（坏账核销、争议挂账等）。金额可正可负 */
@@ -613,7 +655,7 @@ export const CHECK_RESULT_LABEL = {
 
 export default {
   CreditError, ensureAccount, resolveSubject, creditSnapshot, snapshotFor,
-  checkCredit, occupy, release, settle, adjustCredit, openAmountOf,
+  checkCredit, occupy, release, settle, reoccupy, adjustCredit, openAmountOf,
   updateAccount, auditCredit, creditOverview, ledgerOf,
   CHANGE_TYPE_LABEL, CHECK_RESULT_LABEL
 }

@@ -280,7 +280,8 @@ export const TABLES = [
   // 应收与收款核销（模块 21）：应收单引用销售订单 id，收款单的核销明细又引用应收单 id。
   // 重建后 sales_orders 的 id 会被复用，留着就等于「这笔钱抵的是另一张单」——
   // 账面上看不出来，但账龄与对账单会全错。必须跟着一起清。
-  'receipt_allocations', 'receipts', 'ar_documents',
+  // 授信释放台账（迁移 052）引用收款单 id：必须先于 receipts 清，否则重建后指向被复用的 id。
+  'credit_release_ledger', 'receipt_allocations', 'receipts', 'ar_documents',
   // 销售发票（模块 24）：发票行与关联表分别引用发票头、发货行、应收单，而重建后这些 id 全会被复用。
   // 漏掉的后果非常隐蔽 —— 旧发票看起来仍指向「存在的发货行」，任何按 id 的孤儿检查都发现不了，
   // 但开票关闭会算错（旧的已开票量被算到新一代的发货单头上），审计只报「超开发票」，
