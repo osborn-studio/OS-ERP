@@ -409,7 +409,7 @@ const ENVELOPES = [
   {
     name: 'MCP rpcError（协议/传输层错误）',
     file: 'server/mcp/server.js',
-    contains: 'function rpcError(res, id, code, message, stableCode = null)',
+    contains: 'function rpcError(res, id, code, message)',
     why: 'JSON-RPC 的 `error.code` 是**协议层**码（不是业务码），与业务码归类不同是刻意的。'
   }
 ]
