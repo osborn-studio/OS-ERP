@@ -39,6 +39,8 @@ const DECLARED = [
   'server/mcp/delegation.js',
   'server/mcp/tokens.js',
   'server/db/migrations/053_agent_token_owner_version.cjs',
+  'server/lib/outbound-url.js',
+  'server/lib/secret-box.js',
   'scripts/check-mcp-coverage.mjs',
   'scripts/check-file-header.mjs',
   'scripts/db-backup.mjs',
