@@ -439,6 +439,8 @@ section('3. A17b —— 只改单头要重算 / 数量必须为正 / MCP 入参�
     env: { ...process.env, PORT: String(PORT), GML_DATA_DIR: DATA_DIR },
     stdio: ['ignore', 'pipe', 'pipe']
   })
+  // 中途抛错退出时 'exit' 钩子也要收掉服务，否则端口被占、拖垮后续脚本（CI 实测）。
+  installReapFallback(srv)
   let log = ''
   srv.stdout.on('data', (d) => (log += d.toString()))
   srv.stderr.on('data', (d) => (log += d.toString()))

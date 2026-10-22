@@ -38,7 +38,6 @@ jobs:
       GML_DB: ''
       # Configure this repository variable only after checking the Linux host.
       GML_PYTHON: ${{ vars.OS_ERP_LINUX_PYTHON || vars.OS_EGP_LINUX_PYTHON || 'python3' }}
-      RAW_ROOT: ${{ runner.temp }}/os-erp-${{ github.run_id }}-${{ github.run_attempt }}
 
     steps:
       - name: Check out reviewed ref without persistent credentials
@@ -52,6 +51,9 @@ jobs:
         run: |
           set -euo pipefail
           umask 077
+          # runner.temp is not available in job-level env; export the raw-output root here.
+          RAW_ROOT="$RUNNER_TEMP/os-erp-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          echo "RAW_ROOT=$RAW_ROOT" >> "$GITHUB_ENV"
           mkdir -p "$RAW_ROOT" artifacts/ci-summary
           test "$(uname -s)" = Linux
           command -v git >/dev/null

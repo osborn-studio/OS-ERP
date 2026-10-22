@@ -16,7 +16,7 @@
 import { runtimeMode } from '../runtime.js'
 import jwt from 'jsonwebtoken'
 import { getDb, DEFAULT_INDUSTRY, assertIndustry, getCurrentIndustry } from '../db/index.js'
-import { fail } from '../lib/http.js'
+import { fail, bizFail } from '../lib/http.js'
 
 // 密钥来源：`GML_JWT_SECRET` 优先，**兼容 `JWT_SECRET`**（A20）。
 // 起因：`docker-compose.yml` 配的是 `JWT_SECRET`，而这里只读 `GML_JWT_SECRET` ——
@@ -254,7 +254,7 @@ export function requireAuth(req, res, next) {
   try {
     // 只接受**后台** audience 的令牌：C 端（`gml-mall`）令牌在这里一律 401
     const p = jwt.verify(token, JWT_SECRET, { audience: BACK_AUD, algorithms: ['HS256'] })
-    const revoked = () => fail(res, '会话已失效，请重新登录', 401, 'SESSION_REVOKED', { code: 'SESSION_REVOKED' })
+    const revoked = () => bizFail(res, { status: 401, code: 'SESSION_REVOKED', message: '会话已失效，请重新登录' })
     if (!Number.isSafeInteger(p.uid) || p.uid <= 0 || !Number.isSafeInteger(p.auth_version) || p.auth_version < 0 ||
         !assertIndustry(p.industry) || p.industry !== getCurrentIndustry()) return revoked()
     // ------------------------------------------------------------------

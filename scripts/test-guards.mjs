@@ -2231,7 +2231,7 @@ section('G17 权限以库为准，安全变更撤销旧会话（A20 / F06）')
     const change = (body) => api('PUT', '/api/auth/users/' + uid, { token: adminJwt, body })
     const revoked = async (token, label) => {
       const response = await writePath(token)
-      ok(label, response.status === 401 && response.body?.code === 'SESSION_REVOKED', String(response.status))
+      ok(label, response.status === 401 && (response.body?.error || response.body?.detail?.code) === 'SESSION_REVOKED', String(response.status))
     }
     const initial = await loginAs(username, password)
     ok('基线：viewer 登录成功且写入口 → 403', !!initial && (await writePath(initial)).status === 403)

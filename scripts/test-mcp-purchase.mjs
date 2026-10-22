@@ -112,6 +112,8 @@ const srv = spawn(process.execPath, ['server/index.js'], {
   env: { ...process.env, PORT: String(PORT), GML_DATA_DIR: DATA_DIR },
   stdio: ['ignore', 'pipe', 'pipe']
 })
+// 一旦脚本在中途抛错退出，'exit' 钩子也要把服务收掉；否则它会一直占着端口，拖垮后面的脚本（CI 实测）。
+installReapFallback(srv)
 let log = ''
 srv.stdout.on('data', (d) => (log += d.toString()))
 srv.stderr.on('data', (d) => (log += d.toString()))

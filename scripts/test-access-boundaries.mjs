@@ -145,7 +145,7 @@ try {
         verify(`${industry} downgrade clears super flag`, db.prepare('SELECT is_super FROM users WHERE id=?').get(uid).is_super === 0)
         verify(`${industry} downgrade removes primary admin permission link`, !db.prepare("SELECT 1 FROM user_roles WHERE user_id=? AND role_code='admin'").get(uid))
         const revoked = await request('/api/mcp/tokens', oldToken)
-        verify(`${industry} old admin session is revoked immediately`, revoked.status === 401 && revoked.body?.code === 'SESSION_REVOKED')
+        verify(`${industry} old admin session is revoked immediately`, revoked.status === 401 && (revoked.body?.error || revoked.body?.detail?.code) === 'SESSION_REVOKED')
         const forbiddenUser = { username: 'forbidden', password: probePassword, name: 'x' }
         verify(`${industry} old admin session cannot write`, (await request('/api/auth/users', oldToken, forbiddenUser)).status === 401)
         const relogged = await request('/api/auth/login', null, { username: probeName, password: probePassword, industry })
