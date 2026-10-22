@@ -388,7 +388,9 @@ function EditModal({ row, meta, onClose, onSaved }: any) {
       name: row.name ?? '',
       provider: row.provider ?? 'feishu',
       webhook_url: row.webhook_url ?? '',
-      secret: row.secret ?? '',
+      // 后端永远不回传密钥（ADR-0008）：留空 = 保持现有密钥；填写 = 设置/轮换；勾选清除 = 置空
+      secret: '',
+      clear_secret: false,
       event_types: row.event_types ?? '',
       remark: row.remark ?? ''
     })
@@ -403,7 +405,7 @@ function EditModal({ row, meta, onClose, onSaved }: any) {
         name: form.name,
         provider: form.provider,
         webhook_url: form.webhook_url || null,
-        secret: form.secret || null,
+        secret: form.clear_secret ? '' : form.secret || null,
         event_types: form.event_types || null,
         enabled: row.enabled ?? 0,
         remark: form.remark || null
@@ -450,8 +452,27 @@ function EditModal({ row, meta, onClose, onSaved }: any) {
             ))}
           </select>
         </Field>
-        <Field label="签名密钥" hint="钉钉加签用；不用留空">
-          <input className="input" value={form.secret ?? ''} onChange={(e) => setForm({ ...form, secret: e.target.value })} />
+        <Field
+          label="签名密钥"
+          hint={row?.has_secret
+            ? `已设置${row.secret_last4 ? `（…${row.secret_last4}）` : ''}；留空保持不变，填写即轮换`
+            : '钉钉 / 飞书加签与通用 Webhook HMAC 用；不用留空'}
+        >
+          <input
+            className="input"
+            type="password"
+            autoComplete="new-password"
+            placeholder={row?.has_secret ? '••••••••（已设置，不回显）' : ''}
+            disabled={!!form.clear_secret}
+            value={form.secret ?? ''}
+            onChange={(e) => setForm({ ...form, secret: e.target.value })}
+          />
+          {row?.has_secret ? (
+            <label className="mt-1 flex items-center gap-1 text-[12px] text-slate-500">
+              <input type="checkbox" checked={!!form.clear_secret} onChange={(e) => setForm({ ...form, clear_secret: e.target.checked, secret: '' })} />
+              清除密钥
+            </label>
+          ) : null}
         </Field>
         <Field label="Webhook 地址" span={2} hint="留空则该渠道无法启用（后端会挡）">
           <input className="input font-mono text-[12px]" value={form.webhook_url ?? ''} onChange={(e) => setForm({ ...form, webhook_url: e.target.value })} />
