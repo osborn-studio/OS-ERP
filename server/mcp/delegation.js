@@ -107,3 +107,25 @@ export function ownerToolDenied(delegation, tool) {
     message: `令牌所有者「${who}」当前没有调用「${tool.title || tool.name}」的权限（需 ${need.join(' 或 ')}）；委托令牌不能超过所有者本人的权限`
   }
 }
+
+/**
+ * Z8：幂等缓存命中前的数据范围重验。缓存里只记得"首次执行时的有效范围"，
+ * 重放时的**当前**有效范围必须覆盖它，否则回放等于用旧范围替所有者继续放行。
+ *  · 当前不受限（all）⇒ 覆盖一切；
+ *  · 首次范围未知（旧缓存行）或首次不受限而当前受限 ⇒ 不覆盖（fail-closed）；
+ *  · 其余按组织 id 集合求包含。
+ * 判的是"范围是否缩小"而不是具体目标：偏保守，调用方换新幂等键即走工具自身的精确判定。
+ */
+export function scopeCovers(current, snapshot) {
+  const unlimited = (s) => !s || s.scope === 'all'
+  if (unlimited(current)) return true
+  if (!snapshot || unlimited(snapshot)) return false
+  const have = new Set((current.orgIds || []).map(Number))
+  return (snapshot.orgIds || []).every((id) => have.has(Number(id)))
+}
+
+/** 缓存里要保存的范围快照（只留判定所需的两个字段） */
+export function scopeSnapshot(scope) {
+  if (!scope || scope.scope === 'all') return { scope: 'all', orgIds: null }
+  return { scope: scope.scope, orgIds: Array.isArray(scope.orgIds) ? scope.orgIds.map(Number) : [] }
+}

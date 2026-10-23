@@ -241,6 +241,138 @@ test('MCP tokens are delegations of their human owner', { timeout: 300000 }, asy
     assert.equal(txnCount(), before + 1)
   })
 
+  // ---- Z8：幂等缓存 / 二次确认命中前重验（ADR-0011 Z8 补充）----
+  const cacheDenied = (key) => db.prepare("SELECT ok, error_code, result_summary FROM mcp_call_logs WHERE idempotency_key=? AND result_summary LIKE 'cache_denied%' ORDER BY id DESC").get(key)
+  const replay = (token, key) => mcp('tools/call', { name: 'inventory.stock_in', arguments: { warehouse_id: wh.id, sku_id: sku.id, qty: 1, unit_cost: 10, idempotency_key: key } }, token)
+  const otherOrg = () => db.prepare('SELECT id FROM orgs WHERE id<>0 AND id<>? AND id NOT IN (SELECT org_id FROM warehouses WHERE org_id IS NOT NULL) ORDER BY id LIMIT 1').get(wh.org_id)
+
+  await t.test('Z8: replay after owner permission loss returns the current error, audits cache_denied, and never re-executes', async () => {
+    const tz = issue('z8-perm')
+    const first = await stockIn(tz)
+    assert.ok(okTool(first), JSON.stringify(first.body).slice(0, 300))
+    const rows = txnCount()
+    const idemRows = db.prepare('SELECT COUNT(*) AS n FROM mcp_idempotency').get().n
+    db.prepare("DELETE FROM role_permissions WHERE role_code='warehouse' AND perm_code='purchase.inbound'").run()
+    try {
+      const denied = await replay(tz, first.key)
+      assert.equal(toolErr(denied), 'TOKEN_OWNER_PERM_DENIED', JSON.stringify(denied.body).slice(0, 300))
+      assert.equal(denied.body.result._idempotent_replay, undefined, 'a denied replay must not carry cached data')
+      const a = cacheDenied(first.key)
+      assert.ok(a, 'denied replay must be audited with cache_denied')
+      assert.equal(a.ok, 0)
+      assert.equal(a.error_code, 'TOKEN_OWNER_PERM_DENIED')
+      assert.equal(txnCount(), rows)
+    } finally {
+      db.prepare("INSERT OR IGNORE INTO role_permissions (role_code, perm_code) VALUES ('warehouse','purchase.inbound')").run()
+    }
+    const served = await replay(tz, first.key)
+    assert.ok(okTool(served))
+    assert.equal(served.body.result._idempotent_replay, true, 'with permission restored the cache is served unchanged')
+    assert.equal(txnCount(), rows, 'cache hit must not execute the handler again')
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM mcp_idempotency').get().n, idemRows)
+  })
+
+  await t.test('Z8: replay after the owner data scope shrank is denied (domain scope), restored scope serves the cache', async () => {
+    const tz = issue('z8-scope')
+    const first = await stockIn(tz)
+    assert.ok(okTool(first), JSON.stringify(first.body).slice(0, 300))
+    const snap = JSON.parse(db.prepare('SELECT result_json FROM mcp_idempotency WHERE idempotency_key=?').get(first.key).result_json)
+    assert.ok(snap && typeof snap === 'object', 'cache row is stored')
+    const rows = txnCount()
+    const other = otherOrg()
+    assert.ok(other, 'demo data must provide an organization without warehouses')
+    db.prepare("UPDATE users SET org_id=?, data_scope='org' WHERE id=?").run(other.id, ownerId)
+    try {
+      const denied = await replay(tz, first.key)
+      assert.equal(toolErr(denied), 'ORG_OUT_OF_SCOPE', JSON.stringify(denied.body).slice(0, 300))
+      assert.equal(denied.body.result._idempotent_replay, undefined)
+      const a = cacheDenied(first.key)
+      assert.ok(a && a.ok === 0 && a.error_code === 'ORG_OUT_OF_SCOPE', JSON.stringify(a))
+      assert.equal(txnCount(), rows)
+      // a brand-new key under the shrunken scope is refused by the handler as before
+      assert.equal(toolErr(await stockIn(tz)), 'ORG_OUT_OF_SCOPE')
+    } finally {
+      db.prepare("UPDATE users SET org_id=NULL, data_scope='all' WHERE id=?").run(ownerId)
+    }
+    const served = await replay(tz, first.key)
+    assert.equal(served.body.result._idempotent_replay, true)
+    assert.equal(txnCount(), rows)
+  })
+
+  await t.test('Z8: a cache row written before the scope snapshot existed is served only when the current scope is unrestricted', async () => {
+    const tz = issue('z8-legacy')
+    const first = await stockIn(tz)
+    assert.ok(okTool(first))
+    const cached = JSON.parse(db.prepare('SELECT result_json FROM mcp_idempotency WHERE idempotency_key=?').get(first.key).result_json)
+    const plain = cached && typeof cached === 'object' && 'data' in cached && '__replay' in cached ? cached.data : cached
+    db.prepare('UPDATE mcp_idempotency SET result_json=? WHERE idempotency_key=?').run(JSON.stringify(plain), first.key)
+    const rows = txnCount()
+    const served = await replay(tz, first.key)
+    assert.equal(served.body.result._idempotent_replay, true, 'legacy row served under unrestricted scope')
+    const other = otherOrg()
+    db.prepare("UPDATE users SET org_id=?, data_scope='org' WHERE id=?").run(other.id, ownerId)
+    try {
+      assert.equal(toolErr(await replay(tz, first.key)), 'ORG_OUT_OF_SCOPE', 'unknown original scope fails closed')
+    } finally {
+      db.prepare("UPDATE users SET org_id=NULL, data_scope='all' WHERE id=?").run(ownerId)
+    }
+    assert.equal(txnCount(), rows)
+  })
+
+  await t.test('Z8: a token that is not the original caller still gets IDEMPOTENCY_CONFLICT, never the cache', async () => {
+    const a = issue('z8-a')
+    const b = issue('z8-b')
+    const first = await stockIn(a)
+    assert.ok(okTool(first))
+    const r = await replay(b, first.key)
+    assert.equal(toolErr(r), 'IDEMPOTENCY_CONFLICT')
+  })
+
+  await t.test('Z8: confirmed confirmation is rechecked at use; a lost permission or scope leaves it unconsumed, a used one never re-executes', async () => {
+    db.prepare("INSERT OR IGNORE INTO role_permissions (role_code, perm_code) VALUES ('warehouse','inventory.adjust')").run()
+    const tz = issue('z8-confirm', { scopes: 'read,write,danger' })
+    const args = { warehouse_id: wh.id, sku_id: sku.id, delta: 1, reason: 'z8 recheck' }
+    const call = (extra = {}) => mcp('tools/call', { name: 'inventory.adjust', arguments: { ...args, ...extra } }, tz)
+    const req = await call()
+    const ct = toolText(req).confirm_token
+    assert.ok(ct, JSON.stringify(req.body).slice(0, 300))
+    db.prepare("UPDATE mcp_confirmations SET status='confirmed', confirmed_by='z8', confirmed_by_id=?, expires_at='2999-01-01 00:00:00' WHERE confirm_token=?").run(ownerId, ct)
+    const status = () => db.prepare('SELECT status FROM mcp_confirmations WHERE confirm_token=?').get(ct).status
+    const rows = txnCount()
+    // permission loss
+    db.prepare("DELETE FROM role_permissions WHERE role_code='warehouse' AND perm_code='inventory.adjust'").run()
+    try {
+      const denied = await call({ confirm_token: ct })
+      assert.equal(toolErr(denied), 'TOKEN_OWNER_PERM_DENIED', JSON.stringify(denied.body).slice(0, 300))
+      assert.equal(status(), 'confirmed', 'denied use must not consume the confirmation')
+      assert.equal(txnCount(), rows)
+      const a = db.prepare("SELECT error_code, result_summary FROM mcp_call_logs WHERE tool_name='inventory.adjust' AND ok=0 AND result_summary LIKE 'cache_denied%' ORDER BY id DESC").get()
+      assert.equal(a?.error_code, 'TOKEN_OWNER_PERM_DENIED', 'confirm-cache denial is audited with cache_denied')
+    } finally {
+      db.prepare("INSERT OR IGNORE INTO role_permissions (role_code, perm_code) VALUES ('warehouse','inventory.adjust')").run()
+    }
+    // scope loss
+    const other = otherOrg()
+    db.prepare("UPDATE users SET org_id=?, data_scope='org' WHERE id=?").run(other.id, ownerId)
+    try {
+      assert.equal(toolErr(await call({ confirm_token: ct })), 'ORG_OUT_OF_SCOPE')
+      assert.equal(status(), 'confirmed')
+      assert.equal(txnCount(), rows)
+    } finally {
+      db.prepare("UPDATE users SET org_id=NULL, data_scope='all' WHERE id=?").run(ownerId)
+    }
+    // restored: executes exactly once
+    const done = await call({ confirm_token: ct })
+    assert.ok(okTool(done), JSON.stringify(done.body).slice(0, 300))
+    assert.equal(status(), 'used')
+    const after = txnCount()
+    assert.ok(after > rows)
+    const again = await call({ confirm_token: ct })
+    assert.equal(toolErr(again), 'CONFIRM_NOT_APPROVED')
+    assert.equal(txnCount(), after, 'a used confirmation is never replayed')
+    db.prepare("DELETE FROM role_permissions WHERE role_code='warehouse' AND perm_code='inventory.adjust'").run()
+  })
+
   await t.test('ownerless tokens stay independent principals limited to their declared scope', async () => {
     const t10 = createToken(db, { name: 'delegation-ownerless', industry: 'cosmetic', scopes: 'read' }).token
     assert.ok(okTool(await queryStock(t10)))
