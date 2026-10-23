@@ -235,6 +235,26 @@ test('quotes, MCP sales tools and OMS order creation follow the org scope', { ti
     assert.equal(adminOk.status, 200, JSON.stringify(adminOk.body))
   })
 
+  await t.test('convert to SO needs a warehouse / store owner; reused conversion hides an order that moved out of scope', async () => {
+    // 订货客户在范围内、但没有仓 / 门店：转 SO 会造出无主订单 ⇒ 403 且零写；转 OC 不受影响
+    const qOc = mkQ('XQT-OC', { type: 'oc', cust: custA, status: 'approved' })
+    insQI.run(qOc, sku)
+    const so0 = db.prepare('SELECT COUNT(*) c FROM sales_orders').get().c
+    const r = await api(`/api/sales/quotes/${qOc}/convert`, { token: accountA.token, body: { target: 'SO' } })
+    assert.equal(r.status, 403, JSON.stringify(r.body))
+    assert.equal(db.prepare('SELECT COUNT(*) c FROM sales_orders').get().c, so0)
+    assert.equal(db.prepare('SELECT status FROM sales_quotes WHERE id=?').get(qOc).status, 'approved')
+    // 已转单的幂等返回：订单被改到别的组织后，原调用者拿不到单号
+    const qR = mkQ('XQT-R', { dealer: dealer1, wh: whA.id, status: 'approved' })
+    insQI.run(qR, sku)
+    const first = await api(`/api/sales/quotes/${qR}/convert`, { token: accountA.token, body: {} })
+    assert.equal(first.status, 200, JSON.stringify(first.body))
+    assert.equal((await api(`/api/sales/quotes/${qR}/convert`, { token: accountA.token, body: {} })).body.data.reused, true)
+    db.prepare('UPDATE sales_orders SET warehouse_id=? WHERE id=?').run(whB.id, first.body.data.order.id)
+    const again = await api(`/api/sales/quotes/${qR}/convert`, { token: accountA.token, body: {} })
+    assert.equal(again.status, 404, JSON.stringify(again.body))
+  })
+
   await t.test('batch expire only touches in-scope quotes', async () => {
     const past = db.prepare("UPDATE sales_quotes SET valid_to=date('now','-3 day','localtime') WHERE id IN (?,?)")
     const qEA = mkQ('XQT-EA', { dealer: dealer1, wh: whA.id, status: 'approved' })
@@ -316,9 +336,12 @@ test('quotes, MCP sales tools and OMS order creation follow the org scope', { ti
 
     // convert：归平台履约仓，不回落到别的仓
     const ids = okSync.body.data.orders.map((o) => o.id)
+    const stockedSku = db.prepare('SELECT sku_id FROM inventory_stocks WHERE warehouse_id=? ORDER BY (qty_on_hand - qty_reserved) DESC LIMIT 1').get(whB.id).sku_id
     for (const id of ids) {
       db.prepare("UPDATE oms_orders SET status='pending' WHERE id=?").run(id)
-      db.prepare('INSERT INTO oms_order_items (oms_order_id, platform_sku_code, sku_id, title, qty, price, amount) VALUES (?,?,?,?,1,10,10)').run(id, 'XQ', sku, 'x')
+      // 同步出来的明细是随机 SKU / 数量，库存够不够不确定：换成确定的一行（WH03 里库存最多的 SKU，数量 1）
+      db.prepare('DELETE FROM oms_order_items WHERE oms_order_id=?').run(id)
+      db.prepare('INSERT INTO oms_order_items (oms_order_id, platform_sku_code, sku_id, title, qty, price, amount) VALUES (?,?,?,?,1,10,10)').run(id, 'XQ', stockedSku, 'x')
     }
     const so0 = db.prepare('SELECT COUNT(*) c FROM sales_orders').get().c
     const denied = await api(`/api/oms/orders/${ids[0]}/convert`, { token: accountA.token, body: {} })

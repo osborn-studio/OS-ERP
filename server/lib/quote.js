@@ -42,7 +42,7 @@ import { nextDocNoAuto } from './docno.js'
 import { checkCredit } from './credit.js'
 import { readSetting } from './settings.js'
 import { createOrder } from './order-center.js'
-import { SalesOrderError, quoteScopeSql, assertQuoteInScope, assertQuoteTargetInScope } from './sales-order.js'
+import { SalesOrderError, quoteScopeSql, assertQuoteInScope, assertQuoteTargetInScope, assertSalesDocInScope } from './sales-order.js'
 
 export class QuoteError extends Error {
   constructor(message, { code = 'QUOTE_ERROR', httpStatus = 400, detail = null } = {}) {
@@ -454,7 +454,16 @@ export function convertQuote(db, { id, target = 'SO', actor = null, force = fals
   // 转单会建新单据：写比读严，报价的仓 / 门店 / 订货客户须都在范围内（已转过单的幂等返回也不例外）
   guardTarget(db, { warehouseId: q.warehouse_id, storeId: q.store_id, customerId: q.customer_id }, orgScope)
   if (q.converted_order_id) {
+    // 幂等返回的订单也要在**当前**范围内（订单仓 / 门店可能在转单后被改走）：范围外按「订单不存在」，不泄漏单号
+    if (orgScope !== undefined && q.converted_type !== 'OC') {
+      try { assertSalesDocInScope(db, 'order', q.converted_order_id, orgScope) } catch (e) { throw asQuoteError(e) }
+    }
     return { reused: true, quote: q, order: loadConverted(db, q), credit: null }
+  }
+  // 转成销售订单时订单的归属只来自仓 / 门店（订货客户不会写进销售订单）：目标是 SO 就必须由这两者落进范围，
+  // 否则会造出调用者自己都看不到的无主订单。订货单（OC）归订货客户，已在上面判过。
+  if (target !== 'OC') {
+    guardTarget(db, { warehouseId: q.warehouse_id, storeId: q.customer_type === 'store' ? q.store_id : null }, orgScope)
   }
   if (q.status !== 'approved') {
     throw new QuoteError(
