@@ -143,3 +143,13 @@ test('growth tables are flagged even when the fixture has fewer rows than the th
   const r = auditStatements(db, [{ id: 'g', mirrors: 'test', sql: 'SELECT * FROM sales_order_items WHERE order_id = ?', params: [1] }], { threshold: 200, allow: [] })
   assert.equal(r.ok, false)
 })
+
+test('automatic PARTIAL indexes are caught as well', (t) => {
+  const db = new Database(':memory:')
+  t.after(() => db.close())
+  db.exec('CREATE TABLE a (id INTEGER PRIMARY KEY); CREATE TABLE b (id INTEGER PRIMARY KEY, a_id INTEGER, flag INTEGER); INSERT INTO a VALUES (1),(2),(3)')
+  const ins = db.prepare('INSERT INTO b (a_id, flag) VALUES (?, ?)')
+  db.transaction(() => { for (let i = 0; i < 500; i++) ins.run(i % 7, i % 2) })()
+  const r = auditStatements(db, [{ id: 'p', mirrors: 'test', sql: 'SELECT a.id FROM a LEFT JOIN b ON b.a_id = a.id AND b.flag = 1' }], { threshold: 200, allow: [] })
+  assert.ok(r.violations.some(v => /AUTOMATIC/.test(v.detail)), JSON.stringify(r.statements[0].plan))
+})

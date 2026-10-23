@@ -187,14 +187,15 @@ export const GROWTH_TABLES = new Set([
   'ar_documents', 'receipts', 'receipt_allocations', 'doc_events', 'doc_actions'
 ])
 
-const PAGE_REASON = '按主键倒序取最新一页（ORDER BY id DESC LIMIT n）：沿 rowid 反向扫描，取够 n 行即停，计划里没有排序临时表；不是全表读'
+const PAGE_REASON = '按主键倒序取最新一页（ORDER BY id DESC LIMIT n）：沿 rowid 反向扫描，取够 n 行即停，计划里没有排序临时表；不是全表读（无过滤条件，上界即 n 行）'
+const PAGE_VOIDED_REASON = '按主键倒序取最新一页并过滤 status<>\'voided\'：沿 rowid 反向扫描，通常取够 n 行即停、无排序临时表；但若尾部有大段已作废单据会多读（否定式谓词无法建索引），读量上界是整表，属已知残余'
 const AGG_REASON = '整表聚合且谓词是否定式/无谓词（status <> / NOT IN / 全量 SUM），几乎所有行都参与，索引无法缩小读取范围'
 export const ALLOW = [
   { statement: 'po.list_page', table: 'purchase_orders', noSort: true, reason: PAGE_REASON },
   { statement: 'po.receipt_list', table: 'purchase_receipts', noSort: true, reason: PAGE_REASON },
-  { statement: 'po.invoice_list', table: 'purchase_invoices', noSort: true, reason: PAGE_REASON },
-  { statement: 'po.settlement_list', table: 'purchase_settlements', noSort: true, reason: PAGE_REASON },
-  { statement: 'po.payment_list', table: 'purchase_payments', noSort: true, reason: PAGE_REASON },
+  { statement: 'po.invoice_list', table: 'purchase_invoices', noSort: true, reason: PAGE_VOIDED_REASON },
+  { statement: 'po.settlement_list', table: 'purchase_settlements', noSort: true, reason: PAGE_VOIDED_REASON },
+  { statement: 'po.payment_list', table: 'purchase_payments', noSort: true, reason: PAGE_VOIDED_REASON },
   { statement: 'ar.receipts_page', table: 'receipts', noSort: true, reason: PAGE_REASON },
   { statement: 'sales.list_page', table: 'sales_orders', noSort: true, reason: PAGE_REASON },
   { statement: 'oc.orders_page', table: 'oc_orders', noSort: true, reason: PAGE_REASON },
@@ -266,7 +267,7 @@ export function auditStatements(db, statements, { threshold = DEFAULT_THRESHOLD,
     }
     // SQLite 在运行时为连接临时造的"自动索引"= 它认为这里缺索引；每次查询都重建一遍
     for (const detail of plan) {
-      const m = /^SEARCH (\S+) USING AUTOMATIC (?:COVERING )?INDEX/.exec(detail)
+      const m = /^SEARCH (\S+) USING AUTOMATIC (?:PARTIAL )?(?:COVERING )?INDEX/.exec(detail)
       if (!m) continue
       const table = aliases.get(m[1]) ?? m[1]
       const hit = allow.find(a => a.statement === s.id && a.table === table)
