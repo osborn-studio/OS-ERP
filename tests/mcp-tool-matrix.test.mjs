@@ -17,6 +17,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 import Database from 'better-sqlite3'
 import { createToken } from '../server/mcp/tokens.js'
 import { TOOLS } from '../server/mcp/tools.js'
+import { DOC_VIEW_PERMS } from '../server/mcp/doc-perms.js'
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url))
 const secret = () => randomBytes(24).toString('base64url')
@@ -346,6 +347,34 @@ test('MCP delegation matrix: every tool x {owner inactive, permission removed, s
     db.prepare('UPDATE users SET org_id=NULL, data_scope=? WHERE id=?').run('all', ownerId)
   }
 
+  // ---- 状态 4（Y6）：所有者缺门店 / 经销商绑定 ----
+  // 通用单据读工具对「HTTP 侧按门店 / 经销商绑定」的类型，在所有者拥有查看权限点但没有绑定时必须拒绝
+  // （TOKEN_OWNER_BINDING_REQUIRED），list_types 不列出；有绑定后只放行绑定对象自己的单据。
+  // 订货中心（OC/OCS）的 subject 绑定只约束外部主体（dealer/store 角色），由 mcp-doc-perms.test.mjs 覆盖。
+  matrix.binding_state = { state: 'owner_lacks_binding', types: {} }
+  {
+    const hard = Object.entries(DOC_VIEW_PERMS).filter(([, e]) => e.binding === 'store' || e.binding === 'dealer')
+    assert.ok(hard.length >= 6, 'expected store/dealer bound doc types')
+    for (const [, e] of hard) for (const p of e.perms) grant.run('warehouse', p)
+    db.prepare('UPDATE users SET store_id=NULL, dealer_id=NULL WHERE id=?').run(ownerId)
+    try {
+      const lt = await mcp('tools/call', { name: 'doc.list_types', arguments: {} }, token)
+      const listedCodes = payload(lt)?.doc_types?.map((x) => x.code) || []
+      for (const [code, e] of hard) {
+        const any = db.prepare(`SELECT id FROM ${db.prepare('SELECT table_name FROM doc_types WHERE code=?').get(code).table_name} ORDER BY id LIMIT 1`).get()
+        const before = snapshot()
+        const q = outcome(await mcp('tools/call', { name: 'doc.query', arguments: { doc_type: code } }, token))
+        const g = outcome(await mcp('tools/call', { name: 'doc.get', arguments: { doc_type: code, id: any.id } }, token))
+        const changed = diff(before, snapshot())
+        const ok = q.code === 'TOKEN_OWNER_BINDING_REQUIRED' && g.code === 'TOKEN_OWNER_BINDING_REQUIRED' && !listedCodes.includes(code) && changed.length === 0
+        matrix.binding_state.types[code] = { binding: e.binding, result: ok ? 'DENIED' : 'LEAK', query: q.code, get: g.code, listed: listedCodes.includes(code) }
+        if (!ok) failures.push(`owner_lacks_binding ${code}: query=${q.kind}/${q.code} get=${g.kind}/${g.code} listed=${listedCodes.includes(code)} ${changed.join(';')}`)
+      }
+    } finally {
+      restorePerms()
+    }
+  }
+
   // ---- 产出矩阵并断言覆盖 ----
   const file = path.join(f.dir, 'mcp-tool-matrix.json')
   writeFileSync(file, JSON.stringify(matrix, null, 2))
@@ -354,6 +383,7 @@ test('MCP delegation matrix: every tool x {owner inactive, permission removed, s
   if (process.env.MCP_MATRIX_PRINT) console.log(JSON.stringify(saved, null, 1))
   assert.equal(covered, TOOLS.length, 'matrix must cover every tool in every state')
   assert.equal(saved.tool_count, TOOLS.length)
+  assert.ok(Object.keys(saved.binding_state.types).length >= 6 && Object.values(saved.binding_state.types).every((x) => x.result === 'DENIED'), 'every store/dealer bound type is denied to an unbound owner')
   assert.deepEqual(failures, [], `tools that slipped through:\n${failures.join('\n')}`)
   assert.ok(Object.values(saved.tools).every((x) => Object.values(x.states).every((c) => c.result !== 'LEAK')))
 })

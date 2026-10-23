@@ -17,7 +17,7 @@ import { fileURLToPath } from 'node:url'
 import { setTimeout as delay } from 'node:timers/promises'
 import Database from 'better-sqlite3'
 import { createToken } from '../server/mcp/tokens.js'
-import { DOC_VIEW_PERMS, viewPermsOf } from '../server/mcp/doc-perms.js'
+import { DOC_VIEW_PERMS, viewPermsOf, bindingOf } from '../server/mcp/doc-perms.js'
 import { PO_READ_PERMS } from '../server/lib/purchase.js'
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url))
@@ -226,5 +226,185 @@ test('doc.query / doc.get / doc.list_types honour the owner view permission per 
     assert.ok(okTool(await call('doc.get', { doc_type: 'PO', id: po.id }, free)))
     const codes = await listedCodes(free)
     assert.ok(codes.includes('VOUCHER') && codes.includes('PO'))
+  })
+})
+
+// Y6（ADR-0011 补充）：HTTP 侧按门店 / 经销商 / 订货主体绑定的单据类型，MCP 同样要求所有者有绑定、且单据属于该绑定对象。
+// 绑定表（与 HTTP 逐一核对，见 ADR）：PS/PSF/RC/YQ/SH → store_id；DR → dealer_id；OC/OCS → 订货主体（customer_id）。
+// DS/RB 的 HTTP（dealers.js / dms.js）整体 requireInternal 的总部读，无绑定自视图，故不声明绑定。
+const BOUND = {
+  PS: ['store', 'store_id'], PSF: ['store', 'store_id'], RC: ['store', 'store_id'], YQ: ['store', 'store_id'], SH: ['store', 'store_id'],
+  DR: ['dealer', 'dealer_id'], OC: ['subject', 'customer_id'], OCS: ['subject', 'customer_id']
+}
+
+test('Y6 binding table is declared exactly once, in doc-perms, and its columns exist', async (t) => {
+  const { db } = await server(t)
+  for (const [code, [binding, col]] of Object.entries(BOUND)) {
+    assert.deepEqual(bindingOf(code), { binding, col }, code)
+    const tn = db.prepare('SELECT table_name FROM doc_types WHERE code=?').get(code).table_name
+    assert.ok(db.prepare(`PRAGMA table_info(${tn})`).all().some((c) => c.name === col), `${code}: ${tn}.${col} must exist`)
+  }
+  for (const c of Object.keys(DOC_VIEW_PERMS)) if (!BOUND[c]) assert.equal(bindingOf(c), null, `${c} must not carry a binding`)
+  assert.equal(bindingOf('DS'), null, 'DS/RB are HQ-only on HTTP (requireInternal), no self view to bind')
+  assert.equal(bindingOf('RB'), null)
+})
+
+test('Y6 bound doc types: owner without binding is denied; with binding sees only its own store/dealer/subject', { timeout: 300000 }, async (t) => {
+  const f = await server(t)
+  const { db, api, mcp } = f
+  const admin = (await api('/api/auth/login', { body: { username: 'admin', password: '12345', industry: 'cosmetic' } })).body.data.token
+  const mk = async (username, role) => {
+    const r = (await api('/api/auth/users', { token: admin, body: { username, name: username, role, password: secret(), data_scope: 'all' } })).body
+    assert.equal(r.success, true, JSON.stringify(r))
+    return r.data.id
+  }
+  const ownerId = await mk('y6_owner', 'warehouse')
+  const token = createToken(db, { name: 'y6', ownerUserId: ownerId, industry: 'cosmetic', scopes: 'read' }).token
+  const adminId = db.prepare("SELECT id FROM users WHERE username='admin'").get().id
+  const adminTok = createToken(db, { name: 'y6-admin', ownerUserId: adminId, industry: 'cosmetic', scopes: 'read' }).token
+  const free = createToken(db, { name: 'y6-free', industry: 'cosmetic', scopes: 'read' }).token
+  const call = (name, args, tk = token) => mcp('tools/call', { name, arguments: args }, tk)
+  const grant = (role, codes) => {
+    db.prepare('DELETE FROM role_permissions WHERE role_code=?').run(role)
+    const ins = db.prepare('INSERT INTO role_permissions (role_code, perm_code) VALUES (?,?)')
+    for (const c of new Set(codes)) ins.run(role, c)
+  }
+  const allBoundPerms = Object.keys(BOUND).flatMap((c) => DOC_VIEW_PERMS[c].perms)
+  grant('warehouse', allBoundPerms)
+  const tableOf = (c) => db.prepare('SELECT table_name FROM doc_types WHERE code=?').get(c).table_name
+  const ids = (r) => toolText(r).rows.map((x) => x.id)
+  const rowsOf = (c, id) => db.prepare(`SELECT * FROM ${tableOf(c)} WHERE id=?`).get(id)
+  const setBind = (id, { store = null, dealer = null }) => db.prepare('UPDATE users SET store_id=?, dealer_id=? WHERE id=?').run(store, dealer, id)
+
+  await t.test('no binding: query/get denied with TOKEN_OWNER_BINDING_REQUIRED and hidden from list_types; unbound types unaffected', async () => {
+    setBind(ownerId, {})
+    // OC/OCS 是订货主体绑定：内部账号 HTTP 口径是组织范围，不要求绑定（下面单独的子测试覆盖外部主体）
+    const hard = Object.keys(BOUND).filter((c) => BOUND[c][0] !== 'subject')
+    for (const c of hard) {
+      const any = db.prepare(`SELECT id FROM ${tableOf(c)} ORDER BY id LIMIT 1`).get()
+      assert.ok(any, `${c}: demo data must have a row`)
+      assert.equal(toolErr(await call('doc.query', { doc_type: c })), 'TOKEN_OWNER_BINDING_REQUIRED', `query ${c}`)
+      assert.equal(toolErr(await call('doc.get', { doc_type: c, id: any.id })), 'TOKEN_OWNER_BINDING_REQUIRED', `get ${c}`)
+      assert.equal(toolErr(await call('doc.get', { doc_type: c, id: 99999999 })), 'TOKEN_OWNER_BINDING_REQUIRED', `get fake ${c} (no existence oracle)`)
+    }
+    grant('warehouse', [...allBoundPerms, 'purchase.order.view'])
+    const r = await call('doc.list_types', {})
+    const codes = toolText(r).doc_types.map((x) => x.code)
+    for (const c of hard) assert.ok(!codes.includes(c), `${c} must be hidden for an unbound owner`)
+    assert.ok(codes.includes('PO'), 'unbound types keep working')
+    assert.ok(okTool(await call('doc.query', { doc_type: 'PO' })))
+    grant('warehouse', allBoundPerms)
+  })
+
+  await t.test('store binding: only own-store rows, other store is NOT_FOUND, binding is re-read each call', async () => {
+    for (const c of ['PS', 'PSF', 'RC', 'YQ', 'SH']) {
+      const tn = tableOf(c)
+      const stores = db.prepare(`SELECT store_id, COUNT(*) n FROM ${tn} GROUP BY store_id HAVING store_id IS NOT NULL ORDER BY n DESC`).all()
+      assert.ok(stores.length >= 2, `${c}: demo data needs two stores with documents`)
+      const [mine, other] = stores
+      setBind(ownerId, { store: mine.store_id })
+      const q = await call('doc.query', { doc_type: c, limit: 100 })
+      assert.ok(okTool(q), `${c} ${JSON.stringify(q.body).slice(0, 200)}`)
+      const got = ids(q)
+      assert.ok(got.length > 0, `${c}: own store has rows`)
+      assert.ok(got.every((id) => rowsOf(c, id).store_id === mine.store_id), `${c}: every row belongs to store ${mine.store_id}`)
+      assert.equal(got.length, Math.min(mine.n, 100), `${c}: filter is pushed into SQL, not applied after a 3x over-fetch`)
+      const own = db.prepare(`SELECT id FROM ${tn} WHERE store_id=? ORDER BY id LIMIT 1`).get(mine.store_id)
+      const foreign = db.prepare(`SELECT id, ${db.prepare('SELECT doc_no_field f FROM doc_types WHERE code=?').get(c).f || 'doc_no'} AS dn FROM ${tn} WHERE store_id=? ORDER BY id LIMIT 1`).get(other.store_id)
+      assert.ok(okTool(await call('doc.get', { doc_type: c, id: own.id })), `${c} own get`)
+      const g = await call('doc.get', { doc_type: c, id: foreign.id })
+      assert.equal(toolErr(g), 'NOT_FOUND', `${c}: other store's document reads as not found`)
+      assert.equal(toolErr(await call('doc.get', { doc_type: c, doc_no: foreign.dn })), 'NOT_FOUND', `${c} by doc_no`)
+      assert.equal(toolErr(await call('doc.get', { doc_type: c, id: 99999999 })), 'NOT_FOUND', `${c}: same code as a real foreign doc`)
+      // 换成另一家门店 → 立即换范围；撤掉绑定 → 立即拒绝
+      setBind(ownerId, { store: other.store_id })
+      assert.ok(ids(await call('doc.query', { doc_type: c, limit: 100 })).every((id) => rowsOf(c, id).store_id === other.store_id))
+      setBind(ownerId, {})
+      assert.equal(toolErr(await call('doc.query', { doc_type: c })), 'TOKEN_OWNER_BINDING_REQUIRED')
+    }
+    setBind(ownerId, { store: 1 })
+    const listed = toolText(await call('doc.list_types', {})).doc_types.map((x) => x.code)
+    for (const c of ['PS', 'PSF', 'RC', 'YQ', 'SH']) assert.ok(listed.includes(c), `${c} listed once the owner is bound`)
+    assert.ok(!listed.includes('DR'), 'a store binding does not unlock a dealer-bound type')
+    assert.equal(toolErr(await call('doc.query', { doc_type: 'DR' })), 'TOKEN_OWNER_BINDING_REQUIRED')
+  })
+
+  await t.test('dealer binding: DR rows limited to the owner dealer; a store binding does not help', async () => {
+    const dealers = db.prepare('SELECT dealer_id, COUNT(*) n FROM dealer_requisitions GROUP BY dealer_id ORDER BY n DESC').all()
+    assert.ok(dealers.length >= 2, 'demo data needs two dealers with requisitions')
+    const [mine, other] = dealers
+    setBind(ownerId, { dealer: mine.dealer_id })
+    const got = ids(await call('doc.query', { doc_type: 'DR', limit: 100 }))
+    assert.ok(got.length > 0 && got.every((id) => rowsOf('DR', id).dealer_id === mine.dealer_id))
+    const foreign = db.prepare('SELECT id FROM dealer_requisitions WHERE dealer_id=? LIMIT 1').get(other.dealer_id)
+    assert.equal(toolErr(await call('doc.get', { doc_type: 'DR', id: foreign.id })), 'NOT_FOUND')
+    assert.equal(toolErr(await call('doc.query', { doc_type: 'PS' })), 'TOKEN_OWNER_BINDING_REQUIRED', 'a dealer binding does not unlock a store-bound type')
+    // DS / RB: HTTP is HQ-only, no binding required for an internal owner holding the permission
+    grant('warehouse', [...allBoundPerms, 'dms.dealer.view'])
+    setBind(ownerId, {})
+    assert.ok(okTool(await call('doc.query', { doc_type: 'DS' })))
+    assert.ok(okTool(await call('doc.query', { doc_type: 'RB' })))
+    grant('warehouse', allBoundPerms)
+  })
+
+  await t.test('order-center subject binding: external dealer/store owners see only their own customer; internal owners unchanged', async () => {
+    const dealerOwner = await mk('y6_dealer', 'dealer')
+    grant('dealer', ['order.view', 'order.statement.view'])
+    const dTok = createToken(db, { name: 'y6d', ownerUserId: dealerOwner, industry: 'cosmetic', scopes: 'read' }).token
+    setBind(dealerOwner, {})
+    assert.equal(toolErr(await call('doc.query', { doc_type: 'OC' }, dTok)), 'TOKEN_OWNER_BINDING_REQUIRED')
+    assert.equal(toolErr(await call('doc.query', { doc_type: 'OCS' }, dTok)), 'TOKEN_OWNER_BINDING_REQUIRED')
+    // 未绑定的外部主体：订货中心类型不列出；它没有任何别的可读类型 ⇒ list_types 明确拒绝
+    assert.equal(toolErr(await call('doc.list_types', {}, dTok)), 'TOKEN_OWNER_PERM_DENIED')
+    const custs = db.prepare("SELECT c.id, c.source_id, (SELECT COUNT(*) FROM oc_orders o WHERE o.customer_id=c.id) n FROM oc_customers c WHERE c.source_type='dealer' ORDER BY n DESC").all()
+    const [mine, other] = custs
+    assert.ok(mine.n > 0 && other.n > 0, 'demo data needs two dealer customers with orders')
+    setBind(dealerOwner, { dealer: mine.source_id })
+    // 外部主体的 data_scope 为 all 才不被组织范围收窄，凸显绑定本身的作用
+    const got = ids(await call('doc.query', { doc_type: 'OC', limit: 100 }, dTok))
+    assert.ok(got.length > 0 && got.every((id) => rowsOf('OC', id).customer_id === mine.id), 'only the bound dealer customer')
+    const foreign = db.prepare('SELECT id FROM oc_orders WHERE customer_id=? LIMIT 1').get(other.id)
+    assert.equal(toolErr(await call('doc.get', { doc_type: 'OC', id: foreign.id }, dTok)), 'NOT_FOUND')
+    const st = db.prepare('SELECT id, customer_id FROM oc_statements').all()
+    const gotSt = ids(await call('doc.query', { doc_type: 'OCS', limit: 100 }, dTok))
+    assert.ok(gotSt.every((id) => st.find((x) => x.id === id).customer_id === mine.id))
+    for (const s2 of st.filter((x) => x.customer_id !== mine.id)) assert.equal(toolErr(await call('doc.get', { doc_type: 'OCS', id: s2.id }, dTok)), 'NOT_FOUND')
+    assert.ok(toolText(await call('doc.list_types', {}, dTok)).doc_types.some((x) => x.code === 'OC'), 'listed once bound')
+    // 门店主体同理：绑定门店 → 只看本店档案的订货单
+    const storeOwner = await mk('y6_storeowner', 'store')
+    grant('store', ['order.view'])
+    const sTok = createToken(db, { name: 'y6s', ownerUserId: storeOwner, industry: 'cosmetic', scopes: 'read' }).token
+    assert.equal(toolErr(await call('doc.query', { doc_type: 'OC' }, sTok)), 'TOKEN_OWNER_BINDING_REQUIRED')
+    const sc = db.prepare("SELECT c.id, c.source_id FROM oc_customers c WHERE c.source_type='store' AND EXISTS (SELECT 1 FROM oc_orders o WHERE o.customer_id=c.id)").get()
+    if (sc) {
+      setBind(storeOwner, { store: sc.source_id })
+      const gs = ids(await call('doc.query', { doc_type: 'OC', limit: 100 }, sTok))
+      assert.ok(gs.length > 0 && gs.every((id) => rowsOf('OC', id).customer_id === sc.id))
+    }
+    // 内部账号（warehouse）无绑定：HTTP 口径是组织范围，不要求绑定 → 不被 BINDING_REQUIRED 拦
+    setBind(ownerId, {})
+    const r = await call('doc.query', { doc_type: 'OC' })
+    assert.notEqual(toolErr(r), 'TOKEN_OWNER_BINDING_REQUIRED')
+  })
+
+  await t.test('admin owner and ownerless tokens are exempt and see every store', async () => {
+    for (const tk of [adminTok, free]) {
+      for (const c of ['PS', 'RC', 'YQ', 'DR']) {
+        const r = await call('doc.query', { doc_type: c, limit: 100 }, tk)
+        assert.ok(okTool(r), `${c} ${JSON.stringify(r.body).slice(0, 200)}`)
+        const col = BOUND[c][1]
+        const distinct = new Set(ids(r).map((id) => rowsOf(c, id)[col]))
+        assert.ok(distinct.size > 1, `${c}: exempt callers see more than one ${col}`)
+      }
+      const codes = toolText(await call('doc.list_types', {}, tk)).doc_types.map((x) => x.code)
+      for (const c of Object.keys(BOUND)) assert.ok(codes.includes(c), `${c} listed for exempt caller`)
+    }
+  })
+
+  await t.test('the binding is an extra gate: without the view permission it is still TOKEN_OWNER_PERM_DENIED', async () => {
+    setBind(ownerId, { store: 1 })
+    grant('warehouse', ['purchase.order.view'])
+    assert.equal(toolErr(await call('doc.query', { doc_type: 'PS' })), 'TOKEN_OWNER_PERM_DENIED')
+    grant('warehouse', allBoundPerms)
   })
 })
