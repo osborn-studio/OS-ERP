@@ -432,7 +432,7 @@
 <h3 id="293-正确的使用方式">29.3 正确的使用方式</h3>
 <ul><li>把它当同一规模下逐日对比的<strong>趋势指示</strong>：看 p95 有没有持续恶化、违规数有没有出现。托管 runner 是共享虚拟机，单日数字波动大，读数字时连同 <code>host.loadavg_*</code> 一起看。</li><li>它<strong>不是</strong>目标主机 <code>dmserver</code> 的结果、不是容量承诺、不是 RPO / RTO 证据，也不是发行包或生产验收。需要容量结论时，按 <code>capacity-baseline.md</code> 在目标主机上用生产规模副本实测。</li><li>摘要里的恢复演练耗时同样来自合成库和托管 runner，不可对客户作为恢复时间承诺。</li><li>开始收费后是否切回专用 Linux 主机，需要所有者单独决定。</li></ul>
 <h2 id="三十-库存列表分页">三十 库存列表分页</h2>
-<p>依据 Z3。库存查询页（/inventory/stocks）和接口 <code>GET /api/inventory/stocks</code> 已改为强制游标分页，大库下不再随总行数变慢。</p>
+<p>依据 Z3。库存查询页（/inventory/stocks）和接口 <code>GET /api/inventory/stocks</code> 已改为强制游标分页，翻页（第二页起）的代价不再随总行数增长。第一页仍要对满足条件的全部行做一次计数与合计，大库上进入页面或改过滤条件时仍有这一次整表聚合，目标主机上的实测尚未做。</p>
 <ul><li>每页缺省 50 行，<code>pageSize</code> 上限 500（超出按 500 处理）。页面底部是「下一页」翻页，每页 50 行。</li><li>接口翻页用游标：第一页不带游标；响应里的 <code>has_more</code> 为真时，把 <code>next_after_id</code> 作为下一次请求的 <code>after_id</code> 参数继续取，直到 <code>has_more</code> 为假。<code>after_id</code> 必须是非负整数，否则返回错误。行按库存记录编号升序。</li><li><code>total</code>（总行数）和 <code>summary</code>（数量与金额合计）<strong>只在第一页</strong>（不带 <code>after_id</code> 的请求）返回，翻页的后续请求不再计算，所以翻到后面页时页面上的合计取自第一页。</li><li>旧的 <code>page</code>、<code>offset</code> 参数不再支持，会被忽略；自己写的导出脚本或报表需要改成游标方式，否则永远只拿到第一页。过滤参数不变（仓库、品牌、品类、SKU、批次、关键字、仅可用、临期天数等）。</li><li>库存按你的数据范围过滤，范围外的仓库不出现（见第二十六章）。按商品汇总的 <code>/inventory/stocks/by-sku</code> 仍使用页码分页。</li><li>本次改造同时补了热点查询索引（迁移 061）；前后性能数字的口径与限制见 <code>capacity-baseline.md</code>，那些数字不是目标主机结果。</li></ul>
   </main>
 </div>
