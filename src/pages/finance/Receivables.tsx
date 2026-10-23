@@ -34,7 +34,11 @@ import {
   AR_STATUS_CLS, AR_STATUS_LABEL, RC_STATUS_CLS, RC_STATUS_LABEL, overdueCls,
   type ArDocument, type Receipt, type Statement, type AgingSubjectRow, type AgingDetail
 } from '../../api/ar'
-import { Wallet, Banknote, AlertTriangle, FileText, Plus, RefreshCw, CheckCircle2, Ban, Coins, Inbox } from 'lucide-react'
+import { Wallet, Banknote, AlertTriangle, FileText, Plus, RefreshCw, CheckCircle2, Ban, Coins, Inbox, ShieldCheck } from 'lucide-react'
+import {
+  formatCreditEffect, creditEffectSummary,
+  type CreditEffect, type CreditEffectKind, type CreditEffectView
+} from '../../utils/credit-effect'
 
 /**
  * 应收与收款核销（模块 21）。
@@ -52,6 +56,56 @@ import { Wallet, Banknote, AlertTriangle, FileText, Plus, RefreshCw, CheckCircle
  *   ② 草稿收款单不等于收到钱 —— 它只是核销计划，列里标「草稿（未生效）」。
  *   ③ 逾期天数由到期日与今天算出，不存缓存列；逐笔账龄与汇总账龄同源（都取库里的视图）。
  */
+/**
+ * 授信效果面板（ADR-0013）：确认 / 作废 / 预收抵扣成功后，把响应里的 `credit_released` / `credit_reversal`
+ * 原样列出来 —— 逐来源（单号 / 类型 / 台账 / 金额）+ 统一授信 / 订货中心两条合计。
+ * 只展示后端给的数，不在前端算；legacy（迁移前收款单）要把"统一授信没有恢复"说清楚。
+ */
+function CreditEffectPanel({ view, docNo, onClose }: { view: CreditEffectView; docNo?: string; onClose?: () => void }) {
+  const tone = view.legacy ? 'border-amber-300 bg-amber-50' : view.empty ? 'border-slate-200 bg-slate-50' : 'border-emerald-200 bg-emerald-50'
+  return (
+    <div className={`rounded border px-3 py-2 text-[12.5px] ${tone}`} data-testid="credit-effect-panel" role="status">
+      <div className="flex items-center gap-2">
+        <ShieldCheck size={14} className={view.legacy ? 'text-amber-600' : view.empty ? 'text-slate-400' : 'text-emerald-600'} />
+        <span className="font-medium text-slate-700">
+          {docNo ? `${docNo} · ` : ''}{view.kind === 'released' ? '本次释放授信' : '本次恢复占用'}
+        </span>
+        {view.legacy && <span className="px-1.5 py-0.5 rounded border border-amber-300 text-amber-700 text-[11px]">迁移前收款单（旧口径）</span>}
+        <div className="flex-1" />
+        <span className="tabular-nums text-slate-600">统一授信 {fmtMoney(view.totals.unified)}</span>
+        <span className="tabular-nums text-slate-600">订货中心 {fmtMoney(view.totals.oc)}</span>
+        {onClose && (
+          <button className="btn-ghost btn-sm" onClick={onClose} aria-label="收起授信效果">收起</button>
+        )}
+      </div>
+      {view.empty && <div className="mt-1 text-slate-500">本次未触及授信占用（没有释放台账行，合计为 0）。</div>}
+      {view.legacy && <div className="mt-1 text-amber-700">{view.note}</div>}
+      {view.lines.length > 0 && (
+        <table className="mt-2 w-full text-[12px]">
+          <thead>
+            <tr className="text-slate-400 text-left">
+              <th className="font-normal pb-1">来源单号</th>
+              <th className="font-normal pb-1 w-16">类型</th>
+              <th className="font-normal pb-1 w-24">台账</th>
+              <th className="font-normal pb-1 text-right w-28">金额</th>
+            </tr>
+          </thead>
+          <tbody>
+            {view.lines.map((l, i) => (
+              <tr key={`${l.doc_no}-${i}`} className="text-slate-700">
+                <td className="py-0.5">{l.doc_no}</td>
+                <td className="py-0.5">{l.type}</td>
+                <td className="py-0.5">{l.ledger_label}</td>
+                <td className="py-0.5 text-right tabular-nums">{fmtMoney(l.amount)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  )
+}
+
 /** 筛选条里的带标签控件：Inp / Sel 本身不带标签，这里统一补一个前缀 */
 function F({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -564,20 +618,31 @@ function ReceiptsTab({ tick, reload }: { tick: number; reload: () => void }) {
   const [detail, setDetail] = useState<Receipt | null>(null)
   const [createOpen, setCreateOpen] = useState(false)
   const [busy, setBusy] = useState(false)
+  /** 最近一次确认 / 作废带回的授信效果（ADR-0013），钉在详情弹窗顶部直到关闭或换单 */
+  const [effect, setEffect] = useState<{ docNo: string; view: CreditEffectView } | null>(null)
 
   const openDetail = async (id: number) => {
     try {
+      setEffect(null)
       setDetail(await RC_GET(id))
     } catch (e: any) {
       toast(e.message || '打开失败', 'error')
     }
   }
-  const act = async (fn: () => Promise<any>, msg: string) => {
+  const closeDetail = () => {
+    setDetail(null)
+    setEffect(null)
+  }
+  const act = async (fn: () => Promise<Receipt>, msg: string, kind: CreditEffectKind) => {
     setBusy(true)
     try {
       const r = await fn()
-      toast(msg, 'success')
-      if (detail && r?.id === detail.id) setDetail(await RC_GET(detail.id))
+      const raw: CreditEffect | undefined = kind === 'released' ? r?.credit_released : r?.credit_reversal
+      toast(`${msg}；${creditEffectSummary(raw, kind)}`, 'success')
+      if (detail && r?.id === detail.id) {
+        setEffect({ docNo: r.doc_no || detail.doc_no, view: formatCreditEffect(raw, kind) })
+        setDetail(await RC_GET(detail.id))
+      }
       reload()
     } catch (e: any) {
       toast(e.message || '操作失败', 'error')
@@ -651,17 +716,17 @@ function ReceiptsTab({ tick, reload }: { tick: number; reload: () => void }) {
       <Modal
         open={!!detail}
         title={`收款单 ${detail?.doc_no || ''}`}
-        onClose={() => setDetail(null)}
+        onClose={closeDetail}
         width={820}
         footer={
           detail && (
             <>
-              <button className="btn-ghost" onClick={() => setDetail(null)}>关闭</button>
+              <button className="btn-ghost" onClick={closeDetail}>关闭</button>
               {detail.status === 'draft' && (
                 <button
                   className="btn-primary"
                   disabled={busy}
-                  onClick={() => act(() => RC_CONFIRM(detail.id), '已确认收款：核销生效、授信占用释放')}
+                  onClick={() => act(() => RC_CONFIRM(detail.id), '已确认收款：核销生效', 'released')}
                 >
                   <CheckCircle2 size={14} /> 确认收款
                 </button>
@@ -673,7 +738,7 @@ function ReceiptsTab({ tick, reload }: { tick: number; reload: () => void }) {
                   onClick={() => {
                     const reason = window.prompt('作废原因（必填，将写入留痕）：')
                     if (!reason) return
-                    act(() => RC_VOID(detail.id, reason), '已作废：核销回退，授信需显式补占')
+                    act(() => RC_VOID(detail.id, reason), '已作废：核销回退', 'reversal')
                   }}
                 >
                   <Ban size={14} /> 作废
@@ -683,7 +748,14 @@ function ReceiptsTab({ tick, reload }: { tick: number; reload: () => void }) {
           )
         }
       >
-        {detail && <ReceiptDetail rc={detail} />}
+        {detail && (
+          <div className="space-y-3">
+            {effect && effect.docNo === detail.doc_no && (
+              <CreditEffectPanel view={effect.view} docNo={effect.docNo} onClose={() => setEffect(null)} />
+            )}
+            <ReceiptDetail rc={detail} />
+          </div>
+        )}
       </Modal>
 
       <CreateReceiptModal open={createOpen} onClose={() => setCreateOpen(false)} onOk={reload} />
@@ -1239,11 +1311,14 @@ function PrepayTab({
   const [target, setTarget] = useState('auto')
   const [busy, setBusy] = useState(false)
   const [ocBusy, setOcBusy] = useState(false)
+  /** 最近一次预收抵扣带回的授信释放（ADR-0013），钉在弹窗里直到关闭或换客户 */
+  const [effect, setEffect] = useState<{ docNo: string; view: CreditEffectView } | null>(null)
 
   const openDetail = async (r: any) => {
     setDetailSubject({ t: r.subject_type, id: r.subject_id, name: r.subject_name })
     setTarget('auto')
     setDetail(null)
+    setEffect(null)
     try {
       setDetail(await AR_PREPAY_DETAIL(r.subject_type, r.subject_id))
     } catch (e: any) {
@@ -1267,7 +1342,8 @@ function PrepayTab({
       if (target === 'auto') body.auto = true
       else body.ar_id = Number(target)
       const r = await AR_PREPAY_APPLY(body)
-      toast(`已抵扣 ${fmtMoney(r.applied)}，剩余预收 ${fmtMoney(r.remaining)}`, 'success')
+      toast(`已抵扣 ${fmtMoney(r.applied)}，剩余预收 ${fmtMoney(r.remaining)}；${creditEffectSummary(r.credit_released, 'released')}`, 'success')
+      setEffect({ docNo: r.receipt?.doc_no || `收款单#${receiptId}`, view: formatCreditEffect(r.credit_released, 'released') })
       await refreshDetail()
       reload()
     } catch (e: any) {
@@ -1374,6 +1450,7 @@ function PrepayTab({
         onClose={() => {
           setDetailSubject(null)
           setDetail(null)
+          setEffect(null)
         }}
         width={880}
         footer={
@@ -1389,6 +1466,7 @@ function PrepayTab({
               onClick={() => {
                 setDetailSubject(null)
                 setDetail(null)
+                setEffect(null)
               }}
             >
               关闭
@@ -1456,6 +1534,11 @@ function PrepayTab({
               />
               {!detail.open_ars.length && (
                 <div className="mt-2 text-[12px] text-slate-400">该客户当前没有未结应收，钱先留在预收里</div>
+              )}
+              {effect && (
+                <div className="mt-2">
+                  <CreditEffectPanel view={effect.view} docNo={effect.docNo} onClose={() => setEffect(null)} />
+                </div>
               )}
             </div>
 
