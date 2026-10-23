@@ -391,13 +391,7 @@ group('order-center.js', 'handler-scope', '订货中心（ADR-0027 已收口）�
   ['POST', '/orders/:id/:action'], ['GET', '/credit/:customerId'], ['GET', '/statements'], ['GET', '/statements/:id']
 ])
 
-// —— 采购链：ADR-0017 收口列表/概览，ADR-0020（W1）收口详情/预览/计划/目录；剩余写路径见下 ——
-group('purchase-chain.js', 'gap', 'ADR-0020 边界：收货核对仍只有 requireAuth，未过 readGate，也未按组织范围判定', [
-  ['POST', '/orders/:id/receive-check']
-], 'unassigned')
-group('purchase-chain.js', 'handler-scope', '动作路由：处理器内 assertActionPermitted 按动作校验权限码；这些动作路由的单据级组织范围判定仍未做（POST /payments、/settlements 的自动分配与来源选择已由 ADR-0028 按范围收口，它们本身有 requirePerm）', [
-  ['POST', '/requisitions/:id/:action'], ['POST', '/invoices/:id/:action'], ['POST', '/settlements/:id/:action'], ['POST', '/payments/:id/:action']
-], 'unassigned')
+// —— 采购链：ADR-0017 收口列表/概览，ADR-0020（W1）收口详情/预览/计划/目录，ADR-0031（Y1）收口动作/转单/复核/收货核对（actionGate / readGate + assertPurchaseDocInScope）；本文件已无采购链登记 ——
 
 // —— 其它 ——
 group('auth.js', 'handler-scope', '组织档案平铺列表：处理器内按 resolveOrgScope 裁剪（admin / 全局范围全量，其余只含范围内组织，经销商另含挂靠组织，空范围 ⇒ 空列表）；ADR-0028', [['GET', '/orgs']])
@@ -449,6 +443,8 @@ function main() {
   for (const [k, list] of Object.entries(pend)) {
     console.log(`  待办 pending=${k}：${list.length} 条`)
   }
+  // 没有任何排期待办时也要明说（而不是整行消失）：「清零」与「报告机制坏了」必须能从输出里分开
+  if (!Object.keys(pend).length) console.log('  待办 pending=none：0 条（已无带排期标记的真实缺口登记）')
   for (const p of problems) console.log(`  ✗ ${p}`)
   console.log(`通过 ${routes.length - problems.length} / 失败 ${problems.length}`)
   process.exit(problems.length ? 1 : 0)
