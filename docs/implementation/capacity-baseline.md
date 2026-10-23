@@ -277,27 +277,27 @@ node scripts/synth-pipeline.mjs --dir /tmp/synth-large --skus 20000 --txns 25000
 
 ### 口径
 
-`duration_ms` ＝ 一次 `runMigrations` 调用的墙钟（含对暂存目录的校验和核对与已登记迁移的 `verify()`）；`overhead_ms` ＝ 紧接着再调一次（空操作）的墙钟；`net_ms ≈ duration − overhead`，**抖动很大（负载 40 的机器上经常为 0），只看 `duration_ms`**。`写锁阻塞` ＝ worker 线程里另一个连接每约 1 ms 做一次 `BEGIN IMMEDIATE; COMMIT`（`busy_timeout=0`），两次成功之间、期间失败过的最长间隔：**写入者视角的下界，约 1–2 ms 分辨率**；WAL 下读者不被挡，本演练不量读者；上界看 `duration_ms`（单迁移单事务）。
+`duration_ms` ＝ 一次 `runMigrations` 调用的墙钟（含对暂存目录的校验和核对与已登记迁移的 `verify()`）；`overhead_ms` ＝ 紧接着再调一次（必须是空操作，否则判失败）的墙钟；`net_ms ≈ duration − overhead`，**抖动很大（负载 30–50 的机器上经常为 0），只看 `duration_ms`**。写锁：worker 线程里另一个连接每约 1 ms 做一次 `BEGIN IMMEDIATE; COMMIT`（`busy_timeout=0`）。每个"被挡窗口"记两个数，**真实持锁时长落在两者之间**（再加线程调度噪声）：`busy_span`＝第一次到最后一次失败尝试的间隔（下界），`blocked`＝上一次成功到下一次成功的间隔（近似上界，高负载下可能明显偏大）。写入者视角；WAL 下读者不被挡，本演练不量读者；单迁移单事务，粗上界看 `duration_ms`。
 
 ### 数据与结果
 
-输入：`synth-data.mjs --skus 20000 --docs 30000 --txns 150000`（medium；6,667 商品 / 12,000 采购单 / 18,000 销售单 / 150,000 库存流水；库文件 236,937,216 字节 ≈ 226 MiB，种子 20261023）生成后，`upgrade-rehearsal.mjs --from=58 --synth-dir=… `。机器：Mac mini（Apple M4，10 核，16 GB，Node v22.22.1），**测量时整机负载平均值约 35–55（其他任务并行）**，数字只能看量级。同一份库连跑两次：
+输入：`synth-data.mjs --skus 20000 --docs 30000 --txns 150000`（medium；6,667 商品 / 12,000 采购单 / 18,000 销售单 / 150,000 库存流水；库文件 236,937,216 字节 ≈ 226 MiB，种子 20261023）生成后，`upgrade-rehearsal.mjs --from=58 --synth-dir=…`。机器：Mac mini（Apple M4，10 核，16 GB，Node v22.22.1），**测量时整机负载平均值约 17–50（其他任务并行）**，数字只能看量级。以下是最终代码上同一份库连跑两次（运行 5、运行 6）；此前用较早版本的脚本（探针只有 `blocked` 一个口径）还跑过四次，059 耗时 447 / 561 / 993 / 1023 ms，量级一致。
 
-| 迁移 | 结构原本存在 | 运行 1 耗时 / 写锁阻塞 (ms) | 运行 2 耗时 / 写锁阻塞 (ms) | 说明 |
+| 迁移 | 结构原本存在 | 运行 5：耗时 / 写锁（busy_span–blocked） (ms) | 运行 6：耗时 / 写锁（busy_span–blocked） (ms) | 说明 |
 |---|---|---|---|---|
-| 059_indexes | false（先删了 21 个它创建的索引） | 1023.2 / 841.0 | 560.9 / 487.3 | 真实建索引；写锁占耗时的 82–87% |
-| 060_qimen_secrets | false（先删了它创建的 1 个索引） | 51.0 / 0 | 87.1 / 3.6 | 小迁移 |
-| 061_hot_query_indexes | false（先删了它创建的 3 个索引） | 147.1 / 96.2 | 73.1 / 43.1 | 真实建索引 |
-| 062_audit_view_permission | **true** | 38.8 / 0 | 174.3 / 0 | 权限字典行已存在，空转重放，耗时**不代表**升级成本 |
-| 合计（4 步） | | 1,260 | 895 | `steps_ms` 1934 / 1346 含逐步的空操作校验调用 |
+| 059_indexes | false（先删了 21 个它创建的索引） | 337.6 / 277.5–280.5 | 415.0 / 349.6–352.9 | 真实建索引；写锁占耗时的约 80–85% |
+| 060_qimen_secrets | false（先删了它创建的 1 个索引） | 34.4 / 0–0 | 36.2 / 0–3.3 | 小迁移；基本没撞上锁 |
+| 061_hot_query_indexes | false（先删了它创建的 3 个索引） | 43.1 / 24.4–27.1 | 135.9 / 73.9–80.5 | 真实建索引 |
+| 062_audit_view_permission | **true** | 16.8 / 0–0 | 41.2 / 0–0 | 权限字典行已存在，空转重放，耗时**不代表**升级成本 |
+| 合计（4 步） | | 431.9 | 628.3 | |
 
-两次运行都通过全部核对：`checksums_verified`（59/59）、`repo_files_match_registry`、`production_rerun_is_noop`、`registry_covers_all_migrations`、`integrity_ok`、`foreign_keys_not_worse`（0→0）、`probes_retained`（users 1 / products 6667 / purchase_orders 12000 / receipts 0 / ar_open_balance 0 前后相同）、`seed_invariants_not_regressed`（24/24 绿 → 24/24 绿）。其他耗时：合成库备份 5.3 / 8.9 s，恢复复制 0.7 / 0.8 s，索引集差异计算 1.5 / 3.3 s，verify-seed 风格不变量（运行 2 实测）升级前 ≈236 s、升级后 ≈209 s（占总耗时 ≈ 468 s 的绝大部分，与迁移本身无关）。库文件大小升级前后相同（删掉的 25 个索引腾出的页被重建复用）。
+两次运行都通过全部核对且 `warnings` 为空：`checksums_verified`（59/59）、`repo_files_match_registry`、`production_rerun_is_noop`、`registry_covers_all_migrations`、`integrity_ok`、`foreign_keys_not_worse`（0→0）、`probes_retained`（users 1 / products 6667 / purchase_orders 12000 / receipts 0 / ar_open_balance 0 前后相同）、`seed_invariants_not_regressed`（24/24 绿 → 24/24 绿）。其他耗时（运行 5 / 6）：合成库备份 3.9 / 3.7 s，恢复复制 0.3 / 0.4 s，索引集差异计算 1.2 / 0.8 s，verify-seed 风格不变量升级前 137 / 102 s、升级后 109 / 80 s（占总耗时 258 / 192 s 的绝大部分，与迁移本身无关）。库文件大小升级前后相同（删掉的 25 个索引腾出的页被重建复用）。
 
-**读法**：15 万行流水量级的 medium 库，059 建索引在这台机器上约 0.5–1.0 s、持写锁约 0.5–0.85 s；这是"另一个写入者最坏要等多久"的量级，不是 SLA。**没有在 `dmserver` 上测过，没有用真实规模或真实分布的数据测过，没有测读者，没有测并发业务写入与迁移同时进行时的 `SQLITE_BUSY` 次数**（Y7 的写路径基线是另一件事）。两次运行 059 差了近一倍，说明单次数字只能看量级；要引用请在目标主机上重复多次取分布。
+**读法**：15 万行流水量级的 medium 库，059 建索引在这台机器上约 0.3–1.0 s、持写锁约 0.3–0.85 s；这是"另一个写入者最坏要等多久"的量级，不是 SLA。**没有在 `dmserver` 上测过，没有用真实规模或真实分布的数据测过，没有测读者，没有测并发业务写入与迁移同时进行时的 `SQLITE_BUSY` 次数**（Y7 的写路径基线是另一件事）。六次运行里 059 在 0.34–1.02 s 之间波动，说明单次数字只能看量级；要引用请在目标主机上重复多次取分布。
 
 ### 失败路径的证据（夹具规模，`tests/upgrade-rehearsal.test.mjs`）
 
-用 `--extra-migrations-dir` 追加一个"先建表、写行、再抛错"的 `900_rehearsal_failing.cjs`（只复制进暂存目录，永不写进 `server/db/migrations/`）：059–062 先应用，第 900 步失败 ⇒ 退出码 1，报告记录失败步骤与错误，进程内回退（删副本、重新核对 sha256 复制、版本表与升级前逐字段相同、探针相同、integrity ok）与 ADR-0016 回退演练（退出码 0，全部不变量成立）都通过，工作副本里没有半截表、没有 900 行。另有：备份里被篡改的已登记校验和（≤基线与>基线各一例）⇒ `PRE_UPGRADE_CHECKSUM_MISMATCH`、一个迁移都不尝试；`--from` 高于库内真实版本 ⇒ `REHEARSAL_BASELINE_NOT_APPLIED`（退出码 2）。
+用 `--extra-migrations-dir` 追加一个"先建表、写行、再抛错"的 `900_rehearsal_failing.cjs`（只复制进暂存目录，永不写进 `server/db/migrations/`）：059–062 先应用，第 900 步失败 ⇒ 退出码 1，报告记录失败步骤与错误，进程内回退（删副本、重新核对 sha256 复制、版本表与升级前逐字段相同、探针相同、integrity ok）与 ADR-0016 回退演练（退出码 0，全部不变量成立）都通过，工作副本里没有半截表、没有 900 行。另有：备份里被篡改的已登记校验和（≤基线与>基线各一例）⇒ `PRE_UPGRADE_CHECKSUM_MISMATCH`、一个迁移都不尝试；`--from` 高于库内真实版本 ⇒ `REHEARSAL_BASELINE_NOT_APPLIED`（退出码 2）；版本表里有登记行而仓库没有对应文件 ⇒ `PRE_UPGRADE_REGISTRY_FILE_MISSING`（截断会把它的校验和历史一并抹掉，所以先拒绝）；一个 `verify()` 与 `up()` 不自洽的迁移，紧接着的核对调用若发生自愈即判失败（不会被悄悄修好）；合成库副本 settings 里指向别处的 `backup_dir`/`backup_keep` 在副本里被改回迁移 020 的缺省值，备份不会写到或裁剪目标目录之外的任何目录。
 
 ### 用法
 
