@@ -396,15 +396,13 @@ group('order-center.js', 'handler-scope', '订货中心：路由器层 requireAu
   ['POST', '/orders/:id/:action'], ['GET', '/credit/:customerId'], ['GET', '/statements'], ['GET', '/statements/:id']
 ], 'unassigned')
 
-// —— 采购链：ADR-0017 只收口了 7 条列表/概览路由，其余等 W1（ADR-0020） ——
-group('purchase-chain.js', 'gap', 'ADR-0017 边界：详情/预览/计划/目录读路由仍只有 requireAuth，未过 readGate，也未按组织范围判定（W1 / ADR-0020）', [
-  ['GET', '/chain/actions'], ['GET', '/catalog'], ['GET', '/price'], ['POST', '/price-preview'], ['GET', '/requisitions/:id'], ['GET', '/invoices/:id'],
-  ['GET', '/invoices-available-lines'], ['GET', '/settlements/:id'], ['GET', '/settlement-preview'], ['GET', '/payments/:id'], ['GET', '/payment-plan'],
-  ['GET', '/orders/:id/closes'], ['POST', '/orders/:id/receive-check']
-], 'W1')
-group('purchase-chain.js', 'handler-scope', '动作路由：处理器内 assertActionPermitted 按动作校验权限码；但仍无组织范围判定（W1 / ADR-0020 一并收口）', [
+// —— 采购链：ADR-0017 收口列表/概览，ADR-0020（W1）收口详情/预览/计划/目录；剩余写路径见下 ——
+group('purchase-chain.js', 'gap', 'ADR-0020 边界：收货核对仍只有 requireAuth，未过 readGate，也未按组织范围判定', [
+  ['POST', '/orders/:id/receive-check']
+], 'unassigned')
+group('purchase-chain.js', 'handler-scope', '动作路由：处理器内 assertActionPermitted 按动作校验权限码；ADR-0020 明确写路径（含 POST /payments、/settlements 的自动分配与来源选择）仍无组织范围判定', [
   ['POST', '/requisitions/:id/:action'], ['POST', '/invoices/:id/:action'], ['POST', '/settlements/:id/:action'], ['POST', '/payments/:id/:action']
-], 'W1')
+], 'unassigned')
 
 // —— 其它 ——
 group('auth.js', 'gap', '组织档案全表（含 path/负责人等）对任何登录账号（含外部角色）开放；注释写"管理员"但无闸门', [['GET', '/orgs']], 'unassigned')
