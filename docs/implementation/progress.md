@@ -2,6 +2,10 @@
 
 更新：2026-10-22。全新公开仓库：[osborn-studio/OS-ERP](https://github.com/osborn-studio/OS-ERP)，采用 MIT，仅导入清理后的当前文件快照。旧仓库保留为私有归档，其 PR/Actions/历史对象不导入本仓库。未发布正式 Release、未部署。来源及旧 checkout 使用限制见 [PUBLICATION_HISTORY](../PUBLICATION_HISTORY.md)，MIT 决策不替代第三方权属核验。
 
+## 第八批当前状态（2026-10-23）
+
+按 [roadmap-v4](roadmap-v4.md) 的 Y1–Y12，12 路 Sonnet 5.5 subagent 并行实现并各自经 Codex（gpt-6.1-sol）审计后集成到 `integration`（将作为 PR #4）：Y1 采购链动作路由/复核/MCP 结算付款单据范围（ADR-0031）；Y2 单据流读接口按 40 类单据类型解析范围（ADR-0032，`doc-scope-registry`）；Y3 奇门按平台密钥、HMAC-SHA256 签名、时间戳与 nonce 防重放、能力清单需管理权限（ADR-0033，迁移 060）；Y4 报价、MCP 销售工具、OMS 下单按组织（ADR-0034）；Y5 POS 前端按权限显示与自审禁用；Y6 MCP 文档读按门店/经销商绑定；Y7 写路径 SQLITE_BUSY 重试包装与写基线（ADR-0035）；Y8 个人信息擦除覆盖退款/订货快照/日志片段并出报告；Y9 版本 0.2.0-alpha.1、ADR 生成 CHANGELOG、发行包带 SBOM；Y10 合成大库演练（large：2 万 SKU/5 万单据/25 万流水，备份 3.8 s、加密 4.2 s、恢复 2.0 s）；Y11 安全响应头/CSP/可选 HttpOnly Cookie 会话（ADR-0036）；Y12 审批域组织范围（ADR-0037），并补 MCP 审批签字人范围。验证以托管 CI 为准。
+
 ## 第七批当前状态（2026-10-23）
 
 按 [roadmap-v3](roadmap-v3.md) 的 X1–X12，12 路 Sonnet 5.5 subagent 并行实现并各自经 Codex（gpt-6.1-sol）审计后集成：X1 POS 按动作权限 + 跨店 404 + 交班二人分离（ADR-0025，迁移 058）；X2 销售域组织范围（ADR-0026）；X3 订货中心按客户归属组织范围（ADR-0027）；X4 `no-issue`/`orgs`/奇门认证/采购自动分配范围（ADR-0028）；X5 MCP 文档读工具按单据类型权限（40 类型全映射）；X6 托管 CI 浏览器 job 与两个新场景（首次 CI 运行待验证）；X7 登录节流只计失败、成功清零（ADR-0005 修订）；X8 健康/指标 ops 块与备份失败告警（ADR-0029）；X9 日志保留与个人信息导出/擦除工具（ADR-0030，危险键 14→17）；X10 EXPLAIN 守卫与 21 个索引（迁移 059）；X11 用户页组织/数据范围编辑；X12 上游复用来源锁定与相似度核对（Medusa/Medici/casbin 代码重合率 ≤0.41%）。`check-route-authz` 待处理项从 49 降到约 30。验证以托管 CI 为准。

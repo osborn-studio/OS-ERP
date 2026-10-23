@@ -65,3 +65,15 @@
 | `server/routes/qimen.js` `POST /` | 第七批已收口（ADR-0028）：缺 app_key/签名 401，平台只能查绑定仓 | 签名秘密仍是公开演示常量；`/capabilities` 向任意登录用户列出各平台 app_key；生产仍 503 |
 | `server/routes/purchase-chain.js` 写路径 | 第七批已收口自动分配与来源选择（ADR-0028） | `/:id/:action`、`/requisitions/:id/convert`、`/payments/:id/review`、`/orders/:id/receive-check` 仍无单据范围判定；MCP `purchase.settlement.build`/`payment.create` 未传 orgScope |
 | MCP `doc.query`/`doc.get`/`doc.list_types` | 第七批已收口：40 类型全部映射查看权限（ADR-0011 补充） | RC/YQ/SH 的 HTTP 角色名/门店绑定门禁未在 MCP 复刻（记录为残留） |
+
+## 第八批后仍 open 的授权/运维残留
+
+| 位置 | 残留 | 来源 |
+|---|---|---|
+| `server/routes/purchase.js` `/orders/:id/status`、`/receive` | 无单据组织范围判定 | Y1 Codex 审计 |
+| `server/routes/oms.js` `GET /orders`、`/orders/:id` | 无组织过滤（生产 503） | Y4 Codex 审计 |
+| MCP `approval.approve` 以外的 MCP 历史读（`tools.js` 单据历史） | 未按 Y2 解析表过滤 | Y2 报告 |
+| 审批管理员（`system:approval:manage`）可见全部待办实例（只读，不能跨组织决定） | 产品决策 | Y12 |
+| Y10 发现：`dash.todo_counts`、`stock.below_safe` 在大库上对 `product_skus`/`dealers` 全表扫描；`GET /api/inventory/stocks` 随库存行线性变慢 | 需索引/分页改造 | Y10 |
+| 反向代理下 HSTS/Cookie Secure 需 `trust proxy` 开关，当前未提供 | 配置项待加 | Y11 |
+| roadmap 规模（10 万 SKU/100 万流水）未跑：开发机磁盘不足，需在 dmserver 复跑 `scripts/synth-pipeline.mjs` | 目标主机 | Y10 |
