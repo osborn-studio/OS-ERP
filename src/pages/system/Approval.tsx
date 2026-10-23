@@ -20,6 +20,7 @@
 
 import { useState } from 'react'
 import api from '../../api/client'
+import ScopeNotice, { ScopeBlocked, firstFailure, isBlocked } from '../../components/ScopeNotice'
 import { Card, Field, Modal, StatCard, Status, Table, Tabs, fmtInt, toast, useFetch } from '../../components/ui'
 import { FilterBar, Inp, Sel } from '../../components/DataPage'
 import { useAuth } from '../../store/auth'
@@ -45,8 +46,11 @@ export default function Approval() {
   const [decide, setDecide] = useState<any>(null)
   const [detail, setDetail] = useState<any>(null)
 
-  const { data: ov, reload: rOv } = useFetch<any>('/approval/overview', undefined, [])
+  const { data: ov, reload: rOv, errorStatus: ovStatus, errorCode: ovCode } = useFetch<any>('/approval/overview', undefined, [])
   const reloadAll = () => rOv()
+  const ovFailure = { errorStatus: ovStatus, errorCode: ovCode }
+
+  if (isBlocked(ovFailure)) return <ScopeBlocked failure={ovFailure} onRetry={reloadAll} />
 
   return (
     <div>
@@ -103,8 +107,9 @@ export default function Approval() {
 
 function MineTab({ onDecide, onDetail, onChanged }: any) {
   const typeName = useDocTypeNames()
-  const { data, loading, reload } = useFetch<any>('/approval/pending', { pageSize: 50 }, [])
+  const { data, loading, reload, errorStatus, errorCode } = useFetch<any>('/approval/pending', { pageSize: 50 }, [])
   const list: any[] = data?.list || []
+  const failure = { errorStatus, errorCode }
 
   const cancel = async (row: any) => {
     const comment = window.prompt('撤回原因（可留空）') ?? null
@@ -118,8 +123,11 @@ function MineTab({ onDecide, onDetail, onChanged }: any) {
     }
   }
 
+  if (isBlocked(failure)) return <ScopeBlocked failure={failure} onRetry={reload} />
+
   return (
     <Card pad={false}>
+      <ScopeNotice failure={failure} loading={loading} />
       <Table
         columns={[
           { key: 'doc_no', title: '单据号', width: 160, render: (r) => (

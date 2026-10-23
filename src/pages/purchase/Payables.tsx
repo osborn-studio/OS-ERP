@@ -19,6 +19,7 @@
  */
 
 import { useState } from 'react'
+import ScopeNotice, { ScopeBlocked, firstFailure, isBlocked } from '../../components/ScopeNotice'
 import { Card, StatCard, Table, fmtInt, fmtMoney, useFetch } from '../../components/ui'
 import { Inp } from '../../components/DataPage'
 import { RefreshCw, AlertTriangle } from 'lucide-react'
@@ -33,7 +34,8 @@ import { RefreshCw, AlertTriangle } from 'lucide-react'
  * 跟「欠多少」不是一回事；把它并进应付会让人误以为要按差异金额付钱。
  */
 export default function Payables() {
-  const { data, loading, reload } = useFetch<any>('/purchase/payables')
+  const { data, loading, reload, errorStatus, errorCode } = useFetch<any>('/purchase/payables')
+  const failure = { errorStatus, errorCode }
   const [keyword, setKeyword] = useState('')
   const rows: any[] = (data?.list || []).filter(
     (r: any) => !keyword || `${r.supplier_code} ${r.supplier_name}`.toLowerCase().includes(keyword.toLowerCase())
@@ -50,6 +52,8 @@ export default function Payables() {
   )
   const t = keyword ? shown : total
 
+  if (isBlocked(failure)) return <ScopeBlocked failure={failure} onRetry={reload} />
+
   return (
     <div>
       <div className="flex items-end justify-between mb-3 gap-3 flex-wrap">
@@ -63,6 +67,8 @@ export default function Payables() {
           <RefreshCw size={13} /> 刷新
         </button>
       </div>
+
+      <ScopeNotice failure={failure} rows={data ? data.list || [] : null} loading={loading} />
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-3">
         <StatCard label="累计已结算" value={`¥${fmtMoney(t.settle_amount, 0)}`} sub={`${rows.length} 个供应商`} tone="brand" />

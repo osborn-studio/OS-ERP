@@ -23,6 +23,7 @@ import {
   Card, SectionTitle, StatCard, Table, Empty, Modal, Field, Tabs, Pagination, MiniBars,
   fmtMoney, fmtInt, toast, useFetch
 } from '../../components/ui'
+import ScopeNotice, { ScopeBlocked, firstFailure, isBlocked } from '../../components/ScopeNotice'
 import { FilterBar, Sel, Inp } from '../../components/DataPage'
 import { useOpts } from '../../hooks/opts'
 import {
@@ -122,9 +123,10 @@ export default function Receivables() {
   const [tick, setTick] = useState(0)
   const reload = () => setTick((t) => t + 1)
 
-  const { data: ov } = useFetch<any>('/ar/overview', undefined, [tick])
-  const { data: audit } = useFetch<any>('/ar/audit', undefined, [tick])
-  const { data: aging } = useFetch<any>('/ar/aging', { by_subject: '1' }, [tick])
+  const { data: ov, loading: ovLoading, errorStatus: s1, errorCode: c1 } = useFetch<any>('/ar/overview', undefined, [tick])
+  const { data: audit, errorStatus: s2, errorCode: c2 } = useFetch<any>('/ar/audit', undefined, [tick])
+  const { data: aging, errorStatus: s3, errorCode: c3 } = useFetch<any>('/ar/aging', { by_subject: '1' }, [tick])
+  const failure = firstFailure({ errorStatus: s1, errorCode: c1 }, { errorStatus: s2, errorCode: c2 }, { errorStatus: s3, errorCode: c3 })
   const BUCKET_META = [
     { key: 'b0', label: '未到期', color: '#2568a6' },
     { key: 'b1', label: '逾期 1-30 天', color: '#d97706' },
@@ -149,6 +151,8 @@ export default function Receivables() {
   const agingRows: AgingSubjectRow[] = aging?.rows || []
   const buckets = ov?.aging?.buckets || { b0: 0, b1: 0, b2: 0, b3: 0 }
 
+  if (isBlocked(failure)) return <ScopeBlocked failure={failure} onRetry={reload} />
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
@@ -160,6 +164,8 @@ export default function Receivables() {
           <RefreshCw size={14} /> 刷新
         </button>
       </div>
+
+      <ScopeNotice failure={failure} rows={ov ? Number(ov.open_count || 0) : null} loading={ovLoading} />
 
       <Tabs
         tabs={[

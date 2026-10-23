@@ -11,7 +11,7 @@
  */
 
 import { ReactNode, useCallback, useEffect, useState } from 'react'
-import api from '../api/client'
+import api, { ApiError } from '../api/client'
 
 // ============ 格式化 ============
 export const fmtMoney = (v: any, digits = 2) => {
@@ -320,6 +320,8 @@ export function useFetch<T = any>(path: string | null, params?: Record<string, a
   const [data, setData] = useState<T | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [errorStatus, setErrorStatus] = useState<number | null>(null)
+  const [errorCode, setErrorCode] = useState<string | null>(null)
 
   const reload = useCallback(async () => {
     if (!path) return
@@ -328,8 +330,15 @@ export function useFetch<T = any>(path: string | null, params?: Record<string, a
     try {
       const res = await api.get(path, params)
       setData(res.data)
+      // 只有成功响应才解除 403/功能关闭的阻断态，重试期间不提前回到"空数据"页面
+      setErrorStatus(null); setErrorCode(null)
     } catch (e: any) {
       setError(e.message)
+      const status = e instanceof ApiError ? e.status : null
+      const code = e instanceof ApiError ? e.code || null : null
+      setErrorStatus(status); setErrorCode(code)
+      // 403/401/功能关闭时清掉旧数据，避免把拒绝画成上一次的成功结果
+      if (status === 401 || status === 403 || code === 'FEATURE_DISABLED') setData(null)
     } finally {
       setLoading(false)
     }
@@ -341,7 +350,7 @@ export function useFetch<T = any>(path: string | null, params?: Record<string, a
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reload, ...deps])
 
-  return { data, loading, error, reload, setData }
+  return { data, loading, error, errorStatus, errorCode, reload, setData }
 }
 
 export function useList<T = any>(path: string, initParams: Record<string, any> = {}) {
@@ -349,12 +358,15 @@ export function useList<T = any>(path: string, initParams: Record<string, any> =
   const [pageSize] = useState(initParams.pageSize || 20)
   const [filters, setFilters] = useState<Record<string, any>>({})
   const params = { ...initParams, ...filters, page, pageSize }
-  const { data, loading, reload } = useFetch<any>(path, params, [page, JSON.stringify(filters)])
+  const { data, loading, error, errorStatus, errorCode, reload } = useFetch<any>(path, params, [page, JSON.stringify(filters)])
   return {
     list: (data?.list || []) as T[],
     total: data?.total || 0,
     summary: data?.summary,
     loading,
+    error,
+    errorStatus,
+    errorCode,
     page,
     pageSize,
     filters,
