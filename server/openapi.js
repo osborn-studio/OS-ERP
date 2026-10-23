@@ -219,9 +219,9 @@ export function buildOpenApi() {
 
     // —— 模块 07 采购域后段（请购 → 发票 → 三单结算 → 付款核销 + 供货目录）——
     // 与上面「订单/收货/退货」同挂 /api/purchase，Express 先匹配前者、未命中的落到这批。
-    '/api/purchase/chain/overview': { get: { tags: ['采购域'], summary: '采购域总览（请购/订单/发票/结算/付款与四段关闭待办）', responses: { 200: jsonResp(null) } } },
+    '/api/purchase/chain/overview': { get: { tags: ['采购域'], summary: '采购域总览（请购/订单/发票/结算/付款与四段关闭待办）。门：内部主体 + 采购读权限（与 /chain/todos 同一道门）；内容按调用者组织范围过滤，范围为空返回空结果（ADR-0017）；计数 / 金额 / 榜单 / 趋势都按同一集合算', responses: { 200: jsonResp(null), 403: jsonResp(null) } } },
     '/api/purchase/chain/todos': { get: { tags: ['采购域'], summary: '采购域待办（供采购工作台）。门：内部主体 + 采购读权限；内容按调用者组织范围（订单按仓的组织）与动作权限过滤，范围为空返回空列表（ADR-0015）', responses: { 200: jsonResp(null), 403: jsonResp(null) } } },
-    '/api/purchase/chain/flow': { get: { tags: ['采购域'], summary: '采购十环节业务流定义（内核 biz_flow_steps；含到货与质检拆分为两张单后的质量检验环节）', responses: { 200: jsonResp(null) } } },
+    '/api/purchase/chain/flow': { get: { tags: ['采购域'], summary: '采购十环节业务流定义（内核 biz_flow_steps；含到货与质检拆分为两张单后的质量检验环节）。门：内部主体 + 采购读权限（与 /chain/todos 同一道门，ADR-0017）', responses: { 200: jsonResp(null), 403: jsonResp(null) } } },
     '/api/purchase/chain/actions': { get: { tags: ['采购域'], summary: '某单据当前可执行动作（供界面渲染按钮）', parameters: [q('doc_type', '单据类型 PRQ/PI/PST/PAY', true), q('id', '单据 id', true)], responses: { 200: jsonResp(null) } } },
 
     '/api/purchase/catalog': {
@@ -232,7 +232,7 @@ export function buildOpenApi() {
     '/api/purchase/price-preview': { post: { tags: ['采购域'], summary: '批量取价预览（下单前看价，不落库）', responses: { 200: jsonResp(null) } } },
 
     '/api/purchase/requisitions': {
-      get: { tags: ['采购域'], summary: '请购单列表', parameters: [q('status', '状态'), q('applicant_type', '申请主体类型 org/store/warehouse'), q('keyword', '单号/申请人/部门')], responses: { 200: jsonResp(null) } },
+      get: { tags: ['采购域'], summary: '请购单列表。门：内部主体 + 采购读权限（与 /chain/todos 同一道门）；内容按调用者组织范围过滤，范围为空返回空结果（ADR-0017）', parameters: [q('status', '状态'), q('applicant_type', '申请主体类型 org/store/warehouse'), q('keyword', '单号/申请人/部门')], responses: { 200: jsonResp(null), 403: jsonResp(null) } },
       post: { tags: ['采购域'], summary: '新建请购单（未给价的行自动走取价链）', responses: { 200: jsonResp(null) } }
     },
     '/api/purchase/requisitions/{id}': { get: { tags: ['采购域'], summary: '请购单详情（含明细与可转数量）', parameters: [idParam], responses: { 200: jsonResp(null) } } },
@@ -240,7 +240,7 @@ export function buildOpenApi() {
     '/api/purchase/requisitions/{id}/convert': { post: { tags: ['采购域'], summary: '请购转采购订单（支持部分转单，受供货目录与起订量硬拦）', parameters: [idParam], responses: { 200: jsonResp(null) } } },
 
     '/api/purchase/invoices': {
-      get: { tags: ['采购域'], summary: '采购发票列表（含费用发票）', parameters: [q('status', '状态'), q('supplier_id', '供应商'), q('invoice_type', '发票类型')], responses: { 200: jsonResp(null) } },
+      get: { tags: ['采购域'], summary: '采购发票列表（含费用发票）。门：内部主体 + 采购读权限（与 /chain/todos 同一道门）；内容按调用者组织范围过滤，范围为空返回空结果（ADR-0017），summary 合计同口径', parameters: [q('status', '状态'), q('supplier_id', '供应商'), q('invoice_type', '发票类型')], responses: { 200: jsonResp(null), 403: jsonResp(null) } },
       post: { tags: ['采购域'], summary: '录入采购发票（票号重复会被拒）', responses: { 200: jsonResp(null) } }
     },
     '/api/purchase/invoices/{id}': { get: { tags: ['采购域'], summary: '发票详情（含三单匹配结果）', parameters: [idParam], responses: { 200: jsonResp(null) } } },
@@ -248,7 +248,7 @@ export function buildOpenApi() {
     '/api/purchase/invoices-available-lines': { get: { tags: ['采购域'], summary: '可开票的入库行（已入库未开票）', parameters: [q('supplier_id', '供应商')], responses: { 200: jsonResp(null) } } },
 
     '/api/purchase/settlements': {
-      get: { tags: ['采购域'], summary: '采购结算单列表（三单匹配结果）', parameters: [q('status', '状态'), q('supplier_id', '供应商')], responses: { 200: jsonResp(null) } },
+      get: { tags: ['采购域'], summary: '采购结算单列表（三单匹配结果）。门：内部主体 + 采购读权限（与 /chain/todos 同一道门）；内容按调用者组织范围过滤，范围为空返回空结果（ADR-0017），summary 合计同口径', parameters: [q('status', '状态'), q('supplier_id', '供应商')], responses: { 200: jsonResp(null), 403: jsonResp(null) } },
       post: { tags: ['采购域'], summary: '生成结算单（settle_mode: auto 按票 / manual 按入库暂估 / fee 含费用发票）', responses: { 200: jsonResp(null) } }
     },
     '/api/purchase/settlements/{id}': { get: { tags: ['采购域'], summary: '结算单详情（已生效核销 / 未生效计划 / 未结清金额分列）', parameters: [idParam], responses: { 200: jsonResp(null) } } },
@@ -256,14 +256,14 @@ export function buildOpenApi() {
     '/api/purchase/settlement-preview': { get: { tags: ['采购域'], summary: '结算预览（先看金额与差异，不落库）', responses: { 200: jsonResp(null) } } },
 
     '/api/purchase/payments': {
-      get: { tags: ['采购域'], summary: '付款单列表', parameters: [q('status', '状态'), q('supplier_id', '供应商')], responses: { 200: jsonResp(null) } },
+      get: { tags: ['采购域'], summary: '付款单列表。门：内部主体 + 采购读权限（与 /chain/todos 同一道门）；内容按调用者组织范围过滤，范围为空返回空结果（ADR-0017），summary 合计同口径', parameters: [q('status', '状态'), q('supplier_id', '供应商')], responses: { 200: jsonResp(null), 403: jsonResp(null) } },
       post: { tags: ['采购域'], summary: '新建付款单（不传核销分配则按 FIFO 自动核销）', responses: { 200: jsonResp(null) } }
     },
     '/api/purchase/payments/{id}': { get: { tags: ['采购域'], summary: '付款单详情（含核销明细）', parameters: [idParam], responses: { 200: jsonResp(null) } } },
     '/api/purchase/payments/{id}/{action}': { post: { tags: ['采购域'], summary: '付款单流转（submit 核销生效 / pay 核销并标记已付 / void 作废并回退已付）', parameters: [idParam], responses: { 200: jsonResp(null) } } },
     '/api/purchase/payment-plan': { get: { tags: ['采购域'], summary: 'FIFO 核销计划预览（按结算日期先老后新）', parameters: [q('supplier_id', '供应商', true), q('amount', '付款金额', true)], responses: { 200: jsonResp(null) } } },
 
-    '/api/purchase/payables': { get: { tags: ['采购域'], summary: '应付账款（按供应商：已结算/已付/未付）+ **采购退货披露**。⚠️ 退货金额放在单独的 `returns` 块里、**不参与** settle/paid/open 口径 —— 结算怎么抵减退货是业务规则（按单抵 / 按期间抵 / 已审是否追溯），不是实现细节', parameters: [q('supplier_id', '供应商')], responses: { 200: jsonResp(null) } } },
+    '/api/purchase/payables': { get: { tags: ['采购域'], summary: '应付账款（按供应商：已结算/已付/未付）+ **采购退货披露**。⚠️ 退货金额放在单独的 `returns` 块里、**不参与** settle/paid/open 口径 —— 结算怎么抵减退货是业务规则（按单抵 / 按期间抵 / 已审是否追溯），不是实现细节。门：内部主体 + 采购读权限（与 /chain/todos 同一道门）；内容按调用者组织范围过滤，范围为空返回空结果（ADR-0017）；退货披露经仓的组织过滤', parameters: [q('supplier_id', '供应商')], responses: { 200: jsonResp(null), 403: jsonResp(null) } } },
     '/api/purchase/orders/{id}/closes': { get: { tags: ['采购域'], summary: '采购订单四段关闭（到货/入库/开票/付款，只进不退）', parameters: [idParam], responses: { 200: jsonResp(null) } } },
     '/api/purchase/orders/{id}/receive-check': { post: { tags: ['采购域'], summary: '收货前超量校验（写库前拦，非事后回滚）', parameters: [idParam], responses: { 200: jsonResp(null) } } },
     '/api/purchase/supplier-last-price': { post: { tags: ['采购域'], summary: '供应商最近成交价（收货回写的数据来源）', responses: { 200: jsonResp(null) } } },
@@ -1164,7 +1164,7 @@ export function buildOpenApi() {
     openapi: '3.0.3',
     info: {
       title: 'GML 供应链协同系统 API',
-      version: '1.32.0',
+      version: '1.33.0',
       description:
         '化妆品 / 服装 双行业轻量级供应链协同系统接口文档。覆盖主数据、采购、销售、存货、经销商、门店要货、委外管理、计划与生产、生产制造（BOM / 领料 / 完工入库）、质量检验、线上 OMS 与经营看板。\n\n' +
         '**多行业**：登录 `POST /api/auth/login` 时传 `industry`（`cosmetic` / `apparel`）选择行业版本；' +
