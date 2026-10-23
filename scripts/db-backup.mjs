@@ -12,6 +12,9 @@
  *   · 裁剪只在新快照通过之后进行，且永远不会把新文件裁掉、不会少于 keep 份。
  *   · 报告 backup-report-<stamp>.json 写在备份目录：每库结果、大小、sha256、校验结论。不含秘密。
  *   · 必须显式 GML_DATA_DIR（ADR-0001）；相对 backup_dir 解析到数据目录，不写仓库 data/。
+ *   · （ADR-0022）设置 GML_BACKUP_KEY（≥32 字节）⇒ 输出 AES-256-GCM `.db.enc`，报告 sha256 为密文；明文只在 0600 临时文件里
+ *     存活到加密完成后被擦除；校验失败在加密模式下直接擦除而不是隔离。三库在同一写冻结窗口内快照，
+ *     报告带共享的 consistency_stamp（近似一致点，非跨库事务）。
  *
  * 【改它要注意什么】tests/db-backup.test.mjs 用真实子进程跑本脚本；`GML_BACKUP_FAULT`
  *   只在 GML_RUNTIME_MODE=test 下允许，其他模式直接拒绝运行。
@@ -31,15 +34,19 @@
 //   · 裁剪只删本脚本自己生成的 `<库名>_*.db`，不动 `.failed`、报告和用户手工放的文件。
 import fs from 'node:fs'
 import path from 'node:path'
-import { createHash } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import Database from 'better-sqlite3'
 import { INDUSTRIES, DATA_DIR, dbPathFor } from '../server/db/index.js'
 import { runtimeMode, requireDataDirectory } from '../server/runtime.js'
 import { resolveBackupDir } from '../server/lib/backup-dir.js'
+import { loadBackupKey, encryptFile, decryptFile, shredFile, FORMAT_VERSION } from '../server/lib/backup-crypto.js'
 
 const SMOKE_TABLE = 'users'
 const SNAPSHOT_FAILED = 'BACKUP_SNAPSHOT_FAILED'
 const VERIFY_FAILED = 'BACKUP_VERIFY_FAILED'
+const FREEZE_FAILED = 'BACKUP_FREEZE_FAILED'
+const ENCRYPT_FAILED = 'BACKUP_ENCRYPT_FAILED'
+const CONSISTENCY_NOTE = '短暂写冻结下的近似一致点：三库在同一窗口内各持有 BEGIN IMMEDIATE 保留锁后依次快照，窗口内无新提交；这不是跨库事务，窗口外的写入顺序不被保证。'
 
 function usageError(message) {
   console.error(message)
@@ -80,6 +87,13 @@ if (faultSpec) {
   const [kind, only] = faultSpec.split(':')
   if (kind !== 'truncate') usageError(`BACKUP_FAULT_INVALID: 不支持的故障类型 ${kind}`)
   fault = { kind, only: only || null }
+}
+
+let backupKey = null
+try {
+  backupKey = loadBackupKey()
+} catch (e) {
+  usageError(`${e.code}: ${e.message}`)
 }
 
 const stamp = (() => {
@@ -170,69 +184,160 @@ const results = []
 const dirsUsed = new Map() // dir → max keep
 let failed = 0
 
+// ---- 阶段 1：同一写冻结窗口 ----
+// 对所有存在的库各开一个写连接并 BEGIN IMMEDIATE（持有保留锁、不写任何东西），其他写者被挡住；
+// 窗口内用只读连接依次 VACUUM INTO（VACUUM 不能在事务内，所以不在持锁连接上做）。这是"短暂写冻结下的近似一致点"，
+// 不是跨库分布式事务：窗口开始前已提交的写入全部可见，窗口内无新提交；窗口外不保证。
+const plan = []
+const locks = []
+const consistencyId = randomBytes(8).toString('hex')
+let freezeError = null
+const freezeStart = performance.now()
+const frozenAt = new Date().toISOString()
 for (const code of codes) {
   const src = dbPathFor(code)
   const label = INDUSTRIES[code].label
   if (!fs.existsSync(src)) {
-    results.push({ code, label, status: 'skipped', reason: '数据库文件不存在', pruned: [] })
+    plan.push({ code, label, skipped: true })
     continue
   }
+  plan.push({ code, label, src })
+}
+try {
+  for (const item of plan.filter((p) => !p.skipped)) {
+    const lock = new Database(item.src, { timeout: 5000 })
+    locks.push(lock)
+    lock.exec('BEGIN IMMEDIATE')
+  }
+} catch (e) {
+  freezeError = `${FREEZE_FAILED}: ${e.message}`
+}
 
-  // 只读打开源库：VACUUM INTO 只需要读一致性，不动源文件
-  const db = new Database(src, { readonly: true })
-  const cfg = readSettings(db, { dir: null, keep: 10 })
-  if (keepArg) cfg.keep = keepArg
-  const dir = resolveBackupDir(cfg.dir, DATA_DIR)
-  dirsUsed.set(dir, Math.max(dirsUsed.get(dir) || 0, cfg.keep))
+const stampOf = () => ({ id: consistencyId, frozen_at: frozenAt, released_at: null, freeze_ms: null, note: CONSISTENCY_NOTE })
 
-  const base = path.basename(src, '.db')
-  const entry = { code, label, status: 'failed', source: { path: src, ...describeSource(db) }, kept: cfg.keep, pruned: [] }
+if (freezeError) {
+  for (const l of locks) { try { l.exec('ROLLBACK') } catch { /* ignore */ } try { l.close() } catch { /* ignore */ } }
+  locks.length = 0
+  dirsUsed.set(resolveBackupDir(null, DATA_DIR), 10) // 冻结失败时没读到各库设置，报告写到默认备份目录
+  for (const item of plan) {
+    if (item.skipped) results.push({ code: item.code, label: item.label, status: 'skipped', reason: '数据库文件不存在', pruned: [] })
+    else { failed++; results.push({ code: item.code, label: item.label, status: 'failed', error: freezeError, pruned: [] }) }
+  }
+}
 
-  let out = null
+// ---- 阶段 2：窗口内只做快照（明文快照；加密在窗口外） ----
+const snaps = []
+// 兜底：任何未捕获异常/提前退出，都在进程退出时擦除仍在登记的明文临时文件
+const plainTmps = new Set()
+process.on('exit', () => { for (const f of plainTmps) { try { shredFile(f) } catch { /* 尽力而为 */ } } })
+if (!freezeError) {
+  const prevUmask = backupKey ? process.umask(0o077) : null
   try {
-    fs.mkdirSync(dir, { recursive: true })
-    out = path.join(dir, `${base}_${stamp}.db`)
-    let n = 1
-    while (fs.existsSync(out) || fs.existsSync(`${out}.failed`)) out = path.join(dir, `${base}_${stamp}_${n++}.db`)
-    // VACUUM INTO 产出的文件是紧凑、无 WAL 残留的完整库
-    db.prepare('VACUUM INTO ?').run(out)
-  } catch (e) {
-    db.close()
-    failed++
-    entry.error = `${SNAPSHOT_FAILED}: ${e.message}`
-    entry.failed_file = out ? quarantine(out) : null
-    results.push(entry)
+    for (const item of plan) {
+      if (item.skipped) { snaps.push(item); continue }
+      const db = new Database(item.src, { readonly: true })
+      const cfg = readSettings(db, { dir: null, keep: 10 })
+      if (keepArg) cfg.keep = keepArg
+      const dir = resolveBackupDir(cfg.dir, DATA_DIR)
+      dirsUsed.set(dir, Math.max(dirsUsed.get(dir) || 0, cfg.keep))
+      const base = path.basename(item.src, '.db')
+      const entry = { code: item.code, label: item.label, status: 'failed', source: { path: item.src, ...describeSource(db) }, kept: cfg.keep, pruned: [] }
+      const snap = { entry, cfg, dir, base, out: null, finalOut: null }
+      try {
+        fs.mkdirSync(dir, { recursive: true })
+        const ext = backupKey ? '.db.enc' : '.db'
+        let n = 0
+        const suffix = () => (n ? `_${n}` : '')
+        let finalOut
+        // 密文名与明文临时名同序号，冲突时一起换
+        for (;;) {
+          finalOut = path.join(dir, `${base}_${stamp}${suffix()}${ext}`)
+          if (!fs.existsSync(finalOut) && !fs.existsSync(`${finalOut}.failed`) && !fs.existsSync(`${finalOut}.partial`)) break
+          n++
+        }
+        snap.finalOut = finalOut
+        // 有密钥时明文快照只存在于 0600 临时文件（窗口：从 VACUUM INTO 到加密完成后擦除）
+        snap.out = backupKey ? path.join(dir, `.${base}_${stamp}${suffix()}.${randomBytes(6).toString('hex')}.plain.tmp`) : finalOut
+        if (backupKey) plainTmps.add(snap.out)
+        db.prepare('VACUUM INTO ?').run(snap.out)
+      } catch (e) {
+        failed++
+        entry.error = `${SNAPSHOT_FAILED}: ${e.message}`
+        entry.failed_file = snap.out ? (backupKey ? (shredFile(snap.out), null) : quarantine(snap.out)) : null
+        snap.dead = true
+      } finally {
+        db.close()
+      }
+      snaps.push(snap)
+    }
+  } finally {
+    if (prevUmask !== null) process.umask(prevUmask)
+    for (const l of locks) { try { l.exec('ROLLBACK') } catch { /* 无写入，回滚即释放 */ } try { l.close() } catch { /* ignore */ } }
+  }
+}
+const releasedAt = new Date().toISOString()
+const freezeMs = Math.round(performance.now() - freezeStart)
+const consistency = { ...stampOf(), released_at: releasedAt, freeze_ms: freezeMs, databases: plan.filter((p) => !p.skipped).map((p) => p.code) }
+
+// ---- 阶段 3：窗口外 —— 注入故障、校验、（加密）、裁剪 ----
+for (const snap of snaps) {
+  if (snap.skipped) {
+    results.push({ code: snap.code, label: snap.label, status: 'skipped', reason: '数据库文件不存在', pruned: [] })
     continue
   }
-  db.close()
+  const { entry, cfg, dir, base, out, finalOut } = snap
+  entry.consistency_stamp = consistency.id
+  if (snap.dead) { results.push(entry); continue }
+  const discard = () => (backupKey ? (shredFile(out), null) : quarantine(out)) // 加密模式绝不把明文隔离留盘
 
   // 仅测试模式：模拟"快照文件写坏"，证明校验失败路径真的不裁剪、非零退出
-  if (fault && (!fault.only || fault.only === code)) {
+  if (fault && (!fault.only || fault.only === entry.code)) {
     const size = fs.statSync(out).size
     fs.truncateSync(out, Math.floor(size / 2))
   }
 
-  // ---- 先校验，再决定要不要裁剪 ----
+  // ---- 先校验（对明文快照），再决定要不要加密/裁剪 ----
   const verification = verifyBackup(out, entry.source)
   entry.verification = verification
   if (!verification.passed) {
     failed++
     entry.error = `${VERIFY_FAILED}: ${verification.reasons.join('；')}`
-    entry.failed_file = quarantine(out)
+    entry.failed_file = discard()
     results.push(entry)
     continue
   }
 
+  entry.encrypted = !!backupKey
+  if (backupKey) {
+    const t0 = performance.now()
+    try {
+      const enc = encryptFile(out, finalOut, backupKey)
+      decryptFile(finalOut, null, backupKey) // 回读认证：确认落盘密文能用当前密钥解开
+      entry.encryption = { algorithm: 'AES-256-GCM', format_version: FORMAT_VERSION, kdf: 'HKDF-SHA256(per-file salt)', ms: Math.round(performance.now() - t0) }
+      entry.size = enc.size
+      entry.sha256 = enc.sha256 // 密文 sha256
+    } catch (e) {
+      failed++
+      fs.rmSync(finalOut, { force: true })
+      entry.error = `${ENCRYPT_FAILED}: ${e.message}`
+      shredFile(out)
+      results.push(entry)
+      continue
+    }
+    shredFile(out) // 明文临时文件在此擦除
+    entry.file = finalOut
+  } else {
+    entry.file = out
+    entry.size = fs.statSync(out).size
+    entry.sha256 = sha256File(out)
+  }
   entry.status = 'ok'
-  entry.file = out
-  entry.size = fs.statSync(out).size
-  entry.sha256 = sha256File(out)
 
-  // 裁剪：只处理本脚本命名规则生成的 .db，新文件永远保留，其余按时间保留 keep-1 份
-  const outName = path.basename(out)
+  // 裁剪：只处理本脚本命名规则生成的 .db / .db.enc，新文件永远保留，其余按时间保留 keep-1 份
+  const outName = path.basename(entry.file)
   const others = fs
     .readdirSync(dir)
-    .filter((f) => f.startsWith(`${base}_`) && f.endsWith('.db') && f !== outName)
+    .filter((f) => f.startsWith(`${base}_`) && (f.endsWith('.db') || f.endsWith('.db.enc')) && f !== outName)
     .map((f) => ({ f, p: path.join(dir, f), m: fs.statSync(path.join(dir, f)).mtimeMs }))
     .sort((a, b) => b.m - a.m)
   for (const item of others.slice(Math.max(cfg.keep - 1, 0))) {
@@ -250,6 +355,8 @@ const report = {
   runtime_mode: mode,
   data_dir: DATA_DIR,
   failed,
+  encrypted: !!backupKey,
+  consistency_stamp: consistency,
   results
 }
 const reportFiles = []
@@ -282,7 +389,7 @@ for (const r of results) {
   const mb = (r.size / 1024 / 1024).toFixed(1)
   console.log(`${head} ${r.file}`)
   console.log(
-    `${' '.repeat(16)} 表 ${r.source.tables} / 迁移 ${r.source.migrations ?? '-'} / ${mb}MB / sha256 ${r.sha256.slice(0, 12)}… ` +
+    `${' '.repeat(16)} 表 ${r.source.tables} / 迁移 ${r.source.migrations ?? '-'} / ${mb}MB / sha256 ${r.sha256.slice(0, 12)}…${r.encrypted ? '（密文，AES-256-GCM）' : ''} ` +
       `｜ 校验 ${r.verification.integrity}、外键 ${r.verification.foreign_key_violations} 违规、结构一致、烟雾 ${r.verification.smoke.table}=${r.verification.smoke.rows} 行 ` +
       `｜ 保留 ${r.kept} 份，清理 ${r.pruned.length} 份`
   )

@@ -27,7 +27,9 @@ import { spawn, spawnSync } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
 import { setTimeout as delay } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
+import os from 'node:os'
 import Database from 'better-sqlite3'
+import { loadBackupKey, decryptFile } from '../../server/lib/backup-crypto.js'
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 
@@ -99,7 +101,7 @@ export function loadBackupSet(backupDirArg, stamp = null) {
   }
   const entries = (report.results || [])
     .filter((r) => r.status === 'ok' && r.file && r.sha256 && INDUSTRY_DB[r.code])
-    .map((r) => ({ code: r.code, file: path.isAbsolute(r.file) ? r.file : path.join(dir, path.basename(r.file)), sha256: r.sha256, size: r.size ?? null }))
+    .map((r) => ({ code: r.code, file: path.isAbsolute(r.file) ? r.file : path.join(dir, path.basename(r.file)), sha256: r.sha256, size: r.size ?? null, encrypted: r.encrypted === true || String(r.file).endsWith('.db.enc') }))
   if (!entries.length) throw new DrillError('DRILL_BACKUP_EMPTY', `备份报告 ${name} 中没有 status=ok 的库`, EXIT_USAGE)
   return { dir, reportFile, report, stamp: report.stamp || name.replace(/^backup-report-|\.json$/g, ''), entries }
 }
@@ -129,6 +131,39 @@ export function prepareTargetDir(targetArg, { backupDir, sourceDataDir, env = pr
   return target
 }
 
+
+/** 加密备份需要 GML_BACKUP_KEY；缺失/过短都是明确失败（不落任何文件）。 */
+function backupKeyFor(entry) {
+  let key
+  try {
+    key = loadBackupKey()
+  } catch (e) {
+    throw new DrillError('DRILL_BACKUP_KEY_INVALID', e.message)
+  }
+  if (!key) throw new DrillError('DRILL_BACKUP_KEY_REQUIRED', `备份 ${path.basename(entry.file)} 已加密，演练需要环境变量 GML_BACKUP_KEY`)
+  return key
+}
+
+/**
+ * 把备份条目解成可直接打开的明文临时文件（只读探针用）。明文文件直接返回原路径。
+ * 加密条目：解密到 0700 临时目录里的 0600 文件；调用方必须调用返回的 cleanup()。
+ * 密钥错误/文件被改 ⇒ DRILL_BACKUP_DECRYPT_FAILED，且不留临时文件。
+ */
+export function materializeEntry(entry) {
+  if (!entry.encrypted) return { file: entry.file, cleanup() {} }
+  const key = backupKeyFor(entry)
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'os-egp-drill-plain-'))
+  const cleanup = () => fs.rmSync(tmpDir, { recursive: true, force: true })
+  try {
+    const file = path.join(tmpDir, INDUSTRY_DB[entry.code])
+    decryptFile(entry.file, file, key)
+    return { file, cleanup }
+  } catch (e) {
+    cleanup()
+    throw new DrillError('DRILL_BACKUP_DECRYPT_FAILED', `解密 ${path.basename(entry.file)} 失败：${e.message}`)
+  }
+}
+
 /**
  * 先核对全部 sha256，再复制。返回每库 { code, file, sha256_expected, sha256_actual, sha256_verified, restored_as }；
  * 任一不符抛 RESTORE_SHA256_MISMATCH 且**不复制任何文件**（调用方把 restored 列表写进报告）。
@@ -154,10 +189,31 @@ export function verifyAndRestore(set, target) {
     err.restored = restored
     throw err
   }
-  for (const r of restored) {
-    fs.copyFileSync(r.file, r.restored_as, fs.constants.COPYFILE_EXCL)
-    for (const suffix of ['-wal', '-shm']) fs.rmSync(`${r.restored_as}${suffix}`, { force: true })
-    if (sha256File(r.restored_as) !== r.sha256_expected) throw new DrillError('RESTORE_COPY_CORRUPT', `复制后的 ${r.restored_as} 校验和不符`)
+  // 加密条目：先全部确认密钥可用，再逐个解密；任何一步失败都删除本次已落到目标目录的文件（不留半成品）
+  const created = []
+  try {
+    for (const r of restored) {
+      const entry = set.entries.find((e) => e.code === r.code)
+      if (entry.encrypted) {
+        r.encrypted = true
+        created.push(r.restored_as)
+        try {
+          decryptFile(entry.file, r.restored_as, backupKeyFor(entry))
+        } catch (e) {
+          if (e instanceof DrillError) throw e
+          throw new DrillError('DRILL_BACKUP_DECRYPT_FAILED', `解密 ${path.basename(entry.file)} 失败：${e.message}`)
+        }
+      } else {
+        created.push(r.restored_as)
+        fs.copyFileSync(r.file, r.restored_as, fs.constants.COPYFILE_EXCL)
+        if (sha256File(r.restored_as) !== r.sha256_expected) throw new DrillError('RESTORE_COPY_CORRUPT', `复制后的 ${r.restored_as} 校验和不符`)
+      }
+      for (const suffix of ['-wal', '-shm']) fs.rmSync(`${r.restored_as}${suffix}`, { force: true })
+    }
+  } catch (e) {
+    for (const f of created) for (const suffix of ['', '.partial', '-wal', '-shm']) fs.rmSync(`${f}${suffix}`, { force: true })
+    e.restored = restored
+    throw e
   }
   return restored
 }
