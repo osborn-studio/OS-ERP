@@ -1968,6 +1968,28 @@ export function purchaseScopeSql(orgScope, alias = '') {
 }
 
 /**
+ * 单据是否在调用者组织范围内（ADR-0020）：详情 / 动作 / 预览类读接口取单前的同一道判据。
+ * 与 `purchaseScopeSql` 同一口径 —— 请购 / 发票 / 结算 / 付款按自身 `org_id`，订单 / 收货经 `warehouses.org_id`；
+ * 归属 NULL 对受限范围不可见、对全局范围可见。不在范围内与不存在**同形**（404 + 同一句话），不泄漏存在性。
+ * 返回该行（调用方需要时可复用）；单据类型不支持 ⇒ 400。
+ */
+const SCOPED_DOC_TABLES = {
+  PRQ: ['purchase_requisitions', 'org'], PI: ['purchase_invoices', 'org'],
+  PST: ['purchase_settlements', 'org'], PAY: ['purchase_payments', 'org'],
+  PO: ['purchase_orders', 'wh'], GR: ['purchase_receipts', 'wh']
+}
+export function assertPurchaseDocInScope(db, docType, id, orgScope) {
+  const def = SCOPED_DOC_TABLES[docType]
+  if (!def) throw new PurchaseError(`不支持的单据类型 ${docType}`, { code: 'BAD_DOC_TYPE' })
+  const scope = purchaseScopeSql(orgScope, 't')
+  const row = Number.isFinite(Number(id))
+    ? db.prepare(`SELECT t.* FROM ${def[0]} t WHERE t.id=? AND ${scope[def[1]]}`).get(Number(id), ...scope.params)
+    : null
+  if (!row) throw new PurchaseError('单据不存在', { code: 'DOC_NOT_FOUND', httpStatus: 404 })
+  return row
+}
+
+/**
  * 采购单据「读」权限点（任一命中即可进门）。**唯一出处**：
  * `routes/purchase.js` 的订单 / 收货 / 退货读接口与 `routes/purchase-chain.js` 的待办接口共用，
  * 两处各抄一份的后果是"列表页进得去、工作台进不去"这种不报错的不一致。
