@@ -17,7 +17,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdtempSync, rmSync, readdirSync, readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs'
+import { copyFileSync, mkdtempSync, rmSync, readdirSync, readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -189,7 +189,10 @@ test('refusals exit 2 and create nothing', { timeout: 300000 }, (t) => {
   refuse('non-empty', { target: live, pattern: /DRILL_TARGET_NOT_EMPTY/ })
   assert.deepEqual(readdirSync(live), ['keep.txt'])
   // the synth input only accepts synth-data databases
-  refuse('not-synthetic', { input: false, args: ['--from=58', `--synth-dir=${fx.dir}`], pattern: /REHEARSAL_SOURCE_NOT_SYNTHETIC/ })
+  const realLike = tempDir(t, 'os-egp-rehearsal-reallike-')
+  copyFileSync(fx.backupFile, path.join(realLike, 'gml_cosmetic.db'))
+  refuse('not-synthetic', { input: false, args: ['--from=58', `--synth-dir=${realLike}`], pattern: /REHEARSAL_SOURCE_NOT_SYNTHETIC/ })
+  refuse('multi-industry-dir', { input: false, args: ['--from=58', `--synth-dir=${fx.dir}`], pattern: /REHEARSAL_SYNTH_MULTI_INDUSTRY/ })
   refuse('synth-is-caller-data-dir', { input: false, args: ['--from=58', `--synth-dir=${fx.dir}`], env: { GML_DATA_DIR: fx.dir }, pattern: /REHEARSAL_SOURCE_IS_LIVE/ })
   // injected migrations must be numbered above the repo's and live outside it
   const bad = tempDir(t, 'os-egp-rehearsal-badextra-')
@@ -274,6 +277,16 @@ test('a synthetic database whose settings point backup_dir elsewhere cannot make
   assert.ok(readdirSync(path.join(r.target, 'synth-source/backups')).some((f) => /^backup-report-/.test(f)))
 }
 )
+
+test('a synthetic directory holding more than one industry database is refused instead of silently rehearsing only one', { timeout: 120000 }, (t) => {
+  const dir = tempDir(t, 'os-egp-rehearsal-multi-')
+  writeFileSync(path.join(dir, 'gml_cosmetic.db'), '')
+  writeFileSync(path.join(dir, 'gml_food.db'), '')
+  const r = rehearse(t, null, { args: ['--from=58', `--synth-dir=${dir}`], input: false })
+  assert.equal(r.status, 2, r.stdout + r.stderr)
+  assert.match(r.stderr, /REHEARSAL_SYNTH_MULTI_INDUSTRY/)
+  assert.equal(existsSync(r.target), false)
+})
 
 test('lock probe measures how long another writer is blocked, and reports zero when nothing holds the lock', { timeout: 60000 }, async (t) => {
   const dir = tempDir(t, 'os-egp-lockprobe-')

@@ -291,6 +291,12 @@ async function rehearseDb(r, ctx) {
         fail('migration_step_applied', `${id}: ${rec.error}`)
         break
       }
+      if (rec.lock.other_errors > 0) {
+        rec.status = 'failed'
+        rec.error = `写锁探针出错，没有有效的锁时间证据：${rec.lock.first_error ?? 'unknown'}`
+        fail('lock_probe_valid', `${id}: ${rec.error}`)
+        break
+      }
       rec.applied = res.applied
       rec.healed = res.healed
       const to = performance.now()
@@ -445,6 +451,8 @@ try {
     // 源目录只做文件复制，不用 SQLite 打开它（只读打开 WAL 库也会在源目录创建/改动 -shm）；合成指纹与基线在**副本**上核对
     for (const [code, name] of Object.entries(INDUSTRY_DB)) if (fs.existsSync(path.join(synthSourceDir, name))) synthCodes.push(code)
     if (!synthCodes.length) throw usage('DRILL_BACKUP_EMPTY', `--synth-dir 里没有 gml_*.db：${synthSourceDir}`)
+    // db-backup 一次只备一个行业，一份备份集只有一个报告；synth-data 只产出 cosmetic。多库目录拒绝，免得静默漏演练
+    if (synthCodes.length > 1) throw usage('REHEARSAL_SYNTH_MULTI_INDUSTRY', `--synth-dir 里有多个行业库（${synthCodes.join('、')}）；合成库只应有一个，多库请先各自备份再用 --backup-dir`)
     report.input = { mode: 'synth-dir', dir: synthSourceDir, industries: synthCodes }
   } else {
     set = loadBackupSet(args['backup-dir'], args.stamp || null)
@@ -512,6 +520,7 @@ try {
     }
     const synthBackupDir = path.join(copyDir, 'backups')
     set = loadBackupSet(synthBackupDir, null)
+    if (!same(set.entries.map((e) => e.code), synthCodes)) throw new DrillError('REHEARSAL_SYNTH_BACKUP_INCOMPLETE', `合成库备份集的行业 [${set.entries.map((e) => e.code)}] 与 --synth-dir 的 [${synthCodes}] 不一致`)
     report.input.synth_backup = { dir: synthBackupDir, stamp: set.stamp, ms: since(tb), note: '合成库副本经 scripts/db-backup.mjs 备份后作为备份集（演练源），与真实备份集同一路径' }
     report.timing.synth_backup_ms = since(tb)
   }
