@@ -47,7 +47,7 @@ function canon(value) {
   if (family !== 6) return null
   const g = v6Groups(value)
   if (!g) return null
-  if (g.slice(0, 5).every(x => x === 0) && g[5] === 0xffff) return { family: 4, bytes: [g[6] >> 8, g[6] & 255, g[7] >> 8, g[7] & 255] }
+  if (g.slice(0, 5).every(x => x === 0) && g[5] === 0xffff) return { family: 4, mapped: true, bytes: [g[6] >> 8, g[6] & 255, g[7] >> 8, g[7] & 255] }
   return { family: 6, bytes: g.flatMap(x => [x >> 8, x & 255]) }
 }
 
@@ -68,7 +68,6 @@ function parseEntry(raw) {
   const addrText = slash === -1 ? entry : entry.slice(0, slash)
   const prefixText = slash === -1 ? null : entry.slice(slash + 1)
   if (addrText.includes('%')) throw invalid(`zone id not allowed in "${entry}"`)
-  const mappedText = net.isIP(addrText) === 6 && /^::ffff:/i.test(addrText)
   const addr = canon(addrText)
   if (!addr) throw invalid(`"${entry}" is not an IP/CIDR`)
   const max = addr.family === 4 ? 32 : 128
@@ -77,7 +76,7 @@ function parseEntry(raw) {
     if (!/^\d{1,3}$/.test(prefixText)) throw invalid(`bad prefix in "${entry}"`)
     prefix = Number(prefixText)
     // 配置写成 mapped IPv6：折叠成 IPv4 后前缀要相应扣除 96 位；<96 的含义含混，拒绝
-    if (mappedText && addr.family === 4) {
+    if (addr.mapped) {
       if (prefix < 96 || prefix > 128) throw invalid(`ambiguous IPv4-mapped prefix in "${entry}"`)
       prefix -= 96
     } else if (prefix > max) throw invalid(`prefix out of range in "${entry}"`)

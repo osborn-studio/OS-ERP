@@ -48,6 +48,8 @@ test('parser: IPv4-mapped IPv6 peers match IPv4 CIDRs, and mapped CIDRs fold to 
   assert.equal(trusts('10.0.0.0/8', '::ffff:11.1.2.3'), false)
   assert.equal(trusts('::ffff:10.0.0.0/104', '10.9.9.9'), true)
   assert.equal(trusts('::ffff:10.0.0.0/104', '11.9.9.9'), false)
+  assert.equal(trusts('0:0:0:0:0:ffff:10.0.0.0/104', '10.9.9.9'), true, 'expanded mapped spelling folds identically')
+  assert.equal(trusts('0:0:0:0:0:ffff:10.0.0.0/104', '11.9.9.9'), false)
   // a v6 rule never matches v4 and vice versa
   assert.equal(trusts('2001:db8::/32', '10.0.0.1'), false)
 })
@@ -60,7 +62,7 @@ test('parser: peer values that are not clean IPs are never trusted (zone ids, ga
 test('parser: invalid configuration fails with TRUST_PROXY_INVALID', () => {
   for (const v of ['true', 'false', '1', '2', '*', 'yes', 'loopback,10.0.0.0/8', 'off,10.0.0.0/8', '10.0.0.0/8,', ',10.0.0.0/8', '10.0.0.0/33', '10.0.0.0/-1', '10.0.0.0/8/8',
     '10.0.0.0/abc', '10.0.0.0/', '2001:db8::/129', '0.0.0.0/0', '::/0', '10.0.0.0/0', 'fe80::1%eth0/64', 'fe80::1%eth0', '300.0.0.0/8', 'example.com', '10.0.0/8',
-    '::ffff:10.0.0.0/64', '::ffff:10.0.0.0/129', Array.from({ length: 65 }, (_, i) => `10.0.${i}.0/24`).join(','), 5, {}]) bad(v)
+    '::ffff:10.0.0.0/64', '::ffff:10.0.0.0/129', '0:0:0:0:0:ffff:10.1.2.3/8', '0:0:0:0:0:ffff:a01:203/95', '::FFFF:10.0.0.0/8', Array.from({ length: 65 }, (_, i) => `10.0.${i}.0/24`).join(','), 5, {}]) bad(v)
 })
 
 test('parser: legacy-looking truthy values do not silently trust everything', () => {
