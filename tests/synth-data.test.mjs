@@ -24,6 +24,9 @@ import { sourceIdentity } from '../scripts/lib/source-identity.mjs'
 const ROOT = fileURLToPath(new URL('../', import.meta.url))
 const SYNTH = path.join(ROOT, 'scripts/synth-data.mjs')
 const tmp = (t, prefix) => { const d = mkdtempSync(path.join(tmpdir(), prefix)); t.after(() => rmSync(d, { recursive: true, force: true })); return d }
+// 隔离回归副本（regress-isolated）不是 git 检出：来源身份的 git 字段按设计为 null，相关断言在无 git 时跳过。
+const IN_GIT = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, encoding: 'utf8' }).status === 0
+
 const run = (args, env) => spawnSync(process.execPath, [SYNTH, ...args], {
   cwd: ROOT, encoding: 'utf8', timeout: 240000, env: { PATH: process.env.PATH, HOME: tmpdir(), TMPDIR: tmpdir(), ...env }
 })
@@ -129,7 +132,7 @@ test('safe-path: dot-dot-prefixed children, symlink chains and depth exhaustion'
   assert.equal(isWithin(parent, path.join(dangling, 'deeper')), true)
 })
 
-test('source identity includes the content of untracked files in the dirty fingerprint', (t) => {
+test('source identity includes the content of untracked files in the dirty fingerprint', { skip: !IN_GIT && '不在 git 检出内（如隔离回归副本）' }, (t) => {
   const id = sourceIdentity()
   assert.match(id.git_head, /^[0-9a-f]{40}$/)
   assert.match(id.sqlite_version, /^3\./)
@@ -235,7 +238,8 @@ test('pipeline runs generate, plain+encrypted backup, both restore drills, expla
   assert.equal(rep.steps.bench_api.totals.errors, 0)
   assert.equal(rep.steps.bench_api.endpoints.length, 10)
   assert.equal(rep.steps.explain_audit.violations, 0)
-  assert.match(rep.source.git_head, /^[0-9a-f]{40}$/)
+  if (IN_GIT) assert.match(rep.source.git_head, /^[0-9a-f]{40}$/)
+  else assert.equal(rep.source.git_head, null)
   assert.equal(typeof rep.source.git_dirty, 'boolean')
   assert.match(rep.source.sqlite_version, /^3\./)
   assert.ok(rep.bench_dataset.table_counts.inventory_transactions >= rep.dataset.table_counts.inventory_transactions, 'bench copy composition is recorded separately')
