@@ -77,6 +77,13 @@ test('uploads exactly one file: the allowlisted summary JSON', () => {
   assert.match(code, /rm -rf "\$CAP_RUN" "\$CAP_REPORTS"/, 'raw data and reports are removed')
 })
 
+test('pipeline and bench steps redirect stdout AND stderr to disposable log files; raw output is never echoed', () => {
+  assert.doesNotMatch(code, />\s*\/dev\/null\s*$/m, 'a stdout-only redirect leaves stderr in the public log')
+  assert.match(code, /synth-pipeline\.mjs[^\n]*> "\$CAP_REPORTS\/pipeline\.log" 2>&1/)
+  assert.match(code, /bench-api\.mjs[^\n]*> "\$CAP_REPORTS\/bench-write\.log" 2>&1/)
+  assert.doesNotMatch(code, /cat "\$CAP_REPORTS\/[^"]*\.log"|tail [^\n]*\.log/, 'logs are never dumped')
+})
+
 test('the summary file lives in its own directory, apart from raw reports and databases', () => {
   assert.match(code, /CAP_SUMMARY=\$RUNNER_TEMP\/capacity-summary/)
   assert.match(code, /CAP_REPORTS=\$RUNNER_TEMP\/capacity-reports/)

@@ -83,9 +83,14 @@ jobs:
         id: pipeline
         continue-on-error: true
         run: |
-          set -euo pipefail
+          set -uo pipefail
+          # stdout and stderr go to a disposable file; only fixed-format timing lines are echoed (no paths, no error text).
           # shellcheck disable=SC2086
-          node scripts/synth-pipeline.mjs --dir "$CAP_RUN" --keep $CAP_ARGS --iterations 100 --concurrency 4 --out "$CAP_REPORTS/pipeline-report.json" > /dev/null
+          node scripts/synth-pipeline.mjs --dir "$CAP_RUN" --keep $CAP_ARGS --iterations 100 --concurrency 4 --out "$CAP_REPORTS/pipeline-report.json" > "$CAP_REPORTS/pipeline.log" 2>&1
+          rc=$?
+          grep -E '^\[pipeline\] [a-z_]+: exit [0-9a-z]+ in [0-9.]+s$' "$CAP_REPORTS/pipeline.log" || true
+          [ "$rc" -eq 0 ] || echo "::error::pipeline exited with code $rc (raw output withheld)"
+          exit "$rc"
       # The write profile mutates its database, so it runs on a fresh copy of the pipeline's (already disposable, test-classified) bench copy.
       - name: Bench write profile (on a copy of the bench database)
         id: bench_write
@@ -95,10 +100,13 @@ jobs:
           GML_RUNTIME_MODE: test
           GML_BENCH_USER: synthadmin
         run: |
-          set -euo pipefail
-          cp -R "$CAP_RUN/bench-copy" "$CAP_RUN/write-copy"
+          set -uo pipefail
+          cp -R "$CAP_RUN/bench-copy" "$CAP_RUN/write-copy" || exit 1
           GML_DATA_DIR="$CAP_RUN/write-copy" GML_BENCH_PASSWORD="$GML_PIPELINE_ADMIN_PASSWORD" \
-            node scripts/bench-api.mjs --profile=write --iterations 50 --concurrency 4 --max-error-rate 0 --out "$CAP_REPORTS/bench-write.json" > /dev/null
+            node scripts/bench-api.mjs --profile=write --iterations 50 --concurrency 4 --max-error-rate 0 --out "$CAP_REPORTS/bench-write.json" > "$CAP_REPORTS/bench-write.log" 2>&1
+          rc=$?
+          [ "$rc" -eq 0 ] || echo "::error::bench write profile exited with code $rc (raw output withheld)"
+          exit "$rc"
       - name: Reduce reports to the allowlisted summary (printed to the log)
         id: summary
         if: always()
