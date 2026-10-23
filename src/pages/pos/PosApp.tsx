@@ -30,6 +30,8 @@ import {
   ClipboardCheck, Banknote, PackageMinus
 } from 'lucide-react'
 import { PAY_METHODS, ShiftCenter, CashDropPanel, StoreOps } from './ShiftPanels'
+import { ScopeBlocked, isBlocked, type FetchFailure } from '../../components/ScopeNotice'
+import { toFailure } from './usePosPermissions'
 
 /** 门店 POS 收银：独立触屏界面，本地单 + 日结上传总部 */
 export default function PosApp() {
@@ -37,6 +39,7 @@ export default function PosApp() {
   const { token, user, login: authenticate, logout, sessionNotice } = useAuth()
   const { isDemo } = useRuntimeCapabilities()
   const [ctx, setCtx] = useState<any>(null)
+  const [ctxFailure, setCtxFailure] = useState<FetchFailure>({})
   const [sp] = useSearchParams()
   // 支持 /pos?tab=receive 直达指定页签（演示 / 分享链接）。
   // `close` 是老链接里的「日结上传」——批次 E 之后日结并入「交班核款」，
@@ -67,7 +70,7 @@ export default function PosApp() {
 
   useEffect(() => {
     if (!token) return
-    api.get('/pos/context').then((r: any) => setCtx(r.data || r)).catch(() => {})
+    api.get('/pos/context').then((r: any) => { setCtx(r.data || r); setCtxFailure({}) }).catch((e: any) => setCtxFailure(toFailure(e)))
   }, [token])
 
   if (!token || !user) {
@@ -119,6 +122,12 @@ export default function PosApp() {
 
       {/* 内容区 */}
       <div className="flex-1 overflow-hidden">
+        {isBlocked(ctxFailure) && (
+          <div className="p-3">
+            <ScopeBlocked failure={ctxFailure} onRetry={() => api.get('/pos/context').then((r: any) => { setCtx(r.data || r); setCtxFailure({}) }).catch((e: any) => setCtxFailure(toFailure(e)))} />
+          </div>
+        )}
+        {!isBlocked(ctxFailure) && <>
         {tab === 'cash' && <Cashier ctx={ctx} onSynced={() => api.get('/pos/context').then((r: any) => setCtx(r.data || r))} />}
         {tab === 'shift' && <ShiftCenter ctx={ctx} reloadCtx={() => api.get('/pos/context').then((r: any) => setCtx(r.data || r)).catch(() => {})} />}
         {tab === 'drop' && <CashDropPanel />}
@@ -127,6 +136,7 @@ export default function PosApp() {
         {tab === 'requisition' && <StoreRequisition />}
         {tab === 'receive' && <StoreReceive />}
         {tab === 'orders' && <LocalOrders />}
+        </>}
       </div>
 
       {/* 底部 Tab（触屏友好）。8 个页签在手机宽度下放不下 —— 横向可滚，
