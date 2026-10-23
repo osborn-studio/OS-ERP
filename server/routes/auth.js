@@ -39,38 +39,45 @@ r.post(
     // —— 同一个判据两份实现，以后只会改一处。
     const code = normalizeIndustry(industry)
     const normalizedUsername = username.trim()
-    try { consumeLoginAttempt({ industry: code, username: normalizedUsername, ip: req.ip }) } catch (e) {
+    let attempt
+    try { attempt = consumeLoginAttempt({ industry: code, username: normalizedUsername, ip: req.ip }) } catch (e) {
       if (e.code === 'LOGIN_RATE_LIMITED') res.set('Retry-After', String(e.retryAfter))
       if (failFromError(res, e)) return
       throw e
     }
-    const db = getDbFor(code) // 按所选行业登录对应的库
-    const before = db.prepare('SELECT * FROM users WHERE username=?').get(normalizedUsername)
-    const matches = await bcrypt.compare(password, before?.password_hash || DUMMY_PASSWORD_HASH)
-    const user = before ? db.prepare('SELECT * FROM users WHERE id=?').get(before.id) : null
-    if (!matches || !user || user.status !== 'active' || user.password_hash !== before.password_hash || user.auth_version !== before.auth_version) return loginFailed(res)
-    db.prepare("UPDATE users SET last_login_at=datetime('now','localtime') WHERE id=?").run(user.id)
-    const token = signToken(user, code)
-    audit({ user: { uid: user.id, name: user.name }, ip: req.ip }, { action: 'LOGIN', module: 'auth', entity: 'user', entityId: user.id, detail: code })
-    return ok(res, {
-      token,
-      industry: code,
-      industryName: INDUSTRIES[code].name,
-      industryLabel: INDUSTRIES[code].label,
-      user: {
-        id: user.id,
-        username: user.username,
-        name: user.name,
-        role: user.role,
-        roleName: ROLES[user.role] || user.role,
-        dept: user.dept,
-        dealer_id: user.dealer_id,
-        store_id: user.store_id,
+    // 预占（含账号桶 pending）已在上面原子完成；下面任何非成功出口都按失败定案（pending 转实），
+    // 抛错也不例外（未定案的预占继续计数，fail closed）。成功才清账号桶里已定案的失败。
+    let succeeded = false
+    try {
+      const db = getDbFor(code) // 按所选行业登录对应的库
+      const before = db.prepare('SELECT * FROM users WHERE username=?').get(normalizedUsername)
+      const matches = await bcrypt.compare(password, before?.password_hash || DUMMY_PASSWORD_HASH)
+      const user = before ? db.prepare('SELECT * FROM users WHERE id=?').get(before.id) : null
+      if (!matches || !user || user.status !== 'active' || user.password_hash !== before.password_hash || user.auth_version !== before.auth_version) return loginFailed(res)
+      db.prepare("UPDATE users SET last_login_at=datetime('now','localtime') WHERE id=?").run(user.id)
+      const token = signToken(user, code)
+      audit({ user: { uid: user.id, name: user.name }, ip: req.ip }, { action: 'LOGIN', module: 'auth', entity: 'user', entityId: user.id, detail: code })
+      succeeded = true
+      return ok(res, {
+        token,
         industry: code,
-        industryName: INDUSTRIES[code].name
-      },
-      expiresIn: '12h'
-    })
+        industryName: INDUSTRIES[code].name,
+        industryLabel: INDUSTRIES[code].label,
+        user: {
+          id: user.id,
+          username: user.username,
+          name: user.name,
+          role: user.role,
+          roleName: ROLES[user.role] || user.role,
+          dept: user.dept,
+          dealer_id: user.dealer_id,
+          store_id: user.store_id,
+          industry: code,
+          industryName: INDUSTRIES[code].name
+        },
+        expiresIn: '12h'
+      })
+    } finally { attempt.settle(succeeded) }
   })
 )
 
