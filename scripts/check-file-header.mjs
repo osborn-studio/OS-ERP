@@ -68,6 +68,10 @@ const DECLARED = [
   'scripts/lib/drill-common.mjs',
   'scripts/db-restore-drill.mjs',
   'scripts/upgrade-rollback-drill.mjs',
+  // 迁移升级演练（AA11）：逐迁移耗时 + 写锁探针 + 失败回退
+  'scripts/upgrade-rehearsal.mjs',
+  'scripts/lib/lock-probe.mjs',
+  'tests/upgrade-rehearsal.test.mjs',
   'src/App.tsx',
   'src/api/client.ts',
   'src/components/Layout.tsx',
