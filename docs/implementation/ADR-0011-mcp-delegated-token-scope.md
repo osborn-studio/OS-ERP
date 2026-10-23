@@ -132,4 +132,6 @@
 
 **Codex 审计（原文要点）**：映射初版有 4 处 P1——QCI/DH 用了 `quality.inspect.view`（HTTP 为 `quality.qc.view`）、PRQ/PI/PST/PAY 用了单据自己的 view 码（HTTP 为 `PO_READ_PERMS`）、MO/MR 用了 `produce.order.view`（HTTP 为 `produce.bom.view`）、未复刻 `requireInternal` 的外部主体限制。均已修正并补测试。
 
+**已知残余（二审 P1，未修，说明）**：POS（`RC`）与门店要货（`YQ` / `SH`）的 HTTP 路由除权限点外还有按角色名 / 门店绑定的闸（`pos.js` 门店绑定或 HQ 角色、`requisitions.js` `requireRole(...HQ)`）。MCP 这里只复刻"权限点 + 内部/外部主体 + 实体范围"，不复刻按角色名的闸：角色名闸是旧机制，权限点矩阵才是委托口径（"令牌 ≤ 所有者权限点"），且受限所有者的门店 / 组织范围仍由 `scopeEntityIds` 收窄。无门店绑定又 `data_scope=all` 的所有者拿到 `pos.dailyclose` 即可读日结单，属于权限点授予过宽的配置问题，后续由角色权限收口（X 系列）统一处理，而非在 MCP 层再造第二套角色名判据。
+
 **产品影响**：此前依赖 AI 令牌读取其角色无权查看的单据类型的集成会开始被拒绝；需要为该角色补授上表对应权限点。
