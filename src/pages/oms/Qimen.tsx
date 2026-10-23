@@ -20,7 +20,7 @@
 
 import { useState } from 'react'
 import { RefreshCw, Plug, Play, Globe2 } from 'lucide-react'
-import api from '../../api/client'
+import { getIndustry } from '../../api/client'
 import { Card, Table, useFetch, toast } from '../../components/ui'
 
 const METHODS_SAMPLE: Record<string, any> = {
@@ -53,6 +53,7 @@ export default function Qimen() {
   const cap = useFetch<any>('/qimen/capabilities')
   const [method, setMethod] = useState('taobao.qimen.itemmapping.query')
   const [appKey, setAppKey] = useState('')
+  const [sign, setSign] = useState('')
   const [reqBody, setReqBody] = useState(JSON.stringify(METHODS_SAMPLE['taobao.qimen.itemmapping.query'], null, 2))
   const [sending, setSending] = useState(false)
   const [resp, setResp] = useState<any>(null)
@@ -72,10 +73,22 @@ export default function Qimen() {
       } catch {
         return toast('请求体不是合法 JSON', 'error')
       }
+      // 网关自鉴权（app_key + sign，缺一即 401）。这里**不带**后台登录令牌：
+      // 网关的 401 是协议鉴权失败，不是后台会话失效，走 api 客户端会把当前登录误判为过期并登出。
       const body: any = { method, request }
       if (appKey) body.app_key = appKey
-      const res = await api.rawPost('/qimen', body)
-      setResp(res)
+      if (sign) body.sign = sign
+      const industry = getIndustry()
+      const res = await fetch('/api/qimen', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(industry ? { 'x-industry': industry } : {}) },
+        body: JSON.stringify(body),
+        redirect: 'error',
+        credentials: 'same-origin'
+      })
+      let data: any
+      try { data = await res.json() } catch { data = { success: false, message: `返回数据格式异常 (${res.status})` } }
+      setResp({ httpStatus: res.status, ...data })
     } catch (e: any) {
       setResp({ success: false, message: e.message })
     } finally {
@@ -185,8 +198,12 @@ export default function Qimen() {
               </select>
             </div>
             <div>
-              <div className="text-[11px] text-slate-400 mb-1">app_key（选填，从左侧平台列表复制可测试鉴权）</div>
+              <div className="text-[11px] text-slate-400 mb-1">app_key（必填，从左侧平台列表复制；缺失或错误网关返回 401）</div>
               <input className="input font-mono text-[12px]" value={appKey} placeholder="ak_xxx" onChange={(e) => setAppKey(e.target.value)} />
+            </div>
+            <div>
+              <div className="text-[11px] text-slate-400 mb-1">sign（必填：MD5(app_key + method + 演示 secret)，大写十六进制）</div>
+              <input className="input font-mono text-[12px]" value={sign} placeholder="32 位大写 MD5" onChange={(e) => setSign(e.target.value.trim())} />
             </div>
             <div>
               <div className="text-[11px] text-slate-400 mb-1">request 报文（JSON）</div>

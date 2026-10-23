@@ -447,7 +447,7 @@ export function buildOpenApi() {
       post: { tags: ['系统'], summary: '新建 / 修改编号规则（段可配：常量/日期/SKU/流水）', responses: { 200: jsonResp(null) } }
     },
     '/api/docflow/no-preview': { post: { tags: ['系统'], summary: '试取号（不占用计数器，改公式前先验证）', responses: { 200: jsonResp(null) } } },
-    '/api/docflow/no-issue': { post: { tags: ['系统'], summary: '正式取号（占用计数器）', responses: { 200: jsonResp(null) } } },
+    '/api/docflow/no-issue': { post: { tags: ['系统'], summary: '正式取号（占用计数器）；非干跑需该单据类型的创建权限，未映射类型 403 DOC_TYPE_PERM_UNMAPPED（ADR-0028）', responses: { 200: jsonResp(null), 403: jsonResp(null) } } },
 
     '/api/master/bundles': {
       get: { tags: ['主数据'], summary: '组合装（捆绑商品）列表', responses: { 200: jsonResp(null) } },

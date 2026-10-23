@@ -22,9 +22,11 @@ import {
   requirePerm,
   requireInternal,
   permContext,
+  hasPerm,
   assertCanRead,
   isExternalUser,
   attachOrgScope,
+  resolveOrgScope,
   // 内部模块码的**唯一出处**已提到 middleware/auth.js（批次 T：审批提交入口也要用同一条判定）
   INTERNAL_MODULES
 } from '../middleware/auth.js'
@@ -39,7 +41,8 @@ import {
   effectOwnerOf,
   historyOf,
   traceByDocNo,
-  explainLifecycle
+  explainLifecycle,
+  createPermOf
 } from '../lib/docflow.js'
 import { listDocNoRules, previewDocNo, nextDocNoAuto, nextDocNoByRule } from '../lib/docno.js'
 import { audit } from '../middleware/audit.js'
@@ -405,7 +408,13 @@ r.post(
   })
 )
 
-/** 试取号：真实走一次取号链路（会消耗一个序号，用于联调） */
+/**
+ * 试取号：真实走一次取号链路（会消耗一个序号，用于联调）。
+ *
+ * ADR-0028：非干跑要求调用者持有该单据类型的**创建权限**（`DOC_CREATE_PERMS`，唯一映射表）；
+ * 类型没有映射（含未注册类型）⇒ 403 `DOC_TYPE_PERM_UNMAPPED`，对管理员同样成立（映射缺项是工程缺口，不是权限问题）。
+ * 干跑只读预览、不消耗序号，保持豁免。权限判定在取号**之前**，被拒绝的调用不消耗序号。
+ */
 r.post(
   '/no-issue',
   requireAuth,
@@ -420,13 +429,34 @@ r.post(
           .get(docType)
         return ok(res, { docNo: rule ? previewDocNo(db, { docType, pattern: rule.pattern, seqPad: rule.seq_pad }) : null, dry: true })
       }
-      const no = nextDocNoAuto(db, {
+      const need = createPermOf(docType)
+      if (!need) {
+        throw new DocFlowError('该单据类型未配置创建权限映射，拒绝取号', { code: 'DOC_TYPE_PERM_UNMAPPED', httpStatus: 403 })
+      }
+      if (!hasPerm(permContext(db, req.user), need)) {
+        throw new DocFlowError(`当前角色无权为该单据类型取号（需 ${need}）`, {
+          code: 'DOC_CREATE_PERM_DENIED', httpStatus: 403, detail: { permCode: need }
+        })
+      }
+      const args = {
         docType,
         orgId: orgId ? Number(orgId) : null,
         warehouseId: whId ? Number(whId) : null,
         bizDate
-      })
-      return ok(res, { docNo: no, byRule: !!nextDocNoByRule(db, { docType, orgId: orgId ? Number(orgId) : null, warehouseId: whId ? Number(whId) : null, bizDate }) })
+      }
+      // 规则按 org / 仓分计数器：受限范围不得替范围外的组织 / 仓取号（会烧别人的序号）。
+      const scope = resolveOrgScope(db, req.user)
+      if (scope.scope !== 'all' && (args.orgId != null || args.warehouseId != null)) {
+        const allowed = new Set((scope.orgIds || []).map(Number))
+        const whOrg = args.warehouseId != null ? db.prepare('SELECT org_id FROM warehouses WHERE id=?').get(args.warehouseId)?.org_id : null
+        if ((args.orgId != null && !allowed.has(args.orgId)) || (args.warehouseId != null && !allowed.has(Number(whOrg)))) {
+          throw new DocFlowError('org_id / warehouse_id 超出当前账号的组织范围，拒绝取号', { code: 'DOC_NO_SCOPE_DENIED', httpStatus: 403 })
+        }
+      }
+      // 先按规则取号；没有规则才回落旧逻辑。**只取一次**：规则命中时再调一次 nextDocNoByRule 会多烧一个序号。
+      const byRuleNo = nextDocNoByRule(db, args)
+      const no = byRuleNo || nextDocNoAuto(db, args)
+      return ok(res, { docNo: no, byRule: !!byRuleNo })
     } catch (e) {
       return handleFlowError(res, e)
     }

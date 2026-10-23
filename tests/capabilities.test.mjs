@@ -182,9 +182,12 @@ for (const mode of ['demo', 'test']) {
       assert.ok([200, 400, 404, 409, 422].includes(response.status), `${mode}: ${route} domain response ${response.status}`)
       assert.notEqual((await response.json()).error, 'FEATURE_DISABLED')
     }
+    // 网关在非生产模式可用（不是 503 FEATURE_DISABLED），且自鉴权：缺 app_key / 签名 ⇒ 401（ADR-0028）
     const qimen = await request('/api/qimen', 'POST', {})
-    assert.equal(qimen.status, 200)
-    assert.notEqual((await qimen.json()).error, 'FEATURE_DISABLED')
+    assert.equal(qimen.status, 401)
+    const qimenBody = await qimen.json()
+    assert.notEqual(qimenBody.error, 'FEATURE_DISABLED')
+    assert.equal(qimenBody.success, false)
     const mcp = await request('/mcp', 'POST', { jsonrpc: '2.0', id: 1, method: 'initialize' })
     assert.equal(mcp.status, 200)
     assert.ok((await mcp.json()).result.serverInfo)

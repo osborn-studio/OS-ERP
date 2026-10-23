@@ -642,6 +642,7 @@ r.post(
   '/settlements',
   requireAuth,
   requirePerm('purchase.settle.edit'),
+  attachOrgScope,
   guard((req, res) => {
     const db = getDb()
     const b = req.body || {}
@@ -653,6 +654,7 @@ r.post(
       periodEnd: b.period_end || null,
       settleMode: b.settle_mode || 'auto',
       remark: b.remark || null,
+      orgScope: req.orgScope,
       actor: actorOf(req)
     })
     audit(req, { action: 'create', module: 'purchase', entity: 'purchase_settlements', entityId: row.id, detail: { doc_no: row.doc_no } })
@@ -766,6 +768,7 @@ r.post(
   '/payments',
   requireAuth,
   requirePerm('purchase.payment.edit'),
+  attachOrgScope,
   guard((req, res) => {
     const db = getDb()
     const b = req.body || {}
@@ -780,6 +783,7 @@ r.post(
       voucherNo: b.voucher_no || null,
       remark: b.remark || null,
       allocations: b.allocations || null,
+      orgScope: req.orgScope,
       actor: actorOf(req)
     })
     audit(req, { action: 'create', module: 'purchase', entity: 'purchase_payments', entityId: row.id, detail: { doc_no: row.doc_no } })

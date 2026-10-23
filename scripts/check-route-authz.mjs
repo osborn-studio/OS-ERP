@@ -356,7 +356,7 @@ group('meta.js', 'handler-scope', '运维计数器：处理器内 isOpsAdmin（a
 group('meta.js', 'public', '字典（角色名/经销商等级/仓库类型），前端登录前即需渲染；不含业务数据', [['GET', '/dict']])
 group('mall.js', 'public', '商城匿名浏览/登录入口；会话路由另有 requireMall（mall-session）', [['POST', '/login'], ['GET', '/home'], ['GET', '/products'], ['GET', '/products/:skuId']])
 group('promo.js', 'public', '商城活动墙：只返回"任何人都能参与"的自动促销（见处理器内 SQL 条件）', [['GET', '/shop/promotions']])
-group('qimen.js', 'public', '奇门网关模拟承接方：由 body.app_key + 签名 verifySign 自鉴权（处理器内）；注意 app_key 缺省时视为"未鉴权调用"并放行——属模拟网关的演示行为，生产需关闭或强制 app_key', [['POST', '/']], 'unassigned')
+group('qimen.js', 'public', '奇门网关模拟承接方：由 body.app_key + 签名 verifySign 在处理器内自鉴权；ADR-0028 起 app_key / 签名必填，缺失、未知平台或错签名一律 401，不再放行；生产运行时由 capabilities 关闭（503）', [['POST', '/']])
 
 // —— 只读自身 / 自身范围 ——
 group('auth.js', 'self', '返回/修改当前登录者自己的资料、权限或其数据范围内的组织树', [
@@ -376,7 +376,7 @@ group('docflow.js', 'meta', '单据类型/状态机/生命周期/流转图/取�
 ])
 group('docflow.js', 'meta', '取号规则效果预览（不消耗序号，纯计算）', [['POST', '/no-preview']])
 group('docflow.js', 'handler-scope', '/actions 在处理器内 assertCanRead；/transition 在处理器内 assertEdgePermitted + 单据主体/组织范围（ADR 单据流转）', [['GET', '/actions'], ['POST', '/transition']])
-group('docflow.js', 'gap', '/no-issue 非 dry 时真实消耗一个单据序号，任何登录账号（含外部角色）都能调；应要求管理员/单据配置权限', [['POST', '/no-issue']], 'unassigned')
+group('docflow.js', 'handler-scope', '/no-issue 非 dry 时在处理器内按 DOC_CREATE_PERMS（lib/docflow.js 唯一映射表）要求该单据类型的创建权限，未映射类型 403 DOC_TYPE_PERM_UNMAPPED；dry 只读预览豁免（ADR-0028）', [['POST', '/no-issue']])
 
 // —— 门店 / 经销商 / 订货主体：处理器内按绑定主体收口 ——
 group('pos.js', 'handler-scope', '门店 POS：storeCtx 要求账号绑定 store_id 并只读写本店；未设 role/perm 闸门，即任何绑定门店的账号都可操作（班次核款/驳回 approve|reject 靠 lib/pos2 内的角色判定）。是否应加 requireStore/requirePerm 待评估', [
@@ -401,12 +401,12 @@ group('order-center.js', 'handler-scope', '订货中心：路由器层 requireAu
 group('purchase-chain.js', 'gap', 'ADR-0020 边界：收货核对仍只有 requireAuth，未过 readGate，也未按组织范围判定', [
   ['POST', '/orders/:id/receive-check']
 ], 'unassigned')
-group('purchase-chain.js', 'handler-scope', '动作路由：处理器内 assertActionPermitted 按动作校验权限码；ADR-0020 明确写路径（含 POST /payments、/settlements 的自动分配与来源选择）仍无组织范围判定', [
+group('purchase-chain.js', 'handler-scope', '动作路由：处理器内 assertActionPermitted 按动作校验权限码；这些动作路由的单据级组织范围判定仍未做（POST /payments、/settlements 的自动分配与来源选择已由 ADR-0028 按范围收口，它们本身有 requirePerm）', [
   ['POST', '/requisitions/:id/:action'], ['POST', '/invoices/:id/:action'], ['POST', '/settlements/:id/:action'], ['POST', '/payments/:id/:action']
 ], 'unassigned')
 
 // —— 其它 ——
-group('auth.js', 'gap', '组织档案全表（含 path/负责人等）对任何登录账号（含外部角色）开放；注释写"管理员"但无闸门', [['GET', '/orgs']], 'unassigned')
+group('auth.js', 'handler-scope', '组织档案平铺列表：处理器内按 resolveOrgScope 裁剪（admin / 全局范围全量，其余只含范围内组织，经销商另含挂靠组织，空范围 ⇒ 空列表）；ADR-0028', [['GET', '/orgs']])
 
 // ---------------------------------------------------------------------------
 // 主流程
