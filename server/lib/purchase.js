@@ -29,6 +29,7 @@
 //      同订货中心的授信口径：**单头上的汇总数永远是可以被明细推翻的缓存**。
 
 import { nextDocNoByRule, nextDocNoAuto, nextBatchNo } from './docno.js'
+import { assertNotPending as assertFundsNotPending } from './funds-review.js'
 import { applyTransition, allowedActions, logEvent, DocFlowError, claimTransitionEffect, assertEdgePermitted } from './docflow.js'
 import { applyStockIn, applyStockOut } from './stock.js'
 import { localDate, localNow } from './dates.js'
@@ -1565,6 +1566,102 @@ export function writeOffPayment(db, { paymentId, actor = {}, remark = null, sour
   return getPayment(db, paymentId)
 }
 
+// ---------------------------------------------------------------------------
+// 付款释放台账（迁移 057，ADR-0024）：付款生效时逐笔记应付冲减，作废时只按这些行逆向
+// ---------------------------------------------------------------------------
+
+/**
+ * 付款单生效（submit）后，把每条核销明细对结算单的冲减记进 `payment_release_ledger`。
+ * 幂等：该付款单已有行则不再写（pay 执行时也会走到这里）。必须在 `syncSettlePaid` 之后调用，
+ * 这样 paid_after 是重算后的真值，paid_before = paid_after - 本单该结算单的合计。
+ */
+function recordPaymentRelease(db, pay) {
+  if (db.prepare('SELECT 1 FROM payment_release_ledger WHERE payment_id=? LIMIT 1').get(pay.id)) return 0
+  const items = db
+    .prepare('SELECT id, settle_id, amount FROM purchase_payment_items WHERE payment_id=? AND settle_id IS NOT NULL ORDER BY id')
+    .all(pay.id)
+  const running = new Map()
+  const totals = new Map()
+  for (const it of items) totals.set(it.settle_id, round2((totals.get(it.settle_id) || 0) + Number(it.amount)))
+  const ins = db.prepare(
+    `INSERT INTO payment_release_ledger
+       (payment_id,item_id,supplier_id,settle_id,amount,paid_before,paid_after,created_at)
+     VALUES (?,?,?,?,?,?,?,?)`
+  )
+  let n = 0
+  for (const it of items) {
+    const st = db.prepare('SELECT paid_amount FROM purchase_settlements WHERE id=?').get(it.settle_id)
+    if (!st) continue
+    const base = round2(Number(st.paid_amount || 0) - totals.get(it.settle_id))
+    const before = running.has(it.settle_id) ? running.get(it.settle_id) : base
+    const after = round2(before + Number(it.amount))
+    ins.run(pay.id, it.id, pay.supplier_id, it.settle_id, round2(it.amount), before, after, nowStr())
+    running.set(it.settle_id, after)
+    n += 1
+  }
+  return n
+}
+
+/**
+ * 作废付款单时按台账行逐笔逆向（必须在事务里调用）。
+ * 先校验后写：行的供应商 = 付款单供应商 = 结算单供应商；重复逆向拒绝；恢复额不得超过结算单当前已付额。
+ * 逆向后由调用方在状态置 voided 后重算，并用 `verifyReversal` 与台账口径互验，不一致即整体回滚。
+ * @returns {{legacy: boolean, expected: Map<number, number>}} legacy=迁移前生效、没有行
+ */
+function reversePaymentRelease(db, pay) {
+  const rows = db.prepare('SELECT * FROM payment_release_ledger WHERE payment_id=? ORDER BY id').all(pay.id)
+  const expected = new Map()
+  if (!rows.length) return { legacy: pay.status === 'approved' || pay.status === 'paid', expected, rows: 0 }
+  if (rows.some((r) => r.reversed_at)) {
+    throw new PurchaseError(`付款单 ${pay.doc_no} 的付款释放已逆向过，不能重复恢复`, {
+      code: 'PAY_RELEASE_ALREADY_REVERSED', httpStatus: 409, detail: { payment_id: pay.id }
+    })
+  }
+  const per = new Map()
+  for (const r of rows) {
+    if (Number(r.supplier_id) !== Number(pay.supplier_id)) {
+      throw new PurchaseError(`付款释放行 #${r.id} 的供应商 #${r.supplier_id} 与付款单供应商 #${pay.supplier_id} 不一致`, {
+        code: 'PAY_REVERSAL_SUBJECT_MISMATCH', httpStatus: 409, detail: { row: r.id, row_supplier: r.supplier_id, payment_supplier: pay.supplier_id }
+      })
+    }
+    const st = db.prepare('SELECT * FROM purchase_settlements WHERE id=?').get(r.settle_id)
+    if (!st || Number(st.supplier_id) !== Number(pay.supplier_id)) {
+      throw new PurchaseError(`付款释放行 #${r.id} 指向的结算单不属于付款单供应商 #${pay.supplier_id}`, {
+        code: 'PAY_REVERSAL_SUBJECT_MISMATCH', httpStatus: 409, detail: { row: r.id, settle_id: r.settle_id }
+      })
+    }
+    per.set(r.settle_id, round2((per.get(r.settle_id) || 0) + Number(r.amount)))
+  }
+  // 台账与付款明细必须逐结算单一致：否则重算会动到台账之外的结算单（恢复多于释放）
+  const itemTotals = new Map()
+  for (const it of db.prepare('SELECT settle_id, amount FROM purchase_payment_items WHERE payment_id=? AND settle_id IS NOT NULL').all(pay.id)) {
+    itemTotals.set(it.settle_id, round2((itemTotals.get(it.settle_id) || 0) + Number(it.amount)))
+  }
+  const keys = new Set([...per.keys(), ...itemTotals.keys()])
+  for (const sid of keys) {
+    if (Math.abs((per.get(sid) || 0) - (itemTotals.get(sid) || 0)) > 1e-6) {
+      throw new PurchaseError(`付款单 ${pay.doc_no} 对结算单 #${sid} 的释放台账（${per.get(sid) || 0}）与核销明细（${itemTotals.get(sid) || 0}）不一致`, {
+        code: 'PAY_REVERSAL_DRIFT', httpStatus: 409, detail: { settle_id: sid, ledger: per.get(sid) || 0, items: itemTotals.get(sid) || 0 }
+      })
+    }
+  }
+  const upd = db.prepare('UPDATE purchase_settlements SET paid_amount=?, updated_at=? WHERE id=?')
+  for (const [sid, amt] of per) {
+    const st = db.prepare('SELECT paid_amount, status FROM purchase_settlements WHERE id=?').get(sid)
+    const cur = round2(Number(st.paid_amount || 0))
+    if (amt - cur > 1e-6) {
+      throw new PurchaseError(`作废恢复额 ${amt} 超过结算单 #${sid} 当前已付额 ${cur}（释放台账与账面不符）`, {
+        code: 'PAY_REVERSAL_EXCEEDS_RELEASED', httpStatus: 409, detail: { settle_id: sid, restore: amt, paid: cur }
+      })
+    }
+    expected.set(sid, round2(cur - amt))
+    if (st.status !== 'voided') upd.run(round2(cur - amt), nowStr(), sid)
+  }
+  const mark = db.prepare('UPDATE payment_release_ledger SET reversed_at=?, reversal_ref=? WHERE id=?')
+  for (const r of rows) mark.run(nowStr(), `void:PAY#${pay.id}`, r.id)
+  return { legacy: false, expected, rows: rows.length }
+}
+
 export function transitionPayment(db, { id, action, actor = {}, set = {}, remark = null, source = 'api' }) {
   const pay = db.prepare('SELECT * FROM purchase_payments WHERE id=?').get(id)
   if (!pay) throw new PurchaseError('付款单不存在', { code: 'PAY_NOT_FOUND', httpStatus: 404 })
@@ -1622,23 +1719,48 @@ export function transitionPayment(db, { id, action, actor = {}, set = {}, remark
     extra.approved_by_name = actor.name || null
     extra.approved_at = nowStr()
   }
-  const out = applyTransition({
-    db, docType: 'PAY', id, action, actor: { id: actor.id, name: actor.name },
-    set: extra, remark, source
-  })
-
-  // 状态一变，核销是否生效就跟着变（draft ↔ approved 正好横跨生效线）→ 重算涉及的结算单
+  // 状态流转 + 应付冲减 / 逆向 + 台账 + 重算在**同一个事务**里：
+  // 任何一步失败整体回滚，不会出现「付款单已作废，结算单已付额还没掉」。
   const touched = new Set()
-  for (const it of db.prepare('SELECT settle_id FROM purchase_payment_items WHERE payment_id=?').all(id)) {
-    if (!it.settle_id) continue
-    syncSettlePaid(db, it.settle_id, { actor, source })
-    for (const oid of ordersOfSettlement(db, it.settle_id)) touched.add(oid)
-  }
-  for (const oid of touched) {
-    refreshOrderStats(db, oid)
-    refreshCloseFlags(db, oid)
-  }
-  return out
+  const tx = db.transaction(() => {
+    let reversal = null
+    if (action === 'void') {
+      // 待复核期间不能作废（ADR-0018）；库函数层也拦，不只靠路由
+      assertFundsNotPending(db, 'payment', id)
+      reversal = reversePaymentRelease(db, pay)
+    }
+    const res = applyTransition({
+      db, docType: 'PAY', id, action, actor: { id: actor.id, name: actor.name },
+      set: extra,
+      remark: reversal?.legacy ? `${remark || ''} [legacy: 无付款释放台账行，按重算口径恢复]`.trim() : remark,
+      source
+    })
+    // 状态一变，核销是否生效就跟着变（draft ↔ approved 正好横跨生效线）→ 重算涉及的结算单
+    for (const it of db.prepare('SELECT settle_id FROM purchase_payment_items WHERE payment_id=?').all(id)) {
+      if (!it.settle_id) continue
+      syncSettlePaid(db, it.settle_id, { actor, source })
+      for (const oid of ordersOfSettlement(db, it.settle_id)) touched.add(oid)
+    }
+    if (reversal && reversal.expected.size) {
+      // 台账口径与重算口径互验：不一致说明台账或账面漂移，拒绝而不是悄悄以重算为准
+      for (const [sid, want] of reversal.expected) {
+        const st = db.prepare('SELECT paid_amount, status FROM purchase_settlements WHERE id=?').get(sid)
+        if (st && st.status !== 'voided' && Math.abs(Number(st.paid_amount) - want) > 1e-6) {
+          throw new PurchaseError(`结算单 #${sid} 逆向后已付额 ${st.paid_amount} 与释放台账期望 ${want} 不一致`, {
+            code: 'PAY_REVERSAL_DRIFT', httpStatus: 409, detail: { settle_id: sid, recomputed: st.paid_amount, expected: want }
+          })
+        }
+      }
+    }
+    if (action === 'submit') recordPaymentRelease(db, pay)
+    // 订单统计 / 关闭标志也在事务内：否则这里失败会留下「单据已作废、订单已付额未回」
+    for (const oid of touched) {
+      refreshOrderStats(db, oid)
+      refreshCloseFlags(db, oid)
+    }
+    return res
+  })
+  return tx()
 }
 
 // ---------------------------------------------------------------------------
