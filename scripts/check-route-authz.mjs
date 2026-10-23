@@ -88,7 +88,7 @@ export function lex(src) {
       if (c === '/' && d === '*') { const e = src.indexOf('*/', i + 2); const end = e < 0 ? n : e + 2; blank(masked, i, end); blank(skel, i, end); i = end; continue }
       if (c === '"' || c === "'") { i = scanString(i, c); continue }
       if (c === '`') { i = scanTemplate(i); continue }
-      if (c === '/' && /[(,=:[!&|?{};]|^$/.test(prevSig(i))) {
+      if (c === '/' && /[(,=:[!&|?{};+*%<>~^-]|^$/.test(prevSig(i))) {
         let j = i + 1; let cls = false
         while (j < n && src[j] !== '\n') {
           if (src[j] === '\\') { j += 2; continue }
@@ -293,8 +293,14 @@ export function collect(root = ROOT) {
       if (!u.sub) continue
       // 子路由器挂载点当作一条 USE 伪路由：挂载点之前的闸门（挂载层 + 先出现的 r.use）必须已含强闸门
       const pseudo = { file: rel, verb: 'USE', path: u.prefix || '/', line: u.line, pos: u.pos, own: emptyCls() }
-      const chain = effectiveChain(pseudo, uses, mountsOf(rel))
-      const cls = chain.some((x) => STRONG.has(x)) ? 'GATED' : chain.includes(AUTH) ? 'AUTH_ONLY' : 'NO_AUTH'
+      const rank = { NO_AUTH: 0, AUTH_ONLY: 1, GATED: 2 }
+      let worst = null
+      for (const mt of mountsOf(rel).length ? mountsOf(rel) : [null]) {
+        const c = effectiveChain(pseudo, uses, mt ? [mt] : [])
+        const k = c.some((x) => STRONG.has(x)) ? 'GATED' : c.includes(AUTH) ? 'AUTH_ONLY' : 'NO_AUTH'
+        if (!worst || rank[k] < rank[worst.cls]) worst = { chain: c, cls: k }
+      }
+      const { chain, cls } = worst
       const prefixes = mountsOf(rel).map((x) => x.prefix)
       subRouters.push({ ...pseudo, prefixes, chain, cls, sub: u.sub })
       const child = imports.get(u.sub.replace(/\(.*$/, ''))
@@ -310,11 +316,16 @@ export function collect(root = ROOT) {
     if (inh) mounts.push({ file: rel, prefix: inh.prefix, mw: inh.cls })
     const prefixes = mounts.length ? mounts.map((x) => x.prefix) : ['<未挂载>']
     for (const r of routes) {
-      const chain = effectiveChain(r, uses, mounts)
-      const hasAuth = chain.includes(AUTH)
-      const strong = chain.filter((x) => STRONG.has(x))
-      const cls = strong.length ? 'GATED' : hasAuth ? 'AUTH_ONLY' : 'NO_AUTH'
-      out.push({ ...r, prefixes: inh ? [inh.prefix] : prefixes, chain, cls })
+      // 同一个路由文件可能挂在多个前缀下：逐个挂载独立计算，取**最弱**的一条（别的 URL 上的闸门不能替本 URL 背书）
+      const rank = { NO_AUTH: 0, AUTH_ONLY: 1, GATED: 2 }
+      let worst = null
+      for (const mt of mounts.length ? mounts : [null]) {
+        const chain = effectiveChain(r, uses, mt ? [mt] : [])
+        const strong = chain.filter((x) => STRONG.has(x))
+        const cls = strong.length ? 'GATED' : chain.includes(AUTH) ? 'AUTH_ONLY' : 'NO_AUTH'
+        if (!worst || rank[cls] < rank[worst.cls]) worst = { chain, cls }
+      }
+      out.push({ ...r, prefixes: inh ? [inh.prefix] : prefixes, chain: worst.chain, cls: worst.cls })
     }
   }
   return { routes: out, unparsed, subRouters, mounts: allMounts }
@@ -375,15 +386,15 @@ group('pos.js', 'handler-scope', '门店 POS：storeCtx 要求账号绑定 store
 ], 'unassigned')
 group('requisitions.js', 'handler-scope', '门店要货：storeCtx 要求绑定门店，只读写本店单据', [['GET', '/store/mine'], ['GET', '/store/shipments/mine'], ['GET', '/store/shipments/:id'], ['POST', '/store/shipments/:id/receive']])
 group('demand.js', 'handler-scope', '经销商"我的"要货/计划：dealerCtx 要求绑定经销商，只读本经销商', [['GET', '/dealer/requisitions/mine'], ['GET', '/dealer/plans/mine']])
-group('sales.js', 'handler-scope', '销售读接口：scopeFilter / assertCanRead 按账号数据范围过滤（不要求 perm 码）', [
+group('sales.js', 'handler-scope', '销售读接口：scopeFilter / assertCanRead 只按经销商/门店绑定收口（scopePairs），不按内部账号的组织数据范围过滤；data_scope=org 的内部账号可读他组织订单/发货/退货/统计', [
   ['GET', '/orders'], ['GET', '/orders/:id'], ['GET', '/deliveries'], ['GET', '/deliveries/:id'], ['GET', '/returns'], ['GET', '/stats']
-])
+], 'unassigned')
 group('quote.js', 'handler-scope', '报价动作：处理器内按动作再选 requirePerm（动态权限码），守卫看不到', [['POST', '/quotes/:id/action']])
-group('order-center.js', 'handler-scope', '订货中心：路由器层 requireAuth + attachOrgScope + 客户主体准入检查（checkCustomerAccess）；读写按订货主体收口，不要求 perm 码。外部角色（经销商）是本模块的正常用户', [
+group('order-center.js', 'handler-scope', '订货中心：路由器层 requireAuth + attachOrgScope + 客户主体准入（checkCustomerAccess）只收口经销商/门店自身主体；内部账号即使 data_scope=org 也读到全局（如 /overview 的 customerIds=null、/customers、/customers/tree），组织范围未落实。外部角色是本模块的正常用户，故不要求 perm 码', [
   ['GET', '/overview'], ['GET', '/flow'], ['GET', '/policies'], ['GET', '/customers'], ['GET', '/customers/tree'], ['GET', '/customers/:id'],
   ['GET', '/catalog'], ['POST', '/quote'], ['GET', '/orders'], ['GET', '/orders/:id'], ['GET', '/orders/:id/repeat'], ['GET', '/orders/:id/actions'],
   ['POST', '/orders/:id/:action'], ['GET', '/credit/:customerId'], ['GET', '/statements'], ['GET', '/statements/:id']
-])
+], 'unassigned')
 
 // —— 采购链：ADR-0017 只收口了 7 条列表/概览路由，其余等 W1（ADR-0020） ——
 group('purchase-chain.js', 'gap', 'ADR-0017 边界：详情/预览/计划/目录读路由仍只有 requireAuth，未过 readGate，也未按组织范围判定（W1 / ADR-0020）', [
@@ -427,6 +438,8 @@ export function evaluate(root = ROOT) {
     const want = e.kind === 'public' ? 'NO_AUTH' : 'AUTH_ONLY'
     if (r.cls !== want) problems.push(`登记与现实不符：${k} 登记为 ${e.kind}（应为 ${want}）但实际是 ${r.cls}`)
   }
+  // 不可解析的注册方式（r.route()、动态路径）看不到授权链：默认红，必须改成字面量写法
+  for (const u of unparsed) problems.push(`不可解析的路由注册：${u.file}:${u.line} ${u.what} —— 改成 r.<verb>('/字面量路径', …) 写法，守卫才能检查`)
   for (const e of ALLOW) if (!seen.has(key(e)) && !all.some((r) => key(r) === key(e))) problems.push(`过期登记：${key(e)} 已不存在于路由文件`)
   return { routes: all, unparsed, problems, allow: byKey }
 }
@@ -443,7 +456,6 @@ function main() {
   for (const [k, list] of Object.entries(pend)) {
     console.log(`  待办 pending=${k}：${list.length} 条`)
   }
-  for (const u of unparsed) console.log(`  不可解析：${u.file}:${u.line} ${u.what}（守卫看不到，请人工确认）`)
   for (const p of problems) console.log(`  ✗ ${p}`)
   console.log(`通过 ${routes.length - problems.length} / 失败 ${problems.length}`)
   process.exit(problems.length ? 1 : 0)

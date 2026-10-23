@@ -126,3 +126,20 @@ test('every allowlist entry in the real repository carries a reason; gaps are li
   const src = readFileSync(GUARD, 'utf8')
   assert.doesNotMatch(src, /group\([^\n]*,\s*''\s*,/)
 })
+
+test('a gate on another mount does not vouch for an unprotected mount of the same router', (t) => {
+  const dir = copyTree(t)
+  addRoute(dir, 'zz-two.js', HEAD + "r.get('/x', requireAuth, wrap((_q, res) => ok(res, 1)))\nexport default r\n",
+    (id) => `app.use('/api/zz1', requireAuth, requirePerm('a.b'), ${id})\napp.use('/api/zz2', ${id})`)
+  const res = run(dir)
+  assert.equal(res.status, 1)
+  assert.match(res.stdout, /未登记：routes\/zz-two\.js GET \/x \(AUTH_ONLY/)
+})
+
+test('an r.route() registration the parser cannot read fails instead of passing silently', (t) => {
+  const dir = copyTree(t)
+  addRoute(dir, 'zz-route.js', HEAD + "r.route('/sneaky').get(wrap((_q, res) => ok(res, 1)))\nexport default r\n", (id) => `app.use('/api/zzr', ${id})`)
+  const res = run(dir)
+  assert.equal(res.status, 1)
+  assert.match(res.stdout, /不可解析的路由注册：routes\/zz-route\.js:\d+ r\.route\(/)
+})
