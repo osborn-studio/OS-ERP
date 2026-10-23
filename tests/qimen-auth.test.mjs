@@ -127,6 +127,12 @@ test('migration 060 is idempotent, verifies, and platforms start without a secre
   // 一次性授权：管理员收回后，verify 不会因此失败（ADR-0007）
   f.db.prepare("DELETE FROM role_permissions WHERE role_code='admin' AND perm_code='oms.platform.manage'").run()
   assert.equal(m060.verify(f.db), true)
+  // 结构修复（例如 nonce 索引被删）重跑 up() 不得把被收回的授权恢复回来
+  f.db.exec('DROP INDEX idx_qimen_nonces_seen')
+  assert.equal(m060.verify(f.db), false)
+  m060.up(f.db)
+  assert.equal(m060.verify(f.db), true)
+  assert.equal(f.db.prepare("SELECT COUNT(*) c FROM role_permissions WHERE perm_code='oms.platform.manage'").get().c, 0)
 })
 
 test('canonical contract: key order does not matter, content does', () => {
@@ -192,6 +198,11 @@ test('issue and rotate: permission, once-only plaintext, sealed storage, immedia
   const everything = audits + logs + JSON.stringify(db.prepare('SELECT * FROM audit_logs').all())
   for (const needle of [s1, s2, 'enc:v1:']) assert.ok(!everything.includes(needle), `secret material leaked into logs: ${needle.slice(0, 10)}`)
   assert.ok(!logs.includes('"sign"'))
+  // 网关日志对 request 里的凭据类字段做递归脱敏（审计发现：只剥顶层 sign 不够）
+  const leaky = gatewayBody(s2, pf, { request: { itemCode: 'X', nested: { access_token: 'LEAK-TOKEN-123', secret: 'LEAK-SECRET-456' } } })
+  assert.equal((await api('/api/qimen', { body: leaky })).status, 200)
+  const logs2 = JSON.stringify(db.prepare('SELECT payload FROM oms_sync_logs').all())
+  assert.ok(!logs2.includes('LEAK-TOKEN-123') && !logs2.includes('LEAK-SECRET-456'))
 })
 
 test('gateway verifies per-platform HMAC, time window and replay', { timeout: 300000 }, async (t) => {

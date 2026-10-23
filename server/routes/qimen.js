@@ -21,7 +21,8 @@ import { Router } from 'express'
 import { getDb } from '../db/index.js'
 import { ok, fail, wrap } from '../lib/http.js'
 import { requireAuth, requirePerm, requireInternal } from '../middleware/auth.js'
-import { audit } from '../middleware/audit.js'
+import { auditStrict } from '../middleware/audit.js'
+import { redactValue } from '../lib/redact.js'
 import { verifyQimenRequest, issuePlatformSecret } from '../lib/qimen-auth.js'
 
 const r = Router()
@@ -42,7 +43,7 @@ function logGateway(db, platformId, method, payload, status, message, costMs) {
      VALUES (?,?,?,?,?,?,?,?,?,?)`
   ).run(
     platformId || null, `qimen:${method}`, 'in', status, 1, status === 'success' ? 1 : 0, status === 'success' ? 0 : 1,
-    message, JSON.stringify({ ...payload, sign: undefined }).slice(0, 4000), costMs
+    message, JSON.stringify(redactValue({ ...payload, sign: undefined })).slice(0, 4000), costMs
   )
 }
 
@@ -168,9 +169,13 @@ r.post(
     const id = Number(req.params.id)
     if (!Number.isInteger(id) || id <= 0) return fail(res, '平台 id 非法', 400)
     // QimenCredentialError 带 status+code，由 wrap 统一转成项目信封（404 / 409 + 稳定码）
-    const issued = db.transaction(() => issuePlatformSecret(db, id, { rotate: req.body?.rotate === true }))()
-    // 留痕只记"谁对哪个平台做了签发/轮换"，不带密钥也不带末 4 位
-    audit(req, { action: issued.rotated ? 'QIMEN_SECRET_ROTATE' : 'QIMEN_SECRET_ISSUE', module: 'oms', entity: 'platforms', entityId: id, detail: issued.app_key })
+    // 审计写入与凭据变更在同一事务里：审计写不进去就整体回滚（"密钥换了但审计上不存在"不可接受）
+    const issued = db.transaction(() => {
+      const out = issuePlatformSecret(db, id, { rotate: req.body?.rotate === true })
+      // 留痕只记"谁对哪个平台做了签发/轮换"，不带密钥也不带末 4 位
+      auditStrict(req, { action: out.rotated ? 'QIMEN_SECRET_ROTATE' : 'QIMEN_SECRET_ISSUE', module: 'oms', entity: 'platforms', entityId: id, detail: out.app_key })
+      return out
+    })()
     res.set('Cache-Control', 'no-store')
     return ok(res, issued)
   })

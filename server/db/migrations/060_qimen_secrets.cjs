@@ -33,11 +33,13 @@ module.exports.up = (db) => {
   )`)
   db.exec('CREATE INDEX IF NOT EXISTS idx_qimen_nonces_seen ON qimen_nonces(seen_at)')
   if (!tableExists(db, 'permissions')) return
+  // 只有权限点第一次出现时才给 admin 授权（ADR-0007）：之后管理员收回授权再因结构修复重跑 up() 时不会被恢复。
+  const existed = !!db.prepare('SELECT 1 FROM permissions WHERE code=?').get(PERM[0])
   db.prepare(
     `INSERT INTO permissions (code,name,module,category,sort_order) VALUES (?,?,?,?,?)
      ON CONFLICT(code) DO UPDATE SET name=excluded.name, module=excluded.module, category=excluded.category`
   ).run(...PERM)
-  if (!tableExists(db, 'role_permissions')) return
+  if (existed || !tableExists(db, 'role_permissions')) return
   const hasRole = db.prepare('SELECT 1 AS hit FROM roles WHERE code=?').get('admin')
   if (hasRole) db.prepare('INSERT OR IGNORE INTO role_permissions (role_code,perm_code) VALUES (?,?)').run('admin', PERM[0])
 }

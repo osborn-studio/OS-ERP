@@ -18,6 +18,10 @@
 6. **其他读写面一并收口**：`GET /api/oms/platforms` 不再返回 `app_secret_sealed`（改为 `has_secret` / `secret_rotated_at`）；通用主数据 `crudRouter` 新增 `protectedFields` 选项，`/api/master/platforms` 用显式列清单读取，并且封存列、轮换时间、掩码列不可经通用接口写入或作过滤条件（否则 `sales` 角色可以直接 PUT 一个明文进去）。网关读取密钥时**要求** `enc:v1:` 前缀，旧明文形态的值一律当作未签发。
 7. **日志**：`oms_sync_logs.payload` 不再记录 `sign`；失败日志只记 app_key 与原因；`audit_logs` 里没有密钥（测试对两张表做子串扫描）。
 
+## Codex 独立审计后的补充
+
+只读审计（`git diff integration...HEAD`）无高危；三项中危已修：（1）网关日志只剥顶层 `sign` 不够 —— `oms_sync_logs.payload` 现在对整个请求做递归脱敏（`lib/redact.js`，凭据类键名整体遮盖）；（2）签发/轮换改用 `auditStrict` 并与凭据变更同事务，审计写不进去则密钥不变；（3）迁移 060 的 `up()` 只在权限点**首次出现**时给 admin 授权，结构修复重跑不会恢复被收回的授权（测试删除 nonce 索引后重跑验证）。审计确认未发现签名伪造或重放绕过路径。
+
 ## 契约变化
 
 - `POST /api/qimen`：必填字段增加 `timestamp`、`nonce`；`sign` 算法由 MD5 改为 HMAC-SHA256；新增 401 协议码 `1005`（未签发）、`1006`（时间戳）、`1007`（nonce）、`1008`（重放）。
