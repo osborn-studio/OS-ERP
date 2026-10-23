@@ -363,7 +363,7 @@ export const KEEP_TABLES = [
   // A. 迁移与定义
   'schema_migrations', 'schema_def_fingerprints',
   // B. satellite seed 自清（procure-seed 的 ownedTables / oc-seed / quote-seed）
-  'purchase_payment_items', 'purchase_payments',
+  'payment_release_ledger', 'purchase_payment_items', 'purchase_payments',
   'purchase_settlement_items', 'purchase_settlements',
   'purchase_invoice_items', 'purchase_invoices',
   'purchase_requisition_items', 'purchase_requisitions',

@@ -80,7 +80,10 @@ const DECLARED = [
   // 收付款证据与二人复核（ADR-0018）
   'server/lib/funds-review.js',
   'server/db/migrations/056_funds_maker_checker.cjs',
-  'tests/funds-maker-checker.test.mjs'
+  'tests/funds-maker-checker.test.mjs',
+  // 付款释放台账（ADR-0024）
+  'server/db/migrations/057_payment_release_ledger.cjs',
+  'tests/payment-reversal.test.mjs'
 ]
 
 /** 参与覆盖率统计的源文件（**排除** node_modules / dist / data） */
