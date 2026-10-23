@@ -2,7 +2,11 @@
  * ============================================================================
  * 文件标识：scripts/local-manage.mjs | 跨平台本地安装、启动、诊断与一致性备份。
  * ============================================================================
- * 所有数据固定在本副本内，不继承外部 GML_DB / GML_DATA_DIR。
+ * 所有数据固定在**实例目录**内，不继承外部 GML_DB / GML_DATA_DIR / GML_JWT_SECRET。
+ * 一个企业 = 一个实例目录 = 一份 data/ + 一份 .local/config.json（端口 + 签名密钥，0600）+ 一份 backups/。
+ * 实例目录默认就是本代码副本的根（原行为不变）；要在同一份代码上跑第二个企业，用
+ *   `GML_LOCAL_INSTANCE=/absolute/dir`（或 `--instance=/absolute/dir`，优先）+ `GML_LOCAL_PORT=<端口>`。
+ * 相对路径一律拒绝（ADR-0001 / ADR-0019 同一口径）。代码副本里的 dist/ 与 node_modules 仍按 ROOT 找。
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -13,12 +17,23 @@ import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const LOCAL = path.join(ROOT, '.local')
-const CONFIG = path.join(LOCAL, 'config.json')
-const DATA = path.join(ROOT, 'data')
 const require = createRequire(import.meta.url)
 const command = process.argv[2] || 'start'
-const args = new Set(process.argv.slice(3))
+const rawArgs = process.argv.slice(3)
+const instanceArg = rawArgs.find(a => a.startsWith('--instance='))?.slice('--instance='.length)
+const args = new Set(rawArgs.filter(a => !a.startsWith('--instance=')))
+function instanceDir() {
+  const requested = instanceArg ?? process.env.GML_LOCAL_INSTANCE
+  if (requested === undefined || requested === '') return ROOT
+  if (!path.isAbsolute(requested)) throw new Error('GML_LOCAL_INSTANCE / --instance must be an absolute directory path')
+  return path.resolve(requested)
+}
+let INSTANCE
+try { INSTANCE = instanceDir() } catch (error) { console.error(`[error] ${error.message}`); process.exit(1) }
+const LOCAL = path.join(INSTANCE, '.local')
+const CONFIG = path.join(LOCAL, 'config.json')
+const DATA = path.join(INSTANCE, 'data')
+const BACKUPS = path.join(INSTANCE, 'backups')
 process.chdir(ROOT)
 
 function run(executable, argv, options = {}) {
@@ -56,6 +71,7 @@ async function setup() {
     else await run('npm', argv)
     if (!nativeReady()) throw new Error('SQLite native module failed to load; see the installation manual')
   }
+  fs.mkdirSync(INSTANCE, { recursive: true, mode: 0o700 })
   config()
   fs.mkdirSync(DATA, { recursive: true })
   if (!fs.existsSync(path.join(ROOT, 'dist/index.html'))) throw new Error('Missing dist/index.html; developer: npm ci --include=dev && npm run build')
@@ -80,7 +96,7 @@ async function start() {
   const cfg = config()
   await freePort(cfg.port)
   const base = `http://127.0.0.1:${cfg.port}`
-  console.log(`[start] Local access only: ${base}/login\n[start] Data: ${DATA}\n[start] Press Ctrl+C to stop. First launch generates sample data.`)
+  console.log(`[start] Local access only: ${base}/login\n[start] Instance: ${INSTANCE}\n[start] Data: ${DATA}\n[start] Press Ctrl+C to stop.`)
   const child = spawn(process.execPath, ['server/index.js'], { cwd: ROOT, stdio: 'inherit', env: {
     ...process.env, NODE_ENV: 'production', HOST: '127.0.0.1', PORT: String(cfg.port),
     GML_DB: '', GML_DATA_DIR: DATA, GML_JWT_SECRET: cfg.jwtSecret, JWT_SECRET: ''
@@ -119,7 +135,7 @@ async function backup() {
   if (!fs.existsSync(CONFIG)) throw new Error('No local configuration; run setup first')
   const files = fs.existsSync(DATA) ? fs.readdirSync(DATA).filter(name => /^gml_(cosmetic|food|apparel)\.db$/.test(name)) : []
   if (!files.length) throw new Error('No databases yet; start the system once before backing up')
-  const dir = path.join(ROOT, 'backups', new Date().toISOString().replace(/[:.]/g, '-') + '-' + randomBytes(3).toString('hex'))
+  const dir = path.join(BACKUPS, new Date().toISOString().replace(/[:.]/g, '-') + '-' + randomBytes(3).toString('hex'))
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
   const Database = require('better-sqlite3')
   for (const file of files) {
@@ -133,13 +149,13 @@ async function backup() {
 async function doctor() {
   const cfg = config()
   const result = { node: process.version, supportedNode: process.versions.node.startsWith('22.'), platform: process.platform,
-    sqlite: nativeReady(), frontend: fs.existsSync(path.join(ROOT, 'dist/index.html')), dataDirectory: DATA, port: cfg.port }
+    sqlite: nativeReady(), frontend: fs.existsSync(path.join(ROOT, 'dist/index.html')), instance: INSTANCE, dataDirectory: DATA, backupDirectory: BACKUPS, port: cfg.port }
   try { const response = await fetch(`http://127.0.0.1:${cfg.port}/api/meta/health`, { signal: AbortSignal.timeout(2000) }); result.health = await response.json() }
   catch { result.health = 'not running (normal before start)' }
   console.log(JSON.stringify(result, null, 2))
   if (!result.supportedNode || !result.sqlite || !result.frontend) process.exitCode = 1
 }
 try {
-  if (!['setup', 'start', 'doctor', 'backup'].includes(command)) throw new Error('Usage: node scripts/local-manage.mjs setup|start|doctor|backup [--no-browser]')
+  if (!['setup', 'start', 'doctor', 'backup'].includes(command)) throw new Error('Usage: node scripts/local-manage.mjs setup|start|doctor|backup [--no-browser] [--instance=/absolute/dir]')
   await ({ setup, start, doctor, backup })[command]()
 } catch (error) { console.error(`[error] ${error.message}`); process.exitCode = 1 }
