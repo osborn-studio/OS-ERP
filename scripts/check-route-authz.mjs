@@ -391,11 +391,11 @@ group('sales.js', 'handler-scope', '销售读接口：scopeFilter / assertCanRea
   ['GET', '/orders'], ['GET', '/orders/:id'], ['GET', '/deliveries'], ['GET', '/deliveries/:id'], ['GET', '/returns'], ['GET', '/stats']
 ], 'unassigned')
 group('quote.js', 'handler-scope', '报价动作：处理器内按动作再选 requirePerm（动态权限码），守卫看不到', [['POST', '/quotes/:id/action']])
-group('order-center.js', 'handler-scope', '订货中心：路由器层 requireAuth + attachOrgScope + 客户主体准入（checkCustomerAccess）只收口经销商/门店自身主体；内部账号即使 data_scope=org 也读到全局（如 /overview 的 customerIds=null、/customers、/customers/tree），组织范围未落实。外部角色是本模块的正常用户，故不要求 perm 码', [
+group('order-center.js', 'handler-scope', '订货中心（ADR-0027 已收口）：路由器层 requireAuth + attachOrgScope，范围判据只有 lib/order-center.js 的 ocScope / ocAccessCheck 一份 —— 外部主体（dealer/store）只见自己，内部账号按客户归属组织（oc_customers.org_id，下游继承上级）过滤总览、客户树、列表、授信、对账单，范围外详情 404。外部角色是本模块的正常用户，故不要求 perm 码（写动作各自 requirePerm）', [
   ['GET', '/overview'], ['GET', '/flow'], ['GET', '/policies'], ['GET', '/customers'], ['GET', '/customers/tree'], ['GET', '/customers/:id'],
   ['GET', '/catalog'], ['POST', '/quote'], ['GET', '/orders'], ['GET', '/orders/:id'], ['GET', '/orders/:id/repeat'], ['GET', '/orders/:id/actions'],
   ['POST', '/orders/:id/:action'], ['GET', '/credit/:customerId'], ['GET', '/statements'], ['GET', '/statements/:id']
-], 'unassigned')
+])
 
 // —— 采购链：ADR-0017 收口列表/概览，ADR-0020（W1）收口详情/预览/计划/目录；剩余写路径见下 ——
 group('purchase-chain.js', 'gap', 'ADR-0020 边界：收货核对仍只有 requireAuth，未过 readGate，也未按组织范围判定', [

@@ -88,6 +88,8 @@ const DECLARED = [
   'tests/purchase-chain-detail-scope.test.mjs',
   // 杂项授权缺口收口（ADR-0028）
   'tests/authz-misc.test.mjs',
+  // 订货中心组织范围（ADR-0027）
+  'tests/order-center-scope.test.mjs',
   // 脚本数据目录卫生与单实例安装验收（ADR-0019）
   'scripts/check-data-paths.mjs',
   'scripts/check-route-authz.mjs',
