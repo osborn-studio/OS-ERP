@@ -43,7 +43,7 @@ const r3 = (n) => (n === null ? null : Math.round(n * 1000) / 1000)
 /** 把一个端点的原始样本（ms）与状态码汇总成固定字段 */
 export function summarize(name, method, route, samples, statuses, errors) {
   const sorted = [...samples].sort((a, b) => a - b)
-  const requests = samples.length + errors.network
+  const requests = samples.length // 每次尝试都有一个耗时样本（含超时/网络错误的实际等待时间）
   const histogram = {}
   for (const s of statuses) histogram[s] = (histogram[s] || 0) + 1
   if (errors.network) histogram.network_error = errors.network
@@ -91,12 +91,16 @@ async function freePort() {
   return port
 }
 
-function insideRepoData(file) {
-  const phys = (p) => { try { return fs.realpathSync(p) } catch { return path.resolve(p) } }
-  const dataDir = phys(path.resolve(ROOT, 'data'))
-  const parent = phys(path.dirname(path.resolve(file)))
-  const rel = path.relative(dataDir, path.join(parent, path.basename(file)))
+const phys = (p) => { try { return fs.realpathSync(p) } catch { return path.resolve(p) } }
+function withinRepoData(p) {
+  const rel = path.relative(phys(path.resolve(ROOT, 'data')), phys(p))
   return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel))
+}
+/** 输出路径：本体或其父目录解析后不得落在仓库 data/ 内，且目标已存在时不得是符号链接（防 writeFileSync 跟随链接截断库文件） */
+function unsafeOutput(file) {
+  const abs = path.resolve(file)
+  if (withinRepoData(path.dirname(abs)) || withinRepoData(abs)) return true
+  try { return fs.lstatSync(abs).isSymbolicLink() } catch { return false }
 }
 
 /** 并发池：total 个任务，最多 concurrency 个同时在飞 */
@@ -119,7 +123,11 @@ export async function runBench(argv = process.argv.slice(2), env = process.env) 
   if (mode !== 'demo' && mode !== 'test') refuse('GML_RUNTIME_MODE 必须是 demo 或 test（压测只用 demo/test 库）')
   if (!fs.existsSync(dataDir) || !fs.readdirSync(dataDir).some(f => f.endsWith('.db'))) refuse(`GML_DATA_DIR 内没有 .db 种子库：${dataDir}`)
   const outFile = path.resolve(opts.out || path.join(os.tmpdir(), `bench-api-${Date.now()}.json`))
-  if (insideRepoData(outFile)) refuse('输出文件不得位于仓库 data/ 内')
+  if (unsafeOutput(outFile)) refuse('输出文件不得位于仓库 data/ 内，也不得是符号链接')
+  if (withinRepoData(dataDir)) refuse('GML_DATA_DIR 位于仓库 data/ 之内；请使用 /tmp 下的独立副本')
+  for (const f of fs.readdirSync(dataDir)) {
+    if (/\.db(-wal|-shm)?$/.test(f) && (fs.lstatSync(path.join(dataDir, f)).isSymbolicLink() || withinRepoData(path.join(dataDir, f)))) refuse(`库文件 ${f} 是符号链接或解析到仓库 data/；请使用真实副本`)
+  }
 
   const port = await freePort()
   const childEnv = {
@@ -140,6 +148,7 @@ export async function runBench(argv = process.argv.slice(2), env = process.env) 
     if (!ready) refuse(`服务未能启动：${tail.slice(-400)}`, 1)
     const base = `http://127.0.0.1:${port}`
     const call = async (method, route, token, body) => {
+      if (child.exitCode !== null) throw Object.assign(new Error('服务子进程已退出，停止发送请求'), { fatal: true })
       const t0 = performance.now()
       const res = await fetch(base + route, {
         method, signal: AbortSignal.timeout(30000),
@@ -175,10 +184,11 @@ export async function runBench(argv = process.argv.slice(2), env = process.env) 
     for (const ep of endpoints) {
       const samples = []; const statuses = []; const errors = { network: 0 }
       await pool(ep.n || opts.iterations, opts.concurrency, async () => {
+        const tStart = performance.now()
         try {
           const r = await call(ep.method, ep.route, ep.auth === false ? null : token, ep.body)
           samples.push(r.ms); statuses.push(r.status)
-        } catch { errors.network++ }
+        } catch (e) { if (e.fatal) throw e; samples.push(performance.now() - tStart); errors.network++ }
       })
       results.push(summarize(ep.name, ep.method, ep.route, samples, statuses, errors))
     }
@@ -198,7 +208,7 @@ export async function runBench(argv = process.argv.slice(2), env = process.env) 
     }
     fs.writeFileSync(outFile, JSON.stringify(report, null, 2) + '\n')
     console.log(`bench-api: ${total} 请求, 错误率 ${report.totals.error_rate}, SQLITE_BUSY ${busy}, ${report.totals.wall_seconds}s -> ${outFile}`)
-    if (report.totals.error_rate > opts.maxErrorRate) refuse(`错误率 ${report.totals.error_rate} 超过阈值 ${opts.maxErrorRate}`, 1)
+    if (totalErr / Math.max(1, total) > opts.maxErrorRate) refuse(`错误率 ${report.totals.error_rate} 超过阈值 ${opts.maxErrorRate}`, 1)
     return { report, outFile }
   } finally {
     await stop().catch(() => {})

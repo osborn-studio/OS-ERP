@@ -24,13 +24,13 @@ test('percentile uses nearest-rank and handles tiny samples', () => {
 })
 
 test('summarize counts 4xx/5xx and network failures as errors', () => {
-  const r = summarize('x', 'GET', '/x', [1, 2, 3, 4], [200, 200, 500, 404], { network: 1 })
+  const r = summarize('x', 'GET', '/x', [1, 2, 3, 4, 30000], [200, 200, 500, 404], { network: 1 })
   assert.equal(r.requests, 5)
   assert.equal(r.errors, 3)
   assert.equal(r.error_rate, 0.6)
   assert.deepEqual(r.status_histogram, { 200: 2, 404: 1, 500: 1, network_error: 1 })
-  assert.equal(r.latency_ms.p50, 2)
-  assert.equal(r.latency_ms.max, 4)
+  assert.equal(r.latency_ms.p50, 3)
+  assert.equal(r.latency_ms.max, 30000) // timeouts stay in the tail
 })
 
 test('refuses without explicit absolute data dir, with repository data/, or in production mode', () => {
@@ -45,6 +45,26 @@ test('refuses without explicit absolute data dir, with repository data/, or in p
     assert.equal(run([], { GML_RUNTIME_MODE: 'production', GML_DATA_DIR: dir }).status, 2)
     assert.equal(run([], { GML_RUNTIME_MODE: 'demo', GML_DATA_DIR: dir, }).status, 2) // empty dir: no .db
     assert.equal(run(['--out', path.resolve(ROOT, 'data', 'x.json')], { GML_RUNTIME_MODE: 'demo', GML_DATA_DIR: dir }).status, 2)
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('refuses data dir inside repo data/, symlinked db files and symlinked output', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'os-bench-link-'))
+  try {
+    const env = { GML_RUNTIME_MODE: 'demo', GML_DATA_DIR: dir }
+    const { symlinkSync, writeFileSync } = await import('node:fs')
+    writeFileSync(path.join(dir, 'real.db'), '')
+    const target = path.join(dir, 'real.db')
+    symlinkSync(target, path.join(dir, 'link.json'))
+    const linkOut = run(['--out', path.join(dir, 'link.json')], env)
+    assert.equal(linkOut.status, 2); assert.match(linkOut.stderr, /符号链接/)
+    const dir2 = mkdtempSync(path.join(tmpdir(), 'os-bench-link2-'))
+    try {
+      symlinkSync(path.resolve(ROOT, 'package.json'), path.join(dir2, 'gml_cosmetic.db'))
+      const l = run([], { ...env, GML_DATA_DIR: dir2 })
+      assert.equal(l.status, 2); assert.match(l.stderr, /符号链接|data/)
+    } finally { rmSync(dir2, { recursive: true, force: true }) }
+    assert.equal(run([], { ...env, GML_DATA_DIR: path.resolve(ROOT, 'data', 'sub') }).status, 2)
   } finally { rmSync(dir, { recursive: true, force: true }) }
 })
 

@@ -8,11 +8,11 @@
 
 脚本：`scripts/bench-api.mjs`（无新增依赖，自写并发 `fetch` 池）。
 
-1. 必须显式给**绝对路径** `GML_DATA_DIR`，并经 `requireExplicitDataDir()` 拒绝仓库 `data/`；`GML_RUNTIME_MODE` 只接受 `demo`/`test`；输出文件也不得落在仓库 `data/` 内。违反即退出码 2，不启动任何进程。
-2. 在 `127.0.0.1` 的随机空闲端口 spawn `server/index.js`（子进程环境白名单、随机 JWT 密钥、`GML_LOGIN_IP_LIMIT`/`GML_LOGIN_ACCOUNT_LIMIT` 提高到 10000），只对自己 spawn 的子进程发请求。
+1. 必须显式给**绝对路径** `GML_DATA_DIR`，并经 `requireExplicitDataDir()` 拒绝仓库 `data/`；`GML_RUNTIME_MODE` 只接受 `demo`/`test`；输出文件也不得落在仓库 `data/` 内。数据目录若位于仓库 `data/` 之内、或其中 `.db`/`-wal`/`-shm` 是符号链接/解析到仓库 `data/`，输出文件是符号链接，同样拒绝。违反即退出码 2，不启动任何进程。脚本**无法判断**某个 demo/test 目录是否正被别的实例使用——必须是专为本次压测复制或新建的目录。
+2. 在 `127.0.0.1` 的随机空闲端口 spawn `server/index.js`（子进程环境白名单、随机 JWT 密钥、`GML_LOGIN_IP_LIMIT`/`GML_LOGIN_ACCOUNT_LIMIT` 提高到 10000），请求只发往该端口，每次请求前确认自己 spawn 的子进程仍存活、退出即中止；这降低但不能数学上排除端口被他人抢占的竞态。
 3. 登录一次取 token（默认 `admin`/`12345`，即种子文件里的 demo 账号；可用 `GML_BENCH_USER`/`GML_BENCH_PASSWORD`/`GML_BENCH_INDUSTRY` 覆盖）。
 4. 对 10 条接口顺序各跑 N 次，每条内部最多 `concurrency` 个请求同时在飞：登录（`--login-iterations`）、仪表盘 summary、采购单列表、采购单详情（取列表第一条）、库存 `stocks`、收款单列表 `ar/receipts`（应收侧）、报表 `reports/operating`（当月）、`meta/health`、订单中心 overview、通知 meta。
-5. 延迟用 `performance.now()` 测整次请求（含读完响应体）。百分位为**最近秩**：升序 n 个样本取第 `ceil(p/100·n)` 个；样本很少时 p95/p99 会等于最大值，不要过度解读。错误 = HTTP ≥ 400 或网络错误/30 s 超时。`SQLITE_BUSY` 次数 = 子进程 stdout/stderr 中匹配 `SQLITE_BUSY|database is locked` 的行数（应用若吞掉该错误不写日志则计不到，是下限）。
+5. 延迟用 `performance.now()` 测整次请求（含读完响应体）。百分位为**最近秩**：升序 n 个样本取第 `ceil(p/100·n)` 个；样本很少时 p95/p99 会等于最大值，不要过度解读。错误 = HTTP ≥ 400 或网络错误/30 s 超时；超时与网络错误的实际等待时间**计入**延迟样本（不会因失败而让尾部变好看），状态直方图里记为 `network_error`。错误率阈值按未取整比例比较。`SQLITE_BUSY` 次数 = 子进程 stdout/stderr 中匹配 `SQLITE_BUSY|database is locked` 的行数（应用若吞掉该错误不写日志则计不到，是下限）。
 6. 默认档（并发 4 × 每条 30 次，登录 10 次）约 1 秒，远小于 60 秒；脚本在错误率超过 `--max-error-rate`（默认 0.05）时退出码 1。
 
 压测会写库（登录更新 `last_login_at`、产生 WAL），所以**只对副本运行**：
