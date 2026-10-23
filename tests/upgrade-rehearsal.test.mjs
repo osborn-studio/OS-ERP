@@ -70,6 +70,7 @@ test('replays 059+ one by one on an isolated copy: per-migration timing, lock pr
   assert.equal(rep.passed, true)
   assert.deepEqual(rep.failures, [])
   assert.equal(rep.rollback, null, 'no rollback on success')
+  assert.deepEqual(rep.warnings, [])
   assert.deepEqual(rep.baseline.replay, REPLAY)
   const db0 = rep.databases[0]
   assert.equal(db0.passed, true)
@@ -220,6 +221,7 @@ test('synthetic database directory: copied, backed up, restored and rehearsed th
   const rep = readReport(r.target)
   assert.equal(rep.passed, true)
   assert.equal(rep.input.mode, 'synth-dir')
+  assert.deepEqual(rep.warnings, [], 'no baseline migration was self-healed by the preparation of the copy')
   assert.ok(rep.input.synth_backup.stamp)
   assert.deepEqual(rep.databases[0].steps.map((s) => s.id), REPLAY)
   assert.equal(rep.databases[0].pre.seed_checks_available, true)

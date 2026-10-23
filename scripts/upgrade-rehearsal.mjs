@@ -492,12 +492,14 @@ try {
       assertBaseline(info, name, from, steps)
     }
     // db-backup.mjs 读副本 settings 里的 backup_dir / backup_keep：绝对路径会让备份（以及按 keep 裁剪旧备份）落到副本之外。
-    // 只在**副本**里删掉这两个键，使备份目录退回 <副本>/backups，并断言解析结果确实在副本内。
+    // 只在**副本**里把这两个键改回迁移 020 写入的缺省值（backup_dir='data/backups' 按 resolveBackupDir 的规则等价于 <副本>/backups；
+    // 不删除，否则 020 的 verify() 会判结构缺失而自愈），并断言解析结果确实在副本内。
     for (const code of synthCodes) {
       const copy = path.join(copyDir, INDUSTRY_DB[code])
       const sdb = new Database(copy, { fileMustExist: true })
       try {
-        sdb.prepare("DELETE FROM settings WHERE key IN ('backup_dir','backup_keep')").run()
+        sdb.prepare("INSERT INTO settings (key, value) VALUES ('backup_dir', 'data/backups') ON CONFLICT(key) DO UPDATE SET value=excluded.value").run()
+        sdb.prepare("INSERT INTO settings (key, value) VALUES ('backup_keep', '10') ON CONFLICT(key) DO UPDATE SET value=excluded.value").run()
         sdb.pragma('wal_checkpoint(TRUNCATE)')
       } finally {
         sdb.close()
