@@ -17,7 +17,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdtempSync, rmSync, readdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
+import { mkdtempSync, rmSync, readdirSync, readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -228,6 +228,51 @@ test('synthetic database directory: copied, backed up, restored and rehearsed th
   assert.deepEqual(readdirSync(synth).sort(), filesBefore, 'the rehearsal does not even open the source directory with SQLite (no -shm/-wal side files appear)')
 })
 
+test('a migration whose verify() disagrees with its up() is not silently healed by the follow-up check', { timeout: 420000 }, (t) => {
+  const fx = fixture(t)
+  const extra = tempDir(t, 'os-egp-rehearsal-extra-')
+  writeFileSync(path.join(extra, '900_rehearsal_inconsistent.cjs'), `module.exports = { name: 'inconsistent', up(db) { db.exec('CREATE TABLE IF NOT EXISTS rehearsal_x (i INTEGER)') }, verify() { return false } }\n`)
+  const r = rehearse(t, fx, { args: ['--from=58', `--extra-migrations-dir=${extra}`] })
+  assert.equal(r.status, 1, r.stdout + r.stderr)
+  const rep = readReport(r.target)
+  assert.equal(rep.passed, false)
+  assert.ok(rep.failures.some((f) => /no_self_heal_after_apply/.test(f) && /900_rehearsal_inconsistent/.test(f)), JSON.stringify(rep.failures))
+  assert.equal(rep.rollback.in_process.passed, true)
+  assert.equal(rep.rollback.drill.exit_code, 0)
+})
+
+test('a registry row without a migration file is refused before truncation can erase it', { timeout: 420000 }, (t) => {
+  const fx = fixture(t, (db) => db.prepare("INSERT INTO schema_migrations (id, name, checksum, checksum_origin) VALUES ('070_ghost_migration', 'ghost', 'abc', 'applied')").run())
+  const r = rehearse(t, fx)
+  assert.equal(r.status, 1, r.stdout + r.stderr)
+  const rep = readReport(r.target)
+  assert.ok(rep.failures.some((f) => /PRE_UPGRADE_REGISTRY_FILE_MISSING/.test(f) && /070_ghost_migration/.test(f)), JSON.stringify(rep.failures))
+  assert.deepEqual(rep.databases[0].steps, [])
+  assert.ok(rep.rollback)
+})
+
+test('a synthetic database whose settings point backup_dir elsewhere cannot make the rehearsal write or prune outside the target', { timeout: 420000 }, (t) => {
+  const base = tempDir(t, 'os-egp-rehearsal-synth-')
+  const synth = path.join(base, 'data')
+  const gen = spawnSync(process.execPath, ['scripts/synth-data.mjs', '--skus', '24', '--txns', '240', '--docs', '60', '--quiet'], {
+    cwd: ROOT, encoding: 'utf8', timeout: 240000, env: { PATH: process.env.PATH, HOME: tmpdir(), TMPDIR: tmpdir(), GML_RUNTIME_MODE: 'production', GML_DATA_DIR: synth, GML_DB: '', GML_SYNTH_ADMIN_PASSWORD: 'Synthetic-Pass-0123456789' }
+  })
+  assert.equal(gen.status, 0, gen.stderr + gen.stdout)
+  const outside = path.join(base, 'real-backups')
+  mkdirSync(outside)
+  const precious = ['gml_cosmetic_19990101-000000.db', 'gml_cosmetic_19990102-000000.db', 'gml_cosmetic_19990103-000000.db']
+  for (const f of precious) writeFileSync(path.join(outside, f), 'precious backup bytes')
+  const db = new Database(path.join(synth, 'gml_cosmetic.db'))
+  db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('backup_dir', ?)").run(outside)
+  db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('backup_keep', '1')").run()
+  db.close()
+  const r = rehearse(t, null, { args: ['--from=58', `--synth-dir=${synth}`], input: false })
+  assert.equal(r.status, 0, r.stdout + r.stderr)
+  assert.deepEqual(readdirSync(outside).sort(), precious, 'nothing was written to or pruned from the directory named by the copy\'s settings')
+  assert.ok(readdirSync(path.join(r.target, 'synth-source/backups')).some((f) => /^backup-report-/.test(f)))
+}
+)
+
 test('lock probe measures how long another writer is blocked, and reports zero when nothing holds the lock', { timeout: 60000 }, async (t) => {
   const dir = tempDir(t, 'os-egp-lockprobe-')
   const file = path.join(dir, 'probe.db')
@@ -251,5 +296,8 @@ test('lock probe measures how long another writer is blocked, and reports zero w
   holder.close()
   assert.ok(res.busy_attempts > 0, JSON.stringify(res))
   assert.ok(res.max_blocked_ms >= 150 && res.max_blocked_ms < 1500, `blocked window ${res.max_blocked_ms}ms`)
+  // The lock was held for 250 ms: the lower bound (first to last failed attempt) cannot exceed it, the sampled upper bound cannot be below it.
+  assert.ok(res.max_busy_span_ms >= 150 && res.max_busy_span_ms <= 260, `busy span ${res.max_busy_span_ms}ms`)
+  assert.ok(res.max_busy_span_ms <= res.max_blocked_ms)
   assert.equal(res.other_errors, 0)
 })

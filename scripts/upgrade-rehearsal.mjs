@@ -36,7 +36,7 @@
  *
  * 【耗时与锁时间的口径】`duration_ms` = 一次 `runMigrations` 调用的墙钟（含对暂存目录的校验和核对与对已登记迁移的 verify()）；
  *   `overhead_ms` = 紧接着再调用一次（此时是空操作）的墙钟；`net_ms = max(0, duration_ms - overhead_ms)` 近似该迁移 up() + 登记 + 提交。
- *   `lock.max_blocked_ms` 见 lock-probe.mjs（写入者视角、约 1–2 ms 分辨率）；单个迁移一个事务，迁移期间持有写事务的上界就是 `duration_ms`。
+ *   `lock.max_busy_span_ms`（下界）与 `lock.max_blocked_ms`（近似上界）见 lock-probe.mjs：真实持锁时长落在两者之间、外加线程调度噪声，写入者视角；单个迁移一个事务，迁移期间持有写事务的粗上界是 `duration_ms`。
  *   全部是运行它的这台机器、当时负载下的单次墙钟，不是目标主机（dmserver）结果，不是容量承诺。
  *
  * 【扩展：演练尚未合入的迁移】`--extra-migrations-dir=/abs/dir`：目录里编号大于仓库现有最大编号的 `NNN_名称.cjs` 追加到演练序列末尾
@@ -65,6 +65,7 @@ import {
   parseArgs, loadBackupSet, prepareTargetDir, verifyAndRestore, materializeEntry, runtimeMarkerOf,
   sqlProbes, writeReport, stampNow, backupAgeSeconds, childEnv
 } from './lib/drill-common.mjs'
+import { resolveBackupDir } from '../server/lib/backup-dir.js'
 import { isWithin } from './lib/safe-path.mjs'
 import { startLockProbe } from './lib/lock-probe.mjs'
 
@@ -103,7 +104,7 @@ const report = {
   timing: {},
   notes: [
     '被截断的迁移里，表/列/数据变更类的结构在副本里原本就存在，其 up() 是对现成结构的幂等重放；只有 structure_preexisting=false 的步骤耗时才代表真实升级成本。',
-    'lock.max_blocked_ms 是写入者视角、约 1–2 ms 分辨率的下界；迁移期间持有写事务的上界是 duration_ms。WAL 模式下读者不被写锁挡住，本演练不量读者。'
+    '写锁等待是采样区间而不是精确值：lock.max_busy_span_ms 是下界、lock.max_blocked_ms 是含调度噪声的近似上界（高负载下可能明显偏大），写入者视角；迁移期间持有写事务的粗上界是 duration_ms。WAL 模式下读者不被写锁挡住，本演练不量读者。'
   ]
 }
 
@@ -220,9 +221,10 @@ async function rehearseDb(r, ctx) {
   const fail = (name, detail) => { dbr.failures.push(`${name}: ${detail}`); dbr.invariants.push({ name, passed: false, detail }) }
   const ok = (name, detail) => dbr.invariants.push({ name, passed: true, detail })
   const check = (name, cond, detail) => (cond ? ok(name, detail) : fail(name, detail))
-  const db = openWork(r.restored_as, ctx.workDir)
   const stageRoot = path.join(ctx.stageRoot, r.code)
+  let db = null
   try {
+    db = openWork(r.restored_as, ctx.workDir)
     // ---- 升级前状态 ----
     const before = snapshot(db)
     const probesBefore = sqlProbes(r.restored_as)
@@ -237,7 +239,7 @@ async function rehearseDb(r, ctx) {
     // ---- 截断之前：被删行的登记校验和先与当前文件比对（否则截断会抹掉"生产启动会被拒绝"的事实）----
     const preCheck = checkMigrationChecksums(db, { migrationsDir: MIGRATIONS_DIR })
     if (preCheck.mismatched.length) { fail('PRE_UPGRADE_CHECKSUM_MISMATCH', `升级前就有已登记迁移与当前文件校验和不一致：${preCheck.mismatched.join(', ')}（生产模式启动会拒绝）`); return dbr }
-    if (preCheck.missing.length) dbr.warnings.push(`版本表登记了但当前仓库没有文件：${preCheck.missing.join(', ')}`)
+    if (preCheck.missing.length) { fail('PRE_UPGRADE_REGISTRY_FILE_MISSING', `版本表登记了但当前仓库没有对应迁移文件：${preCheck.missing.join(', ')}（无法核对其校验和；截断会把它们的历史一并抹掉）`); return dbr }
     if (preCheck.unrecorded.length) dbr.warnings.push(`无校验和的旧登记行（运行器会按当前文件收养）：${preCheck.unrecorded.join(', ')}`)
 
     // ---- 基线截断 ----
@@ -292,8 +294,14 @@ async function rehearseDb(r, ctx) {
       rec.applied = res.applied
       rec.healed = res.healed
       const to = performance.now()
-      runMigrations(db, { migrationsDir: stage, mode: 'production', warn: () => {} })
+      const noop = runMigrations(db, { migrationsDir: stage, mode: 'production', warn: () => {} })
       rec.overhead_ms = round1(performance.now() - to)
+      if (noop.applied.length || noop.healed.length || noop.adopted.length) {
+        rec.status = 'failed'
+        rec.error = `紧接着的核对调用不是空操作：applied=[${noop.applied}] healed=[${noop.healed}] adopted=[${noop.adopted}]（${id} 的 verify() 与 up() 不自洽？）`
+        fail('no_self_heal_after_apply', `${id}: ${rec.error}`)
+        break
+      }
       rec.net_ms = round1(Math.max(0, rec.duration_ms - rec.overhead_ms))
       rec.db_bytes_after = fs.statSync(r.restored_as).size
       rec.status = same(res.applied, [id]) ? 'ok' : 'unexpected'
@@ -341,7 +349,7 @@ async function rehearseDb(r, ctx) {
   } catch (e) {
     dbr.failures.push(`${e instanceof DrillError ? e.message : `REHEARSAL_UNEXPECTED: ${e.message}`}`)
   } finally {
-    try { db.close() } catch { /* ignore */ }
+    try { db?.close() } catch { /* ignore */ }
     dbr.size_bytes_after = fs.existsSync(r.restored_as) ? fs.statSync(r.restored_as).size : null
     dbr.passed = dbr.failures.length === 0
     fs.rmSync(stageRoot, { recursive: true, force: true })
@@ -403,6 +411,7 @@ function rollback(set, ctx, restored) {
 
 let target = null
 let targetPreexisted = true
+let rollbackCtx = null
 let exitCode = EXIT_FAILED
 const cleanup = []
 
@@ -482,6 +491,19 @@ try {
       if (marker !== 'production') throw usage('DRILL_BACKUP_NOT_PRODUCTION', `${name} 的运行模式标记为 ${marker ?? '缺失'}，只接受 production 库`)
       assertBaseline(info, name, from, steps)
     }
+    // db-backup.mjs 读副本 settings 里的 backup_dir / backup_keep：绝对路径会让备份（以及按 keep 裁剪旧备份）落到副本之外。
+    // 只在**副本**里删掉这两个键，使备份目录退回 <副本>/backups，并断言解析结果确实在副本内。
+    for (const code of synthCodes) {
+      const copy = path.join(copyDir, INDUSTRY_DB[code])
+      const sdb = new Database(copy, { fileMustExist: true })
+      try {
+        sdb.prepare("DELETE FROM settings WHERE key IN ('backup_dir','backup_keep')").run()
+        sdb.pragma('wal_checkpoint(TRUNCATE)')
+      } finally {
+        sdb.close()
+      }
+    }
+    if (resolveBackupDir(null, copyDir) !== path.join(copyDir, 'backups')) throw new DrillError('REHEARSAL_BACKUP_DIR_ESCAPE', '合成库副本的备份目录没有解析到副本之内')
     for (const code of synthCodes) {
       const b = spawnSync(process.execPath, ['scripts/db-backup.mjs', code], { cwd: ROOT, env: childEnv(copyDir), encoding: 'utf8', timeout: 1800000 })
       if (b.status !== 0) throw new DrillError('REHEARSAL_SYNTH_BACKUP_FAILED', `合成库备份失败（${code}，exit ${b.status}）：${((b.stdout || '') + (b.stderr || '')).slice(-600)}`)
@@ -501,6 +523,9 @@ try {
     throw e
   }
   report.timing.restore_ms = since(tr)
+  // 恢复成功之后的任何异常（不只是某个库的核对失败）都必须走回退：ctx 先建好，供外层 catch 使用
+  const ctx = { from, steps, baselineFiles, workDir, stageRoot, target, keepIndexes: !!args['keep-post-baseline-indexes'], postBaselineIndexes: new Set(), pre: new Map() }
+  rollbackCtx = { set, ctx }
 
   // ---- 仓库里"编号 > N 的迁移创建的索引"（A = 基线索引集，B = 全部）----
   const ti = performance.now()
@@ -512,7 +537,7 @@ try {
   report.baseline.post_baseline_indexes = [...postBaselineIndexes].sort()
 
   // ---- 逐库演练 ----
-  const ctx = { from, steps, baselineFiles, workDir, stageRoot, target, keepIndexes: !!args['keep-post-baseline-indexes'], postBaselineIndexes, pre: new Map() }
+  ctx.postBaselineIndexes = postBaselineIndexes
   const tu = performance.now()
   for (const r of report.restored) {
     const dbr = await rehearseDb(r, ctx)
@@ -529,6 +554,13 @@ try {
 } catch (e) {
   report.failures.push(e instanceof DrillError ? e.message : `REHEARSAL_UNEXPECTED: ${e.message}`)
   exitCode = e instanceof DrillError ? e.exitCode : EXIT_FAILED
+  if (rollbackCtx && !report.rollback && exitCode !== EXIT_USAGE) {
+    try {
+      report.rollback = rollback(rollbackCtx.set, rollbackCtx.ctx, report.restored)
+    } catch (e2) {
+      report.failures.push(`ROLLBACK_UNEXPECTED: ${e2.message}`)
+    }
+  }
 } finally {
   for (const d of cleanup) fs.rmSync(d, { recursive: true, force: true })
   // 退出码 2 = 拒绝：演练开始前的拒绝不留任何文件（目标目录在判据通过时一定是空的，所以其内容全是本次创建的）
@@ -550,7 +582,7 @@ if (exitCode === EXIT_USAGE) {
 const file = target ? writeReport(target, 'upgrade-rehearsal', report) : null
 for (const d of report.databases) {
   console.log(`  [${d.code}] ${d.db_file} ${Math.round(d.size_bytes_before / 1048576)}MB → ${d.size_bytes_after != null ? Math.round(d.size_bytes_after / 1048576) : '-'}MB，删除登记行 ${d.registry_truncated.length}、删除索引 ${d.indexes_dropped.length}`)
-  for (const s of d.steps) console.log(`    ${s.id.padEnd(34)} ${String(s.status).padEnd(6)} ${String(s.duration_ms).padStart(9)}ms (净 ${s.net_ms}ms)  写锁阻塞 ${s.lock?.max_blocked_ms ?? '-'}ms  结构原本存在=${s.structure_preexisting}`)
+  for (const s of d.steps) console.log(`    ${s.id.padEnd(34)} ${String(s.status).padEnd(6)} ${String(s.duration_ms).padStart(9)}ms (净 ${s.net_ms}ms)  写锁 ${s.lock?.max_busy_span_ms ?? '-'}–${s.lock?.max_blocked_ms ?? '-'}ms  结构原本存在=${s.structure_preexisting}`)
   for (const i of d.invariants) console.log(`    ${i.passed ? '✓' : '✗'} ${i.name} — ${i.detail}`)
 }
 if (report.rollback) console.log(`  回退：进程内 ${report.rollback.in_process.passed ? '通过' : '失败'}；回退演练 exit ${report.rollback.drill?.exit_code}（不变量 ${report.rollback.drill?.invariants ?? '-'}）`)

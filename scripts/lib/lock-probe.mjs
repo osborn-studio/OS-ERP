@@ -5,12 +5,15 @@
  * 【职责】升级演练（AA11，scripts/upgrade-rehearsal.mjs）要回答"一个迁移持有写锁多久"。better-sqlite3 是同步 API，
  *   迁移跑在主线程里会冻住主线程事件循环，所以探针必须在**另一个线程**（worker_threads）里用**自己的连接**探：
  *   每约 1 ms 对同一个库文件执行 `BEGIN IMMEDIATE; COMMIT`（`busy_timeout=0`，拿不到锁立刻 SQLITE_BUSY）。
- *   · `max_blocked_ms`：两次成功拿到写锁之间、期间至少失败过一次的最长间隔 —— 即另一个写入者最坏被挡多久（含 ≤1 ms 的探测间隔误差）。
+ *   · 每个"被挡窗口"（一串连续失败）记两个数，**真实持锁时长落在两者之间**（外加线程调度噪声）：
+ *     - `max_busy_span_ms`：窗口内**第一次失败到最后一次失败**的间隔 —— 这段时间锁一定被别人持有，所以是持锁时长的**下界**（至多少算两个探测间隔）；
+ *     - `max_blocked_ms`：**上一次成功到下一次成功**的间隔 —— 覆盖了整个持锁期，所以是**近似上界**（多算锁前、锁后各一个探测间隔，
+ *       高负载下 worker 被调度走时会多得多；被调度走期间的空档也会被算进来）。
  *   · 停止时仍处于被挡状态，则把"停止时刻"当作窗口终点，并在 `still_blocked_at_stop` 标明。
  * 【诚实边界】
  *   · 这是**写入者**视角。WAL 模式下读者不会被写锁挡住，本探针不量读者；非 WAL（回滚日志）库里读者也会被挡，此处同样不量。
- *   · 精度约 1–2 ms：短于探测间隔的锁持有可能一次都没被撞上（`busy_attempts=0` 不等于"没持锁"，只表示没撞上）。
- *     所以报告里同时给迁移事务的**总耗时**（迁移期间持有写事务的上界）；锁时间的上界看耗时，下界看这里。
+ *   · 探测间隔约 1 ms，但 BEGIN/COMMIT 与线程调度会让实际周期更长（机器负载高时可达数 ms 以上）；短于一个探测周期的持锁可能一次都没被撞上
+ *     （`busy_attempts=0` 不等于"没持锁"，只表示没撞上）。所以报告里同时给迁移的**总耗时**（迁移期间持有写事务的粗上界）。
  *   · 探针自己每次 `BEGIN IMMEDIATE; COMMIT` 是空事务，不写任何页，不改库内容。
  * 【改它要注意什么】tests/upgrade-rehearsal.test.mjs 用一个持锁的连接证明探针能量到被挡窗口。
  * ============================================================================
@@ -30,12 +33,14 @@ if (!isMainThread && workerData?.lockProbe) {
   const flag = new Int32Array(flagBuffer)
   const sleeper = new Int32Array(new SharedArrayBuffer(4))
   let db = null
-  const out = { ok_attempts: 0, busy_attempts: 0, other_errors: 0, max_blocked_ms: 0, blocked_windows: 0, still_blocked_at_stop: false, first_error: null }
+  const out = { ok_attempts: 0, busy_attempts: 0, other_errors: 0, max_blocked_ms: 0, max_busy_span_ms: 0, blocked_windows: 0, still_blocked_at_stop: false, first_error: null }
   try {
     db = new Database(dbPath, { fileMustExist: true })
     db.pragma('busy_timeout = 0')
     let lastOk = performance.now()
     let blocked = false
+    let firstFail = 0
+    let lastFail = 0
     parentPort.postMessage({ ready: true })
     while (Atomics.load(flag, 0) === 0) {
       try {
@@ -46,11 +51,12 @@ if (!isMainThread && workerData?.lockProbe) {
         if (blocked) {
           out.blocked_windows++
           out.max_blocked_ms = Math.max(out.max_blocked_ms, now - lastOk)
+          out.max_busy_span_ms = Math.max(out.max_busy_span_ms, lastFail - firstFail)
           blocked = false
         }
         lastOk = now
       } catch (e) {
-        if (isBusy(e)) { out.busy_attempts++; blocked = true } else { out.other_errors++; out.first_error ||= String(e.message).slice(0, 200) }
+        if (isBusy(e)) { const now = performance.now(); out.busy_attempts++; if (!blocked) firstFail = now; lastFail = now; blocked = true } else { out.other_errors++; out.first_error ||= String(e.message).slice(0, 200) }
         try { db.exec('ROLLBACK') } catch { /* 没有打开的事务 */ }
       }
       Atomics.wait(sleeper, 0, 0, INTERVAL_MS)
@@ -59,6 +65,7 @@ if (!isMainThread && workerData?.lockProbe) {
       out.still_blocked_at_stop = true
       out.blocked_windows++
       out.max_blocked_ms = Math.max(out.max_blocked_ms, performance.now() - lastOk)
+      out.max_busy_span_ms = Math.max(out.max_busy_span_ms, lastFail - firstFail)
     }
   } catch (e) {
     out.other_errors++
@@ -68,6 +75,7 @@ if (!isMainThread && workerData?.lockProbe) {
     try { db?.close() } catch { /* ignore */ }
   }
   out.max_blocked_ms = Math.round(out.max_blocked_ms * 10) / 10
+  out.max_busy_span_ms = Math.round(out.max_busy_span_ms * 10) / 10
   parentPort.postMessage({ result: out })
 }
 
