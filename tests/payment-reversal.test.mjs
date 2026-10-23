@@ -137,9 +137,9 @@ test('restoring more than the settlement currently has paid is refused', (t) => 
   const f = fixture(t)
   const p = f.pay(7, [{ settle_id: 70, amount: 200 }])
   f.submit(p.id)
-  f.db.prepare('UPDATE payment_release_ledger SET amount=999 WHERE payment_id=?').run(p.id)
+  f.db.prepare('UPDATE purchase_settlements SET paid_amount=50 WHERE id=70').run()
   assert.throws(() => f.voidIt(p.id), (e) => e.code === 'PAY_REVERSAL_EXCEEDS_RELEASED' && e.status === 409)
-  assert.equal(f.paid(70), 200)
+  assert.equal(f.paid(70), 50)
   assert.equal(f.status(p.id), 'approved')
 })
 
@@ -191,6 +191,33 @@ test('a payment effective before migration 057 (no rows) falls back to recompute
   f.voidIt(p.id)
   assert.equal(f.paid(70), 0)
   assert.equal(f.db.prepare("SELECT count(*) n FROM doc_events WHERE doc_type='PAY' AND action='void' AND remark LIKE '%legacy%'").get().n, 1)
+})
+
+test('ledger row redirected to another settlement of the same supplier cannot restore more than released', (t) => {
+  const f = fixture(t)
+  const other = f.pay(7, [{ settle_id: 71, amount: 200 }])
+  f.submit(other.id)
+  const p = f.pay(7, [{ settle_id: 70, amount: 200 }])
+  f.submit(p.id)
+  f.db.prepare('UPDATE payment_release_ledger SET settle_id=71 WHERE payment_id=?').run(p.id)
+  assert.throws(() => f.voidIt(p.id), (e) => e.code === 'PAY_REVERSAL_DRIFT' && e.status === 409)
+  assert.deepEqual([f.paid(70), f.paid(71)], [200, 200])
+  assert.equal(f.status(p.id), 'approved')
+})
+
+test('a failure in order statistics refresh rolls the void back too', (t) => {
+  const f = fixture(t)
+  f.db.pragma('foreign_keys=OFF')
+  f.db.prepare(`INSERT INTO purchase_orders (id,doc_no,supplier_id,warehouse_id,order_date,status,paid_amount) VALUES (5,'PO-TEST-5',7,1,'2026-01-01','confirmed',0)`).run()
+  f.db.prepare(`INSERT INTO purchase_receipts (id,doc_no,supplier_id,warehouse_id,order_id,receipt_date,status) VALUES (5,'RC-TEST-5',7,1,5,'2026-01-02','confirmed')`).run()
+  f.db.prepare(`INSERT INTO purchase_settlement_items (settle_id,source_type,source_id) VALUES (70,'receipt',5)`).run()
+  const p = f.pay(7, [{ settle_id: 70, amount: 200 }])
+  f.submit(p.id)
+  f.db.exec(`CREATE TRIGGER t_ord BEFORE UPDATE ON purchase_orders WHEN NEW.id=5 AND EXISTS(SELECT 1 FROM purchase_payments WHERE status='voided') BEGIN SELECT RAISE(ABORT,'order-injected'); END`)
+  assert.throws(() => f.voidIt(p.id), /order-injected/)
+  assert.equal(f.status(p.id), 'approved')
+  assert.equal(f.paid(70), 200)
+  assert.ok(f.rows(p.id).every((r) => r.reversed_at === null))
 })
 
 test('pay (execute) keeps balances and does not add ledger rows', (t) => {

@@ -1632,6 +1632,19 @@ function reversePaymentRelease(db, pay) {
     }
     per.set(r.settle_id, round2((per.get(r.settle_id) || 0) + Number(r.amount)))
   }
+  // 台账与付款明细必须逐结算单一致：否则重算会动到台账之外的结算单（恢复多于释放）
+  const itemTotals = new Map()
+  for (const it of db.prepare('SELECT settle_id, amount FROM purchase_payment_items WHERE payment_id=? AND settle_id IS NOT NULL').all(pay.id)) {
+    itemTotals.set(it.settle_id, round2((itemTotals.get(it.settle_id) || 0) + Number(it.amount)))
+  }
+  const keys = new Set([...per.keys(), ...itemTotals.keys()])
+  for (const sid of keys) {
+    if (Math.abs((per.get(sid) || 0) - (itemTotals.get(sid) || 0)) > 1e-6) {
+      throw new PurchaseError(`付款单 ${pay.doc_no} 对结算单 #${sid} 的释放台账（${per.get(sid) || 0}）与核销明细（${itemTotals.get(sid) || 0}）不一致`, {
+        code: 'PAY_REVERSAL_DRIFT', httpStatus: 409, detail: { settle_id: sid, ledger: per.get(sid) || 0, items: itemTotals.get(sid) || 0 }
+      })
+    }
+  }
   const upd = db.prepare('UPDATE purchase_settlements SET paid_amount=?, updated_at=? WHERE id=?')
   for (const [sid, amt] of per) {
     const st = db.prepare('SELECT paid_amount, status FROM purchase_settlements WHERE id=?').get(sid)
@@ -1740,14 +1753,14 @@ export function transitionPayment(db, { id, action, actor = {}, set = {}, remark
       }
     }
     if (action === 'submit') recordPaymentRelease(db, pay)
+    // 订单统计 / 关闭标志也在事务内：否则这里失败会留下「单据已作废、订单已付额未回」
+    for (const oid of touched) {
+      refreshOrderStats(db, oid)
+      refreshCloseFlags(db, oid)
+    }
     return res
   })
-  const out = tx()
-  for (const oid of touched) {
-    refreshOrderStats(db, oid)
-    refreshCloseFlags(db, oid)
-  }
-  return out
+  return tx()
 }
 
 // ---------------------------------------------------------------------------

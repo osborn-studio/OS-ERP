@@ -26,13 +26,13 @@
 | `PAY_RELEASE_ALREADY_REVERSED` | 台账行已逆向，拒绝重复恢复（正常重复作废先被 `TRANSITION_NOT_ALLOWED` 拒绝） |
 | `PAY_REVERSAL_SUBJECT_MISMATCH` | 行的供应商或结算单属于别的供应商 |
 | `PAY_REVERSAL_EXCEEDS_RELEASED` | 恢复额超过结算单当前已付额 |
-| `PAY_REVERSAL_DRIFT` | 逆向后重算值与台账期望值不一致，整体回滚 |
+| `PAY_REVERSAL_DRIFT` | 台账与核销明细逐结算单不一致，或逆向后重算值与台账期望不一致，整体回滚 |
 | `FUNDS_REVIEW_PENDING` | 付款单待第二人复核，不能作废（库函数层） |
 | `TRANSITION_NOT_ALLOWED` | 终态 / 已作废再作废 |
 
 ## 验证
 
-`tests/payment-reversal.test.mjs`（13 项）：行与前后值数值断言；作废后已付额 / 未付余额回到付款前绝对值；草稿作废无行；重复作废；跨供应商（行、结算单两种）；超额；漂移；故障注入（触发器）整体回滚含 `doc_events`；待复核拒绝；legacy；pay 不加行。
+`tests/payment-reversal.test.mjs`（15 项）：行与前后值数值断言；作废后已付额 / 未付余额回到付款前绝对值；草稿作废无行；重复作废；跨供应商（行、结算单两种）；超额；漂移；故障注入（触发器）整体回滚含 `doc_events`；台账行改指同供应商另一结算单（drift）；订单统计刷新失败整体回滚；待复核拒绝；legacy；pay 不加行。Codex 审计的两条 P1（台账与明细不一致可恢复过头、订单统计在事务外）已修复并补测试。
 
 ## 边界
 
