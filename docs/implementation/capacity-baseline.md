@@ -92,7 +92,7 @@ node scripts/bench-api.mjs --concurrency 4 --iterations 30 --out "$GML_DATA_DIR/
 
 > **范围声明**：下面所有数字来自开发机 Mac mini（Apple M4, 10 核, 16 GB, Node v22.22.1, SQLite 3.49.2）上**一次**合成数据演练，机器当时还在跑别的任务（见每张表的负载）。
 > **不是目标主机（`dmserver`）结果、不是容量承诺、不是 RPO/RTO 证据、不是验收证据**。合成数据是均匀随机、单行业、单管理员，不代表真实业务分布。
-> 实际跑过的**最大规模**是 `large`（2 万 SKU / 5 万单据 / 25 万库存流水），**没有**跑 roadmap 写的 10 万 SKU / 20 万单据 / 100 万流水：开发机内部盘只剩约 16 GiB 且已用 92%，整条流水线（库 + 两份备份 + 两份恢复副本 + 压测副本）峰值约 10 GB，会挤占同机其他任务。该规模需在 `dmserver` 上用同一脚本复跑。
+> 实际跑过的**最大规模**是 `large`（2 万 SKU / 5 万单据 / 25 万库存流水），**没有**跑 roadmap 写的 10 万 SKU / 20 万单据 / 100 万流水：开发机内部盘只剩约 16 GiB 且已用 92%，整条流水线（库 + 两份备份 + 两份恢复副本 + 压测副本）峰值**按 large 的实测体量外推约 10 GB（估算，未实跑）**，会挤占同机其他任务。该规模需在 `dmserver` 上用同一脚本复跑。
 
 ### 做了什么
 
@@ -156,7 +156,7 @@ node scripts/bench-api.mjs --concurrency 4 --iterations 30 --out "$GML_DATA_DIR/
 1. **`GET /api/inventory/stocks` 随库存行数线性变慢**（84.7k 行 → p95 704 ms；141k 行 → 1 092 ms）。与 X10 记录的残余一致：`qty_on_hand <> 0` 的几乎不过滤列表，索引解决不了，需要分页游标或物化。
 2. **`explain-audit` 在规模下出现 3 处新违规**（夹具规模下为 0）：`dash.todo_counts` 全表扫 `product_skus`（2 万行）与 `dealers`（750/1 250 行）、`stock.below_safe` 全表扫 `product_skus`。X10 的结论"夹具规模下无裸 SCAN"在这里被规模推翻了一部分；需要 `product_skus(status, safe_stock)` 一类的索引或改写，并重新审计。
 3. **`GET /api/dashboard/summary` 随单据增长**（夹具 10 ms → 5 万单据 283 ms），与 2 同源的扫描有关，改索引后应复测。
-4. 生成器自检曾发现的一个性能坑：`inventory_transactions` 分组 `NOT EXISTS + COALESCE(batch_no,'')` 失去索引，25 万流水上要 2 分钟；已改为 LEFT JOIN 走唯一索引（`verifyInvariants` 现在 51–163 s 主要是 `integrity_check`）。
+4. 生成器自检曾发现的一个性能坑：`inventory_transactions` 分组 `NOT EXISTS + COALESCE(batch_no,'')` 失去索引，25 万流水上要 2 分钟；已改为 LEFT JOIN 走唯一索引；修复后 `verifyInvariants` 在 medium/large 仍要 50 s / 163 s（`integrity_check` 在 25 万流水库上单次约 19 s，其余未再逐项剖析）。
 
 ### 压测库与生成库不是同一份（必须一起读）
 
