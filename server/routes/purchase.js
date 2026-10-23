@@ -17,7 +17,7 @@ import { Router } from 'express'
 import { localDate, addDays } from '../lib/dates.js'
 import { getDb } from '../db/index.js'
 import { ok, fail, wrap, pageParams, paged, failFromError } from '../lib/http.js'
-import { requireAuth, requireRole, requirePerm, currentUser, permContext } from '../middleware/auth.js'
+import { requireAuth, requireRole, requirePerm, attachOrgScope, currentUser, permContext } from '../middleware/auth.js'
 import { audit } from '../middleware/audit.js'
 import { withWriteRetry } from '../lib/tx.js'
 // 状态推进的**唯一入口**是内核（`applyTransition`）。本文件过去没有直接用过它，
@@ -32,7 +32,7 @@ import {
   normalizePurchaseOrderLines,
   getPurchaseOrder as loadOrder,
   PURCHASE_ORDER_SELECT, PURCHASE_ORDER_FROM,
-  PurchaseError, DocFlowError, PO_READ_PERMS
+  PurchaseError, DocFlowError, PO_READ_PERMS, assertPurchaseDocInScope
 } from '../lib/purchase.js'
 
 const r = Router()
@@ -199,9 +199,12 @@ r.post(
   '/orders/:id/status',
   requireAuth,
   requireRole(...W),
+  attachOrgScope,
   guard((req, res) => {
     const db = getDb()
     const id = Number(req.params.id)
+    // ADR-0038：先判单据范围（订单经仓归属组织）再谈流转；范围外与不存在同形 404，不产生任何写。
+    assertPurchaseDocInScope(db, 'PO', id, req.orgScope)
     // 流转规则已从本文件搬进单据内核（doc_actions 表）：
     // 合法状态与合法动作是数据，不是这里的 if；非法流转由内核统一拦截，
     // 并自动写 doc_events 留痕（谁、何时、从哪到哪）。
@@ -232,9 +235,12 @@ r.post(
   '/orders/:id/receive',
   requireAuth,
   requireRole(...W),
+  attachOrgScope,
   guard((req, res) => {
     const db = getDb()
     const u = currentUser(req)
+    // ADR-0038：收货入的是订单自己的仓，订单在范围内即该仓在范围内；范围外 404 且不入库。
+    assertPurchaseDocInScope(db, 'PO', Number(req.params.id), req.orgScope)
     const out = withWriteRetry(db, () => receivePurchaseOrder(db, {
       orderId: Number(req.params.id),
       items: req.body?.items || [],

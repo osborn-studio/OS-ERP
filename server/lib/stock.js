@@ -1212,6 +1212,59 @@ export function costOf(db, { warehouseId, ownerOrgId = null, skuId, batchNo = ''
   }
 }
 
+// ============================================================
+// 组织范围（ADR-0038）：库存按**仓库所属组织**（`warehouses.org_id`）收口
+// ============================================================
+
+/**
+ * 库存域 SQL 范围谓词（完整谓词，无前导 AND）。判据与 `purchaseScopeSql` / `salesScopeSql` 同源：
+ *   · 不传或 `all` ⇒ `1=1`（全库，admin / 全局范围 / lib 内部调用口径不变）；
+ *   · `dealer` / `none` / 空集合 ⇒ `1=0` 并置 `empty: true`（空范围不许变成全库）；
+ *   · 其余 ⇒ `<alias>.<column> IN (SELECT id FROM warehouses WHERE org_id IN (…))`；
+ *     仓库的 `org_id` 为 NULL 对受限范围不可见（宁可看不到，也不放行）。
+ * `alias` 给带表别名的查询用；`column` 缺省 `warehouse_id`（调拨单用 `from_warehouse_id` / `to_warehouse_id`，
+ * 仓库表自身用 `id`）。
+ */
+export function stockScopeSql(orgScope, alias = '', column = 'warehouse_id') {
+  if (!orgScope || orgScope.scope === 'all') return { sql: '1=1', params: [], empty: false }
+  const ids = Array.isArray(orgScope.orgIds) ? orgScope.orgIds.map(Number).filter(Number.isFinite) : []
+  if (orgScope.scope === 'dealer' || orgScope.scope === 'none' || !ids.length) return { sql: '1=0', params: [], empty: true }
+  const col = alias ? `${alias}.${column}` : column
+  return { sql: `${col} IN (SELECT id FROM warehouses WHERE org_id IN (${ids.map(() => '?').join(',')}))`, params: ids, empty: false }
+}
+
+/** 仓库是否在范围内（全局恒真；不存在 / org 为 NULL / 范围外 ⇒ false）。 */
+export function warehouseInScope(db, warehouseId, orgScope) {
+  if (!orgScope || orgScope.scope === 'all') return true
+  const sc = stockScopeSql(orgScope, 'w', 'id')
+  if (sc.empty || !Number.isFinite(Number(warehouseId))) return false
+  return !!db.prepare(`SELECT 1 FROM warehouses w WHERE w.id=? AND ${sc.sql}`).get(Number(warehouseId), ...sc.params)
+}
+
+/** 写路径的目标仓校验：范围外（含不存在、org 为 NULL）⇒ 403 `TARGET_OUT_OF_SCOPE`；全局范围恒通过。 */
+export function assertWarehouseInScope(db, warehouseId, orgScope) {
+  if (warehouseInScope(db, warehouseId, orgScope)) return
+  const e = new Error('所选仓库不在您的组织数据范围内')
+  e.status = 403
+  e.code = 'TARGET_OUT_OF_SCOPE'
+  throw e
+}
+
+/** 按仓取单据行并判范围：范围外与不存在同形 404（`DOC_NOT_FOUND`）。`table` / `column` 由调用方写死，不接受用户输入。 */
+export function assertStockDocInScope(db, table, id, orgScope, { column = 'warehouse_id', notFound = '单据不存在' } = {}) {
+  const sc = stockScopeSql(orgScope, 't', column)
+  const row = Number.isFinite(Number(id))
+    ? db.prepare(`SELECT t.* FROM ${table} t WHERE t.id=? AND ${sc.sql}`).get(Number(id), ...sc.params)
+    : null
+  if (!row) {
+    const e = new Error(notFound)
+    e.status = 404
+    e.code = 'DOC_NOT_FOUND'
+    throw e
+  }
+  return row
+}
+
 export default {
   applyStockIn,
   applyStockOut,
@@ -1233,5 +1286,9 @@ export default {
   clearParamCache,
   clearInvTypeCache,
   getStockRow,
+  stockScopeSql,
+  warehouseInScope,
+  assertWarehouseInScope,
+  assertStockDocInScope,
   DOC_TYPE_LABEL
 }

@@ -107,6 +107,7 @@ const DECLARED = [
   // 审批域组织范围（ADR-0037）
   'tests/approval-scope.test.mjs',
   'tests/purchase-action-scope.test.mjs',
+  'tests/inventory-scope.test.mjs',
   // 杂项授权缺口收口（ADR-0028）
   'tests/authz-misc.test.mjs',
   // 订货中心组织范围（ADR-0027）

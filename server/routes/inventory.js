@@ -17,20 +17,27 @@ import { Router } from 'express'
 import { localDate, addDays } from '../lib/dates.js'
 import { getDb } from '../db/index.js'
 import { ok, fail, wrap, pageParams, paged } from '../lib/http.js'
-import { requireAuth, requireRole, requireInternal, currentUser } from '../middleware/auth.js'
+import { requireAuth, requireRole, requireInternal, attachOrgScope, currentUser } from '../middleware/auth.js'
 import { audit } from '../middleware/audit.js'
 import { withWriteRetry } from '../lib/tx.js'
 import { nextDocNo } from '../lib/docno.js'
 // findAction / applyTransition 曾用于调拨的原地实现，现已收进 `lib/transfer.js`，这里不再直接用。
 import { advanceStatus, tryTransition, nowText } from '../lib/docflow.js'
-import { applyStockIn, applyStockOut, applyStockGain, pickBatches, getStockRow, DOC_TYPE_LABEL } from '../lib/stock.js'
+import {
+  applyStockIn, applyStockOut, applyStockGain, pickBatches, getStockRow, DOC_TYPE_LABEL,
+  stockScopeSql, warehouseInScope, assertWarehouseInScope, assertStockDocInScope
+} from '../lib/stock.js'
 // 调拨单的建单 / 出库 / 入库只有一份实现（`lib/transfer.js`）——
 // 质检的不良品处置（让步→不合格仓、返工→待检仓）也要产生调拨单，
 // 服务层不能反向依赖路由，两份实现必然在「成本回写」上分叉。这里只负责权限、审计与 HTTP 外壳。
-import { createTransfer, shipTransfer, receiveTransfer } from '../lib/transfer.js'
+import {
+  createTransfer, shipTransfer, receiveTransfer,
+  transferScopeSql, assertTransferTargetsInScope, assertTransferInScope
+} from '../lib/transfer.js'
 
 const r = Router()
-r.use(requireAuth, requireInternal('总部库存明细；门店库存请使用门店POS'))
+// ADR-0038：库存按仓库所属组织（warehouses.org_id）收口；req.orgScope 由 attachOrgScope 解析，下面每条路由都用 stockScopeSql 落地。
+r.use(requireAuth, requireInternal('总部库存明细；门店库存请使用门店POS'), attachOrgScope)
 const W = ['warehouse', 'scm', 'admin']
 
 const STOCK_SELECT = `
@@ -60,6 +67,9 @@ r.get(
     const { page, pageSize, offset } = pageParams(req)
     const conds = ['st.qty_on_hand <> 0']
     const params = []
+    const sc = stockScopeSql(req.orgScope, 'st')
+    conds.push(sc.sql)
+    params.push(...sc.params)
     if (req.query.warehouse_id) {
       conds.push('st.warehouse_id = ?')
       params.push(Number(req.query.warehouse_id))
@@ -123,10 +133,12 @@ r.get(
       params.push(Number(req.query.category_id))
     }
     const where = conds.length ? `WHERE ${conds.join(' AND ')}` : ''
+    // 范围谓词放在 JOIN 的 ON 里（不是 WHERE）：范围外的仓不计入汇总，但商品行本身仍在（库存为 0）。
+    const sc = stockScopeSql(req.orgScope, 'st')
     const base = `FROM product_skus sk JOIN products p ON p.id=sk.product_id LEFT JOIN brands b ON b.id=p.brand_id
       LEFT JOIN categories c ON c.id=p.category_id
-      LEFT JOIN inventory_stocks st ON st.sku_id=sk.id`
-    const total = db.prepare(`SELECT COUNT(DISTINCT sk.id) c ${base} ${where}`).get(...params).c
+      LEFT JOIN inventory_stocks st ON st.sku_id=sk.id AND ${sc.sql}`
+    const total = db.prepare(`SELECT COUNT(DISTINCT sk.id) c ${base} ${where}`).get(...sc.params, ...params).c
     const rows = db
       .prepare(
         `SELECT sk.id AS sku_id, sk.sku_code, sk.name AS sku_name, sk.spec, sk.safe_stock, sk.price_retail, sk.price_dealer, sk.cost_std,
@@ -140,7 +152,7 @@ r.get(
          ${base} ${where}
          GROUP BY sk.id ORDER BY sk.sku_code LIMIT ? OFFSET ?`
       )
-      .all(...params, pageSize, offset)
+      .all(...sc.params, ...params, pageSize, offset)
     return paged(res, { rows, total, page, pageSize })
   })
 )
@@ -154,6 +166,9 @@ r.get(
     const { page, pageSize, offset } = pageParams(req)
     const conds = []
     const params = []
+    const sc = stockScopeSql(req.orgScope, 't')
+    conds.push(sc.sql)
+    params.push(...sc.params)
     for (const [k, col] of [
       ['sku_id', 't.sku_id'],
       ['warehouse_id', 't.warehouse_id'],
@@ -207,8 +222,9 @@ r.get(
     if (!skuId) return fail(res, '请指定 sku_id')
     const start = req.query.startDate || addDays(localDate(), -30)
     const end = req.query.endDate || localDate()
-    const whCond = req.query.warehouse_id ? ' AND warehouse_id = ?' : ''
-    const whParams = req.query.warehouse_id ? [Number(req.query.warehouse_id)] : []
+    const sc = stockScopeSql(req.orgScope)
+    const whCond = (req.query.warehouse_id ? ' AND warehouse_id = ?' : '') + ` AND ${sc.sql}`
+    const whParams = [...(req.query.warehouse_id ? [Number(req.query.warehouse_id)] : []), ...sc.params]
     const opening = db
       .prepare(
         `SELECT COALESCE(SUM(CASE WHEN direction='in' THEN qty ELSE -qty END),0) q
@@ -243,19 +259,20 @@ r.get(
 r.get(
   '/alerts',
   requireAuth,
-  wrap((_req, res) => {
+  wrap((req, res) => {
     const db = getDb()
+    const sc = stockScopeSql(req.orgScope, 'st')
     const belowSafe = db
       .prepare(
         `SELECT sk.id AS sku_id, sk.sku_code, sk.name AS sku_name, p.name AS product_name, sk.safe_stock,
                 COALESCE(SUM(st.qty_on_hand),0) qty_on_hand, sk.safe_stock - COALESCE(SUM(st.qty_on_hand),0) shortage
          FROM product_skus sk JOIN products p ON p.id=sk.product_id
-         LEFT JOIN inventory_stocks st ON st.sku_id=sk.id
+         LEFT JOIN inventory_stocks st ON st.sku_id=sk.id AND ${sc.sql}
          WHERE sk.status='active' AND sk.safe_stock > 0
          GROUP BY sk.id HAVING COALESCE(SUM(st.qty_on_hand),0) < sk.safe_stock
          ORDER BY shortage DESC LIMIT 50`
       )
-      .all()
+      .all(...sc.params)
     const expiring = db
       .prepare(
         `SELECT st.id, st.batch_no, st.expire_date, st.qty_on_hand, st.warehouse_id, sk.sku_code, sk.name AS sku_name,
@@ -263,25 +280,25 @@ r.get(
                 CAST(julianday(st.expire_date) - julianday('now','localtime') AS INTEGER) AS days_left
          FROM inventory_stocks st JOIN product_skus sk ON sk.id=st.sku_id JOIN warehouses w ON w.id=st.warehouse_id
          WHERE st.qty_on_hand > 0 AND st.expire_date IS NOT NULL AND st.expire_date <> ''
-           AND st.expire_date <= date('now','localtime','+180 day')
+           AND st.expire_date <= date('now','localtime','+180 day') AND ${sc.sql}
          ORDER BY st.expire_date LIMIT 100`
       )
-      .all()
+      .all(...sc.params)
     const zeroStock = db
       .prepare(
         `SELECT sk.id AS sku_id, sk.sku_code, sk.name AS sku_name FROM product_skus sk
-         WHERE sk.status='active' AND NOT EXISTS (SELECT 1 FROM inventory_stocks st WHERE st.sku_id=sk.id AND st.qty_on_hand>0)
+         WHERE sk.status='active' AND NOT EXISTS (SELECT 1 FROM inventory_stocks st WHERE st.sku_id=sk.id AND st.qty_on_hand>0 AND ${sc.sql})
          LIMIT 50`
       )
-      .all()
+      .all(...sc.params)
     const frozen = db
       .prepare(
         `SELECT st.id, st.batch_no, st.qty_on_hand, sk.sku_code, sk.name AS sku_name, w.name AS warehouse_name,
                 CAST(julianday('now','localtime') - julianday(st.updated_at) AS INTEGER) AS idle_days
          FROM inventory_stocks st JOIN product_skus sk ON sk.id=st.sku_id JOIN warehouses w ON w.id=st.warehouse_id
-         WHERE st.qty_on_hand > 0 AND st.updated_at <= datetime('now','localtime','-90 day') ORDER BY idle_days DESC LIMIT 50`
+         WHERE st.qty_on_hand > 0 AND st.updated_at <= datetime('now','localtime','-90 day') AND ${sc.sql} ORDER BY idle_days DESC LIMIT 50`
       )
-      .all()
+      .all(...sc.params)
     return ok(res, {
       belowSafe,
       expiring: expiring.map((x) => ({ ...x, level: x.days_left < 0 ? 'expired' : x.days_left <= 30 ? 'danger' : x.days_left <= 90 ? 'warning' : 'notice' })),
@@ -301,6 +318,8 @@ r.post(
     const u = currentUser(req)
     const { warehouse_id, sku_id, batch_no = '', qty, direction, reason, biz_date } = req.body || {}
     if (!warehouse_id || !sku_id) return fail(res, '请选择仓库与商品')
+    // ADR-0038：写目标仓必须在调用者组织范围内（范围外 / 不存在 / 无归属一律 403，先于任何查询与写）
+    assertWarehouseInScope(db, warehouse_id, req.orgScope)
     // 出入库工具函数统一使用 batchNo 命名
     const batchNo = batch_no || ''
     if (!db.prepare('SELECT id FROM warehouses WHERE id=?').get(Number(warehouse_id))) return fail(res, '仓库不存在')
@@ -345,14 +364,16 @@ r.get(
     const db = getDb()
     const { page, pageSize, offset } = pageParams(req)
     const FROM = `stock_transfers t LEFT JOIN warehouses fw ON fw.id=t.from_warehouse_id LEFT JOIN warehouses tw ON tw.id=t.to_warehouse_id`
-    const total = db.prepare(`SELECT COUNT(*) c FROM ${FROM}`).get().c
+    // ADR-0038：读 —— 调出 / 调入任一端在范围内即可见
+    const sc = transferScopeSql(req.orgScope, 't')
+    const total = db.prepare(`SELECT COUNT(*) c FROM ${FROM} WHERE ${sc.sql}`).get(...sc.params).c
     const rows = db
       .prepare(
         `SELECT t.*, fw.name AS from_warehouse_name, tw.name AS to_warehouse_name,
                 (SELECT COUNT(*) FROM stock_transfer_items i WHERE i.transfer_id=t.id) AS item_count
-         FROM ${FROM} ORDER BY t.id DESC LIMIT ? OFFSET ?`
+         FROM ${FROM} WHERE ${sc.sql} ORDER BY t.id DESC LIMIT ? OFFSET ?`
       )
-      .all(pageSize, offset)
+      .all(...sc.params, pageSize, offset)
     return paged(res, { rows, total, page, pageSize })
   })
 )
@@ -362,6 +383,7 @@ r.get(
   requireAuth,
   wrap((req, res) => {
     const db = getDb()
+    assertTransferInScope(db, Number(req.params.id), req.orgScope)
     const head = db
       .prepare(
         `SELECT t.*, fw.name AS from_warehouse_name, tw.name AS to_warehouse_name FROM stock_transfers t
@@ -390,6 +412,8 @@ r.post(
     if (!from_warehouse_id || !to_warehouse_id) return fail(res, '请选择调出与调入仓库')
     if (Number(from_warehouse_id) === Number(to_warehouse_id)) return fail(res, '调出与调入仓库不能相同')
     if (!items.length) return fail(res, '请添加调拨明细')
+    // ADR-0038：写 —— 调出 / 调入两端都必须在范围内（403，先于建单与任何库存动作）
+    assertTransferTargetsInScope(db, from_warehouse_id, to_warehouse_id, req.orgScope)
     // 建单 / 出库的全部口径都在 `lib/transfer.js`（含单据日期兜底、G4 的 null 单价、
     // autoShip 后的成本回写）。这里只做 HTTP 层的校验与审计。
     const { id: tid } = withWriteRetry(db, () => createTransfer(db, {
@@ -416,6 +440,7 @@ r.post(
     const db = getDb()
     const u = currentUser(req)
     const id = Number(req.params.id)
+    assertTransferInScope(db, id, req.orgScope, { write: true })
     withWriteRetry(db, () => shipTransfer(db, id, u), { label: 'transfer.ship' })
     audit(req, { action: 'SHIP', module: 'inventory', entity: 'stock_transfers', entityId: id })
     return ok(res, { id })
@@ -430,8 +455,7 @@ r.post(
     const db = getDb()
     const u = currentUser(req)
     const id = Number(req.params.id)
-    const head = db.prepare('SELECT * FROM stock_transfers WHERE id=?').get(id)
-    if (!head) return fail(res, '调拨单不存在', 404)
+    const head = assertTransferInScope(db, id, req.orgScope, { write: true })
     if (head.status !== 'shipped') return fail(res, '只有已出库的调拨单可以收货')
     // 入库口径在 `lib/transfer.js`（逐行 TR_IN + 内核流转），这里不做第二遍。
     withWriteRetry(db, () => receiveTransfer(db, id, u, { receiveDate: req.body?.receive_date || null }), { label: 'transfer.receive' })
@@ -450,8 +474,7 @@ r.post(
   wrap((req, res) => {
     const db = getDb()
     const id = Number(req.params.id)
-    const head = db.prepare('SELECT id, doc_no, status FROM stock_transfers WHERE id=?').get(id)
-    if (!head) return fail(res, '调拨单不存在', 404)
+    const head = assertTransferInScope(db, id, req.orgScope, { write: true })
     // 状态推进的**唯一入口**是内核。这里**不写状态白名单** ——
     // 非法来源态由 advanceStatus 抛 DocFlowError（带 httpStatus），全局错误中间件转成 409/403/404。
     // 路由里再判一遍就是第二份判据，两份必然分叉。
@@ -472,8 +495,7 @@ r.post(
   wrap((req, res) => {
     const db = getDb()
     const id = Number(req.params.id)
-    const head = db.prepare('SELECT id, doc_no, status FROM stock_transfers WHERE id=?').get(id)
-    if (!head) return fail(res, '调拨单不存在', 404)
+    const head = assertTransferInScope(db, id, req.orgScope, { write: true })
     advanceStatus(db, req, { docType: 'TF', id, action: 'cancel', remark: `取消调拨单 ${head.doc_no}` })
     audit(req, { action: 'CANCEL', module: 'inventory', entity: 'stock_transfers', entityId: id })
     return ok(res, { id, status: 'cancelled' })
@@ -488,10 +510,11 @@ r.get(
     const db = getDb()
     const { page, pageSize, offset } = pageParams(req)
     const FROM = 'stock_checks c LEFT JOIN warehouses w ON w.id=c.warehouse_id'
-    const total = db.prepare(`SELECT COUNT(*) x FROM ${FROM}`).get().x
+    const sc = stockScopeSql(req.orgScope, 'c')
+    const total = db.prepare(`SELECT COUNT(*) x FROM ${FROM} WHERE ${sc.sql}`).get(...sc.params).x
     const rows = db
-      .prepare(`SELECT c.*, w.name AS warehouse_name FROM ${FROM} ORDER BY c.id DESC LIMIT ? OFFSET ?`)
-      .all(pageSize, offset)
+      .prepare(`SELECT c.*, w.name AS warehouse_name FROM ${FROM} WHERE ${sc.sql} ORDER BY c.id DESC LIMIT ? OFFSET ?`)
+      .all(...sc.params, pageSize, offset)
     return paged(res, { rows, total, page, pageSize })
   })
 )
@@ -501,6 +524,7 @@ r.get(
   requireAuth,
   wrap((req, res) => {
     const db = getDb()
+    assertStockDocInScope(db, 'stock_checks', req.params.id, req.orgScope, { notFound: '盘点单不存在' })
     const head = db
       .prepare('SELECT c.*, w.name AS warehouse_name FROM stock_checks c LEFT JOIN warehouses w ON w.id=c.warehouse_id WHERE c.id=?')
       .get(Number(req.params.id))
@@ -525,6 +549,7 @@ r.post(
     const u = currentUser(req)
     const { warehouse_id, check_date, sku_ids, checker, remark } = req.body || {}
     if (!warehouse_id) return fail(res, '请选择盘点仓库')
+    assertWarehouseInScope(db, warehouse_id, req.orgScope)
     let stocks = db
       .prepare(
         `SELECT st.sku_id, st.batch_no, st.qty_on_hand FROM inventory_stocks st WHERE st.warehouse_id=? AND st.qty_on_hand <> 0`
@@ -564,8 +589,7 @@ r.put(
   wrap((req, res) => {
     const db = getDb()
     const id = Number(req.params.id)
-    const head = db.prepare('SELECT * FROM stock_checks WHERE id=?').get(id)
-    if (!head) return fail(res, '盘点单不存在', 404)
+    const head = assertStockDocInScope(db, 'stock_checks', id, req.orgScope, { notFound: '盘点单不存在' })
     if (head.status === 'adjusted') return fail(res, '已调整的盘点单不能修改')
     const items = req.body?.items || []
     db.transaction(() => {
@@ -600,8 +624,7 @@ r.post(
     const db = getDb()
     const u = currentUser(req)
     const id = Number(req.params.id)
-    const head = db.prepare('SELECT * FROM stock_checks WHERE id=?').get(id)
-    if (!head) return fail(res, '盘点单不存在', 404)
+    const head = assertStockDocInScope(db, 'stock_checks', id, req.orgScope, { notFound: '盘点单不存在' })
     if (head.status === 'adjusted') return fail(res, '该盘点单已经调整过')
     const items = db.prepare('SELECT * FROM stock_check_items WHERE check_id=?').all(id)
     // 全新行（库存行不存在）只能按 0 成本入账 —— 这不是错误，但必须**露出来**（不静默）
@@ -642,8 +665,7 @@ r.post(
   wrap((req, res) => {
     const db = getDb()
     const id = Number(req.params.id)
-    const head = db.prepare('SELECT id, doc_no, status FROM stock_checks WHERE id=?').get(id)
-    if (!head) return fail(res, '盘点单不存在', 404)
+    const head = assertStockDocInScope(db, 'stock_checks', id, req.orgScope, { notFound: '盘点单不存在' })
     // 状态推进走内核（非法来源态抛 DocFlowError → 409），见 /transfers/:id/cancel 的说明。
     advanceStatus(db, req, { docType: 'CK', id, action: 'cancel', remark: `取消盘点单 ${head.doc_no}` })
     audit(req, { action: 'CANCEL', module: 'inventory', entity: 'stock_checks', entityId: id })
@@ -655,42 +677,46 @@ r.post(
 r.get(
   '/stats',
   requireAuth,
-  wrap((_req, res) => {
+  wrap((req, res) => {
     const db = getDb()
+    const scW = stockScopeSql(req.orgScope, 'w', 'id') // 仓库表自身
+    const scS = stockScopeSql(req.orgScope, 'st') // 库存行
+    const scT = stockScopeSql(req.orgScope) // 流水（无别名）
     const byWarehouse = db
       .prepare(
         `SELECT w.name AS warehouse_name, w.type, COUNT(DISTINCT st.sku_id) sku_count,
                 COALESCE(SUM(st.qty_on_hand),0) qty, COALESCE(SUM(st.qty_on_hand*st.cost_price),0) amount
          FROM warehouses w LEFT JOIN inventory_stocks st ON st.warehouse_id=w.id
+         WHERE ${scW.sql}
          GROUP BY w.id ORDER BY amount DESC`
       )
-      .all()
+      .all(...scW.params)
     const byCategory = db
       .prepare(
         `SELECT COALESCE(c.name,'未分类') AS category_name, COALESCE(SUM(st.qty_on_hand),0) qty,
                 COALESCE(SUM(st.qty_on_hand*st.cost_price),0) amount
          FROM inventory_stocks st JOIN product_skus sk ON sk.id=st.sku_id JOIN products p ON p.id=sk.product_id
-         LEFT JOIN categories c ON c.id=p.category_id GROUP BY c.id ORDER BY amount DESC`
+         LEFT JOIN categories c ON c.id=p.category_id WHERE ${scS.sql} GROUP BY c.id ORDER BY amount DESC`
       )
-      .all()
+      .all(...scS.params)
     const total = db
-      .prepare('SELECT COALESCE(SUM(qty_on_hand),0) qty, COALESCE(SUM(qty_on_hand*cost_price),0) amount, COUNT(DISTINCT sku_id) skus FROM inventory_stocks')
-      .get()
+      .prepare(`SELECT COALESCE(SUM(qty_on_hand),0) qty, COALESCE(SUM(qty_on_hand*cost_price),0) amount, COUNT(DISTINCT sku_id) skus FROM inventory_stocks WHERE ${scT.sql}`)
+      .get(...scT.params)
     const turnover = db
       .prepare(
         `SELECT COALESCE(SUM(CASE WHEN direction='out' AND doc_type IN ('SAL_OUT') THEN qty ELSE 0 END),0) out_qty
-         FROM inventory_transactions WHERE biz_date >= date('now','localtime','-30 day')`
+         FROM inventory_transactions WHERE biz_date >= date('now','localtime','-30 day') AND ${scT.sql}`
       )
-      .get().out_qty
+      .get(...scT.params).out_qty
     const txTrend = db
       .prepare(
         `SELECT biz_date AS date,
                 COALESCE(SUM(CASE WHEN direction='in' THEN qty ELSE 0 END),0) in_qty,
                 COALESCE(SUM(CASE WHEN direction='out' THEN qty ELSE 0 END),0) out_qty
-         FROM inventory_transactions WHERE biz_date >= date('now','localtime','-30 day')
+         FROM inventory_transactions WHERE biz_date >= date('now','localtime','-30 day') AND ${scT.sql}
          GROUP BY biz_date ORDER BY biz_date`
       )
-      .all()
+      .all(...scT.params)
     return ok(res, { byWarehouse, byCategory, total, outQty30: turnover, txTrend })
   })
 )
@@ -704,6 +730,9 @@ r.get(
     const { page, pageSize, offset } = pageParams(req)
     const conds = []
     const params = []
+    const sc = stockScopeSql(req.orgScope, 'sn') // 序列号在库仓；无仓（已出库离仓）对受限范围不可见
+    conds.push(sc.sql)
+    params.push(...sc.params)
     if (req.query.keyword) {
       conds.push('(sn.serial_no LIKE ? OR sn.barcode LIKE ? OR sk.sku_code LIKE ? OR sk.name LIKE ?)')
       const kw = `%${req.query.keyword}%`
@@ -758,6 +787,9 @@ r.get(
          WHERE sn.serial_no=?`
       )
       .get(req.params.serialNo)
+    if (sn && !warehouseInScope(db, sn.warehouse_id, req.orgScope)) {
+      return fail(res, '序列号不存在', 404)
+    }
     if (!sn) return fail(res, '序列号不存在', 404)
     const events = []
     if (sn.entry_doc_no) {
@@ -791,6 +823,9 @@ r.get(
     const { page, pageSize, offset } = pageParams(req)
     const conds = ['st.qty_on_hand <> 0']
     const params = []
+    const sc = stockScopeSql(req.orgScope, 'st')
+    conds.push(sc.sql)
+    params.push(...sc.params)
     if (req.query.warehouse_id) {
       conds.push('st.warehouse_id = ?')
       params.push(Number(req.query.warehouse_id))
@@ -836,6 +871,9 @@ r.get(
     const { page, pageSize, offset } = pageParams(req)
     const conds = ["st.qty_on_hand > 0", "COALESCE(st.entry_date, st.produce_date, '') <> ''"]
     const params = []
+    const sc = stockScopeSql(req.orgScope, 'st')
+    conds.push(sc.sql)
+    params.push(...sc.params)
     if (req.query.warehouse_id) {
       conds.push('st.warehouse_id = ?')
       params.push(Number(req.query.warehouse_id))
@@ -891,6 +929,7 @@ r.get(
   wrap((req, res) => {
     const db = getDb()
     const days = Number(req.query.days || 90)
+    const sc = stockScopeSql(req.orgScope, 'st')
     const FROM = `inventory_stocks st JOIN product_skus sk ON sk.id=st.sku_id JOIN products p ON p.id=sk.product_id JOIN warehouses w ON w.id=st.warehouse_id`
     const rows = db
       .prepare(
@@ -899,12 +938,12 @@ r.get(
                 (SELECT MAX(t.biz_date) FROM inventory_transactions t WHERE t.sku_id=st.sku_id AND t.warehouse_id=st.warehouse_id AND t.direction='out') AS last_out_date,
                 CAST(julianday('now','localtime') - COALESCE(julianday((SELECT MAX(t.biz_date) FROM inventory_transactions t WHERE t.sku_id=st.sku_id AND t.warehouse_id=st.warehouse_id AND t.direction='out')), julianday('2000-01-01')) AS INTEGER) AS idle_days
          FROM ${FROM}
-         WHERE st.qty_on_hand > 0
+         WHERE st.qty_on_hand > 0 AND ${sc.sql}
          GROUP BY st.sku_id, st.warehouse_id
          HAVING idle_days >= ?
          ORDER BY idle_days DESC LIMIT 200`
       )
-      .all(days)
+      .all(...sc.params, days)
     const summary = {
       threshold: days,
       sluggish_90: rows.filter((x) => x.idle_days >= 90 && x.idle_days < 180).length,
@@ -919,18 +958,19 @@ r.get(
 r.get(
   '/abc',
   requireAuth,
-  wrap((_req, res) => {
+  wrap((req, res) => {
     const db = getDb()
+    const sc = stockScopeSql(req.orgScope, 'st')
     const rows = db
       .prepare(
         `SELECT sk.id AS sku_id, sk.sku_code, sk.name AS sku_name, p.name AS product_name, c.name AS category_name,
                 COALESCE(SUM(st.qty_on_hand),0) qty, COALESCE(SUM(st.qty_on_hand*st.cost_price),0) amount
          FROM product_skus sk JOIN products p ON p.id=sk.product_id
          LEFT JOIN categories c ON c.id=p.category_id
-         LEFT JOIN inventory_stocks st ON st.sku_id=sk.id
+         LEFT JOIN inventory_stocks st ON st.sku_id=sk.id AND ${sc.sql}
          GROUP BY sk.id HAVING amount > 0 ORDER BY amount DESC`
       )
-      .all()
+      .all(...sc.params)
     const totalAmount = rows.reduce((s, x) => s + x.amount, 0)
     let cum = 0
     const marked = rows.map((x) => {
@@ -963,6 +1003,9 @@ r.get(
     const { page, pageSize, offset } = pageParams(req)
     const conds = []
     const params = []
+    const sc = stockScopeSql(req.orgScope, 'a')
+    conds.push(sc.sql)
+    params.push(...sc.params)
     if (req.query.type) {
       conds.push('a.type = ?')
       params.push(req.query.type)
@@ -993,6 +1036,7 @@ r.get(
   requireAuth,
   wrap((req, res) => {
     const db = getDb()
+    assertStockDocInScope(db, 'assembly_orders', req.params.id, req.orgScope, { notFound: '组装单不存在' })
     const head = db
       .prepare(
         `SELECT a.*, b.code AS bundle_code, b.name AS bundle_name, b.type AS bundle_type, w.name AS warehouse_name
@@ -1020,6 +1064,7 @@ r.post(
     const u = currentUser(req)
     const { type = 'assemble', bundle_id, warehouse_id, biz_date, qty, remark } = req.body || {}
     if (!bundle_id || !warehouse_id) return fail(res, '请选择组合装与仓库')
+    assertWarehouseInScope(db, warehouse_id, req.orgScope)
     const n = Number(qty || 0)
     if (!(n > 0)) return fail(res, '数量必须大于 0')
     const bundle = db.prepare('SELECT * FROM bundles WHERE id=?').get(Number(bundle_id))
@@ -1084,8 +1129,7 @@ r.post(
     const db = getDb()
     const u = currentUser(req)
     const id = Number(req.params.id)
-    const head = db.prepare('SELECT * FROM assembly_orders WHERE id=?').get(id)
-    if (!head) return fail(res, '组装单不存在', 404)
+    const head = assertStockDocInScope(db, 'assembly_orders', id, req.orgScope, { notFound: '组装单不存在' })
     if (head.status !== 'draft') return fail(res, '该单据已过账')
     const bundle = db.prepare('SELECT * FROM bundles WHERE id=?').get(head.bundle_id)
     const components = db.prepare('SELECT * FROM bundle_components WHERE bundle_id=?').all(head.bundle_id)
@@ -1227,8 +1271,7 @@ r.post(
   wrap((req, res) => {
     const db = getDb()
     const id = Number(req.params.id)
-    const head = db.prepare('SELECT id, doc_no, status FROM assembly_orders WHERE id=?').get(id)
-    if (!head) return fail(res, '组装单不存在', 404)
+    const head = assertStockDocInScope(db, 'assembly_orders', id, req.orgScope, { notFound: '组装单不存在' })
     // 状态推进走内核（非法来源态抛 DocFlowError → 409），见 /transfers/:id/cancel 的说明。
     advanceStatus(db, req, { docType: 'AS', id, action: 'cancel', remark: `取消组装单 ${head.doc_no}` })
     audit(req, { action: 'CANCEL', module: 'inventory', entity: 'assembly_orders', entityId: id })
