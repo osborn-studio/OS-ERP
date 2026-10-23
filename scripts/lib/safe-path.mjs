@@ -12,9 +12,9 @@
 import fs from 'node:fs'
 import path from 'node:path'
 
-/** 解析到真实路径；不存在的尾段按字面保留。链接环 / 过深返回字面绝对路径（调用方应视为不可信）。 */
+/** 解析到真实路径；不存在的尾段按字面保留。链接环 / 过深直接抛错（isWithin 对它按"在内"处理，即失败时关闭）。 */
 export function resolveThroughSymlinks(p, depth = 0) {
-  if (depth > 32) return path.resolve(p)
+  if (depth > 32) throw Object.assign(new Error(`符号链接过深或成环：${p}`), { code: 'SYMLINK_DEPTH' })
   const parts = path.resolve(p).split(path.sep).filter(Boolean)
   let cur = path.sep
   for (let i = 0; i < parts.length; i++) {
@@ -32,11 +32,12 @@ export function resolveThroughSymlinks(p, depth = 0) {
 
 /** child 是否等于或位于 parent 之内（两边都先解析符号链接；大小写不敏感平台按小写比较） */
 export function isWithin(parent, child) {
-  let a = resolveThroughSymlinks(parent)
-  let b = resolveThroughSymlinks(child)
+  let a; let b
+  try { a = resolveThroughSymlinks(parent); b = resolveThroughSymlinks(child) } catch { return true } // 解析不了就当作"在内"：宁可误拒
   if (process.platform === 'darwin' || process.platform === 'win32') { a = a.toLowerCase(); b = b.toLowerCase() }
   const rel = path.relative(a, b)
-  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel))
+  // 只有恰好是 `..` 或以 `../` 开头才算在外；`..name`（如 data/..run）是 data 的合法子项
+  return rel === '' || (rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel))
 }
 
 /** 独占创建并写入（O_EXCL，不跟随符号链接，不覆盖已有文件）。 */

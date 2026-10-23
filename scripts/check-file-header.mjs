@@ -89,6 +89,7 @@ const DECLARED = [
   'scripts/synth-data.mjs',
   'scripts/synth-pipeline.mjs',
   'scripts/lib/safe-path.mjs',
+  'scripts/lib/source-identity.mjs',
   'tests/synth-data.test.mjs',
   'tests/authz-followups.test.mjs',
   // 采购链读接口范围收口（ADR-0017）

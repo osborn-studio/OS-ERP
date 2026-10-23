@@ -41,6 +41,10 @@ import crypto from 'node:crypto'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { performance } from 'node:perf_hooks'
 import { isWithin, writeExclusive } from './lib/safe-path.mjs'
+import { sourceIdentity } from './lib/source-identity.mjs'
+
+// 日期口径固定为 UTC：领域函数（如 receivePurchaseOrder 的 localDate）按本地时区取日，不同时区会让单号/摘要不同。必须在任何 Date 使用之前设置。
+process.env.TZ = 'UTC'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 export const SCHEMA_VERSION = 1
@@ -477,6 +481,8 @@ export async function generate(opts, dataDir, env = process.env) {
   db.close()
   return {
     schema_version: SCHEMA_VERSION,
+    source: sourceIdentity(),
+    timezone: process.env.TZ,
     scope_notice: 'Synthetic production-classified database generated on the local host. NOT customer data, NOT a target-host (dmserver) result.',
     config: { skus: opts.skus, txns_target: opts.txns, docs: opts.docs, seed: opts.seed, anchor: opts.anchor, runtime_mode: 'production', industry: 'cosmetic' },
     host: { platform: process.platform, arch: process.arch, cpus: os.cpus().length, cpu_model: os.cpus()[0]?.model ?? null, total_mem_mb: Math.round(os.totalmem() / 1048576), node: process.version },

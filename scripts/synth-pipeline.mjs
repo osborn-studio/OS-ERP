@@ -30,12 +30,12 @@ import os from 'node:os'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { spawnSync } from 'node:child_process'
-import { createRequire } from 'node:module'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { performance } from 'node:perf_hooks'
 import Database from 'better-sqlite3'
 import { isWithin, writeExclusive } from './lib/safe-path.mjs'
 import { verifyInvariants } from './synth-data.mjs'
+import { sourceIdentity } from './lib/source-identity.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const usage = (m) => Object.assign(new Error(m), { exitCode: 2 })
@@ -81,26 +81,6 @@ function step(name, args, { env, input = undefined, timeout = 3600000 } = {}) {
   process.stderr.write(`[pipeline] ${name}: exit ${r.status} in ${(wall_ms / 1000).toFixed(1)}s\n`)
   return { name, status: r.status, wall_ms, stdout: r.stdout || '', stderr: r.stderr || '' }
 }
-/** 证据的来源身份：提交、工作区是否脏（含指纹）、SQLite / Node 版本——没有这些，别人无法复现同一份数字 */
-function sourceIdentity() {
-  const git = (...a) => spawnSync('git', a, { cwd: ROOT, encoding: 'utf8' })
-  const head = git('rev-parse', 'HEAD')
-  const status = git('status', '--porcelain', '--untracked-files=all')
-  const diff = git('diff', 'HEAD')
-  const dirty = status.stdout.trim().length > 0
-  const mem = new Database(':memory:')
-  const sqlite = mem.prepare('SELECT sqlite_version() v').get().v
-  mem.close()
-  const req = createRequire(import.meta.url)
-  return {
-    git_head: head.status === 0 ? head.stdout.trim() : null,
-    git_dirty: dirty,
-    git_dirty_fingerprint: dirty ? crypto.createHash('sha256').update(status.stdout).update(diff.stdout || '').digest('hex') : null,
-    sqlite_version: sqlite,
-    better_sqlite3: req('better-sqlite3/package.json').version,
-    node: process.version
-  }
-}
 const newest = (dir, re) => fs.readdirSync(dir).filter((f) => re.test(f)).sort().at(-1)
 
 export async function runPipeline(o) {
@@ -108,7 +88,7 @@ export async function runPipeline(o) {
   const dataDir = path.join(o.dir, 'data')
   const adminPassword = crypto.randomBytes(18).toString('base64url')
   const backupKey = crypto.randomBytes(32).toString('base64')
-  const prod = { GML_RUNTIME_MODE: 'production', GML_DATA_DIR: dataDir, GML_DB: '' }
+  const prod = { GML_RUNTIME_MODE: 'production', GML_DATA_DIR: dataDir, GML_DB: '', TZ: 'UTC' }
   const report = {
     schema_version: 1,
     scope_notice: 'Local development host / synthetic data / single wall-clock run under whatever load the machine had (see host.loadavg_*). NOT a target-host (dmserver) result and NOT a capacity commitment.',

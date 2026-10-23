@@ -18,6 +18,8 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import Database from 'better-sqlite3'
 import { parseArgs, makeRng, verifyInvariants } from '../scripts/synth-data.mjs'
+import { isWithin, resolveThroughSymlinks } from '../scripts/lib/safe-path.mjs'
+import { sourceIdentity } from '../scripts/lib/source-identity.mjs'
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url))
 const SYNTH = path.join(ROOT, 'scripts/synth-data.mjs')
@@ -98,6 +100,47 @@ test('same seed twice gives the same business digest; a different seed differs',
   const a = digestOf([]); const b = digestOf([])
   assert.equal(a, b)
   assert.notEqual(a, digestOf(['--seed', '99']))
+})
+
+test('digest does not depend on the machine time zone', { timeout: 480000 }, (t) => {
+  const digestIn = (tz) => {
+    const dir = tmp(t, 'os-synth-tz-')
+    const r = run(SMALL, prodEnv(path.join(dir, 'data'), tz ? { TZ: tz } : {}))
+    assert.equal(r.status, 0, r.stderr + r.stdout)
+    return JSON.parse(r.stdout.trim().split('\n').at(-1)).digest
+  }
+  assert.equal(digestIn('America/Los_Angeles'), digestIn('Asia/Shanghai'))
+})
+
+test('safe-path: dot-dot-prefixed children, symlink chains and depth exhaustion', (t) => {
+  const base = tmp(t, 'os-synth-sp-')
+  const parent = path.join(base, 'data'); mkdirSync(parent)
+  assert.equal(isWithin(parent, path.join(parent, '..run')), true, '..name is a legal child of data/')
+  assert.equal(isWithin(parent, path.join(parent, 'a', 'b')), true)
+  assert.equal(isWithin(parent, path.join(base, 'other')), false)
+  assert.equal(isWithin(parent, base), false)
+  // 41 层符号链接链 → 解析抛错，isWithin 失败时关闭（按"在内"）
+  let prev = parent
+  for (let i = 0; i < 41; i++) { const l = path.join(base, `l${i}`); symlinkSync(prev, l); prev = l }
+  assert.throws(() => resolveThroughSymlinks(path.join(prev, 'x')), /符号链接过深/)
+  assert.equal(isWithin(parent, path.join(prev, 'x')), true)
+  // 悬空链接 + 不存在的子路径仍被解析到目标
+  const dangling = path.join(base, 'dangling'); symlinkSync(path.join(parent, 'not-yet'), dangling)
+  assert.equal(isWithin(parent, path.join(dangling, 'deeper')), true)
+})
+
+test('source identity includes the content of untracked files in the dirty fingerprint', (t) => {
+  const id = sourceIdentity()
+  assert.match(id.git_head, /^[0-9a-f]{40}$/)
+  assert.match(id.sqlite_version, /^3\./)
+  const probe = path.join(ROOT, 'scripts', `.synth-identity-probe-${process.pid}.tmp`)
+  t.after(() => rmSync(probe, { force: true }))
+  writeFileSync(probe, 'one')
+  const a = sourceIdentity()
+  writeFileSync(probe, 'two')
+  const b = sourceIdentity()
+  assert.equal(a.git_dirty, true)
+  assert.notEqual(a.git_dirty_fingerprint, b.git_dirty_fingerprint)
 })
 
 test('refuses unsafe environments with exit 2 and writes nothing', (t) => {
