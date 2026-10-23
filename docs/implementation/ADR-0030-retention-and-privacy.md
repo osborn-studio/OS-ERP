@@ -38,14 +38,14 @@
 
 ### 判据：什么算“与主体有确定关联”
 
-只有**精确**的手机号、客户 id、订单 id 算关联；姓名只作为二次门槛（见下），不单独成为关联依据。核心集（客户、购物车、H5 订单、销售单、POS 单）仍决定“该号码是否存在 / 是否已抹除”；扩展集只在核心集存在时参与。
+只有**精确**的手机号、客户 id、订单 id 算关联；姓名只作为二次门槛（见下），不单独成为关联依据。核心集（客户、购物车、H5 订单、销售单、POS 单，以及电话精确等于主体的订货中心客户 / 地址）决定“该号码是否存在 / 是否已抹除”；扩展集只在核心集存在时参与。
 
 - **退款单** `refunds`：`customer_type='member'` 且 `customer_id` = 主体客户 id（姓名一定是主体）；或退款明细 → 退货单 `sales_returns.order_id` 属于主体的销售单（此类退款的 `customer_name` 来自退货单的经销商 / 门店名，是企业名，**只有等于主体名下姓名时才改**）。金额、单号、状态、银行账号、流水号不动。
-- **订货中心**：`oc_customers.phone`（或 `oc_addresses.phone`）精确等于主体手机号。客户行：phone / contact / address 换伪名，名称仅当等于主体姓名；地址行同理（仅地址行命中的企业客户，其客户行与订单不连带）。命中客户的 `oc_orders` / `oc_statements` / `ar_documents` / `receipts` / `sales_invoices`（`subject_type='oc'`）/ `credit_accounts` 上的名称快照用同一“等于主体姓名”判据。
-- **自由文本里的原号码**：只在已关联行的 remark 类列上做原号码→伪名替换（`oms_orders` / `sales_orders` / `pos_orders` / `refunds` 的 remark、`member_*_ledger.remark`）。
+- **订货中心**：`oc_customers.phone`（或 `oc_addresses.phone`）精确等于主体手机号。客户行：phone / contact / address 换伪名，名称仅当等于主体姓名；地址行同理（仅地址行命中的企业客户，其客户行与订单不连带）。命中客户名下的全部 `oc_addresses`（含备用电话 / 空电话的地址）与命中客户的 `oc_orders` / `oc_statements` / `ar_documents` / `receipts` / `sales_invoices`（`subject_type='oc'`）/ `credit_accounts` 上的名称快照用同一“等于主体姓名”判据。
+- **自由文本里的原号码**：只在已关联行的 remark 类列上、且只替换**独立出现**的号码（前后不能紧挨字母 / 数字 / `_` / `-`，所以 `RC-13812345678` 这类单号不动；明细是 JSON 时只改字符串值，不改数字与键，键名像单号 / 账号 / 金额的值也不动）做原号码→伪名替换（`oms_orders` / `sales_orders` / `pos_orders` / `refunds` 的 remark、`member_*_ledger.remark`）。
 - **审计 / 通知日志**：`audit_logs.detail`、`notify_logs.title/payload/error`。含**原号码**的行，以及 `audit_logs.(entity, entity_id)` 指向主体订单 / 销售单 / POS 单 / 客户 / 会员账户 / 退款单的行，把原号码和部分遮盖片段（`redact.js` 的 前 3 + `****` + 后 4）换成同一个伪名。其余仅凭遮盖串命中的行**不能证明属于主体**（约 10^4 个号码共享一个遮盖串），默认不动，`--report` 单列其行数；运维确认接受误伤后可加 `--include-ambiguous-masked`。只替换 detail / title / payload / error 里的子串；动作、模块、实体、实体 id、用户、时间、行 id、金额、单号一律不动，`PRIVACY_ERASE` 审计行自身永不被改。
 - **同一事务**：每个行业库仍是一个 `BEGIN IMMEDIATE` 事务；事务内重新取数、重新生成计划（管理员与在途订单复核同 X9），计划→执行→“实际改动行数必须等于计划行数，否则回滚”→全库原号码残留扫描→一条严格审计（含各表行数、未触碰的遮盖行数、残留列）。
-- **`--report` / `--dry-run`**：只读打开；报告里的行数来自与真实执行同一份计划，因此测试断言 报告 = 执行输出 = 审计 `counts`。`--report` 不需要 `--confirm` / `--actor`，在途订单只列出（`would_refuse`）；`--dry-run` 需要 `--actor` 并做与真实执行相同的拒绝判断。报告同时给出：`raw_phone_not_covered`（原号码现在出现在、但计划没有覆盖的列）与 `manual_review`（经销商 / 门店 / 供应商 / 员工 / 仓库 / IM 映射表里恰好相同的电话，只提示不改）。
+- **`--report` / `--dry-run`**：只读打开；报告里的行数来自与真实执行同一份计划，因此测试断言 报告 = 执行输出 = 审计 `counts`。`--report` 不需要 `--confirm` / `--actor`，在途订单只列出（`would_refuse`）；`--dry-run` 需要 `--actor` 并做与真实执行相同的拒绝判断。报告同时给出：`raw_phone_not_covered`（按行预测：现在含原号码的行数减去计划会清掉的行数，所以与执行后的 `residual_raw_phone` 一致）与 `manual_review`（经销商 / 门店 / 供应商 / 员工 / 仓库 / IM 映射表里恰好相同的电话，只提示不改）。
 - **导出**与抹除共用 `collect`：退款单、订货中心行、台账、含原号码或与主体单据绑定的日志行一并导出；仅遮盖片段命中的日志行只给行数，不导出（避免把别人的数据给本人）。
 
 ### 全库个人信息列清单与结论

@@ -31,7 +31,7 @@
  */
 import { INDUSTRIES, requireExplicitDataDir } from '../server/db/index.js'
 import { auditStrictRow } from '../server/lib/audit-trail.js'
-import { PHONE_RE, ERASED_PREFIX, OPEN_OMS, OPEN_SALES, fatal, phoneHash, erasedLike, openIndustryDbs, collect, isEmpty, planErase, applyPlan, manualReview, scanRawPhone } from './lib/privacy-common.mjs'
+import { PHONE_RE, ERASED_PREFIX, OPEN_OMS, OPEN_SALES, fatal, phoneHash, alreadyErased, openIndustryDbs, collect, isEmpty, planErase, applyPlan, manualReview, scanRawPhone } from './lib/privacy-common.mjs'
 
 const args = process.argv.slice(2)
 let confirm = false
@@ -79,7 +79,7 @@ class Refusal extends Error {}
  *  `lenient`（--report）：不要求 actor、在途订单只列出不拒绝。 */
 function evaluate(db, code, { lenient = false } = {}) {
   const c = collect(db, phone)
-  if (isEmpty(c)) return { state: db.prepare('SELECT 1 FROM mall_customers WHERE phone LIKE ?').get(erasedLike(phone)) ? 'already-erased' : 'not-found' }
+  if (isEmpty(c)) return { state: alreadyErased(db, phone) ? 'already-erased' : 'not-found' }
   const open = [
     ...c.orders.filter((o) => OPEN_OMS.includes(o.status)).map((o) => `oms_orders#${o.id}(${o.status})`),
     ...c.sales_orders.filter((o) => OPEN_SALES.includes(o.status)).map((o) => `sales_orders#${o.id}(${o.status})`)
@@ -120,13 +120,14 @@ function applyErase(db, code) {
 /** --report / --dry-run 的单库输出：每表行数与列、未覆盖的原号码出现位置、人工复核提示。不含任何个人数据。 */
 function describe(db, ev) {
   if (ev.state !== 'ready') return ev.state
+  // 预测执行后的残留 = 现在含原号码的行数 − 计划会清掉的行数（按行，不是按列：同一列里没被计划到的行照样算残留）
   const present = scanRawPhone(db, phone)
-  const covered = (k) => (ev.plan.columns[k.split('.')[0]] || []).includes(k.split('.')[1])
+  const remaining = Object.fromEntries(Object.entries(present).map(([k, n]) => [k, n - (ev.plan.cleared[k] || 0)]).filter(([, n]) => n > 0))
   return {
     state: 'ready',
     tables: Object.fromEntries(Object.entries(ev.plan.counts).map(([t, rows]) => [t, { rows, columns: ev.plan.columns[t] }])),
     ambiguous_masked: ev.plan.ambiguous_masked,
-    raw_phone_not_covered: Object.fromEntries(Object.entries(present).filter(([k]) => !covered(k))),
+    raw_phone_not_covered: remaining,
     manual_review: manualReview(db, phone),
     open_orders: ev.open,
     would_refuse: ev.open.length > 0 && !allowOpen ? 'OPEN_ORDERS' : null

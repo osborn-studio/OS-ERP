@@ -63,6 +63,8 @@ export function subjectNames(c) {
   add(c.customer?.name)
   c.orders.forEach((o) => add(o.receiver))
   c.sales_orders.forEach((o) => add(o.receiver))
+  ;(c.oc_customers || []).forEach((o) => add(o.contact))
+  ;(c.oc_addresses || []).forEach((o) => add(o.contact))
   return out
 }
 
@@ -112,9 +114,12 @@ function collectExtended(db, phone, c) {
   const refunds = refundIds.size ? allRows(db, 'refunds', `id IN (${inList(refundIds.size)})`, [...refundIds]) : []
   // ---- 订货中心：电话精确等于主体手机号的客户 / 地址 ----
   // 只有电话本身是主体的客户行才算个人数据，其订单 / 对账单 / 往来快照才算关联；仅地址簿里有主体电话的客户（企业）只动那条地址，不连带它的单据
-  const oc_addresses = allRows(db, 'oc_addresses', 'phone=?', [phone])
   const oc_customers = allRows(db, 'oc_customers', 'phone=?', [phone])
   const ocList = oc_customers.map((r) => r.id)
+  // 地址簿：电话精确等于主体的行，加上命中客户名下的全部地址（备用电话 / 空电话的地址同样带着本人的姓名与地址）
+  const oc_addresses = has(db, 'oc_addresses')
+    ? db.prepare(`SELECT * FROM oc_addresses WHERE phone=?${ocList.length ? ` OR customer_id IN (${inList(ocList.length)})` : ''} ORDER BY id`).all(phone, ...ocList)
+    : []
   const byCust = (table) => (ocList.length ? allRows(db, table, `customer_id IN (${inList(ocList.length)})`, ocList) : [])
   const bySubject = (table) => (ocList.length ? allRows(db, table, `subject_type='oc' AND subject_id IN (${inList(ocList.length)})`, ocList) : [])
   // ---- 台账类备注里的原号码 ----
@@ -151,7 +156,13 @@ function collectExtended(db, phone, c) {
   }
 }
 
-export const isEmpty = (c) => !c.customer && !c.cart_items.length && !c.orders.length && !c.sales_orders.length && !c.pos_orders.length
+export const isEmpty = (c) => !c.customer && !c.cart_items.length && !c.orders.length && !c.sales_orders.length && !c.pos_orders.length && !c.oc_customers.length && !c.oc_addresses.length
+
+/** 已抹除判定：商城客户、订货中心客户 / 地址任何一处带有该号码的伪名即算 */
+export function alreadyErased(db, phone) {
+  const like = erasedLike(phone)
+  return [['mall_customers', 'phone'], ['oc_customers', 'phone'], ['oc_addresses', 'phone']].some(([t, col]) => has(db, t) && db.prepare(`SELECT 1 FROM ${t} WHERE ${col} LIKE ?`).get(like))
+}
 
 /** 手机号精确出现在这些表里时只提示、不改：它们是供应商 / 经销商 / 门店 / 员工等主数据，与商城主体是否同一人需要业务确认。 */
 const MANUAL_REVIEW = [['dealers', 'phone'], ['stores', 'phone'], ['suppliers', 'phone'], ['users', 'phone'], ['warehouses', 'phone'], ['im_user_map', 'mobile']]
@@ -184,14 +195,49 @@ export function scanRawPhone(db, phone) {
  * 所以报告里的数字与执行结果是同一份计算，不是另外估的。
  * 规则只改个人信息列；金额、单号、状态、数量、时间、行 id、客户 id 一律不动。
  */
+/**
+ * 文本里的号码替换。**只替换独立出现的号码**：前后不能紧挨字母 / 数字 / `_` / `-`（单号 `RC-13812345678`、`13812345678-A` 不动）。
+ * 明细是 JSON 时按结构处理：只改字符串值，不改数字、不改键，键名像单号 / 账号 / 金额的字符串值也不动；改完再序列化（审计明细本就由 JSON.stringify 写入，往返稳定）。
+ */
+const DOCISH_KEY = /(doc|order|serial|ref|bank|account|voucher|invoice|(^|_)no$|number|code|amount|price|total)/i
+export function replaceInText(text, tokens, pp) {
+  if (typeof text !== 'string' || !text) return text
+  const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const re = new RegExp(`(?<![A-Za-z0-9_-])(?:${tokens.map(esc).join('|')})(?![A-Za-z0-9_-])`, 'g')
+  if (!re.test(text)) return text
+  re.lastIndex = 0
+  const t = text.trim()
+  if ((t.startsWith('{') && t.endsWith('}')) || (t.startsWith('[') && t.endsWith(']'))) {
+    try {
+      let changed = false
+      const walk = (v, key) => {
+        if (typeof v === 'string') {
+          if (key && DOCISH_KEY.test(key)) return v
+          const n = v.replace(re, pp)
+          if (n !== v) changed = true
+          return n
+        }
+        if (Array.isArray(v)) return v.map((x) => walk(x, key))
+        if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, walk(x, k)]))
+        return v
+      }
+      const out = walk(JSON.parse(t), null)
+      return changed ? JSON.stringify(out) : text
+    } catch { /* 不是合法 JSON：按文本处理 */ }
+  }
+  return text.replace(re, pp)
+}
+
 export function planErase(db, phone, c, { includeAmbiguous = false } = {}) {
   const pp = phonePseudonym(phone, c.customer?.id)
   const masked = maskedPhone(phone)
   const names = subjectNames(c)
   const ops = new Map() // `${table}#${id}` → { table, id, set }
   const columns = {} // table → Set(col)
+  const cleared = {} // `${table}.${col}` → 原来含原号码、计划执行后不再含的行数（报告据此给出"执行后仍残留"的预测）
   const put = (table, row, col, next) => {
     if (next === undefined || next === row[col]) return
+    if (typeof row[col] === 'string' && row[col].includes(phone) && typeof next === 'string' && !next.includes(phone)) cleared[`${table}.${col}`] = (cleared[`${table}.${col}`] || 0) + 1
     const key = `${table}#${row.id}`
     if (!ops.has(key)) ops.set(key, { table, id: row.id, set: {} })
     ops.get(key).set[col] = next
@@ -201,7 +247,7 @@ export function planErase(db, phone, c, { includeAmbiguous = false } = {}) {
   const nameP = (v) => (v && !isErased(v) ? pseudo('name', v) : v)
   const addrP = (v) => (v && !isErased(v) ? pseudo('address', v) : v)
   const phoneOf = (v) => (!v || isErased(v) ? v : v === phone ? pp : pseudo('phone', v))
-  const freeText = (v) => (typeof v === 'string' && v.includes(phone) ? v.split(phone).join(pp) : v)
+  const freeText = (v) => replaceInText(v, [phone], pp)
   const nameIfSubject = (v) => (names.has(String(v ?? '').trim()) ? nameP(v) : v)
 
   if (c.customer) {
@@ -242,7 +288,7 @@ export function planErase(db, phone, c, { includeAmbiguous = false } = {}) {
     put('oc_customers', r, 'name', nameIfSubject(r.name))
   }
   for (const r of c.oc_addresses) {
-    put('oc_addresses', r, 'phone', pp)
+    put('oc_addresses', r, 'phone', phoneOf(r.phone))
     put('oc_addresses', r, 'contact', nameP(r.contact))
     put('oc_addresses', r, 'address', addrP(r.address))
     put('oc_addresses', r, 'name', nameIfSubject(r.name))
@@ -255,7 +301,7 @@ export function planErase(db, phone, c, { includeAmbiguous = false } = {}) {
   c.credit_accounts.forEach((r) => put('credit_accounts', r, 'name', nameIfSubject(r.name)))
   // ---- Y8：日志。raw 号码或与主体订单 / 客户 id 绑定的行 → 部分遮盖片段与原号码一起换伪名；
   //      仅凭"前 3 后 4"匹配的行不能证明是同一个人（约 10^4 个号码共享同一遮盖串），默认不动，--include-ambiguous-masked 才改 ----
-  const sub = (v) => (typeof v === 'string' ? v.split(phone).join(pp).split(masked).join(pp) : v)
+  const sub = (v) => replaceInText(v, [phone, masked], pp)
   const logCols = { audit_logs: ['detail'], notify_logs: ['title', 'payload', 'error'] }
   for (const table of Object.keys(logCols)) {
     const rows = [...c[table], ...(includeAmbiguous ? c.ambiguous_masked[table] : [])]
@@ -266,7 +312,7 @@ export function planErase(db, phone, c, { includeAmbiguous = false } = {}) {
   for (const { table } of ops.values()) counts[table] = (counts[table] || 0) + 1
   for (const [t, set] of Object.entries(columns)) colsOut[t] = [...set].sort()
   return {
-    ops: [...ops.values()], counts, columns: colsOut, pp,
+    ops: [...ops.values()], counts, columns: colsOut, cleared, pp,
     ambiguous_masked: { included: includeAmbiguous, audit_logs: c.ambiguous_masked.audit_logs.length, notify_logs: c.ambiguous_masked.notify_logs.length }
   }
 }
