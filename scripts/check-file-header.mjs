@@ -89,6 +89,7 @@ const DECLARED = [
   // 采购链读接口范围收口（ADR-0017）
   'tests/purchase-chain-scope.test.mjs',
   'tests/purchase-chain-detail-scope.test.mjs',
+  'tests/purchase-action-scope.test.mjs',
   // 杂项授权缺口收口（ADR-0028）
   'tests/authz-misc.test.mjs',
   // 订货中心组织范围（ADR-0027）

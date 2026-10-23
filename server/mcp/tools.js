@@ -1673,7 +1673,9 @@ export const TOOLS = [
         periodEnd: args.period_end || null,
         settleMode: args.settle_mode || 'auto',
         remark: args.remark || null,
-        actor
+        actor,
+        // ADR-0031：来源选择按委托生效范围（令牌范围 ∩ 所有者当前范围），与 HTTP 同一谓词
+        orgScope: ctx.scope
       })
       return ok(
         { id: row.id, doc_no: row.doc_no, status: row.status, settle_amount: row.settle_amount, diff_amount: row.diff_amount },
@@ -1727,7 +1729,9 @@ export const TOOLS = [
         voucherNo: args.voucher_no || null,
         remark: args.remark || null,
         allocations,
-        actor
+        actor,
+        // ADR-0031：FIFO 与手工核销都限在委托生效范围内（范围外结算单 ⇒ DOC_NOT_FOUND）
+        orgScope: ctx.scope
       })
       return ok(
         { id: row.id, doc_no: row.doc_no, status: row.status, amount: row.amount, settled_amount: row.settled_amount, allocation_count: row.items.length },
