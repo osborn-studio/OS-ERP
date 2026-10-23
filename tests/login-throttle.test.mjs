@@ -283,11 +283,31 @@ test('X7 success clears settled failures of that account only', t => {
   attempt(limiter, request, true)
   attempt(limiter, request, false); attempt(limiter, request, false)
   assert.equal(limiter.consumeLoginAttempt(request).allowed, true) // 2 failures after the clear, still under 3
-  const g = fixture(t, { ipLimit: 1000, accountLimit: 3 })
-  const lim2 = g.open()
-  for (let n = 0; n < 2; n++) attempt(lim2, request, false)
-  attempt(lim2, other, false)
-  assert.equal(rows(g).length, 3) // ip + two account buckets
+  // the other account kept its failure: 1 stored failure, so exactly two more reservations fit
+  assert.equal(limiter.consumeLoginAttempt(other).allowed, true); assert.equal(limiter.consumeLoginAttempt(other).allowed, true)
+  rateLimited(() => limiter.consumeLoginAttempt(other))
+})
+
+test('X7 a success cannot clear failures that settled after its own reservation', t => {
+  const f = fixture(t, { ipLimit: 1000, accountLimit: 3 })
+  const limiter = f.open()
+  const winner = limiter.consumeLoginAttempt(request)
+  const wrong = [limiter.consumeLoginAttempt(request), limiter.consumeLoginAttempt(request)]
+  wrong.forEach(w => limiter.settleLoginAttempt(w.reservation, false)) // 2 failures settle first
+  limiter.settleLoginAttempt(winner.reservation, true)                 // success settles last
+  assert.equal(limiter.consumeLoginAttempt(request).allowed, true)     // 2 failures still counted: 1 slot left
+  rateLimited(() => limiter.consumeLoginAttempt(request))
+})
+
+test('X7 a success clears only the failures settled before its reservation', t => {
+  const f = fixture(t, { ipLimit: 1000, accountLimit: 4 })
+  const limiter = f.open()
+  attempt(limiter, request, false); attempt(limiter, request, false)
+  const winner = limiter.consumeLoginAttempt(request) // sees 2 settled failures
+  attempt(limiter, request, false)                    // 3rd failure settles during the success's bcrypt
+  limiter.settleLoginAttempt(winner.reservation, true)
+  assert.deepEqual(rows(f).filter(r => r.attempts === 1), [{ attempts: 1, pending: 0 }].concat(rows(f).filter(r => r.attempts === 1).slice(1)))
+  assert.equal(limiter.consumeLoginAttempt(request).allowed, true)
 })
 
 test('X7 in-flight wrong-password reservations cannot be erased by an interleaved success', t => {
