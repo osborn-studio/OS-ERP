@@ -117,6 +117,7 @@
 <a class="toc-l3" data-depth="3" href="#54-密钥与敏感文件">5.4 密钥与敏感文件</a>
 <a class="toc-l3" data-depth="3" href="#55-迁移与健康核对">5.5 迁移与健康核对</a>
 <a class="toc-l2" data-depth="2" href="#六-端口多实例与访问范围">六 端口、多实例与访问范围</a>
+<a class="toc-l3" data-depth="3" href="#61-反向代理后的受信配置gml_trust_proxyadr-0040">6.1 反向代理后的受信配置（GML_TRUST_PROXY，ADR-0040）</a>
 <a class="toc-l2" data-depth="2" href="#七-备份校验与恢复演练">七 备份、校验与恢复演练</a>
 <a class="toc-l3" data-depth="3" href="#71-日常校验备份">7.1 日常校验备份</a>
 <a class="toc-l3" data-depth="3" href="#72-恢复演练">7.2 恢复演练</a>
@@ -219,7 +220,9 @@ curl -s http://127.0.0.1:3001/api/meta/health</code></pre>
 $env:GML_LOCAL_PORT=&quot;3011&quot;
 node scripts/local-manage.mjs start</code></pre>
 <p>同一份代码为<strong>第二家企业</strong>再开实例时，使用另一个绝对路径与另一个端口，各自独立执行 5.1–5.3；两个实例的数据、签名密钥、备份和账号互不相通（ADR-0019 的测试覆盖了这四个维度）。这不是多租户：同一数据库内没有租户隔离。</p>
-<p>更换端口后，登录、POS 与手册链接中的端口同步更改；离线手册的&quot;返回系统&quot;链接默认仍指向 3001，此时手动输入实际地址。需要局域网或公网访问时，必须在前面加 HTTPS 反向代理与访问控制并自行做安全评估，本手册不提供该配置。</p>
+<p>更换端口后，登录、POS 与手册链接中的端口同步更改；离线手册的&quot;返回系统&quot;链接默认仍指向 3001，此时手动输入实际地址。需要局域网或公网访问时，必须在前面加 HTTPS 反向代理与访问控制并自行做安全评估，本手册不提供代理本身的配置，仅说明程序侧的信任开关（6.1）。</p>
+<h3 id="61-反向代理后的受信配置gml_trust_proxyadr-0040">6.1 反向代理后的受信配置（GML_TRUST_PROXY，ADR-0040）</h3>
+<ul><li>默认 <code>GML_TRUST_PROXY=off</code>：程序忽略一切 <code>X-Forwarded-For</code> / <code>X-Forwarded-Proto</code> / <code>X-Request-Id</code>；登录节流与审计的来源 IP 是 TCP 对端地址，不发 HSTS，会话 Cookie 不带 <code>Secure</code>（除非 <code>GML_COOKIE_SECURE=always</code>）。</li><li>代理与程序同机：<code>GML_TRUST_PROXY=loopback</code>。代理在另一台机器或容器网络：填写代理<strong>连接到程序时的来源地址</strong>的 CIDR 列表，如 <code>GML_TRUST_PROXY=10.0.0.5/32,172.18.0.0/16</code>。不接受 <code>true</code>、<code>1</code>、<code>*</code>、<code>0.0.0.0/0</code> 等宽泛写法，非法值启动即失败（<code>TRUST_PROXY_INVALID</code>）。</li><li>只有对端命中该列表的连接，其转发头才被采纳：来源 IP 取转发链从右向左第一个不受信的地址；<code>X-Forwarded-Proto: https</code> 才使 HSTS 与 Cookie <code>Secure</code> 生效；<code>X-Request-Id</code> 才被透传。其余连接上客户端自带的这些头一律无效。</li><li>代理必须<strong>覆盖</strong>而不是透传这三个头（nginx：<code>proxy_set_header X-Forwarded-For $remote_addr; proxy_set_header X-Forwarded-Proto $scheme; proxy_set_header X-Request-Id $request_id;</code>），并且程序端口只对代理开放。若代理未覆盖 <code>X-Forwarded-For</code> 或程序端口可被绕过代理直连，节流键可被伪造。</li><li>未设置本项而放在代理后：所有用户共享代理 IP，来源 IP 限额会被整体触发；上线前必须设置并用不同客户端实测。</li></ul>
 <h2 id="七-备份校验与恢复演练">七 备份、校验与恢复演练</h2>
 <p>有两套备份工具，用途不同：</p>
 <div class="table-wrap"><table><thead><tr><th>工具</th><th>产物</th><th>校验</th><th>适用</th></tr></thead><tbody><tr><td><code>scripts/db-backup.mjs</code></td><td><code>$GML_DATA_DIR/backups/</code> 下每库快照 + <code>backup-report-&lt;stamp&gt;.json</code></td><td>强制：integrity_check、foreign_key_check、表数与迁移数、只读打开 COUNT，通过后才裁剪旧备份</td><td><strong>生产的日常备份</strong>，也是恢复演练的输入</td></tr>
