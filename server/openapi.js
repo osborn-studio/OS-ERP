@@ -347,11 +347,11 @@ export function buildOpenApi() {
     '/api/dealers/statements/{id}/void': { post: { tags: ['经销商'], summary: '作废对账单（只作废本凭证，不动底层应收台账；须写理由）', parameters: [idParam], responses: { 200: jsonResp(null) } } },
 
     '/api/oms/platforms': { get: { tags: ['线上 OMS'], summary: '平台店铺列表（含订单数/GMV/最近同步）', responses: { 200: jsonResp(null) } } },
-    '/api/oms/sync/{platformId}': { post: { tags: ['线上 OMS'], summary: '从平台拉取订单（演示为模拟数据源）', parameters: [{ name: 'platformId', in: 'path', required: true, schema: { type: 'integer' } }], responses: { 200: jsonResp(null) } } },
+    '/api/oms/sync/{platformId}': { post: { tags: ['线上 OMS'], summary: '从平台拉取订单（演示为模拟数据源；生产 503）。订单归平台绑定组织（履约仓所属组织）：平台未绑定 422 PLATFORM_ORG_UNBOUND，履约仓不在调用者组织范围内 403', parameters: [{ name: 'platformId', in: 'path', required: true, schema: { type: 'integer' } }], responses: { 200: jsonResp(null), 403: jsonResp(null), 404: jsonResp(null), 422: jsonResp(null) } } },
     '/api/oms/orders': { get: { tags: ['线上 OMS'], summary: '线上订单列表', parameters: [q('platform_id', '平台'), q('status', '状态'), q('pending', '=1 只看待发货'), q('startDate', '开始日期'), q('endDate', '结束日期'), q('keyword', '关键字')], responses: { 200: jsonResp(null) } } },
     '/api/oms/orders/{id}': { get: { tags: ['线上 OMS'], summary: '线上订单详情', parameters: [idParam], responses: { 200: jsonResp(null) } } },
-    '/api/oms/orders/{id}/convert': { post: { tags: ['线上 OMS'], summary: '线上订单转销售订单（占库）', parameters: [idParam], responses: { 200: jsonResp(null) } } },
-    '/api/oms/orders/convert-batch': { post: { tags: ['线上 OMS'], summary: '批量转单', responses: { 200: jsonResp(null) } } },
+    '/api/oms/orders/{id}/convert': { post: { tags: ['线上 OMS'], summary: '线上订单转销售订单（占库）；销售订单归平台绑定组织的履约仓，平台未绑定 422，平台范围外 404', parameters: [idParam], responses: { 200: jsonResp(null), 404: jsonResp(null), 422: jsonResp(null) } } },
+    '/api/oms/orders/convert-batch': { post: { tags: ['线上 OMS'], summary: '批量转单（逐单同上：范围外按「订单不存在」、未绑定平台按原因计入 failed）', responses: { 200: jsonResp(null) } } },
     '/api/oms/orders/{id}/ship': { post: { tags: ['线上 OMS'], summary: '发货并回传平台（同时出库）', parameters: [idParam], responses: { 200: jsonResp(null) } } },
     '/api/oms/orders/{id}/refund': { post: { tags: ['线上 OMS'], summary: '退款处理（释放占用）', parameters: [idParam], responses: { 200: jsonResp(null) } } },
     // 线上订单完成（OM shipped → completed）。平台侧早就完成了，系统里一直显示「已发货」
@@ -650,17 +650,17 @@ export function buildOpenApi() {
     // 报价侧四条硬口径：① 价由价格中心算出并留痕来源；② 有效期是硬约束（过期不能转单）；
     // ③ 低于最低限价 / 低于客户政策折扣 / 超金额阈值必须审批；④ 转单只能成功一次。
     '/api/sales/quotes/meta': { get: { tags: ['销售报价'], summary: '报价枚举（状态 / 客户类型 / 渠道 / 转单目标 / 审批阈值 / 默认有效期）', responses: { 200: jsonResp(null) } } },
-    '/api/sales/quotes/overview': { get: { tags: ['销售报价'], summary: '报价概览（各状态数量 + 待审批数 + 7 天内到期 + 已转单金额）', responses: { 200: jsonResp(null) } } },
-    '/api/sales/quotes/price': { post: { tags: ['销售报价'], summary: '取价试算（不落库）：按客户算每行价格、折扣率、是否低于最低限价，并给出是否需要审批', requestBody: body('QuotePriceRequest'), responses: { 200: jsonResp(null), 400: jsonResp(null) } } },
+    '/api/sales/quotes/overview': { get: { tags: ['销售报价'], summary: '报价概览（各状态数量 + 待审批数 + 7 天内到期 + 已转单金额；按调用者组织范围统计，ADR-0034）', responses: { 200: jsonResp(null) } } },
+    '/api/sales/quotes/price': { post: { tags: ['销售报价'], summary: '取价试算（不落库；给出的仓库 / 门店 / 订货客户须在组织范围内，否则 403）：按客户算每行价格、折扣率、是否低于最低限价，并给出是否需要审批', requestBody: body('QuotePriceRequest'), responses: { 200: jsonResp(null), 400: jsonResp(null), 403: jsonResp(null) } } },
     '/api/sales/quotes': {
-      get: { tags: ['销售报价'], summary: '报价单列表', parameters: [q('status', '状态'), q('customer_type', '客户类型'), q('dealer_id', '经销商'), q('customer_id', '订货客户'), q('keyword', '单号/客户'), q('valid_only', '1=只看可转单（已审批且未过期）'), q('page', '页码'), q('pageSize', '每页条数')], responses: { 200: jsonResp(null) } },
-      post: { tags: ['销售报价'], summary: '新建报价单（草稿；价由价格中心算出，手工改价需同时保留挂牌价与成交价）', requestBody: body('QuoteCreate'), responses: { 200: jsonResp(null), 400: jsonResp(null) } }
+      get: { tags: ['销售报价'], summary: '报价单列表（按仓库 / 门店 / 订货客户的组织归属过滤，ADR-0034）', parameters: [q('status', '状态'), q('customer_type', '客户类型'), q('dealer_id', '经销商'), q('customer_id', '订货客户'), q('keyword', '单号/客户'), q('valid_only', '1=只看可转单（已审批且未过期）'), q('page', '页码'), q('pageSize', '每页条数')], responses: { 200: jsonResp(null) } },
+      post: { tags: ['销售报价'], summary: '新建报价单（草稿；价由价格中心算出，手工改价需同时保留挂牌价与成交价）；受限范围下仓库 / 门店 / 订货客户须都在范围内且至少给一个，否则 403；改版来源范围外 404', requestBody: body('QuoteCreate'), responses: { 200: jsonResp(null), 400: jsonResp(null), 403: jsonResp(null), 404: jsonResp(null) } }
     },
-    '/api/sales/quotes/{id}': { get: { tags: ['销售报价'], summary: '报价单详情（含行级取价来源、最低限价快照、是否已过期 / 已转单）', parameters: [idParam], responses: { 200: jsonResp(null), 404: jsonResp(null) } } },
-    '/api/sales/quotes/{id}/action': { post: { tags: ['销售报价'], summary: '报价流转：submit 提交 / approve 审批通过 / reject 驳回 / resubmit 修改后再提交 / cancel 取消', parameters: [idParam], requestBody: body('QuoteAction'), responses: { 200: jsonResp(null), 409: jsonResp(null) } } },
-    '/api/sales/quotes/{id}/convert': { post: { tags: ['销售报价'], summary: '报价转订单（**唯一有后果的动作**）：生成销售订单（沿用报价价）或订货单；已审批且未过期才可转，一张报价只能转一次；超信默认拦住，force+reason 为特批放行', parameters: [idParam], requestBody: body('QuoteConvert'), responses: { 200: jsonResp(null), 409: jsonResp(null) } } },
-    '/api/sales/quotes/{id}/copy': { post: { tags: ['销售报价'], summary: '复制改版：生成新草稿且 version+1（已报出去的价不改，要改就出新版本）', parameters: [idParam], requestBody: body('QuoteCopy'), responses: { 200: jsonResp(null) } } },
-    '/api/sales/quotes/expire': { post: { tags: ['销售报价'], summary: '批量把过了有效期的报价置为「已过期」（系统动作，不是状态机里的按钮）', requestBody: body('QuoteExpire'), responses: { 200: jsonResp(null) } } },
+    '/api/sales/quotes/{id}': { get: { tags: ['销售报价'], summary: '报价单详情（含行级取价来源、最低限价快照、是否已过期 / 已转单）；组织范围外 404', parameters: [idParam], responses: { 200: jsonResp(null), 404: jsonResp(null) } } },
+    '/api/sales/quotes/{id}/action': { post: { tags: ['销售报价'], summary: '报价流转：submit 提交 / approve 审批通过 / reject 驳回 / resubmit 修改后再提交 / cancel 取消；组织范围外 404（与不存在同形）', parameters: [idParam], requestBody: body('QuoteAction'), responses: { 200: jsonResp(null), 404: jsonResp(null), 409: jsonResp(null) } } },
+    '/api/sales/quotes/{id}/convert': { post: { tags: ['销售报价'], summary: '报价转订单（**唯一有后果的动作**）：生成销售订单（沿用报价价）或订货单；已审批且未过期才可转，一张报价只能转一次；超信默认拦住，force+reason 为特批放行；组织范围外 404，仓库 / 门店 / 订货客户不全在范围内 403', parameters: [idParam], requestBody: body('QuoteConvert'), responses: { 200: jsonResp(null), 403: jsonResp(null), 404: jsonResp(null), 409: jsonResp(null) } } },
+    '/api/sales/quotes/{id}/copy': { post: { tags: ['销售报价'], summary: '复制改版：生成新草稿且 version+1（已报出去的价不改，要改就出新版本）；组织范围外 404', parameters: [idParam], requestBody: body('QuoteCopy'), responses: { 200: jsonResp(null), 403: jsonResp(null), 404: jsonResp(null) } } },
+    '/api/sales/quotes/expire': { post: { tags: ['销售报价'], summary: '批量把过了有效期的报价置为「已过期」（系统动作，不是状态机里的按钮；只处理调用者组织范围内的报价）', requestBody: body('QuoteExpire'), responses: { 200: jsonResp(null) } } },
 
     // 信用侧三条硬口径：① 已用额 = 统一台账 + 订货中心同主体占用，不读缓存列；
     // ② 占用 / 释放 / 核销成对，核销只认回款（货发了钱没到，额度仍占着）；
@@ -1169,7 +1169,7 @@ export function buildOpenApi() {
     openapi: '3.0.3',
     info: {
       title: 'GML 供应链协同系统 API',
-      version: '1.35.0',
+      version: '1.36.0',
       description:
         '化妆品 / 服装 双行业轻量级供应链协同系统接口文档。覆盖主数据、采购、销售、存货、经销商、门店要货、委外管理、计划与生产、生产制造（BOM / 领料 / 完工入库）、质量检验、线上 OMS 与经营看板。\n\n' +
         '**多行业**：登录 `POST /api/auth/login` 时传 `industry`（`cosmetic` / `apparel`）选择行业版本；' +

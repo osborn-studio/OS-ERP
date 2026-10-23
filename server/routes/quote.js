@@ -35,7 +35,7 @@
 import { Router } from 'express'
 import { getDb } from '../db/index.js'
 import { ok, fail, wrap, pageParams, bizFail } from '../lib/http.js'
-import { requireAuth, requirePerm, currentUser } from '../middleware/auth.js'
+import { requireAuth, requirePerm, currentUser, attachOrgScope } from '../middleware/auth.js'
 import { audit } from '../middleware/audit.js'
 import {
   QuoteError, QUOTE_STATUS, CUSTOMER_TYPE,
@@ -44,6 +44,9 @@ import {
 } from '../lib/quote.js'
 
 const r = Router()
+
+// 组织范围（ADR-0034）：报价按仓 / 门店 / 订货客户归属收口；缺 req.orgScope 按 none（fail-closed）。
+const scopeOf = (req) => req.orgScope || { scope: 'none', orgIds: [] }
 
 const actorOf = (req) => {
   const u = currentUser(req)
@@ -68,9 +71,10 @@ const dict = (obj) => Object.entries(obj).map(([value, label]) => ({ value, labe
 r.get(
   '/quotes/meta',
   requireAuth,
+  attachOrgScope,
   wrap((_req, res) => {
     const db = getDb()
-    const ov = quoteOverview(db)
+    const ov = quoteOverview(db) // 仅取字典阈值，不回显任何单据数据
     ok(res, {
       statuses: dict(QUOTE_STATUS),
       customer_types: dict(CUSTOMER_TYPE),
@@ -94,14 +98,16 @@ r.get(
 r.get(
   '/quotes/overview',
   requireAuth,
+  attachOrgScope,
   requirePerm('sales.quote.view'),
-  wrap((_req, res) => ok(res, quoteOverview(getDb())))
+  wrap((req, res) => ok(res, quoteOverview(getDb(), { orgScope: scopeOf(req) })))
 )
 
 // 取价试算：不落库，可反复调用（界面「新增报价」先看价再保存）
 r.post(
   '/quotes/price',
   requireAuth,
+  attachOrgScope,
   requirePerm('sales.quote.view'),
   guard((req, res) => {
     const b = req.body || {}
@@ -116,7 +122,8 @@ r.post(
         channel: b.channel || null,
         warehouseId: b.warehouse_id || null,
         freight: Number(b.freight || 0),
-        taxRate: Number(b.tax_rate || 0)
+        taxRate: Number(b.tax_rate || 0),
+        orgScope: scopeOf(req)
       })
     )
   })
@@ -125,6 +132,7 @@ r.post(
 r.get(
   '/quotes',
   requireAuth,
+  attachOrgScope,
   requirePerm('sales.quote.view'),
   wrap((req, res) => {
     const { page, pageSize } = pageParams(req)
@@ -136,7 +144,8 @@ r.get(
       keyword: req.query.keyword || null,
       validOnly: String(req.query.valid_only || '') === '1',
       page,
-      pageSize
+      pageSize,
+      orgScope: scopeOf(req)
     })
     return ok(res, out)
   })
@@ -145,9 +154,10 @@ r.get(
 r.get(
   '/quotes/:id',
   requireAuth,
+  attachOrgScope,
   requirePerm('sales.quote.view'),
   wrap((req, res) => {
-    const q = getQuote(getDb(), Number(req.params.id))
+    const q = getQuote(getDb(), Number(req.params.id), { orgScope: scopeOf(req) })
     if (!q) return fail(res, '报价单不存在', 404)
     return ok(res, q)
   })
@@ -156,6 +166,7 @@ r.get(
 r.post(
   '/quotes',
   requireAuth,
+  attachOrgScope,
   requirePerm('sales.quote.edit'),
   guard((req, res) => {
     const db = getDb()
@@ -177,7 +188,8 @@ r.post(
       taxRate: Number(b.tax_rate || 0),
       remark: b.remark || null,
       sourceQuoteId: b.source_quote_id || null,
-      actor: actorOf(req)
+      actor: actorOf(req),
+      orgScope: scopeOf(req)
     })
     audit(req, { action: 'CREATE', module: 'sales', entity: 'sales_quotes', entityId: q.id, detail: q.doc_no })
     return ok(res, q)
@@ -195,6 +207,7 @@ const ACTION_PERM = {
 r.post(
   '/quotes/:id/action',
   requireAuth,
+  attachOrgScope,
   guard((req, res, next) => {
     const action = String(req.body?.action || '')
     const perm = ACTION_PERM[action]
@@ -205,7 +218,8 @@ r.post(
           id: Number(req.params.id),
           action,
           actor: actorOf(req),
-          remark: req.body?.remark || null
+          remark: req.body?.remark || null,
+          orgScope: scopeOf(req)
         })
         audit(req, { action: action.toUpperCase(), module: 'sales', entity: 'sales_quotes', entityId: out.quote.id, detail: req.body?.remark || null })
         return ok(res, out.quote)
@@ -221,6 +235,7 @@ r.post(
 r.post(
   '/quotes/:id/convert',
   requireAuth,
+  attachOrgScope,
   requirePerm('sales.quote.convert'),
   guard((req, res) => {
     const db = getDb()
@@ -231,7 +246,8 @@ r.post(
       force: !!req.body?.force,
       reason: req.body?.reason || null,
       orderDate: req.body?.order_date || null,
-      remark: req.body?.remark || null
+      remark: req.body?.remark || null,
+      orgScope: scopeOf(req)
     })
     audit(req, {
       action: 'CONVERT', module: 'sales', entity: 'sales_quotes', entityId: out.quote.id,
@@ -244,13 +260,15 @@ r.post(
 r.post(
   '/quotes/:id/copy',
   requireAuth,
+  attachOrgScope,
   requirePerm('sales.quote.edit'),
   guard((req, res) => {
     const q = copyQuote(getDb(), {
       id: Number(req.params.id),
       actor: actorOf(req),
       validDays: req.body?.valid_days || null,
-      remark: req.body?.remark || null
+      remark: req.body?.remark || null,
+      orgScope: scopeOf(req)
     })
     return ok(res, q)
   })
@@ -260,9 +278,10 @@ r.post(
 r.post(
   '/quotes/expire',
   requireAuth,
+  attachOrgScope,
   requirePerm('sales.quote.edit'),
   guard((req, res) => {
-    const out = expireQuotes(getDb(), { at: req.body?.at || null, actor: actorOf(req) })
+    const out = expireQuotes(getDb(), { at: req.body?.at || null, actor: actorOf(req), orgScope: scopeOf(req) })
     return ok(res, out)
   })
 )

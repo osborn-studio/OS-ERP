@@ -27,7 +27,7 @@ import { pickBatches, queryBalance, costOf, getInvParam, resolveOwnerOrg, applyS
 import { localDate, localNow } from '../lib/dates.js'
 // D5：MCP 工具不再"平行实现"业务 —— 有领域服务的一律调领域服务
 import { decideApproval, ApprovalError } from '../lib/approval.js'
-import { cancelOrder, SalesOrderError } from '../lib/sales-order.js'
+import { cancelOrder, SalesOrderError, salesScopeSql } from '../lib/sales-order.js'
 import { logPriceChange } from '../lib/pricing.js'
 // 采购域领域服务（批次 K）。**每一个采购写型工具只做两件事**：
 // 校验入参与组织归属，然后把动作交给下面这些函数 —— 一行业务 SQL 都不在这里写。
@@ -895,16 +895,13 @@ export const TOOLS = [
       if (args.channel) { where.push('so.channel=?'); params.push(args.channel) }
       if (args.store_id) { where.push('so.store_id=?'); params.push(args.store_id) }
       if (args.start_date) { where.push('so.order_date >= ?'); params.push(args.start_date) }
-      // A03 增量：同一份组织范围映射到 门店 / 经销商 / 发货仓 三种归属
-      const f = entityScopeClause(
-        scopeEntityIds(ctx, db),
-        { stores: ['store_id'], dealers: ['dealer_id'], warehouses: ['warehouse_id'] },
-        { alias: 'so' }
-      )
+      // ADR-0034：与 `GET /api/sales/orders` 同一个判据（salesScopeSql：出货仓 / 门店组织，任一在范围内可见；
+      // 空范围 = 1=0）。此前这里用另一套「门店 / 经销商 / 仓」映射，两个入口看到的订单集合不一致。
+      const f = salesScopeSql(ctx.scope, 'order', 'so')
       const rows = db.prepare(`
         SELECT so.*,
                (SELECT COUNT(*) FROM sales_order_items i WHERE i.order_id=so.id) AS item_count
-        FROM sales_orders so WHERE ${where.join(' AND ')} ${f.sql} ORDER BY so.id DESC LIMIT ?`).all(...params, ...f.params, limit)
+        FROM sales_orders so WHERE ${where.join(' AND ')} AND ${f.sql} ORDER BY so.id DESC LIMIT ?`).all(...params, ...f.params, limit)
       return ok({ count: rows.length, list: rows }, `销售订单 ${rows.length} 张`)
     }
   },
@@ -1337,16 +1334,12 @@ export const TOOLS = [
       // 原来这里只有一行 `UPDATE sales_orders SET status='cancelled'`：
       // 库存占用没释放（那批货永远卖不出去）、授信没还回去（额度只减不增），
       // 而单子看起来"已作废"，一切正常。
-      // 与 `sales.list_orders` 同一份范围映射：列表里看不到的订单，也不能作废（W5 矩阵验收发现此前缺这一道）
-      const so = db.prepare('SELECT * FROM sales_orders WHERE id=?').get(Number(args.order_id))
-      const soScope = scopeEntityIds(ctx, db)
-      if (so && !entityRowVisible(soScope, so, { stores: ['store_id'], dealers: ['dealer_id'], warehouses: ['warehouse_id'] })) {
-        const e = new Error('销售订单不存在'); e.code = 'ORDER_NOT_FOUND'; e.status = 404; throw e
-      }
+      // ADR-0034：范围判定在领域服务里（`orgScope` = 令牌 ∩ 所有者当前数据范围），与 `sales.list_orders` 同一判据；
+      // 范围外与不存在同形（ORDER_NOT_FOUND 404，早于状态校验）。
       const actor = ctx?.confirmedBy?.id
         ? { id: ctx.confirmedBy.id, name: ctx.confirmedBy.name }
         : { id: null, name: `MCP:${ctx?.tokenName || ''}` }
-      const out = cancelOrder(db, { id: args.order_id, reason: args.reason, actor, source: 'mcp' })
+      const out = cancelOrder(db, { id: args.order_id, reason: args.reason, actor, source: 'mcp', orgScope: ctx.scope || { scope: 'all', orgIds: null } })
       return ok(
         {
           order_id: out.order.id,
