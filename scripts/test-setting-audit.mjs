@@ -174,8 +174,9 @@ section('S1 定义表是全项目唯一的「配置定义」')
   // ⚠️ 这份清单是**刻意钉死**的：它抓的是"有人把某个危险项误标成不危险"，
   // 改成从 `is_danger` 派生就永远等于自己、抓不到任何东西。
   // ADR-0018 再补三个资金复核键：关掉证据/复核或抬高阈值都会让收付款绕过第二人，按同一判据是危险项。十一个 → **十四个**。
-  const DANGER = ['closing_profit_subject', 'annual_retained_subject', 'voucher_default_tax_rate', 'ar_source_of_truth', 'ar_oc_enabled', 'pos_variance_limit', 'fiscal.start_month', 'inv_allow_negative', 'inv_allow_negative_for', 'inv_doc_warehouse_scope', 'purchase_return_offset', 'funds_evidence_required', 'funds_review_required', 'funds_review_threshold']
-  eq('危险配置集合恰好是这十四个（会计政策 + 应收口径 + 门店阈值 + 会计年度边界 + 库存口径 + 单据类型允许仓库 + 采购退货抵减 + 资金复核）',
+  // ADR-0030 再补三个数据保留键：缩短窗口会更早永久删除日志，按同一判据是危险项。十四个 → **十七个**。
+  const DANGER = ['closing_profit_subject', 'annual_retained_subject', 'voucher_default_tax_rate', 'ar_source_of_truth', 'ar_oc_enabled', 'pos_variance_limit', 'fiscal.start_month', 'inv_allow_negative', 'inv_allow_negative_for', 'inv_doc_warehouse_scope', 'purchase_return_offset', 'funds_evidence_required', 'funds_review_required', 'funds_review_threshold', 'retention_audit_days', 'retention_notify_log_days', 'retention_mcp_log_days']
+  eq('危险配置集合恰好是这十七个（会计政策 + 应收口径 + 门店阈值 + 会计年度边界 + 库存口径 + 单据类型允许仓库 + 采购退货抵减 + 资金复核 + 数据保留）',
     keys.filter((k) => S.SETTING_RULES[k].is_danger).sort(), [...DANGER].sort())
 
   // 动作表：三态必须能分开
@@ -692,7 +693,7 @@ section('S14 listSettingAudit：按键 / 按危险 / 分页')
 
     const m = S.meta(db)
     eq('meta 给出三种动作', m.actions.length, 3)
-    eq('meta 给出十四个危险键（批次 U 之四起含 fiscal.start_month；批次 V 起含两个库存口径键 + 单据类型允许仓库；采购退货抵减；ADR-0018 起含三个 funds_* 资金复核键）', m.danger_keys.length, 14)
+    eq('meta 给出十七个危险键（批次 U 之四起含 fiscal.start_month；批次 V 起含两个库存口径键 + 单据类型允许仓库；采购退货抵减；ADR-0018 起含三个 funds_* 资金复核键；ADR-0030 起含三个 retention_*_days 保留键）', m.danger_keys.length, 17)
     eq('meta 的 keys 与定义表一致', m.keys.length, S.SETTING_KEYS.length)
   })
 }

@@ -50,6 +50,11 @@ const DECLARED = [
   'scripts/gen-third-party-notices.mjs',
   'scripts/check-file-header.mjs',
   'scripts/db-backup.mjs',
+  // 数据保留与个人信息处理（ADR-0030）
+  'scripts/retention.mjs',
+  'scripts/privacy-export.mjs',
+  'scripts/privacy-erase.mjs',
+  'scripts/lib/privacy-common.mjs',
   'server/db/migrations/runner.js',
   'server/lib/backup-dir.js',
   // 恢复 / 升级回退演练（ADR-0016）：共用底座 + 两个演练入口
