@@ -256,6 +256,8 @@ BOM 服务层（模块 10B · 一个 BOM + 三类执行单）
 | `getBom` | fn | GET /api/manufacture/boms/:id | — | — |
 | `getSkuInfo` | fn | — | — | lib/mfg.js |
 | `listBoms` | fn | GET /api/manufacture/boms | — | — |
+| `localDate` | 再导出（lib/dates.js） | 29 条：ar.js×3, dealers.js×1, demand.js×2, inventory.js×6, oms.js×1, outsourcing.js×4, pos.js×3, purchase.js×1, requisitions.js×6, sales.js×2 | inventory.adjust, inventory.ownership_transfer, inventory.stock_in, inventory.stock_out, inventory.transfer, report.sales_summary | 16 个：lib/accounting.js, lib/ar.js, lib/bom.js, lib/costing.js, lib/credit.js, lib/invoice.js … |
+| `localNow` | 再导出（lib/dates.js） | — | inventory.list_batches | 22 个：lib/ar.js, lib/bom.js, lib/costing.js, lib/credit-release.js, lib/credit.js, lib/dealer-statement.js … |
 | `obsoleteBom` | fn | POST /api/manufacture/boms/:id/obsolete | — | — |
 | `resolveBom` | fn | GET /api/manufacture/boms/by-sku | — | lib/mfg.js |
 | `skuAvailable` | fn | — | — | — |
@@ -685,6 +687,8 @@ HTTP 响应与错误归一：`ok` / `fail` / `wrap` 的**唯一实现**（统一
 | `listIssues` | fn | GET /api/manufacture/issues | — | — |
 | `listProductionOrders` | fn | GET /api/manufacture/orders | — | — |
 | `listWorkReports` | fn | GET /api/manufacture/reports | — | — |
+| `localDate` | 再导出（lib/dates.js） | 29 条：ar.js×3, dealers.js×1, demand.js×2, inventory.js×6, oms.js×1, outsourcing.js×4, pos.js×3, purchase.js×1, requisitions.js×6, sales.js×2 | inventory.adjust, inventory.ownership_transfer, inventory.stock_in, inventory.stock_out, inventory.transfer, report.sales_summary | 16 个：lib/accounting.js, lib/ar.js, lib/bom.js, lib/costing.js, lib/credit.js, lib/invoice.js … |
+| `localNow` | 再导出（lib/dates.js） | — | inventory.list_batches | 22 个：lib/ar.js, lib/bom.js, lib/costing.js, lib/credit-release.js, lib/credit.js, lib/dealer-statement.js … |
 | `mfgOverview` | fn | — | — | — |
 | `planRequirement` | fn | GET /api/manufacture/orders/:id/requirement | — | — |
 | `previewCompletion` | fn | GET /api/manufacture/orders/:id/complete-preview | — | — |
@@ -932,7 +936,7 @@ HTTP 响应与错误归一：`ok` / `fail` / `wrap` 的**唯一实现**（统一
 
 | 导出 | 类型 | 路由 | MCP 工具 | 被模块调用 |
 |---|---|---|---|---|
-| `DocFlowError` | 再导出 | — | — | — |
+| `DocFlowError` | 再导出（未解析） | — | — | — |
 | `PO_READ_PERMS` | const | — | — | — |
 | `PURCHASE_ORDER_FROM` | const | — | — | — |
 | `PURCHASE_ORDER_SELECT` | const | — | — | — |
@@ -1024,6 +1028,8 @@ HTTP 响应与错误归一：`ok` / `fail` / `wrap` 的**唯一实现**（统一
 | `listHandlings` | fn | GET /api/qc/handlings | — | — |
 | `listInspections` | fn | GET /api/qc/inspections | — | — |
 | `listRequests` | fn | GET /api/qc/requests | — | — |
+| `localDate` | 再导出（lib/dates.js） | 29 条：ar.js×3, dealers.js×1, demand.js×2, inventory.js×6, oms.js×1, outsourcing.js×4, pos.js×3, purchase.js×1, requisitions.js×6, sales.js×2 | inventory.adjust, inventory.ownership_transfer, inventory.stock_in, inventory.stock_out, inventory.transfer, report.sales_summary | 16 个：lib/accounting.js, lib/ar.js, lib/bom.js, lib/costing.js, lib/credit.js, lib/invoice.js … |
+| `localNow` | 再导出（lib/dates.js） | — | inventory.list_batches | 22 个：lib/ar.js, lib/bom.js, lib/costing.js, lib/credit-release.js, lib/credit.js, lib/dealer-statement.js … |
 | `pendingSources` | fn | GET /api/qc/pending | — | — |
 | `qcOverview` | fn | GET /api/qc/overview | — | — |
 | `recalcDisposition` | fn | — | — | — |
@@ -1166,7 +1172,7 @@ HTTP 响应与错误归一：`ok` / `fail` / `wrap` 的**唯一实现**（统一
 
 | 导出 | 类型 | 路由 | MCP 工具 | 被模块调用 |
 |---|---|---|---|---|
-| `CARRY_BIZ_TYPE` | 再导出 | — | — | — |
+| `CARRY_BIZ_TYPE` | 再导出（未解析） | — | — | — |
 | `CASH_FLOW_CATEGORY_LABEL` | const | — | — | — |
 | `CASH_FLOW_DIRECTION_LABEL` | const | — | — | — |
 | `CASH_OTHER_BUCKET` | const | — | — | — |
@@ -1179,15 +1185,15 @@ HTTP 响应与错误归一：`ok` / `fail` / `wrap` 的**唯一实现**（统一
 | `MULTI_YEAR_LAG_KEY` | fn | — | — | — |
 | `MULTI_YEAR_MAX` | const | — | — | — |
 | `MULTI_YEAR_MIN` | const | — | — | — |
-| `PERIOD_STATUS_LABEL` | 再导出 | — | — | — |
-| `PeriodError` | 再导出 | — | — | — |
+| `PERIOD_STATUS_LABEL` | 再导出（未解析） | — | — | — |
+| `PeriodError` | 再导出（未解析） | — | — | — |
 | `RANGE_MODES` | const | — | — | — |
 | `REPORT_BASIS_LABEL` | const | — | — | — |
 | `ReportError` | class | — | — | — |
 | `XLSX_SHEET_NAME_MAX` | const | — | — | — |
 | `assertNaturalFiscalYear` | fn | — | — | lib/annual.js |
-| `assertPeriod` | 再导出 | — | — | — |
-| `assertPeriodOpen` | 再导出 | — | — | — |
+| `assertPeriod` | 再导出（未解析） | — | — | — |
+| `assertPeriodOpen` | 再导出（未解析） | — | — | — |
 | `auditComparison` | fn | GET /api/reports/:code/compare/audit | — | — |
 | `auditMultiYear` | fn | GET /api/reports/:code/multi-year/audit | — | — |
 | `auditRange` | fn | GET /api/reports/:code/range/audit | — | — |
@@ -1207,20 +1213,20 @@ HTTP 响应与错误归一：`ok` / `fail` / `wrap` 的**唯一实现**（统一
 | `computeReport` | fn | GET /api/reports/:code | — | — |
 | `csvCell` | fn | — | — | — |
 | `deleteReportLine` | fn | DELETE /api/reports/lines/:id | — | — |
-| `ensurePeriod` | 再导出 | — | — | — |
+| `ensurePeriod` | 再导出（未解析） | — | — | — |
 | `exportReport` | fn | GET /api/reports/:code/export | — | — |
 | `fiscalStartMonth` | fn | — | — | lib/annual.js |
 | `fiscalYearOf` | fn | — | — | lib/annual.js |
-| `getPeriod` | 再导出 | — | — | — |
+| `getPeriod` | 再导出（未解析） | — | — | — |
 | `getReportDef` | fn | — | — | — |
 | `inSubjectRange` | fn | — | — | — |
 | `incomeStatement` | fn | — | — | lib/annual.js, lib/closing.js |
-| `isPeriodCarried` | 再导出 | — | — | — |
-| `isPeriodClosed` | 再导出 | — | — | — |
+| `isPeriodCarried` | 再导出（未解析） | — | — | — |
+| `isPeriodClosed` | 再导出（未解析） | — | — | — |
 | `isRangeCompareMode` | fn | — | — | — |
 | `listCashFlowItems` | fn | GET /api/reports/cashflow-items | — | — |
 | `listOpeningBalances` | fn | GET /api/reports/opening | — | — |
-| `listPeriods` | 再导出 | — | — | — |
+| `listPeriods` | 再导出（未解析） | — | — | — |
 | `listReportDefs` | fn | GET /api/reports/defs | — | — |
 | `listReportLines` | fn | GET /api/reports/defs/:code/lines | — | — |
 | `meta` | fn | GET /api/reports/meta | — | — |
@@ -1237,7 +1243,7 @@ HTTP 响应与错误归一：`ok` / `fail` / `wrap` 的**唯一实现**（统一
 | `saveReportDef` | fn | PUT /api/reports/defs/:code | — | — |
 | `saveReportLine` | fn | POST /api/reports/lines | — | — |
 | `setOpeningBalances` | fn | PUT /api/reports/opening | — | — |
-| `shiftPeriod` | 再导出 | — | — | — |
+| `shiftPeriod` | 再导出（未解析） | — | — | — |
 | `subjectBalances` | fn | GET /api/reports/subject-balances | — | lib/annual.js, lib/closing.js |
 | `subjectRangeMovements` | fn | — | — | — |
 | `tagVoucherCashFlow` | fn | POST /api/reports/vouchers/:id/tag-cashflow | — | — |
@@ -1445,7 +1451,7 @@ Agent Token 管理（管理员）：签发 / 列表 / 吊销 / 调用审计
 | `DOC_TYPE_UNMAPPED` | const | — | — | — |
 | `DOC_VIEW_PERMS` | const | — | — | — |
 | `TOKEN_OWNER_BINDING_REQUIRED` | const | — | — | — |
-| `TOKEN_OWNER_PERM_DENIED` | 再导出 | — | — | — |
+| `TOKEN_OWNER_PERM_DENIED` | 再导出（未解析） | — | — | — |
 | `assertCanViewDocType` | fn | — | doc.get, doc.query | mcp/tools.js |
 | `bindingOf` | fn | — | — | — |
 | `bindingWhere` | fn | — | doc.query | mcp/tools.js |
@@ -1538,7 +1544,7 @@ MCP 工具入参校验（唯一实现）。
 | `inventory.adjust` | danger | inventory.adjust | lib/dates.js: localDate<br>lib/stock.js: applyStockGain, resolveOwnerOrg | warehouses | cost_periods, inv_params, inv_txn_types, inventory_batches, inventory_stocks, inventory_transactions, stock_cost_ledger |
 | `pricing.update_price` | danger | master.price.edit | lib/pricing.js: logPriceChange | — | price_change_logs |
 | `sales.cancel_order` | danger | sales.order.edit | lib/sales-order.js: cancelOrder | — | credit_accounts, credit_ledger, dealers, doc_actions, doc_events, doc_states, doc_types, inv_params, inventory_batches, inventory_reservations, inventory_stocks, oc_customers, product_skus, products, sales_deliveries, sales_order_items, sales_orders, sales_returns, stores, warehouses |
-| `approval.approve` | danger | approval.instance.act | lib/approval.js: decideApproval | approval_instances, dealers, doc_types, stores, users, warehouses | approval_records, approval_steps, brands, doc_actions, doc_events, doc_transition_policy, oc_addresses, oc_customers, orgs, permissions, product_skus, products, purchase_order_items, purchase_orders, purchase_receipts, role_permissions, roles, sales_orders, suppliers, user_roles |
+| `approval.approve` | danger | approval.instance.act | lib/approval.js: decideApproval | approval_instances, dealers, doc_types, stores, users, warehouses | approval_records, approval_steps, brands, doc_actions, doc_events, doc_states, doc_transition_policy, oc_addresses, oc_customers, orgs, permissions, product_skus, products, purchase_order_items, purchase_orders, purchase_receipts, role_permissions, roles, sales_orders, suppliers, user_roles |
 | `purchase.create_requisition` | write | purchase.req.edit | lib/purchase.js: createRequisition, resolvePurchasePrices | users | doc_no_counters, doc_no_rules, doc_types, product_skus, products, purchase_order_items, purchase_orders, purchase_requisition_items, purchase_requisitions, role_permissions, supplier_products, user_roles |
 | `purchase.create_order` | write | purchase.order.edit | lib/purchase.js: createPurchaseOrder | users | brands, doc_no_counters, doc_no_rules, doc_types, product_skus, products, purchase_order_items, purchase_orders, purchase_receipts, role_permissions, settings, suppliers, user_roles, warehouses |
 | `purchase.create_invoice` | write | purchase.invoice.edit | lib/purchase.js: createInvoice | users | doc_no_counters, doc_no_rules, doc_types, product_skus, purchase_invoice_items, purchase_invoices, purchase_order_items, purchase_orders, purchase_receipts, purchase_settlement_items, purchase_settlements, role_permissions, suppliers, user_roles |

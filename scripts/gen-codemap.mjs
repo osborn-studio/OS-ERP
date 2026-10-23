@@ -309,9 +309,9 @@ function analyse(idx, file, sqlText, identText, known) {
     else if (cur.hops === 0) { /* 同文件辅助函数：算处理器自身 */ }
     const t = tablesIn(cur.decl.sql, known)
     for (const x of t) (cur.hops === 0 ? direct : via).add(x)
-    if (cur.hops >= MAX_HOPS) continue
     for (const r of refsIn(idx, cur.file, cur.decl.ident).values()) {
       const hops = cur.hops + (r.file !== cur.file ? 1 : 0)
+      if (hops > MAX_HOPS) continue
       queue.push({ ...r, hops, top: cur.top && cur.hops === 0 && r.file !== cur.file })
     }
   }
@@ -428,13 +428,14 @@ export function generate({ root }) {
   mm += `共 ${modFiles.length} 个模块。“路由”只列在处理器区域内直接引用该函数的路由（路由超过 5 条时按路由文件汇总，明细见 [routes.md](routes.md)）；“MCP 工具”来自 \`server/mcp/tools.js\` 的 ${tools.length} 个工具；“被模块调用”是其它 lib/mcp 模块里的跨文件引用。“—”表示静态扫描没找到调用方，不等于死代码。\n\n${LIMITS}\n`
   for (const rel of modFiles) {
     const f = idx.get(rel)
-    const names = [...f.exports.keys()].sort(cmp)
+    const names = uniqSorted([...f.exports.keys(), ...f.reexports.keys()])
     mm += `\n## \`${rel}\`\n\n${f.header ? `${esc(f.header)}\n\n` : ''}`
     if (!names.length) { mm += '（无具名导出）\n'; continue }
     mm += '| 导出 | 类型 | 路由 | MCP 工具 | 被模块调用 |\n|---|---|---|---|---|\n'
     for (const n of names) {
       const d = f.decls.get(f.exports.get(n))
-      const us = usage.get(`${rel}#${d ? d.name : n}`) ?? { routes: [], tools: [], mods: new Set() }
+      const orig = d ? { file: rel, decl: d } : (f.reexports.get(n)?.file ? declOf(idx, f.reexports.get(n).file, f.reexports.get(n).name) : null)
+      const us = (orig && usage.get(`${orig.file}#${orig.decl.name}`)) || { routes: [], tools: [], mods: new Set() }
       const rs = us.routes
       let rcell = '—'
       if (rs.length && rs.length <= 5) rcell = rs.map((r) => `${esc(routeLabel(r))}`).join('<br>')
@@ -446,7 +447,7 @@ export function generate({ root }) {
       const tcell = !ts.length ? '—' : ts.length <= 8 ? ts.join(', ') : `${ts.length} 个：${ts.slice(0, 8).join(', ')} …`
       const ms = uniqSorted(us.mods).map((x) => x.replace(/^server\//, ''))
       const mcell = !ms.length ? '—' : ms.length <= 6 ? ms.join(', ') : `${ms.length} 个：${ms.slice(0, 6).join(', ')} …`
-      mm += `| \`${n}\` | ${d ? d.kind : '再导出'} | ${rcell} | ${tcell} | ${mcell} |\n`
+      mm += `| \`${n}\` | ${d ? d.kind : `再导出（${orig ? orig.file.replace(/^server\//, '') : '未解析'}）`} | ${rcell} | ${tcell} | ${mcell} |\n`
     }
   }
   mm += `\n## MCP 工具 → lib 函数 → 表\n\n| 工具 | 级别 | 权限点 | 调用的 lib 函数 | 工具内 SQL 表 | 经 lib 触达的表 |\n|---|---|---|---|---|---|\n`
