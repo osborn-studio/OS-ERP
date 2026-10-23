@@ -17,6 +17,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { unzipSync } from 'fflate'
+import { BATCHES } from '../scripts/gen-changelog.mjs'
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url))
 const PATH = process.env.PATH
@@ -170,7 +171,8 @@ test('candidate builds RC-<version>-<sha>.zip with sha256, EVIDENCE.json and not
   const notes = readFileSync(path.join(dir, 'RELEASE-NOTES.md'), 'utf8')
   assert.match(notes, new RegExp(version.replace(/\./g, '\\.')))
   assert.match(notes, /not a published release/i)
-  assert.match(notes, /第八批/)
+  // 版本号在 CHANGELOG 中没有专属小节时，发布说明展示最新批次小节（BATCHES 末项；随批次推进，不写死批次名）
+  assert.ok(notes.includes(BATCHES[BATCHES.length - 1].title), 'notes show the newest batch section')
 
   // 默认（无 --ci-run / 人工声明）时同样的证据字段是 null / not run
   // verify-release --evidence 接受真证据，拒绝篡改
