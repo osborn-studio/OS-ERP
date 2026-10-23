@@ -121,6 +121,55 @@ export function assertSalesTargetInScope(db, { warehouseId = null, storeId = nul
   }
 }
 
+// ---------------------------------------------------------------------------
+// 报价单范围（ADR-0034）：报价没有 org_id 列，归属由三条参与方推出 ——
+//   出货仓 `warehouses.org_id`、门店 `stores.org_id`（与订单同一口径，直接复用 `salesScopeSql`），
+//   再加订货客户 `oc_customers.org_id`（下游客户继承上级，口径同 ADR-0027 `ocScope`）。
+// 经销商是客户而不是本方组织，仍不参与。**读：任一参与方在范围内即可见**；
+// **写（建 / 复制 / 转单）：给出的每一个参与方都必须在范围内，且至少给出一个**（不许建出受限范围永远看不到的无主报价）。
+// ---------------------------------------------------------------------------
+
+const ocCustomerOrgIn = (col, ph) =>
+  `${col} IN (SELECT cs.id FROM oc_customers cs WHERE COALESCE(cs.org_id,
+     (SELECT pp.org_id FROM oc_customers pp WHERE pp.id=cs.parent_customer_id)) IN (${ph}))`
+
+/** 报价列表 / 详情 / 概览的 SQL 谓词（无前导 AND）。`alias` 是 `sales_quotes` 的别名。 */
+export function quoteScopeSql(orgScope, alias = '') {
+  const { all, ids } = scopeIds(orgScope)
+  if (all) return { sql: '1=1', params: [], empty: false }
+  if (!ids.length) return { sql: '1=0', params: [], empty: true }
+  const base = salesScopeSql(orgScope, 'order', alias)
+  const ph = ids.map(() => '?').join(',')
+  const cust = ocCustomerOrgIn(alias ? `${alias}.customer_id` : 'customer_id', ph)
+  return { sql: `(${base.sql} OR ${cust})`, params: [...base.params, ...ids], empty: false }
+}
+
+/** 报价是否在范围内；返回该行。范围外与不存在同形（404）。 */
+export function assertQuoteInScope(db, id, orgScope) {
+  const scope = quoteScopeSql(orgScope, 't')
+  const row = Number.isFinite(Number(id))
+    ? db.prepare(`SELECT t.* FROM sales_quotes t WHERE t.id=? AND ${scope.sql}`).get(Number(id), ...scope.params)
+    : null
+  if (!row) throw new SalesOrderError('QUOTE_NOT_FOUND', `报价单 #${id} 不存在`, 404)
+  return row
+}
+
+/** 写路径目标校验：仓 / 门店 / 订货客户都必须在范围内，且受限范围下至少给出一个。不通过 ⇒ 403。 */
+export function assertQuoteTargetInScope(db, { warehouseId = null, storeId = null, customerId = null } = {}, orgScope) {
+  const { all, ids } = scopeIds(orgScope)
+  if (all) return
+  if (warehouseId == null && storeId == null && customerId == null) {
+    throw new SalesOrderError('TARGET_OUT_OF_SCOPE', '受限数据范围下报价必须指明仓库 / 门店 / 订货客户之一，不能创建无主报价', 403)
+  }
+  assertSalesTargetInScope(db, { warehouseId, storeId }, orgScope)
+  if (customerId != null) {
+    const ph = ids.map(() => '?').join(',')
+    const okC = ids.length && Number.isFinite(Number(customerId)) &&
+      db.prepare(`SELECT 1 FROM oc_customers c WHERE c.id=? AND ${ocCustomerOrgIn('c.id', ph)}`).get(Number(customerId), ...ids)
+    if (!okC) throw new SalesOrderError('TARGET_OUT_OF_SCOPE', '所选订货客户不在您的组织数据范围内', 403)
+  }
+}
+
 /** 该订单的授信账户（按往来对象解析，不猜） */
 function creditAccountOf(db, order) {
   const sub = resolveSubject(db, { dealerId: order.dealer_id, storeId: order.store_id })
@@ -141,7 +190,17 @@ function creditAccountOf(db, order) {
  *
  * `actor` 必须显式传入 —— MCP 等非 HTTP 入口没有 `req.user`。
  */
-export function cancelOrder(db, { id, reason = null, actor = null, source = 'api' } = {}) {
+export function cancelOrder(db, { id, reason = null, actor = null, source = 'api', orgScope } = {}) {
+  // ADR-0034：非 HTTP 入口（MCP）把所有者的组织范围传进来，范围外与不存在同形（ORDER_NOT_FOUND 404）。
+  // `orgScope === undefined`（HTTP 路由已在调用前判过范围）⇒ 不重复判。
+  if (orgScope !== undefined) {
+    try {
+      assertSalesDocInScope(db, 'order', id, orgScope)
+    } catch (e) {
+      if (e instanceof SalesOrderError && e.status === 404) throw new SalesOrderError('ORDER_NOT_FOUND', '销售订单不存在', 404)
+      throw e
+    }
+  }
   const order = db.prepare('SELECT * FROM sales_orders WHERE id=?').get(Number(id))
   if (!order) throw new SalesOrderError('ORDER_NOT_FOUND', '销售订单不存在', 404)
   if (['shipped', 'completed', 'cancelled'].includes(order.status)) {
@@ -209,4 +268,4 @@ export function cancelOrder(db, { id, reason = null, actor = null, source = 'api
   return tx()
 }
 
-export default { SalesOrderError, cancelOrder, salesScopeSql, assertSalesDocInScope, assertSalesTargetInScope }
+export default { SalesOrderError, cancelOrder, salesScopeSql, assertSalesDocInScope, assertSalesTargetInScope, quoteScopeSql, assertQuoteInScope, assertQuoteTargetInScope }
