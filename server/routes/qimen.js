@@ -28,15 +28,19 @@ const r = Router()
 const md5 = (s) => crypto.createHash('md5').update(s, 'utf8').digest('hex').toUpperCase()
 
 // 奇门签名规则（演示版）：sign = MD5(app_key + method + secret)
-// 真实环境为 系统参数按 key 排序拼接 + secret 前后缀，此处做等价简化
+// 真实环境为 系统参数按 key 排序拼接 + secret 前后缀，此处做等价简化。
+// ADR-0028：签名**必填**——缺签名与错签名同样拒绝（原来缺签名直接放行是"未鉴权调用"后门）。
 function verifySign(platform, method, sign) {
-  if (!sign) return { pass: true, note: '未携带签名（演示环境放行，生产必须校验）' }
-  const expected = md5(`${platform.app_key}${method}GML-DEMO-SECRET`)
-  return { pass: sign === expected, note: 'sign = MD5(app_key + method + secret)' }
+  if (typeof sign !== 'string' || !sign) return { pass: false, note: '缺少签名' }
+  const expected = Buffer.from(md5(`${platform.app_key}${method}GML-DEMO-SECRET`))
+  const given = Buffer.from(sign.toUpperCase())
+  const pass = given.length === expected.length && crypto.timingSafeEqual(given, expected)
+  return { pass, note: 'sign = MD5(app_key + method + secret)' }
 }
 
-function qimenError(res, code, message, extra = {}) {
-  return res.status(200).json({ success: false, code, message, ...extra })
+// 协议错误码走 HTTP 200（外部协议约定，见 check-bizcode-shape 的已声明落点）；鉴权失败（缺/错 app_key、缺/错签名）是 401。
+function qimenError(res, code, message, extra = {}, status = 200) {
+  return res.status(status).json({ success: false, code, message, ...extra })
 }
 
 function logGateway(db, platformId, method, payload, status, message, costMs) {
@@ -146,7 +150,7 @@ r.get(
     return ok(res, {
       protocol: '奇门标准化协议 V3.9.5（演示实现）',
       gateway: '/api/qimen',
-      signRule: 'sign = MD5(app_key + method + secret)，演示环境 secret = GML-DEMO-SECRET，未携带签名时放行并记录告警',
+      signRule: 'sign = MD5(app_key + method + secret)，演示环境 secret = GML-DEMO-SECRET；app_key 与签名均为必填，缺失或错误一律 401',
       methods: METHODS,
       platformCodes: PLATFORM_CODES,
       platforms
@@ -162,24 +166,25 @@ r.post(
     const started = Date.now()
     const body = req.body || {}
     const method = body.method
+    // 鉴权先于一切：缺 app_key / 未知或停用平台 / 缺签名 / 错签名 ⇒ 401，绝不放行（ADR-0028）。
+    // app_key 必须是非空字符串（对象 / 数组等载荷不进 SQL 绑定）。
+    const appKey = typeof body.app_key === 'string' ? body.app_key : ''
+    if (!appKey) return qimenError(res, '1003', '缺少 app_key', {}, 401)
+    const platform = db.prepare("SELECT * FROM platforms WHERE app_key=? AND status='active'").get(appKey)
+    if (!platform) return qimenError(res, '1003', 'app_key 不存在或未授权', {}, 401)
+    const signCheck = verifySign(platform, typeof method === 'string' ? method : '', body.sign)
+    if (!signCheck.pass) {
+      logGateway(db, platform.id, String(method || '').slice(0, 100), { app_key: appKey }, 'fail', '签名校验失败', Date.now() - started)
+      return qimenError(res, '1004', '签名校验失败', {}, 401)
+    }
     if (!method) return qimenError(res, '1001', '缺少 method 参数')
     if (!METHODS.some((m) => m.method === method)) {
       return qimenError(res, '1002', `不支持的奇门接口：${method}`)
     }
-    // app_key 鉴权
-    const platform = body.app_key
-      ? db.prepare('SELECT * FROM platforms WHERE app_key=?').get(body.app_key)
-      : null
-    if (body.app_key && !platform) return qimenError(res, '1003', 'app_key 不存在或未授权')
-    const signCheck = platform ? verifySign(platform, method, body.sign) : { pass: true, note: '未鉴权调用' }
-    if (!signCheck.pass) {
-      logGateway(db, platform?.id || null, method, { app_key: body.app_key }, 'fail', '签名校验失败', Date.now() - started)
-      return qimenError(res, '1004', '签名校验失败')
-    }
 
     const request = body.request || {}
     const respond = (data) => {
-      logGateway(db, platform?.id || null, method, body, 'success', `${method} 处理成功`, Date.now() - started)
+      logGateway(db, platform.id, method, body, 'success', `${method} 处理成功`, Date.now() - started)
       return res.json({ success: true, code: 0, message: signCheck.note || 'success', ...data })
     }
 
@@ -192,7 +197,7 @@ r.post(
       return respond({
         mappings: rows.map((s) => ({
           ownerCode: 'GML',
-          shopCode: request.shopCode || platform?.shop_code || '',
+          shopCode: request.shopCode || platform.shop_code || '',
           itemCode: s.sku_code,
           shopSkuId: `P${s.sku_code}`,
           itemId: s.sku_code,

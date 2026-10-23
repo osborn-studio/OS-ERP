@@ -49,6 +49,42 @@ export class DocFlowError extends Error {
 }
 
 // ---------------------------------------------------------------------------
+// 单据类型 → 创建权限码（ADR-0028）：唯一映射表
+// ---------------------------------------------------------------------------
+//
+// 用途：`POST /api/docflow/no-issue`（真实取号会消耗序号）按单据类型要求"能创建这类单据"的权限。
+// 取值口径：与该类型在 HTTP 侧**创建路由**挂的权限码一致；该类型的创建路由用角色闸门（`requireRole`）时，
+//   取与它同域的状态机首条出边 / 编辑权限码（写在每行注释里）。表里没有的类型 = 未映射 ⇒ 调用方必须拒绝
+//   （`DOC_TYPE_PERM_UNMAPPED`），新增 doc_types 时 `tests/authz-misc.test.mjs` 会因缺映射而变红。
+export const DOC_CREATE_PERMS = Object.freeze({
+  // 采购
+  PO: 'purchase.order.edit', GR: 'purchase.inbound', PRT: 'purchase.return', PRQ: 'purchase.req.edit',
+  PI: 'purchase.invoice.edit', PST: 'purchase.settle.edit', PAY: 'purchase.payment.edit', INS: 'quality.inspect.edit',
+  // 销售
+  QT: 'sales.quote.edit', SO: 'sales.order.edit', DL: 'sales.outbound', SR: 'sales.return', SI: 'sales.invoice.edit',
+  // 质检
+  QCR: 'quality.request.create', QCI: 'quality.inspect', DH: 'quality.handle.approve',
+  // 库存与成本
+  TF: 'inventory.transfer', CK: 'inventory.check', AS: 'inventory.adjust', CA: 'cost.adjust',
+  // 财务
+  AR: 'finance.receipt.edit', RCP: 'finance.receipt.edit', VOUCHER: 'finance.voucher.gen', RFD: 'finance.refund.edit',
+  // 门店要货 / 发货 / POS
+  YQ: 'pos.store.requisition', SH: 'pos.store.requisition', PS: 'pos.cashier', PSF: 'pos.shift', RC: 'pos.dailyclose',
+  // 生产与委外
+  MO: 'produce.order.edit', WW: 'produce.order.edit', WM: 'produce.issue', WR: 'produce.receipt', MR: 'produce.issue',
+  // 电商 / 经销商 / 订货中心
+  OM: 'oms.order.route', DR: 'order.place', DS: 'finance.settle.edit', RB: 'finance.settle.edit',
+  OC: 'order.place', OCS: 'order.statement.view'
+})
+
+/** 单据类型的创建权限码；未映射（含未注册 / 原型链键）⇒ null，调用方必须按"拒绝"处理。 */
+export function createPermOf(docType) {
+  return typeof docType === 'string' && Object.prototype.hasOwnProperty.call(DOC_CREATE_PERMS, docType)
+    ? DOC_CREATE_PERMS[docType]
+    : null
+}
+
+// ---------------------------------------------------------------------------
 // 读取定义
 // ---------------------------------------------------------------------------
 
@@ -613,6 +649,8 @@ function label(m, code) {
 
 export default {
   DocFlowError,
+  DOC_CREATE_PERMS,
+  createPermOf,
   listDocTypes,
   getDocType,
   getMachine,

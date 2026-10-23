@@ -22,6 +22,7 @@ import {
   requirePerm,
   requireInternal,
   permContext,
+  hasPerm,
   assertCanRead,
   isExternalUser,
   attachOrgScope,
@@ -39,7 +40,8 @@ import {
   effectOwnerOf,
   historyOf,
   traceByDocNo,
-  explainLifecycle
+  explainLifecycle,
+  createPermOf
 } from '../lib/docflow.js'
 import { listDocNoRules, previewDocNo, nextDocNoAuto, nextDocNoByRule } from '../lib/docno.js'
 import { audit } from '../middleware/audit.js'
@@ -405,7 +407,13 @@ r.post(
   })
 )
 
-/** 试取号：真实走一次取号链路（会消耗一个序号，用于联调） */
+/**
+ * 试取号：真实走一次取号链路（会消耗一个序号，用于联调）。
+ *
+ * ADR-0028：非干跑要求调用者持有该单据类型的**创建权限**（`DOC_CREATE_PERMS`，唯一映射表）；
+ * 类型没有映射（含未注册类型）⇒ 403 `DOC_TYPE_PERM_UNMAPPED`，对管理员同样成立（映射缺项是工程缺口，不是权限问题）。
+ * 干跑只读预览、不消耗序号，保持豁免。权限判定在取号**之前**，被拒绝的调用不消耗序号。
+ */
 r.post(
   '/no-issue',
   requireAuth,
@@ -420,13 +428,25 @@ r.post(
           .get(docType)
         return ok(res, { docNo: rule ? previewDocNo(db, { docType, pattern: rule.pattern, seqPad: rule.seq_pad }) : null, dry: true })
       }
-      const no = nextDocNoAuto(db, {
+      const need = createPermOf(docType)
+      if (!need) {
+        throw new DocFlowError('该单据类型未配置创建权限映射，拒绝取号', { code: 'DOC_TYPE_PERM_UNMAPPED', httpStatus: 403 })
+      }
+      if (!hasPerm(permContext(db, req.user), need)) {
+        throw new DocFlowError(`当前角色无权为该单据类型取号（需 ${need}）`, {
+          code: 'DOC_CREATE_PERM_DENIED', httpStatus: 403, detail: { permCode: need }
+        })
+      }
+      const args = {
         docType,
         orgId: orgId ? Number(orgId) : null,
         warehouseId: whId ? Number(whId) : null,
         bizDate
-      })
-      return ok(res, { docNo: no, byRule: !!nextDocNoByRule(db, { docType, orgId: orgId ? Number(orgId) : null, warehouseId: whId ? Number(whId) : null, bizDate }) })
+      }
+      // 先按规则取号；没有规则才回落旧逻辑。**只取一次**：规则命中时再调一次 nextDocNoByRule 会多烧一个序号。
+      const byRuleNo = nextDocNoByRule(db, args)
+      const no = byRuleNo || nextDocNoAuto(db, args)
+      return ok(res, { docNo: no, byRule: !!byRuleNo })
     } catch (e) {
       return handleFlowError(res, e)
     }

@@ -281,15 +281,31 @@ r.put(
   wrap((req, res) => ok(res, replaceRolePermissions(getDb(), req.user, req.params.code, req.body?.permissions, { ip: req.ip })))
 )
 
-/** 组织档案维护（管理员） */
+/**
+ * 组织档案（平铺全表）。
+ * ADR-0028：admin / 全局范围账号拿全量；其余账号只拿 `resolveOrgScope` 圈定的组织（经销商加上自己的挂靠组织），
+ * 空范围 ⇒ 空列表（空范围不许变成全库）。与 `/org-tree` 不同：这里不补祖先节点——平铺档案不需要拼层级，
+ * 补祖先等于把范围外的上级组织档案（负责人 / 路径）也交出去。
+ */
 r.get(
   '/orgs',
   requireAuth,
   wrap((req, res) => {
     const db = getDb()
     const { type, keyword } = req.query
+    const scope = resolveOrgScope(db, req.user)
     let sql = 'SELECT * FROM orgs WHERE id<>0'
     const params = []
+    if (scope.scope !== 'all') {
+      const ids = new Set((scope.orgIds || []).map(Number).filter(Number.isFinite))
+      if (scope.scope === 'dealer' && scope.dealerId) {
+        const d = db.prepare('SELECT org_id FROM dealers WHERE id=?').get(scope.dealerId)
+        if (d?.org_id) ids.add(Number(d.org_id))
+      }
+      if (!ids.size) return ok(res, [])
+      sql += ` AND id IN (${[...ids].map(() => '?').join(',')})`
+      params.push(...ids)
+    }
     if (type) { sql += ' AND type=?'; params.push(type) }
     if (keyword) { sql += ' AND (name LIKE ? OR code LIKE ?)'; params.push(`%${keyword}%`, `%${keyword}%`) }
     sql += ' ORDER BY path'
