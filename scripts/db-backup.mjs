@@ -227,6 +227,9 @@ if (freezeError) {
 
 // ---- 阶段 2：窗口内只做快照（明文快照；加密在窗口外） ----
 const snaps = []
+// 兜底：任何未捕获异常/提前退出，都在进程退出时擦除仍在登记的明文临时文件
+const plainTmps = new Set()
+process.on('exit', () => { for (const f of plainTmps) { try { shredFile(f) } catch { /* 尽力而为 */ } } })
 if (!freezeError) {
   const prevUmask = backupKey ? process.umask(0o077) : null
   try {
@@ -254,7 +257,8 @@ if (!freezeError) {
         }
         snap.finalOut = finalOut
         // 有密钥时明文快照只存在于 0600 临时文件（窗口：从 VACUUM INTO 到加密完成后擦除）
-        snap.out = backupKey ? path.join(dir, `.${base}_${stamp}${suffix()}.plain.tmp`) : finalOut
+        snap.out = backupKey ? path.join(dir, `.${base}_${stamp}${suffix()}.${randomBytes(6).toString('hex')}.plain.tmp`) : finalOut
+        if (backupKey) plainTmps.add(snap.out)
         db.prepare('VACUUM INTO ?').run(snap.out)
       } catch (e) {
         failed++

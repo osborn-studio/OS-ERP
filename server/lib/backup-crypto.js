@@ -50,6 +50,16 @@ export function loadBackupKey(env = process.env) {
 
 const fileKey = (ikm, salt) => Buffer.from(hkdfSync('sha256', ikm, salt, HKDF_INFO, 32))
 
+/** writeSync 可能短写：循环写完，否则抛错（绝不静默丢字节）。 */
+function writeAll(fd, buf) {
+  let off = 0
+  while (off < buf.length) {
+    const n = fs.writeSync(fd, buf, off, buf.length - off)
+    if (n <= 0) throw new BackupCryptoError('BACKUP_WRITE_FAILED', '写入返回 0 字节')
+    off += n
+  }
+}
+
 function removeQuietly(file) {
   try { fs.rmSync(file, { force: true }) } catch { /* 清理失败不覆盖原始错误 */ }
 }
@@ -59,6 +69,7 @@ export function encryptFile(src, dest, keyBytes) {
   const partial = `${dest}.partial`
   let inFd = null
   let outFd = null
+  let created = false
   try {
     if (fs.existsSync(dest)) throw new BackupCryptoError('BACKUP_ENC_DEST_EXISTS', `目标已存在：${dest}`)
     if (fs.statSync(src).size > MAX_PLAINTEXT_BYTES) throw new BackupCryptoError('BACKUP_TOO_LARGE', '快照超过单次 GCM 消息上限（约 64 GiB）')
@@ -70,8 +81,9 @@ export function encryptFile(src, dest, keyBytes) {
     const hash = createHash('sha256')
     inFd = fs.openSync(src, 'r')
     outFd = fs.openSync(partial, 'wx', 0o600)
+    created = true
     let size = 0
-    const emit = (buf) => { if (buf.length) { fs.writeSync(outFd, buf); hash.update(buf); size += buf.length } }
+    const emit = (buf) => { if (buf.length) { writeAll(outFd, buf); hash.update(buf); size += buf.length } }
     emit(header)
     const buf = Buffer.allocUnsafe(CHUNK)
     for (;;) {
@@ -87,7 +99,7 @@ export function encryptFile(src, dest, keyBytes) {
     return { size, sha256: hash.digest('hex') }
   } catch (e) {
     if (outFd !== null) try { fs.closeSync(outFd) } catch { /* ignore */ }
-    removeQuietly(partial)
+    if (created) removeQuietly(partial) // 只删本次调用自己创建的 partial
     throw e
   } finally {
     if (inFd !== null) try { fs.closeSync(inFd) } catch { /* ignore */ }
@@ -101,6 +113,7 @@ export function decryptFile(src, dest, keyBytes) {
   const partial = dest ? `${dest}.partial` : null
   let inFd = null
   let outFd = null
+  let created = false
   try {
     if (dest && fs.existsSync(dest)) throw new BackupCryptoError('BACKUP_DEC_DEST_EXISTS', `目标已存在：${dest}`)
     inFd = fs.openSync(src, 'r')
@@ -117,8 +130,8 @@ export function decryptFile(src, dest, keyBytes) {
     const decipher = createDecipheriv('aes-256-gcm', fileKey(keyBytes, salt), iv)
     decipher.setAAD(header)
     decipher.setAuthTag(tag)
-    if (partial) outFd = fs.openSync(partial, 'wx', 0o600)
-    const emit = (buf) => { if (outFd !== null && buf.length) fs.writeSync(outFd, buf) }
+    if (partial) { outFd = fs.openSync(partial, 'wx', 0o600); created = true }
+    const emit = (buf) => { if (outFd !== null && buf.length) writeAll(outFd, buf) }
     const end = total - TAG_BYTES
     let pos = HEADER_BYTES
     const buf = Buffer.allocUnsafe(CHUNK)
@@ -141,7 +154,7 @@ export function decryptFile(src, dest, keyBytes) {
     return { ok: true }
   } catch (e) {
     if (outFd !== null) try { fs.closeSync(outFd) } catch { /* ignore */ }
-    if (partial) removeQuietly(partial)
+    if (created) removeQuietly(partial)
     throw e
   } finally {
     if (inFd !== null) try { fs.closeSync(inFd) } catch { /* ignore */ }
