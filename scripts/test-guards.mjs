@@ -1375,8 +1375,13 @@ if (throwawayArs.length === 2) {
   // 两张草稿各抵同一张应收的 60% → 第一次确认成功、第二次必须被拒
   const d1 = await mkRc(100, [{ ar_id: Y.id, amount: 60 }], '守卫回归 A07 草稿一')
   const d2 = await mkRc(100, [{ ar_id: Y.id, amount: 60 }], '守卫回归 A07 草稿二')
-  const c1 = await api('POST', `/api/ar/receipts/${d1.body?.data?.id}/confirm`, { token: adminJwt, body: {} })
-  const c2 = await api('POST', `/api/ar/receipts/${d2.body?.data?.id}/confirm`, { token: adminJwt, body: {} })
+  // ADR-0018：确认要带凭证号；本用例考的是核销超额闸门，不是二人复核，所以临时关掉复核、结束后恢复
+  const fundsSetting = (value) => api('PUT', '/api/meta/settings', { token: adminJwt, body: { key: 'funds_review_required', value, reason: '守卫回归 A07：临时关闭二人复核' } })
+  await fundsSetting('0')
+  const evidence = { evidence_ref: 'GUARD-A07' }
+  const c1 = await api('POST', `/api/ar/receipts/${d1.body?.data?.id}/confirm`, { token: adminJwt, body: evidence })
+  const c2 = await api('POST', `/api/ar/receipts/${d2.body?.data?.id}/confirm`, { token: adminJwt, body: evidence })
+  await fundsSetting('1')
   ok('两张草稿都能建（草稿上的核销只是计划）', d1.status === 200 && d2.status === 200)
   ok('第一张确认成功', c1.status === 200, JSON.stringify(c1.body?.message || '').slice(0, 110))
   ok(
