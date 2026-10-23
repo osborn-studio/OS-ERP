@@ -64,3 +64,25 @@
 `node --test tests/mcp-delegation.test.mjs`（`GML_RUNTIME_MODE=test`，临时数据目录 + 随机回环端口，约 25 s）：查询串 / 其他头拒收；基线读写与审计脱敏；直接删权限点后写拒 `TOKEN_OWNER_PERM_DENIED`、读照常、恢复后无需重签；API 改角色权限集 ⇒ 旧令牌 `TOKEN_OWNER_REVOKED`、新令牌按缩减后的权限；所有者改为单组织 ⇒ 令牌范围交集生效（`ORG_OUT_OF_SCOPE`，含"令牌绑仓库组织 ∩ 所有者绑别处 = 空"）；API 停用 ⇒ 全部令牌 `revoked`、业务行不变、不能再签、重新启用不复活；绕过钩子直接改状态 ⇒ `TOKEN_OWNER_INACTIVE`，直接递增版本 ⇒ `TOKEN_OWNER_REVOKED`；审计表触发器注入失败 ⇒ 写回滚、幂等缓存无行、读照常、同键可重试；无主只读令牌仍为独立主体（`SCOPE_DENIED`）。
 
 另需通过：`npm run test:focused`、`npx tsc --noEmit`、`node scripts/check-mcp-coverage.mjs`，以及在全新演示数据目录上运行 `scripts/test-mcp.mjs`、`scripts/test-mcp-purchase.mjs`、`scripts/test-mcp-validation.mjs`。
+
+## 矩阵验收（W5）
+
+`tests/mcp-tool-matrix.test.mjs` 把上面的"代表工具"负向测试扩成**全量矩阵**：对 `tools/list` 枚举出的每一个工具（当前 40 个），用其 `inputSchema` 生成最小合法参数（`*_id` 等业务关联走夹具表，单据类走"当前状态下确有流转边"的真实单据；显式覆盖表只维护 schema 不够的工具），分别在三种所有者状态下调用，并对每一格断言稳定拒绝码与"除 MCP 审计 / 幂等 / 确认单表外，全部业务表行数不变"。矩阵以 JSON 写入测试临时目录并断言覆盖数 == 工具数；新增工具而没有进矩阵会让测试变红。
+
+| 状态 | 做法 | 期望 |
+|---|---|---|
+| 所有者停用 | 直接改库（绕过吊销钩子） | 40/40 凭据层 `TOKEN_OWNER_INACTIVE` |
+| 失去权限 | 只删该工具 `perms` 里的权限点；`perms` 为空的工具撤掉角色全部权限 | 声明了 `perms` 的 27 个：`tools/list` 不再列出，调用 `TOKEN_OWNER_PERM_DENIED`；`perms` 为空的 8 个（7 个采购推进 + `doc.transition`）：边权限实时判（`PERM_DENIED`，执行人 = 确认单签字人，用"被撤权的所有者"做签字人来证明）；另 5 个读工具见下 |
+| 范围排除 | 所有者改为一个全新的、无任何数据的单组织 | 写 / 高危工具 `ORG_OUT_OF_SCOPE` 或"越界当作不存在"（`NOT_FOUND` / `DOC_NOT_FOUND` / `ORDER_NOT_FOUND` / `APPROVAL_NOT_FOUND`）；列表类读工具只返回空集；主数据类读工具与 HTTP 同口径不按组织收窄 |
+
+### 矩阵发现并修复的工具级漏洞（`server/mcp/tools.js`）
+
+1. `sales.cancel_order`：没有任何范围判定——列表里看不到的订单，范围受限的所有者经人工确认后仍能作废（实测写入 `doc_events`）。现与 `sales.list_orders` 同一份范围映射（门店 / 经销商 / 发货仓），越界按 `ORDER_NOT_FOUND`。
+2. `purchase.create_requisition` / `create_invoice` / `build_settlement` / `create_payment`：归属目标（`org_id`、令牌组织、仓库、门店）全为空时 `assertPurchaseWriteScope` 直接放行，受限所有者可以建出范围内永远看不到的无主单据。现受限范围下"没有任何归属"一律 `ORG_OUT_OF_SCOPE`（fail-closed，与读侧 `AND 1=0` 同口径）。
+3. `approval.approve`：只靠确认人的审批身份，不看审批对象是否在调用范围内。现通过 `assertDocInScope` 校验审批实例所挂单据，越界 `APPROVAL_NOT_FOUND`。
+
+### 明确记录的边界（矩阵中不是漏判）
+
+- `report.dashboard_kpi` / `org.tree` / `doc.list_types` / `doc.query` / `doc.get` 没有功能权限点（`perms: []`），与 HTTP 侧同类接口"只要登录、按范围收窄"一致，矩阵里记为 `NO_PERM_POINT`；它们的停用与范围两格照常断言。若要给通用单据读工具加按类型的查看权限点，是新的产品决定，不在本次验收内。
+- `pricing.update_price` 改的是全局价格主数据，HTTP 的 `master.price.edit` 也只验权限点；范围外状态下它仍执行（矩阵记 `GLOBAL_PARITY`，且只允许改价格表与留痕）。
+- 幂等重放发生在领域范围判定之前：同一令牌、同一幂等键、同一参数的重放会返回**首次执行时**缓存的结果，不会再次写业务行。所有者随后被撤权 / 缩范围时，这一重放仍会回放旧结果（凭据层的停用 / 版本失效 / 权限闸门仍先于重放生效）。矩阵每次调用换新幂等键，以免把"命中缓存"误判成"范围放行"。
