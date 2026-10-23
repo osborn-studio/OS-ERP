@@ -38,10 +38,10 @@
 | 处理器 | 方法 | 路径 | 分类 | 中间件链 | 调用的 lib 函数 | 处理器内 SQL 表 | 经 lib 触达的表 |
 |---|---|---|---|---|---|---|---|
 | `ai.js:27` | GET | `/api/ai/manifest` | NO_AUTH | （无） | — | — | — |
-| `ai.js:81` | POST | `/api/ai/query` | GATED | requireAuth → requireAuth → requirePerm → requireGlobalData | — | ai_query_logs, brands, categories, dealer_rebates, dealers, inventory_stocks, inventory_transactions, oms_orders, platforms, product_skus, products, purchase_order_items, purchase_orders, sales_order_items, sales_orders, stores, suppliers, warehouses | orgs, role_permissions, roles, user_roles, users |
-| `ai.js:333` | GET | `/api/ai/schema` | GATED | requireAuth → requireAuth → requirePerm → requireGlobalData | — | — | orgs, role_permissions, roles, user_roles, users |
-| `ai.js:361` | GET | `/api/ai/metrics` | NO_AUTH | （无） | lib/metrics.js: metricDefinitions | — | approval_instances, dealers, inventory_stocks, inventory_transactions, oc_orders, oms_orders, pos_orders, product_skus, purchase_orders, purchase_settlements, sales_orders, sales_returns |
-| `ai.js:369` | GET | `/api/ai/logs` | GATED | requireAuth → requireAuth → requirePerm → requireGlobalData | — | ai_query_logs | orgs, role_permissions, roles, user_roles, users |
+| `ai.js:81` | POST | `/api/ai/query` | GATED | requireAuth → requireAuth → requirePerm → requireGlobalData | lib/stock.js: listBelowSafe | ai_query_logs, brands, categories, dealer_rebates, dealers, inventory_stocks, inventory_transactions, oms_orders, platforms, product_skus, products, purchase_order_items, purchase_orders, sales_order_items, sales_orders, stores, suppliers, warehouses | orgs, role_permissions, roles, user_roles, users |
+| `ai.js:326` | GET | `/api/ai/schema` | GATED | requireAuth → requireAuth → requirePerm → requireGlobalData | — | — | orgs, role_permissions, roles, user_roles, users |
+| `ai.js:354` | GET | `/api/ai/metrics` | NO_AUTH | （无） | lib/metrics.js: metricDefinitions | — | approval_instances, dealers, inventory_stocks, inventory_transactions, oc_orders, oms_orders, pos_orders, product_skus, purchase_orders, purchase_settlements, sales_orders, sales_returns, warehouses |
+| `ai.js:362` | GET | `/api/ai/logs` | GATED | requireAuth → requireAuth → requirePerm → requireGlobalData | — | ai_query_logs | orgs, role_permissions, roles, user_roles, users |
 
 ## server/routes/approval.js
 
@@ -150,13 +150,13 @@
 
 | 处理器 | 方法 | 路径 | 分类 | 中间件链 | 调用的 lib 函数 | 处理器内 SQL 表 | 经 lib 触达的表 |
 |---|---|---|---|---|---|---|---|
-| `dashboard.js:25` | GET | `/api/dashboard/summary` | GATED | requireAuth → requireInternal → requireGlobalData → requireAuth | lib/stock.js: countBelowSafe | dealers, inventory_stocks, oms_orders, purchase_orders, sales_orders | product_skus, users, warehouses |
-| `dashboard.js:77` | GET | `/api/dashboard/trend` | GATED | requireAuth → requireInternal → requireGlobalData → requireAuth | — | oms_orders, purchase_orders, sales_orders | users |
-| `dashboard.js:126` | GET | `/api/dashboard/channel` | GATED | requireAuth → requireInternal → requireGlobalData → requireAuth | — | oms_orders, platforms, sales_orders | users |
-| `dashboard.js:154` | GET | `/api/dashboard/todos` | GATED | requireAuth → requireInternal → requireGlobalData → requireAuth | lib/stock.js: listBelowSafe | dealers, inventory_stocks, oms_orders, platforms, product_skus, purchase_orders, sales_orders, stores, suppliers, warehouses | products, users |
-| `dashboard.js:195` | GET | `/api/dashboard/top` | GATED | requireAuth → requireInternal → requireGlobalData → requireAuth | — | brands, dealers, product_skus, products, sales_order_items, sales_orders, stores | users |
-| `dashboard.js:240` | GET | `/api/dashboard/recent` | GATED | requireAuth → requireInternal → requireGlobalData → requireAuth | — | dealers, inventory_transactions, oms_orders, platforms, product_skus, purchase_orders, sales_orders, stores, suppliers, warehouses | users |
-| `dashboard.js:276` | GET | `/api/dashboard/inventory-dist` | GATED | requireAuth → requireInternal → requireGlobalData → requireAuth | — | categories, inventory_stocks, product_skus, products, warehouses | users |
+| `dashboard.js:27` | GET | `/api/dashboard/summary` | GATED | requireAuth → requireInternal → requireGlobalData → requireAuth | lib/db-ttl-cache.js: cachedForDb<br>lib/profile.js: createProfiler<br>lib/stock.js: countBelowSafe | dealers, inventory_stocks, oms_orders, purchase_orders, sales_orders | product_skus, users, warehouses |
+| `dashboard.js:91` | GET | `/api/dashboard/trend` | GATED | requireAuth → requireInternal → requireGlobalData → requireAuth | — | oms_orders, purchase_orders, sales_orders | users |
+| `dashboard.js:140` | GET | `/api/dashboard/channel` | GATED | requireAuth → requireInternal → requireGlobalData → requireAuth | — | oms_orders, platforms, sales_orders | users |
+| `dashboard.js:168` | GET | `/api/dashboard/todos` | GATED | requireAuth → requireInternal → requireGlobalData → requireAuth | lib/stock.js: listBelowSafe | dealers, inventory_stocks, oms_orders, platforms, product_skus, purchase_orders, sales_orders, stores, suppliers, warehouses | products, users |
+| `dashboard.js:209` | GET | `/api/dashboard/top` | GATED | requireAuth → requireInternal → requireGlobalData → requireAuth | — | brands, dealers, product_skus, products, sales_order_items, sales_orders, stores | users |
+| `dashboard.js:254` | GET | `/api/dashboard/recent` | GATED | requireAuth → requireInternal → requireGlobalData → requireAuth | — | dealers, inventory_transactions, oms_orders, platforms, product_skus, purchase_orders, sales_orders, stores, suppliers, warehouses | users |
+| `dashboard.js:290` | GET | `/api/dashboard/inventory-dist` | GATED | requireAuth → requireInternal → requireGlobalData → requireAuth | — | categories, inventory_stocks, product_skus, products, warehouses | users |
 
 ## server/routes/dealers.js
 
@@ -428,12 +428,12 @@
 
 | 处理器 | 方法 | 路径 | 分类 | 中间件链 | 调用的 lib 函数 | 处理器内 SQL 表 | 经 lib 触达的表 |
 |---|---|---|---|---|---|---|---|
-| `metrics.js:63` | GET | `/api/metrics` | GATED | requireAuth → requirePerm | lib/metrics.js: metricGroups | — | approval_instances, dealers, inventory_stocks, inventory_transactions, oc_orders, oms_orders, pos_orders, product_skus, purchase_orders, purchase_settlements, role_permissions, sales_orders, sales_returns, user_roles, users |
-| `metrics.js:81` | GET | `/api/metrics/defs` | GATED | requireAuth → requirePerm | lib/metrics.js: metricDefinitions | — | approval_instances, dealers, inventory_stocks, inventory_transactions, oc_orders, oms_orders, pos_orders, product_skus, purchase_orders, purchase_settlements, role_permissions, sales_orders, sales_returns, user_roles, users |
-| `metrics.js:89` | GET | `/api/metrics/values` | GATED | requireAuth → requirePerm | lib/metrics.js: metricValues | — | approval_instances, dealers, inventory_stocks, inventory_transactions, oc_orders, oms_orders, pos_orders, product_skus, purchase_orders, purchase_settlements, role_permissions, sales_orders, sales_returns, user_roles, users |
-| `metrics.js:105` | GET | `/api/metrics/catalog` | GATED | requireAuth → requirePerm | lib/metrics.js: metricCatalog | — | approval_instances, dealers, inventory_stocks, inventory_transactions, oc_orders, oms_orders, pos_orders, product_skus, purchase_orders, purchase_settlements, role_permissions, sales_orders, sales_returns, user_roles, users |
-| `metrics.js:120` | GET | `/api/metrics/stale` | GATED | requireAuth → requirePerm | lib/metrics.js: metricDefinitions, metricDefsStale | metric_defs | approval_instances, dealers, inventory_stocks, inventory_transactions, oc_orders, oms_orders, pos_orders, product_skus, purchase_orders, purchase_settlements, role_permissions, sales_orders, sales_returns, user_roles, users |
-| `metrics.js:145` | POST | `/api/metrics/sync` | GATED | requireAuth → requirePerm | lib/metrics.js: metricDefsStale, syncMetricDefs | metric_defs | approval_instances, audit_logs, dealers, inventory_stocks, inventory_transactions, oc_orders, oms_orders, pos_orders, product_skus, purchase_orders, purchase_settlements, role_permissions, sales_orders, sales_returns, user_roles, users |
+| `metrics.js:63` | GET | `/api/metrics` | GATED | requireAuth → requirePerm | lib/metrics.js: metricGroups | — | approval_instances, dealers, inventory_stocks, inventory_transactions, oc_orders, oms_orders, pos_orders, product_skus, purchase_orders, purchase_settlements, role_permissions, sales_orders, sales_returns, user_roles, users, warehouses |
+| `metrics.js:81` | GET | `/api/metrics/defs` | GATED | requireAuth → requirePerm | lib/metrics.js: metricDefinitions | — | approval_instances, dealers, inventory_stocks, inventory_transactions, oc_orders, oms_orders, pos_orders, product_skus, purchase_orders, purchase_settlements, role_permissions, sales_orders, sales_returns, user_roles, users, warehouses |
+| `metrics.js:89` | GET | `/api/metrics/values` | GATED | requireAuth → requirePerm | lib/metrics.js: metricValues | — | approval_instances, dealers, inventory_stocks, inventory_transactions, oc_orders, oms_orders, pos_orders, product_skus, purchase_orders, purchase_settlements, role_permissions, sales_orders, sales_returns, user_roles, users, warehouses |
+| `metrics.js:105` | GET | `/api/metrics/catalog` | GATED | requireAuth → requirePerm | lib/metrics.js: metricCatalog | — | approval_instances, dealers, inventory_stocks, inventory_transactions, oc_orders, oms_orders, pos_orders, product_skus, purchase_orders, purchase_settlements, role_permissions, sales_orders, sales_returns, user_roles, users, warehouses |
+| `metrics.js:120` | GET | `/api/metrics/stale` | GATED | requireAuth → requirePerm | lib/metrics.js: metricDefinitions, metricDefsStale | metric_defs | approval_instances, dealers, inventory_stocks, inventory_transactions, oc_orders, oms_orders, pos_orders, product_skus, purchase_orders, purchase_settlements, role_permissions, sales_orders, sales_returns, user_roles, users, warehouses |
+| `metrics.js:145` | POST | `/api/metrics/sync` | GATED | requireAuth → requirePerm | lib/metrics.js: metricDefsStale, syncMetricDefs | metric_defs | approval_instances, audit_logs, dealers, inventory_stocks, inventory_transactions, oc_orders, oms_orders, pos_orders, product_skus, purchase_orders, purchase_settlements, role_permissions, sales_orders, sales_returns, user_roles, users, warehouses |
 
 ## server/routes/notify.js
 

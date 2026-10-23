@@ -23,7 +23,7 @@
 // 设计原则：工具直接复用五维库存引擎与组织数据权限，而不是另写一套取数逻辑 ——
 //          这样 AI 看到的数据与人在界面上看到的永远一致，不会出现「AI 说还有 10 件、页面显示 0 件」。
 
-import { pickBatches, queryBalance, costOf, getInvParam, resolveOwnerOrg, applyStockGain, stockScopeSql, warehouseInScope } from '../lib/stock.js'
+import { pickBatches, queryBalance, costOf, getInvParam, resolveOwnerOrg, applyStockGain, stockScopeSql, warehouseInScope, listBelowSafe } from '../lib/stock.js'
 import { localDate, localNow } from '../lib/dates.js'
 // D5：MCP 工具不再"平行实现"业务 —— 有领域服务的一律调领域服务
 import { decideApproval, ApprovalError } from '../lib/approval.js'
@@ -851,12 +851,9 @@ export const TOOLS = [
     handler({ db, args, ctx }) {
       const days = Number(args.expiring_days) || Number(getInvParam(db, 'expire_warn_days', 90))
       const f = invFilter(ctx, 's', 'owner_org_id')
-      const below = db.prepare(`
-        SELECT s.sku_id, k.sku_code, k.name AS sku_name, k.safe_stock, SUM(s.qty_on_hand) AS qty_on_hand
-        FROM inventory_stocks s JOIN product_skus k ON k.id=s.sku_id
-        WHERE k.safe_stock > 0 ${f.sql}
-        GROUP BY s.sku_id HAVING SUM(s.qty_on_hand) < k.safe_stock
-        ORDER BY (SUM(s.qty_on_hand) - k.safe_stock) LIMIT 100`).all(...f.params)
+      // AA5：低库存与看板 / 预警页同一口径（lib/stock.js listBelowSafe，按仓库所属组织收口，ctx.scope 即令牌范围）；
+      // 输出字段保持原来的五个键。口径差异见 ADR-0044（全局范围含无库存行的 SKU、只算 active、并列按 sku id；受限范围只列范围内有库存行的 SKU）。
+      const below = listBelowSafe(db, 100, ctx.scope, { visibleOnly: true }).map(({ sku_id, sku_code, sku_name, safe_stock, qty_on_hand }) => ({ sku_id, sku_code, sku_name, safe_stock, qty_on_hand }))
       const expiring = db.prepare(`
         SELECT s.sku_id, k.name AS sku_name, s.batch_no, s.warehouse_id, w.name AS warehouse_name,
                COALESCE(s.expire_at, s.expire_date) AS expire_at, s.qty_on_hand

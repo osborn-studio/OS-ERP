@@ -77,7 +77,10 @@ export const STATEMENTS = [
   { id: 'dash.oms_month', mirrors: 'server/routes/dashboard.js summary', bench: 'dashboard_summary',
     sql: "SELECT COUNT(*) orders, COALESCE(SUM(pay_amount),0) gmv, COALESCE(SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END),0) pending FROM oms_orders WHERE substr(order_time,1,7) = strftime('%Y-%m','now','localtime')" },
   { id: 'dash.stock_total', mirrors: 'server/routes/dashboard.js summary', bench: 'dashboard_summary',
-    sql: 'SELECT COALESCE(SUM(qty_on_hand),0) qty, COALESCE(SUM(qty_on_hand*cost_price),0) amount, COUNT(DISTINCT sku_id) skus FROM inventory_stocks' },
+    sql: 'SELECT COALESCE(SUM(qty_on_hand),0) qty, COALESCE(SUM(qty_on_hand*cost_price),0) amount FROM inventory_stocks' },
+  // AA5：COUNT(DISTINCT sku_id) 从上面的整表求和里拆出来，走 idx_stock_sku 覆盖索引（去重计数不再建临时 B 树、不扫宽表）
+  { id: 'dash.stock_sku_count', mirrors: 'server/routes/dashboard.js summary', bench: 'dashboard_summary',
+    sql: 'SELECT COUNT(*) skus FROM (SELECT DISTINCT sku_id FROM inventory_stocks WHERE sku_id IS NOT NULL)' },
   { id: 'dash.todo_counts', mirrors: 'server/routes/dashboard.js summary', bench: 'dashboard_summary',
     sql: "SELECT (SELECT COUNT(*) FROM sales_orders WHERE status='confirmed') AS pending_delivery, (SELECT COUNT(*) FROM purchase_orders WHERE status IN ('submitted','approved')) AS pending_receipt, (SELECT COUNT(*) FROM oms_orders WHERE status='pending') AS oms_pending, (SELECT COUNT(*) FROM inventory_stocks st WHERE st.qty_on_hand>0 AND st.expire_date IS NOT NULL AND st.expire_date <> '' AND st.expire_date <= date('now','localtime','+90 day')) AS expiring, (SELECT COUNT(*) FROM dealers WHERE status='active' AND credit_limit>0 AND credit_used*1.0/credit_limit>=0.8) AS credit_alert" },
   // Z3：below_safe 计数与 Top 10 改走 server/lib/stock.js 的预聚合口径
@@ -248,7 +251,7 @@ export const ALLOW = [
   { statement: 'audit.list_entity_only', table: 'audit_logs', noSort: true, reason: '仅按 entity 类型（几十种、每种命中很多行）：用 `+entity` 屏蔽 idx_audit_entity，避免对全部命中行临时排序；沿 rowid 倒扫凑够一页即停。命中稀少的类型会读到整表——已知残余（见 capacity-baseline AA6）' },
   { statement: 'audit.list_keyword', table: 'audit_logs', noSort: true, reason: '同 audit.count_keyword：子串匹配无法建索引；按 id 倒序取够一页即停，命中稀少时读量上界是整表' },
   { statement: 'dash.sales_unpaid', table: 'sales_orders', reason: AGG_REASON },
-  { statement: 'dash.stock_total', table: 'inventory_stocks', reason: '整表聚合（SUM / COUNT DISTINCT 全库存），没有谓词；索引只能做覆盖扫描，不改变量级' },
+  { statement: 'dash.stock_total', table: 'inventory_stocks', reason: '整表聚合（SUM 全库存），没有谓词；索引只能做覆盖扫描，不改变量级；AA5 起由看板 30 s 缓存吸收重复读取' },
   { statement: 'rpt.stock_value', table: 'inventory_stocks', reason: '整表聚合库存金额，没有谓词' },
   { statement: 'rpt.ar_open', table: 'ar_documents', reason: AGG_REASON },
   { statement: 'rpt.ap_open', table: 'purchase_settlements', reason: AGG_REASON },
