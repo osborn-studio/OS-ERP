@@ -10,6 +10,8 @@
  *   4. 第二人（另一个 finance 账号）在界面点「复核通过」→ 200，status=confirmed、review.status=approved、
  *      复核人 = 第二人；授信效果面板出现并带本单单号；应收核销金额 = 收款金额。
  * 断言的是服务端状态与响应体，不只是页面上有没有某段文字。
+ * 局限：夹具是不挂销售订单的手工应收，所以授信释放台账为空、释放金额为 0；面板只与服务端 credit_released 对照（行数 / 空态），
+ *   不证明非零授信释放（那由 tests/funds-maker-checker.test.mjs 与授信台账测试负责）。
  * 不声明：不覆盖付款单（Payments.tsx）、不覆盖阈值/设置分支（见 tests/funds-maker-checker.test.mjs）。
  * 只在 Linux 托管 CI 或专用 Linux 主机运行；未执行前不得称"浏览器场景已通过"。
  * ============================================================================
@@ -122,6 +124,11 @@ try {
     const text = await panel.innerText()
     assert.ok(text.includes(receipt.doc_no), 'credit effect panel names the receipt')
     assert.ok(text.includes('本次释放授信'), 'credit effect panel states it is a release')
+    // The panel must mirror the server's credit_released block: same number of ledger rows, empty-state only when the server says nothing was released.
+    const released = data.credit_released
+    assert.ok(released && Array.isArray(released.rows), 'approve response carries credit_released.rows')
+    assert.equal(await panel.locator('tbody tr').count(), released.rows.length)
+    assert.equal(text.includes('本次未触及授信占用'), released.rows.length === 0 && Number(released.unified || 0) === 0 && Number(released.oc || 0) === 0)
     const row = await receiptRow()
     assert.equal(row.status, 'confirmed')
     assert.equal(row.review.checker.id, checker.id)

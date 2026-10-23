@@ -104,7 +104,7 @@ jobs:
     # Chromium comes from the lockfile-pinned playwright devDependency (1.64.0, integrity in package-lock.json),
     # downloaded by `playwright install`; the driver starts server/index.js in test mode on a random loopback port with a
     # fresh random JWT secret and a temp GML_DATA_DIR (demo seed), then runs the scenarios.
-    # Only the allowlisted summary.json, session-evidence.json and failure screenshots are uploaded; raw logs never are.
+    # Only the allowlisted summary.json, evidence-*.json and failure screenshots are uploaded; raw logs never are.
     # Passing is source-level browser evidence for this commit; it is not release-package or production acceptance.
     name: Browser scenarios (Linux Chromium)
     needs: checks
@@ -139,7 +139,7 @@ jobs:
           name: os-erp-browser-summary-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             artifacts/browser-ci/summary.json
-            artifacts/browser-ci/session-evidence.json
+            artifacts/browser-ci/evidence-*.json
             artifacts/browser-ci/screenshots/failure-*.png
           if-no-files-found: error
           retention-days: 14

@@ -7,7 +7,7 @@
  * 约束：
  *   · 只在 Linux 运行（场景自己也断言）；需要先 `npm ci`、`npx playwright install chromium`、`npm run build`。
  *   · 场景与服务端的原始输出不外泄：只打印 `PASS ...` 行与阶段结果；失败时打印脱敏尾部（32 位以上不透明串打码）。
- *   · 产物只有 <out>/summary.json、<out>/session-evidence.json（场景名与浏览器版本）和 <out>/screenshots/failure-*.png。
+ *   · 产物只有 <out>/summary.json、<out>/evidence-<场景>.json（场景名与浏览器版本，每个场景各自一份，避免 wx 写入冲突）和 <out>/screenshots/failure-*.png。
  *   · 先探测 Chromium 沙箱：可用则保持开启；托管 runner 的内核策略禁止非特权 userns 时才退到 GML_CHROMIUM_SANDBOX=0，
  *     并在摘要里如实记录 sandbox 取值。回退只发生在一次性 runner 上，场景只访问本机回环源并拦截外部请求。
  * 不声明：这是源码级浏览器场景证据，不是发行包或生产验收。
@@ -97,12 +97,11 @@ try {
     PATH: process.env.PATH, HOME: process.env.HOME, CI: process.env.CI,
     ...(process.env.PLAYWRIGHT_BROWSERS_PATH ? { PLAYWRIGHT_BROWSERS_PATH: process.env.PLAYWRIGHT_BROWSERS_PATH } : {}),
     GML_TEST_BASE_URL: base, GML_PLAYWRIGHT_MODULE: playwrightModule, GML_CHROMIUM_EXECUTABLE: chromiumExecutable,
-    GML_CHROMIUM_SANDBOX: browserInfo.sandbox ? '1' : '0', GML_BROWSER_SHOT_DIR: path.join(outDir, 'screenshots'),
-    GML_BROWSER_EVIDENCE: path.join(outDir, 'session-evidence.json')
+    GML_CHROMIUM_SANDBOX: browserInfo.sandbox ? '1' : '0', GML_BROWSER_SHOT_DIR: path.join(outDir, 'screenshots')
   }
   for (const name of SCENARIOS) {
     const started = Date.now()
-    const child = spawn(process.execPath, [`tests/browser/${name}.mjs`], { cwd: ROOT, env: scenarioEnv, stdio: ['ignore', 'pipe', 'pipe'] })
+    const child = spawn(process.execPath, [`tests/browser/${name}.mjs`], { cwd: ROOT, env: { ...scenarioEnv, GML_BROWSER_EVIDENCE: path.join(outDir, `evidence-${name}.json`) }, stdio: ['ignore', 'pipe', 'pipe'] })
     let output = ''
     const collect = (d) => { if (output.length < 1_000_000) output += d }
     child.stdout.on('data', collect)

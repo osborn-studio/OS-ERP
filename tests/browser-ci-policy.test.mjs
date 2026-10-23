@@ -73,7 +73,7 @@ test('browser job uploads only the allowlisted summary files and failure screens
   const paths = upload.match(/path:\s*\|\n((?:\s+\S.*\n?)+)/)?.[1].split('\n').map((l) => l.trim()).filter((l) => l && !/^[\w-]+:/.test(l))
   assert.deepEqual(paths, [
     'artifacts/browser-ci/summary.json',
-    'artifacts/browser-ci/session-evidence.json',
+    'artifacts/browser-ci/evidence-*.json',
     'artifacts/browser-ci/screenshots/failure-*.png'
   ])
   assert.doesNotMatch(upload, /\.log|node_modules|\.db|\.env|\*\*|\btmp\b/i)
@@ -96,6 +96,7 @@ test('driver isolates the server (random secret, temp data dir, loopback random 
   assert.doesNotMatch(driver, /GML_JWT_SECRET[^\n]*console|console[^\n]*GML_JWT_SECRET/)
   const literals = [...driver.matchAll(/'([A-Za-z0-9_-]{24,})'/g)].map((m) => m[1])
   assert.deepEqual(literals, [])
+  assert.match(driver, /evidence-\$\{name\}\.json/, 'each scenario gets its own evidence file (wx writes would collide)')
   assert.match(driver, /process\.platform !== 'linux'/)
 })
 
