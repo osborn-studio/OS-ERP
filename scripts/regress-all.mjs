@@ -226,6 +226,21 @@ for (let round = 1; round <= ROUNDS; round++) {
         // 失败时把输出尾部打出来 —— 否则只有"✗"一行，还得翻回去重跑才能看原因
         console.log('    ── 输出尾部 ──')
         console.log(out.split('\n').slice(-25).map((l) => '    ' + l).join('\n'))
+        // node --test 的失败用例名在 TAP 的 `not ok` 行，往往不在尾部 25 行里；单独列出（含紧随其后的 error/location 行）
+        const lines = out.split('\n')
+        const picked = []
+        for (let i = 0; i < lines.length; i++) {
+          if (/^\s*not ok /.test(lines[i])) {
+            picked.push(lines[i])
+            for (let j = i + 1; j < Math.min(i + 12, lines.length); j++) {
+              if (/^\s+(error:|location:|code:|failureType:|ENOENT|expected|actual)/.test(lines[j])) picked.push(lines[j])
+            }
+          }
+        }
+        if (picked.length) {
+          console.log('    ── not ok 用例 ──')
+          console.log(picked.slice(0, 60).map((l) => '    ' + l).join('\n'))
+        }
       }
     }
   }
