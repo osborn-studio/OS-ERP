@@ -14,6 +14,7 @@
  * ============================================================================
  */
 import test from 'node:test'
+import { readFileSync } from 'node:fs'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
@@ -259,4 +260,12 @@ test('approval instances are scoped to the org of the document they point at', {
       assert.equal((await api(route)).status, 401, route)
     }
   })
+})
+
+
+// Y12 审计跟进：MCP approval.approve 必须把人工确认人的组织范围传给 decideApproval（静态断言，守住接线）。
+test('MCP approval.approve passes the human signer org scope into decideApproval', () => {
+  const src = readFileSync(new URL('../server/mcp/tools.js', import.meta.url), 'utf8')
+  assert.match(src, /resolveOrgScope\(db, \{ uid: signerRow\.id, role: signerRow\.role \}\)/)
+  assert.match(src, /decideApproval\(db, \{[\s\S]*?scopeCtx: \{ orgScope: signerScope/)
 })

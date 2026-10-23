@@ -47,7 +47,7 @@ import {
   DocFlowError, getDocType, assertEdgePermitted, dispatchTransition
 } from '../lib/docflow.js'
 // 金额/数量与权限点的**唯一判据**（与 HTTP 入口同一个）
-import { numAmount, numQty, permContext, hasPerm } from '../middleware/auth.js'
+import { numAmount, numQty, permContext, hasPerm, resolveOrgScope } from '../middleware/auth.js'
 import { assertCanViewDocType, canViewDocType, bindingWhere, rowInBinding, TOKEN_OWNER_PERM_DENIED } from './doc-perms.js'
 
 /**
@@ -1399,11 +1399,16 @@ export const TOOLS = [
       }
       // 审批实例挂在某张单据上：单据不在本次调用的数据范围内，就不能替它签字（W5 矩阵验收发现此前缺这一道）
       assertDocInScope(ctx, db, inst.doc_type, inst.doc_id, { code: 'APPROVAL_NOT_FOUND', label: `审批实例 #${inst.id} 对应的单据` })
+      // ADR-0037：签字人不只是"在场的人"，还要对这张单据有组织范围——Agent 令牌范围之外再叠一层人的范围，
+      // 否则 HTTP 侧按组织拒绝的审批可以绕到 MCP 由同一个人确认后签掉（Y12 审计发现）。
+      const signerRow = db.prepare('SELECT id, role FROM users WHERE id=?').get(actor.id)
+      const signerScope = signerRow ? resolveOrgScope(db, { uid: signerRow.id, role: signerRow.role }) : { scope: 'none', orgIds: [] }
       const out = decideApproval(db, {
         instanceId: inst.id,
         decision: 'approve',
         comment: args.comment || null,
-        actor
+        actor,
+        scopeCtx: { orgScope: signerScope, user: { uid: actor.id, name: actor.name } }
       })
       return ok(
         {
