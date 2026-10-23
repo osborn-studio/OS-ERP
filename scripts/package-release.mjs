@@ -26,7 +26,7 @@ if (!args.includes('--skip-docs')) run(['scripts/build-docs-wiki.mjs'])
 if (!args.includes('--skip-build')) run(['node_modules/vite/bin/vite.js', 'build'])
 if (!fs.existsSync(path.join(ROOT, 'dist/index.html'))) throw new Error('Build frontend first')
 fs.mkdirSync(dest, { recursive: true })
-const excluded = /(^|\/)(?:node_modules|\.git|\.local|backups|release|evidence|__pycache__)(\/|$)|(^|\/)\.env(?:\.|$)|\.db(?:-|$)|\.log$|\.DS_Store$|\.(?:mp4|mov|mp3|wav)$/i
+const excluded = /(^|\/)(?:node_modules|\.git|\.local|backups|release|evidence|__pycache__)(\/|$)|(^|\/)\.env(?:\.|$)|\.(?:db|db3|sqlite3?)(?:-|\.|$)|\.log$|\.DS_Store$|\.(?:mp4|mov|mp3|wav)$/i
 function copy(relative, to = relative) {
   fs.cpSync(path.join(ROOT, relative), path.join(dest, to), { recursive: true, filter: source => {
     const rel = path.relative(ROOT, source).split(path.sep).join('/')

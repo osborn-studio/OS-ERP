@@ -25,6 +25,7 @@ import { unzipSync } from 'fflate'
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url))
 const PATH = process.env.PATH
+const RUNTIME_DIR = 'data' // 包根下的运行态目录名（不是仓库 data/ 兜底路径）
 
 function tempDir(t, prefix) {
   const dir = mkdtempSync(path.join(tmpdir(), prefix))
@@ -120,11 +121,36 @@ test('verify-release rejects a package without baseCommit, notices, or with data
   r = mutate(m => { delete m.files['THIRD_PARTY_NOTICES.md'] })
   assert.notEqual(r.status, 0)
   assert.match(r.stderr, /THIRD_PARTY_NOTICES/)
-  r = mutate(m => { m.files['data/gml_cosmetic.db'] = 'x' })
+  r = mutate(m => { m.files[`${RUNTIME_DIR}/gml_cosmetic.db`] = 'x' })
   assert.notEqual(r.status, 0)
   assert.match(r.stderr, /must not be part of a release/)
+  r = mutate(m => { m.files['public/demo.sqlite3'] = 'x' })
+  assert.notEqual(r.status, 0)
   writeFileSync(file, original)
   assert.equal(verify().status, 0)
+  // 清单之外的文件（事后塞进包里的 .env / 演示库）也要红；运行态目录（data/ .local/ backups/ node_modules/）不算
+  for (const planted of ['.env', 'public/demo.db', 'public/docs/seed.sqlite']) {
+    put(pkg, planted, 'x')
+    r = verify()
+    assert.notEqual(r.status, 0, planted)
+    assert.match(r.stderr, /not listed in MANIFEST/)
+    rmSync(path.join(pkg, planted))
+  }
+  put(pkg, `${RUNTIME_DIR}/gml_cosmetic.db`, 'x')
+  put(pkg, '.local/config.json', '{}')
+  assert.equal(verify().status, 0, 'runtime directories are allowed')
+})
+
+test('package-release leaves database-like files out of the archive', (t) => {
+  const src = minimalSource(t)
+  put(src, 'public/demo.sqlite', 'x')
+  put(src, 'public/demo.sqlite3', 'x')
+  put(src, 'public/demo.db.bak', 'x')
+  put(src, 'server/seed.db', 'x')
+  const out = tempDir(t, 'os-erp-release-out-')
+  assert.equal(release(src, out).status, 0)
+  const names = Object.keys(JSON.parse(readFileSync(path.join(extract(t, out), 'MANIFEST.json'), 'utf8')).files)
+  assert.deepEqual(names.filter(n => /(^|\/)(demo\.|seed\.db)/.test(n)), [])
 })
 
 test('package-release refuses to build without a git commit to record', (t) => {

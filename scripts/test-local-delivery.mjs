@@ -37,7 +37,8 @@ async function timed(name, fn) { const t = performance.now(); try { return await
 const port = await new Promise(resolve => { const s = net.createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => resolve(p)) }) })
 const base = `http://127.0.0.1:${port}`
 const instance = mode === 'production' ? path.join(evidence, 'instance') : null
-const manage = (...argv) => ['scripts/local-manage.mjs', ...argv, ...(instance ? [`--instance=${instance}`] : [])]
+let currentInstance = instance // 恢复验收会把服务切到第二个实例目录
+const manage = (...argv) => ['scripts/local-manage.mjs', ...argv, ...(currentInstance ? [`--instance=${currentInstance}`] : [])]
 const env = { ...process.env, PATH: `${path.dirname(process.execPath)}${path.delimiter}${process.env.PATH || ''}`, GML_LOCAL_PORT: String(port),
   ...(mode === 'demo' ? { GML_RUNTIME_MODE: 'demo' } : {}), GML_DATA_DIR: path.join(evidence, 'must-not-create'), GML_DB: path.join(evidence, 'must-not-create.db'), GML_JWT_SECRET: 'must-not-use' }
 function child(argv, extra = {}, stdin = 'ignore') {
@@ -146,8 +147,8 @@ try {
   await login(username, 'cosmetic', 'Test-only-123456-long!')
   check('restart preserves user data and signing configuration', () => assert.deepEqual(fs.readFileSync(path.join(root, '.local/config.json')), originalConfig))
   await stop()
-  const dataBefore = path.join(root, 'data-before-restore')
-  fs.renameSync(path.join(root, 'data'), dataBefore); fs.mkdirSync(path.join(root, 'data'))
+  const dataBefore = path.join(root, 'backups', 'data-before-restore') // 放在 backups/ 下：包根其余位置不允许出现清单外文件
+  fs.mkdirSync(path.join(root, 'backups'), { recursive: true }); fs.renameSync(path.join(root, 'data'), dataBefore); fs.mkdirSync(path.join(root, 'data'))
   for (const file of fs.readdirSync(lastBackup).filter(name => name.endsWith('.db'))) fs.copyFileSync(path.join(lastBackup, file), path.join(root, 'data', file))
   fs.copyFileSync(path.join(lastBackup, 'config.json'), path.join(root, '.local/config.json'))
   await start(); await login(username, 'cosmetic', 'Test-only-123456-long!')
@@ -174,6 +175,12 @@ try {
     assert.match(String(manifest.baseCommit), /^[0-9a-f]{7,64}$/, 'MANIFEST.baseCommit must be a git sha')
     assert.ok(manifest.files['THIRD_PARTY_NOTICES.md'], 'notices must be hash-listed')
   })
+  // 已知缺口（W10 重写手册）：随包手册仍以演示口径写着默认账号。只记入报告，不让验收假装它们不存在。
+  report.warnings = []
+  for (const rel of ['docs/本地交付', '手册']) {
+    const walk = dir => fs.readdirSync(path.join(root, dir), { withFileTypes: true }).flatMap(e => e.isDirectory() ? walk(`${dir}/${e.name}`) : [`${dir}/${e.name}`])
+    if (fs.existsSync(path.join(root, rel))) for (const f of walk(rel)) if (/admin\s*\/\s*12345/.test(read(f))) report.warnings.push(`${f} advertises demo credentials admin/12345 (docs rewrite pending, roadmap W10)`)
+  }
   check('package ships no database, secret, instance state or default credentials', () => {
     const bad = Object.keys(manifest.files).filter(f => /(^|\/)(\.local|backups|data)(\/|$)|\.db(-|$)|(^|\/)\.env(\.|$)/i.test(f) && !/^\.gitignore$/.test(f))
     assert.deepEqual(bad, [])
@@ -264,12 +271,29 @@ try {
     assert.equal(JSON.parse(text).passed, true); assert.ok(!text.includes(adminPassword))
   })
 
+  // 把 local-manage 的备份真正恢复到全新实例：配置（签名密钥）与三个库都回来，bootstrap 管理员能登录
+  const restored = path.join(evidence, 'instance-restored')
+  assert.equal(await run(manage('setup').map(a => a.startsWith('--instance=') ? `--instance=${restored}` : a)), 0)
+  fs.mkdirSync(path.join(restored, 'data'), { recursive: true })
+  for (const f of fs.readdirSync(lastBackup).filter(n => n.endsWith('.db'))) fs.copyFileSync(path.join(lastBackup, f), path.join(restored, 'data', f))
+  fs.copyFileSync(path.join(lastBackup, 'config.json'), path.join(restored, '.local', 'config.json'))
+  currentInstance = restored
+  await start()
+  await login(adminName, 'cosmetic', adminPassword)
+  check('local-manage backup restores into a fresh instance: all three databases, signing config, admin can log in', () => {
+    assert.deepEqual(fs.readdirSync(path.join(restored, "data")).filter(n => n.endsWith(".db")).sort(), ['gml_apparel.db', 'gml_cosmetic.db', 'gml_food.db'])
+    assert.deepEqual(fs.readFileSync(path.join(restored, '.local', 'config.json')), originalConfig)
+  })
+  await stop(); currentInstance = instance
+
   const readme = path.join(root, 'README.md'); const before = fs.readFileSync(readme)
   try {
     fs.appendFileSync(readme, '\nTamper test\n')
     assert.notEqual(await run(['scripts/verify-release.mjs']), 0)
     check('integrity check detects modified release file', () => {})
   } finally { fs.writeFileSync(readme, before) }
+  fs.writeFileSync(path.join(root, 'planted.env'), 'X=1')
+  try { assert.notEqual(await run(['scripts/verify-release.mjs']), 0); check('integrity check detects an unlisted file planted in the package', () => {}) } finally { fs.rmSync(path.join(root, 'planted.env')) }
   assert.equal(await run(['scripts/verify-release.mjs']), 0)
   check('instance data and backups (outside the package) do not invalidate release hashes', () => {})
   report.timings_ms = timings
