@@ -3,7 +3,7 @@
 <!-- generated -->
 <!-- 由 `node scripts/gen-codemap.mjs` 生成，勿手改；CI 校验不漂移 -->
 
-共 37 个 ADR 文件。批次来自 `scripts/gen-changelog.mjs` 的 BATCHES（编号区间）；状态是 ADR 原文“状态：”一句的摘录（没有就如实标注），**不代表验收**；“守卫 / 测试”是 ADR 正文里提到的文件路径（静态正则提取，路径不存在时标注“（不存在）”），不证明该测试覆盖了 ADR 的全部决定。
+共 39 个 ADR 文件。批次来自 `scripts/gen-changelog.mjs` 的 BATCHES（编号区间）；状态是 ADR 原文“状态：”一句的摘录（没有就如实标注），**不代表验收**；“守卫 / 测试”是 ADR 正文里提到的文件路径（静态正则提取，路径不存在时标注“（不存在）”），不证明该测试覆盖了 ADR 的全部决定。
 
 | 编号 | 标题 | 批次 | 状态（原文摘录） | 守卫（scripts/） | 测试（tests/） |
 |---|---|---|---|---|---|
@@ -17,7 +17,7 @@
 | 0008 | [ADR-0008：通知子系统加固（摘要数据范围、出站 Webhook 策略、渠道密钥静态保护）](ADR-0008-notify-hardening.md) | 第三批 | 开发实现，尚非产品上线验收 | — | — |
 | 0009 | [ADR-0009：备份先校验后轮转，迁移文件校验和](ADR-0009-backup-verification-and-migration-checksums.md) | 第三批 | （ADR 未写出状态） | `db-backup.mjs`<br>`migrate.mjs`<br>`verify-migrations.mjs` | — |
 | 0010 | [ADR-0010：审计与错误卫生（F13）](ADR-0010-audit-and-error-hygiene.md) | 第三批 | （ADR 未写出状态） | `check-bizcode-shape.mjs`<br>`check-file-header.mjs` | — |
-| 0011 | [ADR-0011：MCP Agent Token 是所有者的委托，不是独立服务主体](ADR-0011-mcp-delegated-token-scope.md) | 第三批 | （ADR 未写出状态） | `check-mcp-coverage.mjs`<br>`test-mcp-purchase.mjs`<br>`test-mcp-validation.mjs`<br>`test-mcp.mjs` | — |
+| 0011 | [ADR-0011：MCP Agent Token 是所有者的委托，不是独立服务主体](ADR-0011-mcp-delegated-token-scope.md) | 第三批 | 对每个首次成功的写型工具，用同一幂等键依次在"权限被撤""范围被缩""全部恢复"下重放，断言前两格得到当前错误、不带 ` | `check-mcp-coverage.mjs`<br>`test-mcp-purchase.mjs`<br>`test-mcp-validation.mjs`<br>`test-mcp.mjs` | — |
 | 0012 | [ADR-0012：最小运行镜像与版本 / 状态契约](ADR-0012-container-and-version-contract.md) | 第三批 | 开发实现，尚非生产部署验收 | `build-docs-wiki.mjs`<br>`check-api-contract.mjs`<br>`check-contract-routes.mjs`<br>`check-file-header.mjs`<br>`package-release.mjs`<br>`test-dependency-security.mjs` | — |
 | 0013 | [ADR-0013：收款释放的授信按台账逐笔逆向，不按总额猜](ADR-0013-credit-release-ledger.md) | 第三批 | （ADR 未写出状态） | — | — |
 | 0014 | [ADR-0014：sales_orders.credit_hold 是授信台账的投影，只有一个写入者](ADR-0014-credit-hold-projection.md) | 第四批 | （ADR 未写出状态） | `test-guards.mjs`<br>`test-quote-credit.mjs`<br>`verify-seed.mjs` | — |
@@ -43,4 +43,6 @@
 | 0034 | [ADR-0034：报价、MCP 销售工具与 OMS 入口按组织范围收口](ADR-0034-quote-sales-mcp-scope.md) | 第八批（进行中） | 开发实现，尚非产品上线验收 | `check-route-authz.mjs` | — |
 | 0035 | [ADR-0035：写路径并发与 SQLITE_BUSY 治理](ADR-0035-write-contention.md) | 第八批（进行中） | （ADR 未写出状态） | `lib/bench-contender.mjs` | — |
 | 0036 | [ADR-0036 安全响应头与后台会话传输（Y11）](ADR-0036-security-headers-and-session-transport.md) | 第八批（进行中） | 已采纳 | — | — |
-| 0037 | [ADR-0037：审批域按指向单据的组织范围收口](ADR-0037-approval-scope.md) | 第八批（进行中） | 开发实现，尚非产品上线验收 | — | — |
+| 0037 | [ADR-0037：审批域按指向单据的组织范围收口](ADR-0037-approval-scope.md) | 第八批（进行中） | 开发实现，尚非产品上线验收 | `test-setting-audit.mjs` | — |
+| 0039 | [ADR-0039：OMS 读接口与 MCP 单据历史工具按组织范围收口](ADR-0039-oms-mcp-history-scope.md) | 第九批（进行中） | 开发实现，尚非产品上线验收 | `check-route-authz.mjs` | — |
+| 0040 | [ADR-0040 受信代理配置（Z4）](ADR-0040-trust-proxy.md) | 第九批（进行中） | 已采纳 | — | — |

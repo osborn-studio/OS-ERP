@@ -3,7 +3,7 @@
 <!-- generated -->
 <!-- 由 `node scripts/gen-codemap.mjs` 生成，勿手改；CI 校验不漂移 -->
 
-共 72 个模块。“路由”只列在处理器区域内直接引用该函数的路由（路由超过 5 条时按路由文件汇总，明细见 [routes.md](routes.md)）；“MCP 工具”来自 `server/mcp/tools.js` 的 40 个工具；“被模块调用”是其它 lib/mcp 模块里的跨文件引用。“—”表示静态扫描没找到调用方，不等于死代码。
+共 73 个模块。“路由”只列在处理器区域内直接引用该函数的路由（路由超过 5 条时按路由文件汇总，明细见 [routes.md](routes.md)）；“MCP 工具”来自 `server/mcp/tools.js` 的 40 个工具；“被模块调用”是其它 lib/mcp 模块里的跨文件引用。“—”表示静态扫描没找到调用方，不等于死代码。
 
 ## 扫描边界（必读）
 
@@ -466,7 +466,7 @@ BOM 服务层（模块 10B · 一个 BOM + 三类执行单）
 | `createPermOf` | fn | POST /api/docflow/no-issue | — | — |
 | `dispatchTransition` | fn | POST /api/docflow/transition | doc.transition, purchase.advance_invoice, purchase.advance_payment, purchase.advance_requisition, purchase.advance_settlement | mcp/tools.js |
 | `docEventScope` | fn | GET /api/docflow/overview<br>GET /api/docflow/history/:docType/:id<br>GET /api/docflow/trace<br>GET /api/docflow/events | — | — |
-| `docInScope` | fn | GET /api/docflow/history/:docType/:id | — | — |
+| `docInScope` | fn | GET /api/docflow/history/:docType/:id | doc.get | mcp/tools.js |
 | `docScopeOf` | fn | GET /api/docflow/overview | — | — |
 | `effectOwnerOf` | fn | POST /api/docflow/transition | — | lib/approval.js |
 | `explainLifecycle` | fn | GET /api/docflow/types/:code/lifecycle<br>GET /api/purchase/chain/flow | — | — |
@@ -522,15 +522,15 @@ HTTP 响应与错误归一：`ok` / `fail` / `wrap` 的**唯一实现**（统一
 |---|---|---|---|---|
 | `GENERIC_5XX_MESSAGE` | const | — | — | — |
 | `bizFail` | fn | 8 条：auth.js×1, demand.js×1, notify.js×1, outsourcing.js×1, quote.js×1, sales.js×3 | — | — |
-| `fail` | fn | 193 条：accounting.js×1, ai.js×1, approval.js×5, ar.js×4, auth.js×2, costing.js×1, credit.js×5, dealers.js×10, demand.js×9, dms.js×7, docflow.js×8, im.js×3, inventory.js×17, invoice.js×2, mall.js×7, manufacture.js×5, master.js×11, meta.js×3, notify.js×1, oms.js×10, order-center.js×8, outsourcing.js×7, pos.js×9, pricing.js×3, promo.js×5, purchase-chain.js×10, purchase.js×8, qc.js×2, qc2.js×4, qimen.js×1, quote.js×2, refund.js×1, requisitions.js×11, sales.js×10 | — | lib/crud.js |
+| `fail` | fn | 194 条：accounting.js×1, ai.js×1, approval.js×5, ar.js×4, auth.js×2, costing.js×1, credit.js×5, dealers.js×10, demand.js×9, dms.js×7, docflow.js×8, im.js×3, inventory.js×18, invoice.js×2, mall.js×7, manufacture.js×5, master.js×11, meta.js×3, notify.js×1, oms.js×10, order-center.js×8, outsourcing.js×7, pos.js×9, pricing.js×3, promo.js×5, purchase-chain.js×10, purchase.js×8, qc.js×2, qc2.js×4, qimen.js×1, quote.js×2, refund.js×1, requisitions.js×11, sales.js×10 | — | lib/crud.js |
 | `failFromError` | fn | 164 条：accounting.js×18, auth.js×1, dms.js×17, mall.js×3, meta.js×2, pos.js×3, promo.js×40, purchase-chain.js×33, purchase.js×4, refund.js×4, report.js×39 | — | — |
 | `hidesInternals` | fn | — | — | — |
 | `newIncidentId` | fn | — | — | — |
-| `ok` | fn | 570 条：accounting.js×17, ai.js×4, approval.js×13, ar.js×23, auth.js×14, costing.js×11, credit.js×13, dashboard.js×7, dealers.js×15, demand.js×13, dms.js×13, docflow.js×15, im.js×8, inv-txn-types.js×2, inventory.js×22, invoice.js×14, mall.js×16, manufacture.js×26, master.js×15, meta.js×9, metrics.js×6, notify.js×8, oms.js×12, order-center.js×21, outsourcing.js×9, pos.js×39, pricing.js×8, promo.js×35, purchase-chain.js×33, purchase.js×12, qc.js×9, qc2.js×19, qimen.js×2, quote.js×10, refund.js×8, report.js×38, requisitions.js×14, sales.js×13, warehouses.js×4 | — | lib/crud.js |
-| `pageParams` | fn | 66 条：accounting.js×1, ai.js×1, approval.js×2, auth.js×2, costing.js×1, credit.js×1, dealers.js×3, demand.js×2, dms.js×4, docflow.js×1, im.js×2, inv-txn-types.js×1, inventory.js×9, manufacture.js×4, master.js×2, notify.js×1, oms.js×2, order-center.js×3, outsourcing.js×3, pricing.js×1, promo.js×5, purchase.js×3, qc.js×1, qc2.js×3, quote.js×1, refund.js×1, requisitions.js×2, sales.js×3, warehouses.js×1 | — | lib/crud.js |
-| `paged` | fn | 59 条：accounting.js×1, ai.js×1, auth.js×2, costing.js×1, dealers.js×3, demand.js×2, dms.js×4, im.js×2, inv-txn-types.js×1, inventory.js×9, manufacture.js×4, master.js×2, oms.js×2, order-center.js×3, outsourcing.js×3, pricing.js×1, promo.js×5, purchase.js×3, qc.js×1, qc2.js×3, requisitions.js×2, sales.js×3, warehouses.js×1 | — | lib/crud.js |
+| `ok` | fn | 572 条：accounting.js×17, ai.js×4, approval.js×13, ar.js×23, auth.js×15, costing.js×11, credit.js×13, dashboard.js×7, dealers.js×15, demand.js×13, dms.js×13, docflow.js×15, im.js×8, inv-txn-types.js×2, inventory.js×23, invoice.js×14, mall.js×16, manufacture.js×26, master.js×15, meta.js×9, metrics.js×6, notify.js×8, oms.js×12, order-center.js×21, outsourcing.js×9, pos.js×39, pricing.js×8, promo.js×35, purchase-chain.js×33, purchase.js×12, qc.js×9, qc2.js×19, qimen.js×2, quote.js×10, refund.js×8, report.js×38, requisitions.js×14, sales.js×13, warehouses.js×4 | — | lib/crud.js |
+| `pageParams` | fn | 65 条：accounting.js×1, ai.js×1, approval.js×2, auth.js×2, costing.js×1, credit.js×1, dealers.js×3, demand.js×2, dms.js×4, docflow.js×1, im.js×2, inv-txn-types.js×1, inventory.js×8, manufacture.js×4, master.js×2, notify.js×1, oms.js×2, order-center.js×3, outsourcing.js×3, pricing.js×1, promo.js×5, purchase.js×3, qc.js×1, qc2.js×3, quote.js×1, refund.js×1, requisitions.js×2, sales.js×3, warehouses.js×1 | — | lib/crud.js |
+| `paged` | fn | 58 条：accounting.js×1, ai.js×1, auth.js×2, costing.js×1, dealers.js×3, demand.js×2, dms.js×4, im.js×2, inv-txn-types.js×1, inventory.js×8, manufacture.js×4, master.js×2, oms.js×2, order-center.js×3, outsourcing.js×3, pricing.js×1, promo.js×5, purchase.js×3, qc.js×1, qc2.js×3, requisitions.js×2, sales.js×3, warehouses.js×1 | — | lib/crud.js |
 | `statusOf` | fn | — | — | — |
-| `wrap` | fn | 626 条：accounting.js×18, ai.js×5, approval.js×13, ar.js×23, auth.js×15, costing.js×12, credit.js×13, dashboard.js×7, dealers.js×18, demand.js×15, dms.js×17, docflow.js×15, im.js×10, inv-txn-types.js×4, inventory.js×31, invoice.js×14, mall.js×16, manufacture.js×30, master.js×17, meta.js×9, metrics.js×6, notify.js×8, oms.js×14, order-center.js×24, outsourcing.js×12, pos.js×39, pricing.js×9, promo.js×40, purchase-chain.js×33, purchase.js×15, qc.js×10, qc2.js×22, qimen.js×3, quote.js×10, refund.js×8, report.js×39, requisitions.js×16, sales.js×16 | — | lib/crud.js |
+| `wrap` | fn | 627 条：accounting.js×18, ai.js×5, approval.js×13, ar.js×23, auth.js×16, costing.js×12, credit.js×13, dashboard.js×7, dealers.js×18, demand.js×15, dms.js×17, docflow.js×15, im.js×10, inv-txn-types.js×4, inventory.js×31, invoice.js×14, mall.js×16, manufacture.js×30, master.js×17, meta.js×9, metrics.js×6, notify.js×8, oms.js×14, order-center.js×24, outsourcing.js×12, pos.js×39, pricing.js×9, promo.js×40, purchase-chain.js×33, purchase.js×15, qc.js×10, qc2.js×22, qimen.js×3, quote.js×10, refund.js×8, report.js×39, requisitions.js×16, sales.js×16 | — | lib/crud.js |
 
 ## `server/lib/im-sync.js`
 
@@ -1272,6 +1272,8 @@ HTTP 响应与错误归一：`ok` / `fail` / `wrap` 的**唯一实现**（统一
 | `assertSalesDocInScope` | fn | 11 条：sales.js×11 | — | lib/quote.js |
 | `assertSalesTargetInScope` | fn | 9 条：oms.js×3, sales.js×6 | — | — |
 | `cancelOrder` | fn | POST /api/sales/orders/:id/cancel | sales.cancel_order | mcp/tools.js |
+| `omsOrderScopeSql` | fn | GET /api/oms/orders<br>GET /api/oms/orders/:id<br>GET /api/oms/stats<br>GET /api/oms/qimen-message/:orderId | — | — |
+| `omsPlatformScopeSql` | fn | GET /api/oms/platforms<br>GET /api/oms/sync-logs<br>GET /api/oms/stats<br>GET /api/oms/qimen-stock-message/:platformId | — | — |
 | `quoteScopeSql` | fn | — | — | lib/quote.js |
 | `salesScopeSql` | fn | GET /api/sales/orders<br>GET /api/sales/deliveries<br>GET /api/sales/returns<br>GET /api/sales/stats | sales.list_orders | lib/approval.js, mcp/tools.js |
 
@@ -1309,7 +1311,7 @@ HTTP 响应与错误归一：`ok` / `fail` / `wrap` 的**唯一实现**（统一
 | `logSettingChange` | fn | — | — | — |
 | `meta` | fn | — | — | — |
 | `normalizeSettingValue` | fn | — | — | — |
-| `readSetting` | fn | GET /api/invoices/meta | — | 14 个：lib/accounting.js, lib/annual.js, lib/closing.js, lib/credit.js, lib/funds-review.js, lib/invoice.js … |
+| `readSetting` | fn | GET /api/invoices/meta | — | 15 个：lib/accounting.js, lib/annual.js, lib/approval.js, lib/closing.js, lib/credit.js, lib/funds-review.js … |
 | `replaySettings` | fn | — | — | — |
 | `resetSetting` | fn | POST /api/meta/settings/reset | — | — |
 | `settingDef` | fn | — | — | — |
@@ -1333,8 +1335,10 @@ HTTP 响应与错误归一：`ok` / `fail` / `wrap` 的**唯一实现**（统一
 | `clearParamCache` | fn | — | — | — |
 | `consumeStock` | fn | — | — | — |
 | `costOf` | fn | — | inventory.get_cost | mcp/tools.js |
+| `countBelowSafe` | fn | GET /api/dashboard/summary | — | — |
 | `getInvParam` | fn | — | inventory.stock_alert | mcp/tools.js |
 | `getStockRow` | fn | — | — | — |
+| `listBelowSafe` | fn | GET /api/dashboard/todos<br>GET /api/inventory/alerts | — | — |
 | `pickBatches` | fn | POST /api/inventory/assembly/:id/confirm<br>POST /api/outsourcing/orders/:id/issue<br>POST /api/requisitions/store/:id/to-transfer<br>POST /api/requisitions/shipments/:id/ship | inventory.pick_suggestion, inventory.stock_out, inventory.transfer | lib/mfg.js, lib/pos2.js, mcp/tools.js |
 | `planShipment` | fn | POST /api/oms/orders/:id/ship<br>POST /api/sales/orders/:id/deliver | — | — |
 | `queryBalance` | fn | — | — | — |
@@ -1357,6 +1361,18 @@ HTTP 响应与错误归一：`ok` / `fail` / `wrap` 的**唯一实现**（统一
 | `createTransfer` | fn | POST /api/inventory/transfers | — | lib/qc2.js |
 | `receiveTransfer` | fn | POST /api/inventory/transfers/:id/receive | — | lib/qc2.js |
 | `shipTransfer` | fn | POST /api/inventory/transfers/:id/ship | — | lib/qc2.js |
+
+## `server/lib/trust-proxy.js`
+
+受信反向代理的唯一判据（ADR-0040）
+
+| 导出 | 类型 | 路由 | MCP 工具 | 被模块调用 |
+|---|---|---|---|---|
+| `assertTrustProxyConfig` | fn | — | — | — |
+| `isSecureRequest` | fn | — | — | — |
+| `isTrustedPeer` | fn | — | — | lib/logger.js |
+| `parseTrustProxy` | fn | — | — | — |
+| `trustProxyFn` | fn | — | — | — |
 
 ## `server/lib/tx.js`
 
@@ -1439,7 +1455,11 @@ Agent Token 管理（管理员）：签发 / 列表 / 吊销 / 调用审计
 | `effectiveScope` | fn | — | — | mcp/server.js |
 | `intersectScope` | fn | — | — | — |
 | `ownerToolDenied` | fn | — | — | mcp/server.js |
+| `permSnapshot` | fn | — | — | — |
+| `permsCovered` | fn | — | — | — |
 | `resolveDelegation` | fn | — | — | — |
+| `scopeCovers` | fn | — | — | — |
+| `scopeSnapshot` | fn | — | — | — |
 | `tokenOrgScope` | fn | — | — | — |
 
 ## `server/mcp/doc-perms.js`
@@ -1467,6 +1487,7 @@ MCP 服务端：以标准 MCP（2026-07-28 无状态版）暴露系统业务能�
 
 | 导出 | 类型 | 路由 | MCP 工具 | 被模块调用 |
 |---|---|---|---|---|
+| `CACHE_DENIED` | const | — | — | — |
 | `redactArgs` | fn | — | — | — |
 
 ## `server/mcp/tokens.js`
@@ -1560,5 +1581,5 @@ MCP 工具入参校验（唯一实现）。
 | `purchase.advance_payment` | danger | — | lib/docflow.js: dispatchTransition | dealers, purchase_invoices, purchase_orders, purchase_payments, purchase_receipts, purchase_requisitions, purchase_returns, purchase_settlements, stores, users, warehouses | doc_actions, doc_events, doc_states, doc_transition_policy, doc_types, role_permissions, user_roles |
 | `doc.list_types` | read | — | mcp/doc-perms.js: canViewDocType | doc_actions, doc_states, doc_types | role_permissions, user_roles, users |
 | `doc.query` | read | — | mcp/doc-perms.js: assertCanViewDocType, bindingWhere | dealers, doc_types, stores, warehouses | oc_customers, role_permissions, user_roles, users |
-| `doc.get` | read | — | mcp/doc-perms.js: assertCanViewDocType, rowInBinding | dealers, doc_events, doc_types, stores, warehouses | oc_customers, role_permissions, user_roles, users |
+| `doc.get` | read | — | lib/docflow.js: docInScope<br>mcp/doc-perms.js: assertCanViewDocType, rowInBinding | doc_events, doc_types, users | ar_documents, assembly_orders, cost_adjustments, dealer_rebates, dealer_requisitions, dealer_statements, dealers, material_issues, oc_customers, oc_orders, oc_statements, oms_orders, outsourcing_materials, outsourcing_orders, outsourcing_receipts, pos_daily_closes, pos_orders, pos_shifts, production_orders, purchase_inspections, purchase_invoices, purchase_orders, purchase_payments, purchase_receipts, purchase_requisitions, purchase_returns, purchase_settlements, qc_defect_handlings, qc_inspections, qc_requests, receipts, refunds, role_permissions, sales_deliveries, sales_invoices, sales_orders, sales_quotes, sales_returns, stock_checks, stock_transfers, store_requisitions, store_shipments, stores, user_roles, vouchers, warehouses |
 | `doc.transition` | write | — | lib/docflow.js: assertEdgePermitted, dispatchTransition | dealers, doc_actions, doc_types, stores, users, warehouses | doc_events, doc_states, doc_transition_policy, role_permissions, user_roles |

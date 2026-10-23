@@ -3,7 +3,7 @@
 <!-- generated -->
 <!-- 由 `node scripts/gen-codemap.mjs` 生成，勿手改；CI 校验不漂移 -->
 
-共 198 张表、57 个迁移。“建于”= schema.sql / 迁移编号 / 运行时建表的文件；“改于”= ALTER、addColumn（无后缀）、建索引（·idx）、触发器（·trg）、DROP（·drop）所在迁移编号。“触达”= 该文件的 SQL 文本里出现这张表（server/db/ 下的种子与启动文件不计）。
+共 198 张表、58 个迁移。“建于”= schema.sql / 迁移编号 / 运行时建表的文件；“改于”= ALTER、addColumn（无后缀）、建索引（·idx）、触发器（·trg）、DROP（·drop）所在迁移编号。“触达”= 该文件的 SQL 文本里出现这张表（server/db/ 下的种子与启动文件不计）。
 
 ## 扫描边界（必读）
 
@@ -118,7 +118,7 @@
 | `payment_release_ledger` | 057 | 057·idx | lib/purchase.js | — |
 | `period_audit_log` | 037 | 037·idx | lib/period-audit.js | — |
 | `permissions` | 005 | 005·idx | lib/account-security.js, lib/approval.js, middleware/auth.js | routes/approval.js, routes/auth.js |
-| `platforms` | schema.sql | 060 | lib/qimen-auth.js | routes/ai.js, routes/dashboard.js, routes/mall.js, routes/master.js, routes/oms.js, routes/qimen.js, routes/sales.js |
+| `platforms` | schema.sql | 060 | lib/qimen-auth.js, lib/sales-order.js | routes/ai.js, routes/dashboard.js, routes/mall.js, routes/master.js, routes/oms.js, routes/qimen.js, routes/sales.js |
 | `pos_cash_drop_items` | 024 | 024·idx | lib/pos2.js | routes/pos.js |
 | `pos_cash_drops` | 024 | 024·idx | lib/pos2.js | routes/pos.js |
 | `pos_daily_closes` | schema.sql | 024 | lib/docflow.js, lib/pos2.js | routes/pos.js |
@@ -274,3 +274,4 @@
 | 058 | `058_pos_permissions.cjs` | 门店 POS 权限点补全（pos.view / pos.cashdrop.receive）与内置角色授权 | — | — |
 | 059 | `059_indexes.cjs` | 索引审计补缺（外键列 / 状态+日期 / 月度聚合表达式索引） | — | — |
 | 060 | `060_qimen_secrets.cjs` | 奇门网关每平台密钥（封存）、防重放 nonce 表与 oms.platform.manage 权限点 | qimen_nonces | platforms, qimen_nonces |
+| 061 | `061_hot_query_indexes.cjs` | 大库热点查询索引（低库存预警 / 看板待办计数） | — | — |
