@@ -308,7 +308,7 @@ export const SETTING_RULES = {
   // ---- 运维 ----
   backup_dir: {
     group: 'ops', label: '备份输出目录', type: 'text', default: 'data/backups', is_danger: false, wired: true,
-    impact: '`scripts/db-backup.mjs` / `db-reset.mjs` 的备份目录（相对项目根）。'
+    impact: '`scripts/db-backup.mjs` / `db-reset.mjs` 的备份目录：绝对路径原样用，相对路径落在 GML_DATA_DIR 内（旧值 data/backups 等价于 backups；ADR-0009）。'
   },
   backup_keep: {
     group: 'ops', label: '每库保留备份份数', type: 'int', default: '10', is_danger: false, wired: true,

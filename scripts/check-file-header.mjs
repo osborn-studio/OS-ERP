@@ -32,16 +32,41 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 /** 已登记「文件标识块」的文件。补一个加一行。 */
 const DECLARED = [
   'server/index.js',
+  'server/lib/audit-trail.js',
+  'server/lib/redact.js',
+  'server/middleware/audit.js',
+  'server/version.js',
   'server/mcp/catalog.js',
+  'server/mcp/delegation.js',
+  'server/mcp/tokens.js',
+  'server/db/migrations/053_agent_token_owner_version.cjs',
+  'server/lib/outbound-url.js',
+  'server/lib/secret-box.js',
   'scripts/check-mcp-coverage.mjs',
   'scripts/check-file-header.mjs',
+  'scripts/db-backup.mjs',
+  'server/db/migrations/runner.js',
+  'server/lib/backup-dir.js',
+  // 恢复 / 升级回退演练（ADR-0016）：共用底座 + 两个演练入口
+  'scripts/lib/drill-common.mjs',
+  'scripts/db-restore-drill.mjs',
+  'scripts/upgrade-rollback-drill.mjs',
   'src/App.tsx',
   'src/api/client.ts',
   'src/components/Layout.tsx',
   'src/constants/brand.ts',
   'src/constants/capabilities.ts',
   'src/pages/system/McpCenter.tsx',
-  'tailwind.config.js'
+  'tailwind.config.js',
+  // 授信释放台账（ADR-0013）：释放/逆向的唯一实现、建表迁移与守卫测试
+  'server/lib/credit-release.js',
+  'server/db/migrations/052_credit_release_ledger.cjs',
+  'tests/credit-reversal.test.mjs',
+  // 授信投影（ADR-0014）：credit_hold 的唯一写入者与对账守卫
+  'tests/credit-hold-projection.test.mjs',
+  // 待办范围与 Agent Token 有效状态（ADR-0015）
+  'server/db/migrations/055_agent_token_revoke_reason.cjs',
+  'tests/authz-followups.test.mjs'
 ]
 
 /** 参与覆盖率统计的源文件（**排除** node_modules / dist / data） */

@@ -30,11 +30,13 @@ import { Router } from 'express'
 import crypto from 'node:crypto'
 import { getDb, runWithIndustry, getCurrentIndustry, assertIndustry, showValue } from '../db/index.js'
 import { localNow } from '../lib/dates.js'
-import { TOOL_MAP, listTools, toolToMcp } from './tools.js'
+import { TOOLS, TOOL_MAP, toolToMcp } from './tools.js'
 import { validateToolArgs } from './validate.js'
 import { extractToken, verifyToken, tokenScopes, tokenAllow, tokenDeny, touchToken, SCOPE_LABEL } from './tokens.js'
+import { resolveDelegation, effectiveScope, ownerToolDenied } from './delegation.js'
 import { requireAuth, requirePerm } from '../middleware/auth.js'
 import * as engine from '../lib/stock.js'
+import { versionInfo } from '../version.js'
 
 const r = Router()
 
@@ -42,7 +44,8 @@ const PROTOCOL_VERSION = '2026-07-28'
 const SERVER_INFO = {
   name: 'gml-supply-chain',
   title: 'GML 供应链协同系统',
-  version: '1.0.0',
+  // 与 /api、/api/meta/health、AI manifest 同一份版本与构建 SHA
+  ...versionInfo(),
   description: '原生 MCP：业务能力从系统内核直接暴露，而非外挂在传统 ERP 之上。'
 }
 
@@ -54,7 +57,10 @@ const SERVER_INFO = {
 // `inventory.stock_alert`，`resources/read gml://inventory/alert` 照样把数据吐出来）。
 // 「同一份数据有两个读入口，只挡了一个」——这就是漏洞的形状。
 // 现在两个入口共用 checkToolAccess，资源只是一个"URI → 工具名"的别名。
-function checkToolAccess(tool, { scopes, allow, deny }) {
+// 第四道闸（ADR-0011）：有主令牌的所有者**此刻**必须持有工具声明的权限点（`tool.perms`）——
+// 令牌能做的事 = 令牌声明范围 ∩ 所有者当前权限。tools/list、resources/list、resources/read、tools/call
+// 全走这一个函数：列得出的就调得到，调不到的也列不出。
+function checkToolAccess(tool, { scopes, allow, deny, delegation = null }) {
   if (!tool) return { code: 'TOOL_NOT_FOUND', message: '未知工具' }
   if (!scopes.includes(tool.level)) {
     return {
@@ -64,7 +70,7 @@ function checkToolAccess(tool, { scopes, allow, deny }) {
   }
   if (allow && !allow.includes(tool.name)) return { code: 'TOOL_NOT_ALLOWED', message: `该 Token 的白名单不含 ${tool.name}` }
   if (deny.includes(tool.name)) return { code: 'TOOL_DENIED', message: `该 Token 被禁止调用 ${tool.name}` }
-  return null
+  return ownerToolDenied(delegation, tool)
 }
 
 // 资源 → 工具。资源不是"另一条数据通道"，只是工具的一个别名。
@@ -118,8 +124,12 @@ function argsFingerprint(args) {
 // 工具执行
 // ============================================================
 
-function rpcError(res, id, code, message) {
-  return res.json({ jsonrpc: '2.0', id, error: { code, message } })
+// 凭据 / 协议层错误。`data.code` 是给客户端程序判定用的**稳定业务码**（ADR-0011），
+// `message` 是给人看的；只给 message 的话客户端只能靠字符串匹配中文。
+function rpcError(res, id, code, message, stableCode = null) {
+  const error = { code, message }
+  if (stableCode) error.data = { code: stableCode }
+  return res.json({ jsonrpc: '2.0', id, error })
 }
 
 // 工具级错误：按 MCP 规范走 result.isError，而不是 JSON-RPC error。
@@ -141,33 +151,68 @@ function textResult(data, summary) {
   return { content: [{ type: 'text', text: typeof payload === 'string' ? payload : JSON.stringify(payload, null, 2) }] }
 }
 
-function logCall(db, { token, tool, ok, errorCode, errorMessage, args, summary, durationMs, ip, idemKey }) {
+// ---- 调用审计（F13）----
+// 入库前脱敏：键名命中 /password|secret|token|authorization|key/i 的值一律打码（递归到嵌套对象 / 数组）。
+// `idempotency_key` 也会被打码 —— 它有自己的专用列 `idempotency_key`，args 里不必再留一份明文。
+const SENSITIVE_KEY = /password|secret|token|authorization|key/i
+const MASK = '***'
+export function redactArgs(value, depth = 0) {
+  if (value === null || typeof value !== 'object' || depth > 8) return value
+  if (Array.isArray(value)) return value.map((v) => redactArgs(v, depth + 1))
+  const out = {}
+  for (const [k, v] of Object.entries(value)) out[k] = SENSITIVE_KEY.test(k) ? MASK : redactArgs(v, depth + 1)
+  return out
+}
+
+/** 审计写入的**唯一**语句。失败即抛 `AUDIT_UNAVAILABLE`，由调用方决定是回滚（写型）还是记错继续（只读）。 */
+function insertCallLog(db, { token, tool, ok, errorCode, errorMessage, args, summary, durationMs, ip, idemKey }) {
+  let inserted
   try {
-    db.prepare(`
+    inserted = db.prepare(`
       INSERT INTO mcp_call_logs (token_id, token_name, tool_name, level, ok, error_code, error_message,
                                  args, result_summary, duration_ms, ip, idempotency_key)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
     `).run(
       token?.id ?? null, token?.name ?? null, tool?.name ?? null, tool?.level ?? null,
       ok ? 1 : 0, errorCode ?? null, errorMessage ?? null,
-      JSON.stringify(args ?? {}).slice(0, 4000), summary ? String(summary).slice(0, 500) : null,
+      JSON.stringify(redactArgs(args ?? {})).slice(0, 4000), summary ? String(summary).slice(0, 500) : null,
       durationMs ?? null, ip ?? null, idemKey ?? null
     )
-  } catch { /* 日志失败不影响主流程 */ }
+  } catch (e) {
+    const err = new Error(`调用审计暂不可用，操作未提交：${e?.message ?? e}`)
+    err.code = 'AUDIT_UNAVAILABLE'
+    err.status = 503
+    throw err
+  }
+  if (inserted.changes !== 1) {
+    const err = new Error('调用审计未落行，操作未提交')
+    err.code = 'AUDIT_UNAVAILABLE'
+    err.status = 503
+    throw err
+  }
 }
 
-function buildContext(db, row) {
-  // 数据权限：Token 绑定的主体决定可见范围（A3 会话绑单一主体）
-  let scope = { scope: 'all', orgIds: null, orgId: row.org_id ?? null }
-  if (row.org_id) {
-    const node = db.prepare('SELECT id, path FROM orgs WHERE id=?').get(row.org_id)
-    if (node?.path) {
-      const ids = db.prepare('SELECT id FROM orgs WHERE path LIKE ? OR id=?').all(`${node.path}%`, node.id).map((x) => x.id)
-      scope = { scope: 'subtree', orgIds: ids, orgId: node.id }
-    } else {
-      scope = { scope: 'org', orgIds: [row.org_id], orgId: row.org_id }
-    }
+/**
+ * best-effort 审计：只读工具与"已经失败"的路径用它 —— 没有业务行需要保护，
+ * 但失败**必须可见**（原来是静默吞掉：审计表坏了，所有调用照常、一条记录都没有、没人知道）。
+ */
+function logCall(db, entry) {
+  try {
+    insertCallLog(db, entry)
+  } catch (e) {
+    console.error(`[mcp] 调用审计写入失败（${entry?.tool?.name ?? '-'} / ${entry?.errorCode ?? (entry?.ok ? 'ok' : 'fail')}）：${e.message}`)
   }
+}
+
+/** 严格审计：写型 / 高危工具的成功路径用它，**与业务过账同一事务**，写不进去就一起回滚。 */
+function auditOrThrow(db, entry) {
+  insertCallLog(db, entry)
+}
+
+function buildContext(db, row, delegation) {
+  // 数据权限（ADR-0011）：令牌绑定主体的范围 ∩ 所有者**当前**数据范围（无主令牌 = 令牌范围）。
+  // 判据在 `delegation.js`，这里只取结果。
+  const scope = effectiveScope(db, row, delegation)
   return { db, orgId: row.org_id ?? null, tokenName: row.name, scope, engine, ownerUserId: row.owner_user_id ?? null }
 }
 
@@ -205,18 +250,27 @@ r.post('/', (req, res) => {
 
   // ---- 以下一律需要 Agent Token ----
   const raw = extractToken(req)
-  const v = verifyToken(getDb(), raw)
+  const authDb = getDb()
+  const v = verifyToken(authDb, raw)
   if (v.error) {
-    const msg = {
-      missing_token: '缺少 Agent Token（Authorization: Bearer gml_xxx）',
-      invalid_token: 'Agent Token 无效',
-      revoked: 'Agent Token 已被吊销',
-      expired: 'Agent Token 已过期',
-      rate_limited: `调用超限（近 1 小时已达 ${v.used} 次）`
-    }[v.error] || v.error
-    return rpcError(res, id, -32001, msg)
+    const known = {
+      missing_token: ['TOKEN_MISSING', '缺少 Agent Token（只认 Authorization: Bearer gml_xxx，不收查询串 / 其他请求头）'],
+      invalid_token: ['TOKEN_INVALID', 'Agent Token 无效'],
+      revoked: ['TOKEN_REVOKED', 'Agent Token 已被吊销'],
+      expired: ['TOKEN_EXPIRED', 'Agent Token 已过期'],
+      rate_limited: ['TOKEN_RATE_LIMITED', `调用超限（近 1 小时已达 ${v.used} 次）`]
+    }[v.error] || ['TOKEN_INVALID', String(v.error)]
+    return rpcError(res, id, -32001, known[1], known[0])
   }
   const row = v.row
+
+  // 委托判定（ADR-0011）：有主令牌 = 所有者的委托。所有者不存在 / 已停用 / 安全版本已变 ⇒
+  // **所有**方法（含只读工具、资源、提示）一律拒绝；判据与令牌行在同一个库里查。
+  const delegation = resolveDelegation(authDb, row)
+  if (delegation.error) {
+    logCall(authDb, { token: row, tool: { name: method }, ok: false, errorCode: delegation.error.code, args: {}, ip: req.ip })
+    return rpcError(res, id, -32001, delegation.error.message, delegation.error.code)
+  }
 
   // 行业上下文按 Token 绑定决定。**两条判据**（与 db/index.js 同源）：
   //   · 令牌行**没登记**行业（`null` / 空）⇒ 落到当前请求行业（合法语义，Token 未绑定行业）；
@@ -235,25 +289,22 @@ r.post('/', (req, res) => {
 
   return runWithIndustry(industry, () => {
     const db = getDb()
-    const ctx = buildContext(db, row)
+    const ctx = buildContext(db, row, delegation)
     const scopes = tokenScopes(row)
     const allow = tokenAllow(row)
     const deny = tokenDeny(row)
+    // 工具 / 资源可见性与可调用性的**同一份**判定（级别 + 白黑名单 + 所有者当前权限）
+    const gate = { scopes, allow, deny, delegation }
 
     // ---------- tools/list ----------
     if (method === 'tools/list') {
-      const visible = listTools({
-        levels: scopes.map((s) => s),
-        allow,
-        deny
-      })
+      const visible = TOOLS.filter((t) => !checkToolAccess(t, gate))
       return res.json({ jsonrpc: '2.0', id, result: { tools: visible.map(toolToMcp) } })
     }
 
     // ---------- resources ----------
     // 只列出**本令牌真的拿得到**的资源：列的出、读的到，两者用同一个判定。
     if (method === 'resources/list') {
-      const gate = { scopes, allow, deny }
       const visible = RESOURCES.filter((x) => !checkToolAccess(resolveTool(x.tool), gate))
       return res.json({
         jsonrpc: '2.0',
@@ -268,7 +319,7 @@ r.post('/', (req, res) => {
       const toolName = RESOURCE_TOOL[uri]
       if (!toolName) return rpcError(res, id, -32602, `未知资源：${uri}`)
       const tool = resolveTool(toolName)
-      const denied = checkToolAccess(tool, { scopes, allow, deny })
+      const denied = checkToolAccess(tool, gate)
       if (denied) {
         logCall(db, { token: row, tool, ok: false, errorCode: denied.code, args: { uri }, ip: req.ip })
         return rpcError(res, id, -32003, denied.message)
@@ -342,8 +393,8 @@ r.post('/', (req, res) => {
       return toolError(res, id, 'TOOL_NOT_FOUND', `未知工具：${toolName}`)
     }
 
-    // 权限范围校验（与 resources/read 同一份判定）
-    const access = checkToolAccess(tool, { scopes, allow, deny })
+    // 权限范围校验（与 resources/read 同一份判定；含所有者当前权限点）
+    const access = checkToolAccess(tool, gate)
     if (access) {
       logCall(db, { token: row, tool, ok: false, errorCode: access.code, args, ip })
       return toolError(res, id, access.code, access.message)
@@ -504,14 +555,18 @@ r.post('/', (req, res) => {
         ).run(String(idemKey), tool.name, row.id, JSON.stringify(out.data), argsHash)
       }
       touchToken(db, row.id)
+      // F13：写型 / 高危工具的审计与业务过账**同生共死** —— 审计写不进去，上面的过账、幂等缓存、
+      // 确认消费一起回滚，客户端拿到 `AUDIT_UNAVAILABLE`，故障消除后可用同一幂等键干净重试。
+      // 只读工具没有业务行要保护，走事务外的 best-effort（失败打错误日志）。
+      const entry = { token: row, tool, ok: true, args: execArgs, summary: out.summary, durationMs: Date.now() - started, ip, idemKey }
+      if (tool.level === 'read') logCall(db, entry)
+      else auditOrThrow(db, entry)
       return out
     })
 
     // ---- 执行 ----
     try {
       const out = runInOneTx()
-      const took = Date.now() - started
-      logCall(db, { token: row, tool, ok: true, args: execArgs, summary: out.summary, durationMs: took, ip, idemKey })
       return res.json({ jsonrpc: '2.0', id, result: { ...textResult(out.data, out.summary), isError: false } })
     } catch (e) {
       const took = Date.now() - started

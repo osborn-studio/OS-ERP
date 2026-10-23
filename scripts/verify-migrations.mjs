@@ -14,7 +14,12 @@
  */
 
 // 迁移结果自检：node scripts/verify-migrations.mjs
+// 除了结构打印，还核对 schema_migrations 登记的迁移文件校验和（ADR-0009）：
+// 任一库出现 mismatched 即以退出码 1 结束；unrecorded 只提示（下次启动会自动收养）。
 import { getDbFor } from '../server/db/index.js'
+import { checkMigrationChecksums } from '../server/db/migrations/runner.js'
+
+let checksumFailures = 0
 
 const NEW_TABLES = [
   'orgs',
@@ -67,4 +72,17 @@ for (const code of ['cosmetic', 'food', 'apparel']) {
 
   const txnCols = db.prepare('PRAGMA table_info(inventory_transactions)').all().map((r) => r.name)
   console.log('txn 新增列: ' + txnCols.filter((c) => ['owner_org_id', 'currency', 'fx_rate', 'cost_method', 'txn_type', 'biz_time', 'source'].includes(c)).join(', '))
+
+  const sums = checkMigrationChecksums(db)
+  console.log(
+    `迁移校验和: 一致 ${sums.verified}  未登记 ${sums.unrecorded.length}  不一致 ${sums.mismatched.length}  文件缺失 ${sums.missing.length}` +
+      (sums.mismatched.length ? `  MISMATCH → ${sums.mismatched.join(', ')}` : '') +
+      (sums.missing.length ? `  缺失 → ${sums.missing.join(', ')}` : '')
+  )
+  if (sums.mismatched.length) checksumFailures += 1
+}
+
+if (checksumFailures) {
+  console.error(`\n[verify-migrations] MIGRATION_CHECKSUM_MISMATCH：${checksumFailures} 个库的已执行迁移文件与登记校验和不一致`)
+  process.exitCode = 1
 }

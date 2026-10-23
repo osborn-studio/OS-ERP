@@ -516,10 +516,14 @@ export function listInstances(db = getDb(), { status = null, docType = null, pag
   return { list: list.map((r) => ({ ...r, doc_title: docTitleOf(db, r.doc_type, r.doc_id) })), total, page, pageSize }
 }
 
-/** 「待我审批」：当前级指到我头上的 pending 实例（admin 全见） */
-export function pendingForMe(db = getDb(), actor, { page = 1, pageSize = 20 } = {}) {
+/**
+ * 「我能处理的 pending 实例」的**唯一**判据：admin / 超管 / 持有 `system:approval:manage`
+ * 的审批管理员全见；其余只保留当前级指到本人头上的实例（`canApproveStep`）。
+ * 「待我审批」列表与审批待办计数（ADR-0015）都从这里取，不各写一份过滤。
+ */
+export function pendingInstancesFor(db = getDb(), actor) {
   const u = db.prepare('SELECT id, role, is_super FROM users WHERE id=?').get(actor?.id)
-  const isSuper = !!u?.is_super || u?.role === 'admin'
+  const seesAll = !!u?.is_super || u?.role === 'admin' || userPermissions(db, actor?.id, u?.role).includes('system:approval:manage')
   const rows = db
     .prepare(
       `SELECT i.*, t.name AS template_name
@@ -529,13 +533,14 @@ export function pendingForMe(db = getDb(), actor, { page = 1, pageSize = 20 } = 
         ORDER BY i.id DESC`
     )
     .all()
-  const mine = rows.filter((r) => {
-    if (isSuper) return true
-    const step = db
-      .prepare('SELECT * FROM approval_steps WHERE template_id=? AND step_no=?')
-      .get(r.template_id, r.current_step)
-    return canApproveStep(db, step, actor)
-  })
+  if (seesAll) return rows
+  const stepOf = db.prepare('SELECT * FROM approval_steps WHERE template_id=? AND step_no=?')
+  return rows.filter((r) => canApproveStep(db, stepOf.get(r.template_id, r.current_step), actor))
+}
+
+/** 「待我审批」：当前级指到我头上的 pending 实例（admin / 审批管理员全见） */
+export function pendingForMe(db = getDb(), actor, { page = 1, pageSize = 20 } = {}) {
+  const mine = pendingInstancesFor(db, actor)
   const total = mine.length
   const slice = mine.slice((page - 1) * pageSize, page * pageSize)
   return { list: slice.map((r) => ({ ...r, doc_title: docTitleOf(db, r.doc_type, r.doc_id) })), total, page, pageSize }
@@ -598,20 +603,22 @@ export function approvalTodoItems(db = getDb()) {
     }))
 }
 
-/** 审批待办（供消息推送 013 使用）：按单据类型分组 */
-export function approvalTodos(db = getDb()) {
-  const rows = db
-    .prepare(
-      `SELECT doc_type, action, action_name, COUNT(*) c, COALESCE(SUM(amount),0) amt
-         FROM approval_instances WHERE status='pending'
-        GROUP BY doc_type, action, action_name ORDER BY c DESC`
-    )
-    .all()
+/** 把 pending 实例按「单据类型 · 动作」分组成待办摘要（全库与按人两条路共用同一个形状） */
+function groupTodos(db, rows) {
+  const groups = new Map()
+  for (const r of rows) {
+    const key = `${r.doc_type}|${r.action}|${r.action_name || ''}`
+    const g = groups.get(key) || { doc_type: r.doc_type, action: r.action, action_name: r.action_name, c: 0, amt: 0 }
+    g.c += 1
+    g.amt += Number(r.amount) || 0
+    groups.set(key, g)
+  }
+  const sorted = [...groups.values()].sort((a, b) => b.c - a.c)
   return {
     kind: 'approval_pending',
     label: '待审批单据',
-    count: rows.reduce((n, r) => n + r.c, 0),
-    groups: rows.map((r) => ({
+    count: rows.length,
+    groups: sorted.map((r) => ({
       name: `${db.prepare('SELECT name FROM doc_types WHERE code=?').get(r.doc_type)?.name || r.doc_type} · ${r.action_name || r.action}`,
       count: r.c,
       amount: round2(r.amt)
@@ -619,9 +626,19 @@ export function approvalTodos(db = getDb()) {
   }
 }
 
+/** 审批待办（供消息推送 013 使用）：**全库** pending，按单据类型分组。调用方须自行把住全局数据范围门（ADR-0008）。 */
+export function approvalTodos(db = getDb()) {
+  return groupTodos(db, db.prepare(`SELECT doc_type, action, action_name, amount FROM approval_instances WHERE status='pending'`).all())
+}
+
+/** 审批待办（按人，ADR-0015）：只统计 `pendingInstancesFor` 认为调用者能处理的实例，形状与 `approvalTodos` 一致。 */
+export function approvalTodosFor(db = getDb(), actor) {
+  return { ...groupTodos(db, pendingInstancesFor(db, actor)), scope: 'mine' }
+}
+
 export default {
   ApprovalError, amountOf, matchTemplate, stepsOfTemplate, describeApprover,
   approvalGate, submitApproval, getInstance, canApproveStep,
-  decideApproval, cancelApproval, listInstances, pendingForMe,
-  listTemplates, approvalOverview, approvalTodos, approvalTodoItems
+  decideApproval, cancelApproval, listInstances, pendingForMe, pendingInstancesFor,
+  listTemplates, approvalOverview, approvalTodos, approvalTodosFor, approvalTodoItems
 }

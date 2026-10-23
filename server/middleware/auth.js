@@ -247,9 +247,19 @@ export function isTokenInvalid(e) {
   return e instanceof jwt.JsonWebTokenError
 }
 
-export function requireAuth(req, res, next) {
+/**
+ * 后台 JWT **只从 `Authorization: Bearer` 头取**（F13）。
+ * 原来还接受 `?token=`：令牌会随 URL 进访问日志、浏览器历史、Referer 与代理日志，
+ * 而这些地方没有任何一处当它是凭据来保护。前端从不拼 `?token=`（`src/api/client.ts` 只写头），
+ * 所以这里没有兼容期；需要浏览器直接导航下载文件的场景另做短期一次性票据，不复用会话 JWT。
+ */
+export function bearerToken(req) {
   const header = req.headers.authorization || ''
-  const token = header.startsWith('Bearer ') ? header.slice(7) : req.query.token
+  return header.startsWith('Bearer ') ? header.slice(7) : null
+}
+
+export function requireAuth(req, res, next) {
+  const token = bearerToken(req)
   if (!token) return fail(res, '未登录或登录已过期', 401, 401)
   try {
     // 只接受**后台** audience 的令牌：C 端（`gml-mall`）令牌在这里一律 401

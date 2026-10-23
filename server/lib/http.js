@@ -13,6 +13,21 @@
  * ============================================================================
  */
 
+import { randomBytes } from 'node:crypto'
+import { runtimeMode } from '../runtime.js'
+import { redactValue } from './redact.js'
+
+/** 5xx 事件号：16 位 hex，响应体与服务端 `[error]` 日志共用，运维凭它把两边对上 */
+export function newIncidentId() {
+  return randomBytes(8).toString('hex')
+}
+
+/** 生产环境 5xx 不回显内部错误文案（SQLite 表名 / 栈信息 / 配置细节）；demo / test 保留，便于联调 */
+export const GENERIC_5XX_MESSAGE = '服务器内部错误，请联系管理员并提供事件号'
+export function hidesInternals() {
+  return runtimeMode() === 'production'
+}
+
 export function ok(res, data, extra = {}) {
   res.json({ code: 0, success: true, data, ...extra })
 }
@@ -81,15 +96,22 @@ export function statusOf(err) {
  * 无业务码时顶层 `code` 退回 HTTP status —— 与旧的全局中间件行为一致。
  *
  * `status` 走 `statusOf`（与 `errorHandler` 的日志判定同源，见上）。
+ * 第三参 `incidentId`：`errorHandler` 已为 5xx 打过日志时传入，让响应与日志用同一个事件号。
  */
-export function bizFail(res, err) {
+export function bizFail(res, err, incidentId = null) {
   const status = statusOf(err)
-  const code = err?.code
+  // **业务码 = 有 `code` 且自带 HTTP 状态**（与 `failFromError` 的门同源）。
+  // 只有 `code` 没有状态的是**运行时错误**：better-sqlite3 的 `SqliteError.code='SQLITE_ERROR'`、
+  // Node 的 `ENOENT` / `ERR_*`…… 它们原来也被当业务码回给客户端（`error:'SQLITE_ERROR'` + 表名文案），
+  // 正是 F13 说的"错误响应泄露内部结构"。这类一律按无业务码的 5xx 处理。
+  const code = err?.code && (err.status || err.httpStatus || err.http) ? err.code : null
   const body = {
     code: code ? 1 : status,
     success: false,
     message: err?.message || '服务器内部错误'
   }
+  // 5xx 的 `detail` 一律脱敏（凭据键遮盖）；4xx 的 detail 是校验反馈（字段名 / 可选值），原样回。
+  const detailOf = (d) => (status >= 500 ? redactValue(d) : d)
   if (code) {
     body.error = code
     // ⚠️ 展开**必须在 `code` 之前**：写反了（`{ code, ...err.detail }`）时，只要
@@ -97,7 +119,20 @@ export function bizFail(res, err) {
     // `{ agreement_id, code: a.code }`（`a.code` 是**协议号** AG2026-xxx）就真的撞上了：
     // `error='AGREEMENT_BELOW_FLOOR'` 而 `detail.code='AG2026-001'`，同一份响应里
     // 两处读法拿到两个不同的东西，且没有任何报错。`code` 是**保留键**。
-    body.detail = { ...(err.detail || {}), code }
+    body.detail = { ...detailOf(err.detail || {}), code }
+  } else if (status >= 500) {
+    // **无业务码的 5xx = 预期之外的内部错误**（SQLite 抛的、TypeError…）：
+    //   · 事件号：`errorHandler` 已经打过日志就沿用它的；别的入口直接调 `bizFail` 时这里自己打，
+    //     否则响应里的事件号在日志里找不到对应（事件号指向空处比没有事件号更误导）；
+    //   · 生产：文案换成通用语 + 事件号，`detail` 不回（F13：错误响应泄露内部结构）；
+    //   · demo / test：保留 `message` 与脱敏后的 `detail`，联调时能直接看到原因。
+    // 带业务码的 5xx（`FEATURE_DISABLED` / `SECURITY_AUDIT_UNAVAILABLE`…）是各 lib **刻意**给出的
+    // 文案，不在此列 —— 它们走上面那个分支，形状不变。
+    const id = incidentId || newIncidentId()
+    if (!incidentId) console.error('[error]', id, err)
+    body.incident_id = id
+    if (hidesInternals()) body.message = `${GENERIC_5XX_MESSAGE}：${id}`
+    else if (err?.detail) body.detail = detailOf(err.detail)
   } else if (err?.detail) {
     // 无业务码时仍透传 detail（旧中间件的行为），只是不再有 code 可写
     body.detail = err.detail

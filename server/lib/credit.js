@@ -33,6 +33,11 @@
 //    超信有两种处理方式：拦住（默认）与特批放行（force + reason 必填）。
 //    无论哪种都写 credit_check_logs —— 「这笔超信是谁放的」事后必须要能查到，
 //    否则信用控制就退化成「谁嗓门大谁过」。
+//
+// ④ **sales_orders.credit_hold 是台账的投影，只有本文件写它。**
+//    台账每写一行（占用 / 释放 / 核销 / 恢复）就在同一事务里重算该订单的投影；
+//    订单确认、取消、seed、收款核销、作废都不许另写 `UPDATE sales_orders SET credit_hold`。
+//    对账判据在 `reconcileOrderHolds`（ADR-0014）。
 
 import { getDb } from '../db/index.js'
 // 日期一律走 dates.js 的本地口径。本模块原来的 addDays 在本地零点上加天数、
@@ -389,7 +394,80 @@ function writeLedger(db, { accountId, changeType, sourceType, sourceId, docNo, a
       round2(Number(before) + amt), dueDate || null,
       operator?.id || null, operator?.name || null, remark || null, nowStr()
     )
+  // 单据视角的投影跟着台账走（ADR-0014）：同一事务、同一处写，调用方不再另写 credit_hold。
+  projectOrderHold(db, { sourceType, sourceId })
   return { id: info.lastInsertRowid, balance_after: round2(Number(before) + amt) }
+}
+
+// ---------------------------------------------------------------------------
+// 四之二、单据投影：sales_orders.credit_hold 是台账的派生值，只有这一个写入者
+// ---------------------------------------------------------------------------
+//
+// 为什么要有投影：列表页与审批页要显示"这张订单还占着多少额度"，每行去 SUM 台账太慢；
+// 为什么只能在这里写：原来订单确认 / 取消 / seed 各写一遍 `UPDATE sales_orders SET credit_hold=…`，
+// 而收款核销、预收抵扣、作废恢复走的是 credit.js 的 settle / reoccupy —— 那三条路谁都没改投影，
+// `auditCredit.order_hold_diff` 于是常年报差（test-quote-credit 的两条既有失败）。
+// 台账每写一行就重算一次该来源的投影，四条路径自然同步，且与台账在同一事务里成败。
+
+/** 某张销售订单在台账里的净占用（所有账户合计；正常只会落在一个账户名下） */
+function netHoldOfOrder(db, orderId) {
+  const row = db
+    .prepare("SELECT COALESCE(SUM(amount),0) s FROM credit_ledger WHERE source_type='SO' AND source_id=?")
+    .get(orderId)
+  return round2(Math.max(0, Number(row?.s || 0)))
+}
+
+/**
+ * 重算一张销售订单的 `credit_hold`（唯一写入者）。
+ * 来源不是 SO 的台账行（SI / RCP / MANUAL / OC …）没有投影，直接返回 null。
+ */
+export function projectOrderHold(db, { sourceType, sourceId } = {}) {
+  if (sourceType !== 'SO' || sourceId == null) return null
+  const hold = netHoldOfOrder(db, sourceId)
+  db.prepare('UPDATE sales_orders SET credit_hold=? WHERE id=? AND ROUND(COALESCE(credit_hold,0),2)<>?')
+    .run(hold, Number(sourceId), hold)
+  return hold
+}
+
+/** 整库重投影（seed 清台账之后用）：每一张订单都按台账重算，没有台账行的归零 */
+export function reprojectOrderHolds(db) {
+  const ids = db
+    .prepare(`SELECT id FROM sales_orders WHERE credit_hold<>0
+              UNION SELECT source_id AS id FROM credit_ledger WHERE source_type='SO' AND source_id IS NOT NULL`)
+    .all()
+    .map((r) => r.id)
+  for (const id of ids) projectOrderHold(db, { sourceType: 'SO', sourceId: id })
+  return ids.length
+}
+
+/**
+ * 对账：单据投影 vs 台账净占用，返回差异行（空数组 = 一致）。
+ * 判据与 `projectOrderHold` 故意**不是**同一条 SQL：投影按来源合计所有账户，
+ * 对账按**订单往来对象解析出的账户**取占用 —— 占用挂错账户（跨客户）时投影能对上、对账会响。
+ * 覆盖两种错：hold > 0 但台账不等（含台账为 0）；hold = 0 但台账仍有占用。
+ */
+export function reconcileOrderHolds(db) {
+  const diffs = []
+  const orders = db
+    .prepare(
+      `SELECT id, doc_no, dealer_id, store_id, status, credit_hold FROM sales_orders
+        WHERE (credit_hold > 0 AND status NOT IN ('cancelled','returned'))
+           OR id IN (SELECT source_id FROM credit_ledger WHERE source_type='SO' GROUP BY source_id HAVING SUM(amount) > 0.005)
+        ORDER BY id`
+    )
+    .all()
+  for (const o of orders) {
+    const sub = resolveSubject(db, { dealerId: o.dealer_id, storeId: o.store_id })
+    const acc = sub
+      ? db.prepare('SELECT id FROM credit_accounts WHERE subject_type=? AND subject_id=?').get(sub.subjectType, sub.subjectId)
+      : null
+    const ledger = acc ? openAmountOf(db, acc.id, 'SO', o.id) : 0
+    const hold = round2(o.credit_hold)
+    if (Math.abs(ledger - hold) > 0.005) {
+      diffs.push({ order_id: o.id, doc_no: o.doc_no, status: o.status, hold, ledger, diff: round2(hold - ledger) })
+    }
+  }
+  return diffs
 }
 
 /** 占用（订单生效点）。金额 > 0 */
@@ -423,10 +501,52 @@ export function settle(db, { account, amount, sourceType, sourceId, docNo, opera
   const open = openAmountOf(db, acc.id, sourceType, sourceId)
   const amt = Math.min(round2(amount), round2(open))
   if (!(amt > 0)) return null
-  return writeLedger(db, {
+  // 回报 **实际释放额**（已按剩余占用封顶）：调用方要把它记进释放台账，
+  // 作废时按这个数恢复 —— 不能按"核销了多少"恢复，那会把封顶掉的部分凭空占回来。
+  const row = writeLedger(db, {
     accountId: acc.id, changeType: 'settle', sourceType, sourceId, docNo,
     amount: -amt, operator, remark: remark || '回款核销，释放授信'
   })
+  return { ...row, amount: amt }
+}
+
+/**
+ * 逆向恢复占用（作废收款 / 撤销预收抵扣）：把一笔已记录的释放按原来源占回去。
+ *
+ * 判据只有一处：**恢复额 ≤ 该来源历史占用总额 − 当前仍占用额**。
+ * 超过说明别的路径已经把额度占回来了（或台账被改过），此时**拒绝而不是截平**（A07 同一条原则）。
+ * 写成 `occupy` 行而不另立类型：快照的逾期统计、界面的类型字典都只认四类；
+ * 到期日沿用该来源最近一条占用行的 due_date —— 作废收款不能把逾期"洗白"。
+ */
+export function reoccupy(db, { account, amount, sourceType, sourceId, docNo, operator = null, remark = null }) {
+  const acc = ensureAcc(db, account)
+  const amt = round2(amount)
+  if (!(amt > 0)) return null
+  const occupied = round2(
+    db.prepare(
+      `SELECT COALESCE(SUM(amount),0) s FROM credit_ledger
+        WHERE account_id=? AND source_type=? AND source_id=? AND amount>0`
+    ).get(acc.id, sourceType, sourceId)?.s || 0
+  )
+  const room = round2(occupied - openAmountOf(db, acc.id, sourceType, sourceId))
+  if (amt > room + 0.005) {
+    throw new CreditError(
+      `${sourceType}#${sourceId} 可恢复占用只有 ${room}，本次要恢复 ${amt}（历史占用 ${occupied}）`,
+      { code: 'CREDIT_REVERSAL_EXCEEDS_SOURCE', httpStatus: 409, detail: { sourceType, sourceId, occupied, room, amount: amt } }
+    )
+  }
+  const last = db
+    .prepare(
+      `SELECT due_date FROM credit_ledger
+        WHERE account_id=? AND source_type=? AND source_id=? AND change_type='occupy' AND amount>0
+        ORDER BY id DESC LIMIT 1`
+    )
+    .get(acc.id, sourceType, sourceId)
+  const row = writeLedger(db, {
+    accountId: acc.id, changeType: 'occupy', sourceType, sourceId, docNo,
+    amount: amt, dueDate: last?.due_date || null, operator, remark: remark || '核销作废，恢复占用'
+  })
+  return { ...row, amount: amt }
 }
 
 /** 人工调整占用（坏账核销、争议挂账等）。金额可正可负 */
@@ -497,7 +617,7 @@ export function updateAccount(db, { accountId = null, subject = null, patch = {}
 /**
  * 信用自洽审计：
  *   ① 台账逐笔的 balance_after 必须与「从头累计」一致（防止并发写坏余额列）；
- *   ② 销售订单上记的 credit_hold（单据视角）与台账里该单的净占用必须一致。
+ *   ② 销售订单上记的 credit_hold（单据视角）与台账里该单的净占用必须一致（`reconcileOrderHolds`）。
  * 前者错了说明写入有问题，后者错了说明「单据与台账没成对」—— 都是静默错账。
  */
 export function auditCredit(db) {
@@ -516,25 +636,8 @@ export function auditCredit(db) {
     }
   }
 
-  const holdDiff = []
-  const holds = db
-    .prepare(
-      `SELECT id, doc_no, dealer_id, credit_hold FROM sales_orders
-        WHERE credit_hold > 0 AND status NOT IN ('cancelled','returned')`
-    )
-    .all()
-  for (const o of holds) {
-    const sub = resolveSubject(db, { dealerId: o.dealer_id })
-    if (!sub) {
-      holdDiff.push({ order_id: o.id, doc_no: o.doc_no, hold: o.credit_hold, ledger: 0, diff: round2(o.credit_hold) })
-      continue
-    }
-    const acc = db.prepare('SELECT * FROM credit_accounts WHERE subject_type=? AND subject_id=?').get(sub.subjectType, sub.subjectId)
-    const ledger = acc ? openAmountOf(db, acc.id, 'SO', o.id) : 0
-    if (Math.abs(ledger - Number(o.credit_hold || 0)) > 0.005) {
-      holdDiff.push({ order_id: o.id, doc_no: o.doc_no, hold: round2(o.credit_hold), ledger, diff: round2(Number(o.credit_hold) - ledger) })
-    }
-  }
+  // 单据投影与台账的差异：判据只有一处（reconcileOrderHolds），legacy 探针与 verify-seed 都调它
+  const holdDiff = reconcileOrderHolds(db)
   return {
     ledger_balance_drift: drift,
     order_hold_diff: holdDiff,
@@ -613,7 +716,8 @@ export const CHECK_RESULT_LABEL = {
 
 export default {
   CreditError, ensureAccount, resolveSubject, creditSnapshot, snapshotFor,
-  checkCredit, occupy, release, settle, adjustCredit, openAmountOf,
+  checkCredit, occupy, release, settle, reoccupy, adjustCredit, openAmountOf,
+  projectOrderHold, reprojectOrderHolds, reconcileOrderHolds,
   updateAccount, auditCredit, creditOverview, ledgerOf,
   CHANGE_TYPE_LABEL, CHECK_RESULT_LABEL
 }

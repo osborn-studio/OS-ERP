@@ -31,9 +31,13 @@
 // 推送是唯一一个会「把消息发到真实的人面前」的动作，误推的代价远大于漏推 ——
 // 所以它必须是一个需要人显式配置与打开的动作，不能有默认生效的路径。
 
+import { createHmac } from 'node:crypto'
 import { purchaseTodos } from './purchase.js'
 // 审批待办与采购待办**同形状合并**，推送侧不区分来源 —— 见 approvalTodoItems 的注释。
 import { approvalTodoItems } from './approval.js'
+// 出站策略与密钥封存各只有一处实现（ADR-0008）：保存渠道与发送走同一份判据。
+import { validateOutboundUrl, outboundRequest, OutboundUrlError } from './outbound-url.js'
+import { openSecret, sealSecret, resealIfLegacy, maskSecret } from './secret-box.js'
 
 export class NotifyError extends Error {
   constructor(message, { code = 'NOTIFY_ERROR', httpStatus = 400, detail = null } = {}) {
@@ -71,8 +75,40 @@ const nowStr = () => new Date().toISOString().slice(0, 19).replace('T', ' ')
 // 一、渠道
 // ---------------------------------------------------------------------------
 
+/** 原始行（含封存后的 secret 列）：只给服务层内部与发送路径用，**不要**直接塞进响应。 */
 export function listChannels(db) {
   return db.prepare('SELECT * FROM notify_channels ORDER BY id').all()
+}
+
+/**
+ * 对外形态：**永远不带 `secret`**，只给 `has_secret` / `secret_last4`。
+ * 路由层返回渠道一律经过这里 —— 这是"密钥不出服务端"的唯一出口，不要在路由里再拼一份。
+ * 封存值解不开（密钥已更换且没配 PREVIOUS）时如实标 `secret_unreadable`，而不是假装没有密钥。
+ */
+export function publicChannel(row) {
+  if (!row) return null
+  const { secret, ...rest } = row
+  try {
+    return { ...rest, ...maskSecret(openSecret(secret)) }
+  } catch {
+    return { ...rest, has_secret: true, secret_last4: null, secret_unreadable: true }
+  }
+}
+
+export function listChannelsPublic(db) {
+  return listChannels(db).map(publicChannel)
+}
+
+/** 发送时取明文密钥：只在本模块内用，结果不进日志、不进响应。 */
+function channelSecret(channel) {
+  return openSecret(channel?.secret)
+}
+
+/** 保存前的地址门：空地址允许（"配了但没填地址"是合法中间态），非空必须过出站策略。 */
+function checkedWebhookUrl(webhookUrl) {
+  const s = String(webhookUrl ?? '').trim()
+  if (!s) return ''
+  return validateOutboundUrl(s).href
 }
 
 export function getChannel(db, idOrCode) {
@@ -98,18 +134,19 @@ export function upsertChannel(db, { code, name, provider, webhookUrl, secret, ev
          VALUES (?,?,?,?,?,?,?,?)`
       )
       .run(
-        code, name, provider || 'generic', webhookUrl || '', secret || '',
+        code, name, provider || 'generic', checkedWebhookUrl(webhookUrl), sealSecret(secret),
         Array.isArray(eventTypes) ? eventTypes.join(',') : eventTypes || '',
         enabled === undefined ? 0 : Number(enabled) ? 1 : 0,
         remark || null
       )
     return db.prepare('SELECT * FROM notify_channels WHERE id=?').get(res.lastInsertRowid)
   }
+  // secret 的三种输入：未传/null = 保持（旧明文顺手升级为封存）；'' = 清除；非空 = 设置/轮换
   const patch = {
     name: name ?? existing.name,
     provider: provider ?? existing.provider,
-    webhook_url: webhookUrl ?? existing.webhook_url,
-    secret: secret ?? existing.secret,
+    webhook_url: webhookUrl == null ? existing.webhook_url : checkedWebhookUrl(webhookUrl),
+    secret: secret == null ? resealIfLegacy(existing.secret) : sealSecret(secret),
     event_types: eventTypes === undefined
       ? existing.event_types
       : Array.isArray(eventTypes) ? eventTypes.join(',') : eventTypes,
@@ -270,6 +307,45 @@ export function renderPayload(channel, digest) {
 // ---------------------------------------------------------------------------
 
 /**
+ * 按渠道类型给请求加签。密钥为空则原样返回（渠道没配加签就是没配）。
+ *
+ *   dingtalk：query 追加 `timestamp`（毫秒）与 `sign` = base64(HMAC-SHA256(secret, `${timestamp}\n${secret}`))
+ *   feishu  ：body 里加 `timestamp`（秒）与 `sign` = base64(HMAC-SHA256(key=`${timestamp}\n${secret}`, ''))
+ *   generic ：头 `X-GML-Timestamp`（秒）与 `X-GML-Signature: sha256=` + hex(HMAC-SHA256(secret, `${timestamp}.${body}`))
+ *   wecom   ：机器人 key 在 URL 里，没有签名方案
+ *
+ * 返回的 url/body/headers 就是实际要发出去的；留痕用同一份，保证"日志里的"= "发出去的"。
+ */
+export function signRequest(channel, body, secret) {
+  const provider = channel?.provider || 'generic'
+  let url
+  try {
+    url = new URL(String(channel?.webhook_url || ''))
+  } catch {
+    throw new OutboundUrlError('OUTBOUND_URL_INVALID', 'webhook 地址不是合法 URL')
+  }
+  const plain = String(secret ?? '')
+  if (!plain) return { url: url.href, body: JSON.stringify(body), headers: {} }
+  if (provider === 'dingtalk') {
+    const timestamp = String(Date.now())
+    const sign = createHmac('sha256', plain).update(`${timestamp}\n${plain}`).digest('base64')
+    url.searchParams.set('timestamp', timestamp)
+    url.searchParams.set('sign', sign)
+    return { url: url.href, body: JSON.stringify(body), headers: {} }
+  }
+  if (provider === 'feishu') {
+    const timestamp = String(Math.floor(Date.now() / 1000))
+    const sign = createHmac('sha256', `${timestamp}\n${plain}`).update('').digest('base64')
+    return { url: url.href, body: JSON.stringify({ timestamp, sign, ...body }), headers: {} }
+  }
+  if (provider === 'wecom') return { url: url.href, body: JSON.stringify(body), headers: {} }
+  const timestamp = String(Math.floor(Date.now() / 1000))
+  const text = JSON.stringify(body)
+  const signature = createHmac('sha256', plain).update(`${timestamp}.${text}`).digest('hex')
+  return { url: url.href, body: text, headers: { 'X-GML-Timestamp': timestamp, 'X-GML-Signature': `sha256=${signature}` } }
+}
+
+/**
  * 发一条消息到指定渠道并留痕。
  *
  * @param dryRun true 时只渲染不发送（用于界面预览与测试）。
@@ -296,34 +372,45 @@ export async function pushToChannel(db, channel, digest, { dryRun = false, trigg
   let httpStatus = null
   let error = null
   let okFlag = false
+  // 签名在发送前、留痕之前完成：日志里只会出现签名结果（timestamp/sign），绝不出现密钥本身
+  let signed
   try {
-    const ctrl = new AbortController()
-    const timer = setTimeout(() => ctrl.abort(), timeoutMs)
-    const res = await fetch(channel.webhook_url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: payloadStr,
-      signal: ctrl.signal
-    })
-    clearTimeout(timer)
-    httpStatus = res.status
-    // 机器人网关惯用「HTTP 200 + 业务错误码」，所以 HTTP 200 不能单独作为成功判据
-    const bodyText = await res.text().catch(() => '')
-    let bizCode = null
-    try {
-      const j = JSON.parse(bodyText)
-      bizCode = j?.code ?? j?.errcode ?? j?.StatusCode ?? null
-    } catch {
-      /* 非 JSON 响应：不阻断判断，交给 HTTP 状态码 */
-    }
-    okFlag = res.ok && (bizCode === null || Number(bizCode) === 0)
-    if (!okFlag) error = `HTTP ${httpStatus}${bizCode !== null ? ` · 业务码 ${bizCode}` : ''} ${bodyText.slice(0, 200)}`
+    signed = signRequest(channel, rendered.body, channelSecret(channel))
   } catch (e) {
-    error = e.name === 'AbortError' ? `请求超时（${timeoutMs}ms）` : String(e.message || e)
+    signed = null
+    error = `${e.code || 'NOTIFY_SIGN_ERROR'}: ${e.message}`
+  }
+  const sentPayload = signed ? signed.body : payloadStr
+  if (signed) {
+    try {
+      // 出站策略在这里再判一次（库里的地址可能是策略收紧之前存的，或绕过 API 写入的）：
+      // 协议/主机/名单 → DNS 逐地址检查 → 钉住地址连接 → 不跟随重定向 → 总超时覆盖响应体 → 响应体上限
+      const res = await outboundRequest(signed.url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...signed.headers },
+        body: signed.body,
+        timeoutMs
+      })
+      httpStatus = res.status
+      // 机器人网关惯用「HTTP 200 + 业务错误码」，所以 HTTP 200 不能单独作为成功判据
+      const bodyText = res.bodyText || ''
+      let bizCode = null
+      try {
+        const j = JSON.parse(bodyText)
+        bizCode = j?.code ?? j?.errcode ?? j?.StatusCode ?? null
+      } catch {
+        /* 非 JSON 响应：不阻断判断，交给 HTTP 状态码 */
+      }
+      okFlag = httpStatus >= 200 && httpStatus < 300 && (bizCode === null || Number(bizCode) === 0)
+      if (!okFlag) error = `HTTP ${httpStatus}${bizCode !== null ? ` · 业务码 ${bizCode}` : ''} ${bodyText.slice(0, 200)}`
+    } catch (e) {
+      // 策略拒绝（OUTBOUND_*）与网络错误都走同一条留痕路径；带上 code 便于在日志里区分"没发"与"发了没成"
+      error = e instanceof OutboundUrlError ? `${e.code}: ${e.message}` : String(e.message || e)
+    }
   }
 
   const logId = writeLog(db, {
-    channel, digest, payload: payloadStr, status: okFlag ? 'success' : 'fail',
+    channel, digest, payload: sentPayload, status: okFlag ? 'success' : 'fail',
     httpStatus, error, triggeredBy
   })
   db.prepare(`UPDATE notify_channels SET last_push_at=?, last_status=? WHERE id=?`).run(

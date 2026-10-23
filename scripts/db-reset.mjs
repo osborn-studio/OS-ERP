@@ -34,8 +34,9 @@ import fs from 'node:fs'
 import path from 'node:path'
 import readline from 'node:readline'
 import Database from 'better-sqlite3'
-import { INDUSTRIES, ROOT_DIR, dbPathFor } from '../server/db/index.js'
+import { INDUSTRIES, ROOT_DIR, DATA_DIR, dbPathFor } from '../server/db/index.js'
 import { bootIndustry, bootAll } from '../server/db/boot.js'
+import { resolveBackupDir } from '../server/lib/backup-dir.js'
 
 const args = process.argv.slice(2)
 const autoYes = args.includes('--yes')
@@ -51,14 +52,15 @@ function backup(industry) {
   const src = dbPathFor(industry)
   if (!fs.existsSync(src)) return null
   const db = new Database(src, { readonly: true })
-  let dir = 'data/backups'
+  let dir = null
   try {
     const row = db.prepare("SELECT value FROM settings WHERE key='backup_dir'").get()
     if (row?.value) dir = row.value
   } catch {
     /* settings 尚未迁移出来，用默认目录 */
   }
-  const outDir = path.isAbsolute(dir) ? dir : path.join(ROOT_DIR, dir)
+  // 相对目录落在 GML_DATA_DIR 内，不写仓库（ADR-0001 / ADR-0009）
+  const outDir = resolveBackupDir(dir, DATA_DIR)
   fs.mkdirSync(outDir, { recursive: true })
   const d = new Date()
   const p = (n) => String(n).padStart(2, '0')

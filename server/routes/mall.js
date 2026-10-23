@@ -590,7 +590,10 @@ r.post(
       if (failFromError(res, e)) return undefined
       throw e
     }
-    return ok(res, { id, status: 'closed', ...out })
+    // 返回**落库后的真实状态**（F16）：原来写死 `'closed'`，而事务里落的是内核值 `cancelled`，
+    // 客户端拿到的字符串与列表/详情再读出来的不一致。这里重读一次，不再写字面量。
+    const persisted = db.prepare('SELECT status FROM oms_orders WHERE id=?').get(id)
+    return ok(res, { id, status: persisted?.status ?? null, ...out })
   })
 )
 

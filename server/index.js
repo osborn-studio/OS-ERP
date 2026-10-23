@@ -79,6 +79,8 @@ import mcpRoutes from './mcp/server.js'
 import mcpAdminRoutes from './mcp/admin.js'
 import { buildOpenApi } from './openapi.js'
 import { installCapabilityGates, runtimeCapabilities } from './capabilities.js'
+// 版本与构建 SHA 的唯一出处（F16）：/api、health、AI manifest、MCP serverInfo 都从这里取
+import { versionInfo } from './version.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const PORT = Number(process.env.PORT || 3001)
@@ -133,7 +135,8 @@ app.use((req, res, next) => {
     let industry = normalizeIndustry(req.headers['x-industry'])
     // ② 令牌里的行业（签发时确定）优先于头
     const raw = String(req.headers.authorization || req.headers['x-mall-token'] || '')
-    const token = raw.replace(/^Bearer\s+/i, '') || req.query.token || ''
+    // 只认受控头：`?token=` 不再是凭据来源（与 `requireAuth` 同一口径，F13）
+    const token = raw.replace(/^Bearer\s+/i, '')
     if (token) {
       try {
         const payload = jwt.verify(String(token), JWT_SECRET)
@@ -174,7 +177,7 @@ app.get('/api', (_req, res) => {
     success: true,
     data: {
       name: 'GML 供应链协同系统',
-      version: '1.2.0',
+      ...versionInfo(),
       industries: Object.values(INDUSTRIES).map((x) => ({ code: x.code, name: x.name, label: x.label })),
       default_industry: DEFAULT_INDUSTRY,
       capabilities: runtimeCapabilities(),

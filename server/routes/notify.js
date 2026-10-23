@@ -29,27 +29,40 @@
 
 import { Router } from 'express'
 import { getDb } from '../db/index.js'
-import { ok, fail, wrap, pageParams } from '../lib/http.js'
-import { requireAuth, requirePerm, currentUser } from '../middleware/auth.js'
+import { ok, fail, bizFail, wrap, pageParams } from '../lib/http.js'
+import { requireAuth, requirePerm, requireInternal, requireGlobalData, currentUser } from '../middleware/auth.js'
 import { audit } from '../middleware/audit.js'
 import {
   NotifyError, PROVIDERS, KNOWN_KINDS,
-  listChannels, getChannel, upsertChannel, channelReady,
+  listChannelsPublic, publicChannel, getChannel, upsertChannel, channelReady,
   buildDigest, renderPayload, pushDigest, listLogs, notifyOverview
 } from '../lib/notify.js'
+import { OutboundUrlError } from '../lib/outbound-url.js'
 
 const r = Router()
 
 function guard(fn) {
-  return wrap((req, res, next) => {
+  return wrap(async (req, res, next) => {
     try {
-      return fn(req, res, next)
+      return await fn(req, res, next)
     } catch (e) {
-      if (e instanceof NotifyError) return fail(res, e.message, e.httpStatus, 1, e.detail)
+      if (e instanceof NotifyError || e instanceof OutboundUrlError) {
+        return bizFail(res, { status: e.httpStatus, code: e.code, message: e.message, detail: e.detail || {} })
+      }
       throw e
     }
   })
 }
+
+// ---------------------------------------------------------------------------
+// 摘要类接口的门（ADR-0008 / F05）
+// ---------------------------------------------------------------------------
+// 摘要（预览 / 推送 / 日志 / 概览里的最近一条）汇总的是**全库**的采购与审批待办：
+// 采购订单与审批实例表没有组织列，无法按组织切片，所以不假装"按范围过滤"，
+// 而是要求：内部角色 + 通知权限点 + **全部数据范围**。受限账号（门店 / 经销商 /
+// 只有 subtree、org 范围的岗位）一律 403，判据与 dashboard / accounting 用的是同一组中间件。
+const VIEW_PERMS = ['system:notify:view', 'system:notify:manage', 'system:notify:push']
+const digestGate = (label) => [requireAuth, requireInternal(label), requirePerm(...VIEW_PERMS), requireGlobalData(label)]
 
 const actorOf = (req) => {
   const u = currentUser(req)
@@ -65,7 +78,7 @@ r.get(
 
 r.get(
   '/overview',
-  requireAuth,
+  ...digestGate('通知概览'),
   wrap((_req, res) => ok(res, notifyOverview(getDb())))
 )
 
@@ -79,7 +92,8 @@ r.get(
   requirePerm('system:notify:manage'),
   wrap((_req, res) => {
     const db = getDb()
-    const list = listChannels(db).map((c) => ({ ...c, ready: channelReady(c) }))
+    // 渠道一律走 publicChannel：响应里没有 secret，只有 has_secret / secret_last4
+    const list = listChannelsPublic(db).map((c) => ({ ...c, ready: channelReady(c) }))
     return ok(res, { list })
   })
 )
@@ -101,8 +115,8 @@ r.post(
       enabled: b.enabled,
       remark: b.remark
     })
-    audit(req, { action: 'UPSERT', module: 'notify', entity: 'notify_channels', entityId: row.id, detail: { code: row.code, enabled: row.enabled } })
-    return ok(res, { ...row, ready: channelReady(row) })
+    audit(req, { action: 'UPSERT', module: 'notify', entity: 'notify_channels', entityId: row.id, detail: { code: row.code, enabled: row.enabled, secret_changed: typeof b.secret === 'string' } })
+    return ok(res, { ...publicChannel(row), ready: channelReady(row) })
   })
 )
 
@@ -122,7 +136,7 @@ r.post(
     }
     const row = upsertChannel(db, { code: ch.code, enabled: next })
     audit(req, { action: next ? 'ENABLE' : 'DISABLE', module: 'notify', entity: 'notify_channels', entityId: ch.id })
-    return ok(res, { ...row, ready: channelReady(row) })
+    return ok(res, { ...publicChannel(row), ready: channelReady(row) })
   })
 )
 
@@ -130,10 +144,10 @@ r.post(
 // 预览 / 推送
 // ===========================================================================
 
-/** 渲染预览：不发送。可指定渠道（决定消息体格式）与事件类型。 */
+/** 渲染预览：不发送。可指定渠道（决定消息体格式）与事件类型。摘要是全库口径，见 digestGate。 */
 r.get(
   '/preview',
-  requireAuth,
+  ...digestGate('待办摘要预览'),
   wrap((req, res) => {
     const db = getDb()
     const kinds = req.query.kinds ? String(req.query.kinds).split(',').map((s) => s.trim()).filter(Boolean) : null
@@ -150,7 +164,7 @@ r.get(
  */
 r.post(
   '/push',
-  requireAuth,
+  ...digestGate('待办推送'),
   requirePerm('system:notify:push'),
   guard(async (req, res) => {
     const db = getDb()
@@ -169,9 +183,10 @@ r.post(
   })
 )
 
+/** 日志里存的是实际发出的消息体（含单号与金额），所以与摘要同一道门 */
 r.get(
   '/logs',
-  requireAuth,
+  ...digestGate('推送日志'),
   wrap((req, res) => {
     const { page, pageSize } = pageParams(req)
     return ok(res, listLogs(getDb(), {

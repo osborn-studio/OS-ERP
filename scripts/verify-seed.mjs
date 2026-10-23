@@ -24,6 +24,8 @@ import { TABLES, KEEP_TABLES } from '../server/db/seed.js'
 import { pruneOrphanEvents } from '../server/lib/docflow.js'
 import { auditInvoice } from '../server/lib/invoice.js'
 import { auditAr } from '../server/lib/ar.js'
+// 授信投影对账（第 9 节）：`sales_orders.credit_hold` 必须等于台账净占用，判据只有 `reconcileOrderHolds` 一处（ADR-0014）
+import { reconcileOrderHolds } from '../server/lib/credit.js'
 import { auditQc } from '../server/lib/qc2.js'
 import { auditMfg } from '../server/lib/mfg.js'
 // 报表域自洽（第 18 节）：与 `lib/report.js` **共用同一份自证判据** ——
@@ -170,6 +172,11 @@ for (const code of codes) {
   const arAudit = auditAr(db)
   const arBad = (arAudit.drift?.length || 0) + (arAudit.badStatus?.length || 0) + (arAudit.overAlloc?.length || 0) + (arAudit.rcDrift?.length || 0)
   ok(arAudit.ok, `应收自洽审计通过（不一致 ${arBad} 处，应为 0）`)
+  // 授信投影：seed 先补历史占用，再由 ar-seed 核销 / 作废 / 预收抵扣 —— 四条路径之后
+  // 每张订单的 credit_hold 都必须仍等于台账净占用。原来只有 test-quote-credit 会响，这里让重建自己也响。
+  const holdDiffs = reconcileOrderHolds(db)
+  if (holdDiffs.length) console.log(`  投影漂移：${holdDiffs.slice(0, 5).map((d) => `${d.doc_no} hold=${d.hold} ledger=${d.ledger}`).join(' / ')}`)
+  ok(holdDiffs.length === 0, `销售订单 credit_hold 投影与授信台账逐单一致（漂移 ${holdDiffs.length} 条，应为 0）`)
 
   // 10. 质量检验自洽（模块 13）
   // 与第 9 节同一个道理：质检的三张表（报检行 / 检验单 / 处置单）互相引用，

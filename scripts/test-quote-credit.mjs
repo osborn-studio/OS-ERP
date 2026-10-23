@@ -46,7 +46,7 @@ import {
 import {
   CreditError, ensureAccount, resolveSubject, creditSnapshot,
   checkCredit, occupy, release, settle, adjustCredit, openAmountOf,
-  updateAccount, auditCredit, creditOverview, ledgerOf
+  updateAccount, auditCredit, creditOverview, ledgerOf, reconcileOrderHolds
 } from '../server/lib/credit.js'
 
 const industry = process.argv[2] && INDUSTRIES[process.argv[2]] ? process.argv[2] : 'cosmetic'
@@ -377,6 +377,10 @@ runWithIndustry(industry, () => {
     '台账 balance_after 逐笔累计无误（并发写坏余额列会被这里发现）')
   ok(audit.order_hold_diff.length === 0,
     `销售订单占用与台账零差异（差异 ${audit.order_hold_diff.length} 条）`)
+  // 投影对账的唯一判据（ADR-0014）：seed 的收款核销 / 作废 / 预收抵扣之后 credit_hold 必须仍等于台账净占用
+  const holdDiffs = reconcileOrderHolds(db)
+  if (holdDiffs.length) console.log('    ' + holdDiffs.map((d) => `${d.doc_no} hold=${d.hold} ledger=${d.ledger}`).join(' / '))
+  ok(holdDiffs.length === 0, `credit_hold 投影与台账逐单对账零差异（${holdDiffs.length} 条）`)
 
   const ov = creditOverview(db)
   ok(ov.account_count > 0, `信用账户 ${ov.account_count} 个`)

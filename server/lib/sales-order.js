@@ -28,7 +28,7 @@
 
 import { advanceStatus, nowText } from './docflow.js'
 import { releaseForDoc } from './stock.js'
-import { release as creditRelease, resolveSubject } from './credit.js'
+import { release as creditRelease, projectOrderHold, resolveSubject } from './credit.js'
 
 export class SalesOrderError extends Error {
   constructor(code, message, status = 400, detail = null) {
@@ -55,7 +55,7 @@ function creditAccountOf(db, order) {
  *   ① 释放库存占用（按明细释放，**不重新拣选**）；
  *   ② 走内核流转（合法性与留痕由 `doc_actions` 定义）；
  *   ③ 释放授信（订单取消，占着的额度必须还回去，否则额度只减不增）；
- *   ④ 清 `credit_hold` 标志。
+ *   ④ `credit_hold` 投影随台账归零（投影的唯一写入者在 credit.js，见 ADR-0014）。
  *
  * `actor` 必须显式传入 —— MCP 等非 HTTP 入口没有 `req.user`。
  */
@@ -98,7 +98,8 @@ export function cancelOrder(db, { id, reason = null, actor = null, source = 'api
       actor
     })
 
-    // ③④ 释放授信
+    // ③④ 释放授信。`credit_hold` 是台账的投影（ADR-0014）：release 写台账时自动归零；
+    //     没有信用账户（投影是旧数据残留）时走同一个投影函数重算，不另写 UPDATE。
     let creditReleased = 0
     if (Number(order.credit_hold || 0) > 0) {
       const acc = creditAccountOf(db, order)
@@ -113,7 +114,7 @@ export function cancelOrder(db, { id, reason = null, actor = null, source = 'api
         })
         creditReleased = Number(order.credit_hold || 0)
       }
-      db.prepare('UPDATE sales_orders SET credit_hold=0 WHERE id=?').run(order.id)
+      projectOrderHold(db, { sourceType: 'SO', sourceId: order.id })
     }
 
     return {

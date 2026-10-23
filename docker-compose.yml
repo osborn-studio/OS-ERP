@@ -1,28 +1,52 @@
+# ============================================================================
+# 文件标识：docker-compose.yml ｜ 本地 / 演示栈（回环发布、只读根文件系统、命名数据卷、密钥只从环境取）
+# ============================================================================
+# 决策见 docs/implementation/ADR-0012-container-and-version-contract.md；
+# 文本规则由 tests/dockerfile-policy.test.mjs 静态守卫。
+#
+# 启动：
+#   cp .env.example .env && 编辑 .env 填入 GML_JWT_SECRET（openssl rand -hex 32）
+#   docker compose up --build
+# 或不落盘：GML_JWT_SECRET=$(openssl rand -hex 32) docker compose up --build
+#
+# 本文件**不是**生产编排：生产请用 k8s / 云编排平台显式下发密钥、TLS 与备份策略。
 services:
-  gml:
-    build: .
-    image: gml-supply-chain:1.0.0
-    container_name: gml
+  os-erp:
+    build:
+      context: .
+      args:
+        # 构建 SHA 注入 /api、/api/meta/health、AI manifest、MCP serverInfo 的 build_sha（可空）
+        GML_BUILD_SHA: ${GML_BUILD_SHA:-}
+    image: os-erp:local
+    container_name: os-erp
     restart: unless-stopped
+    # 默认只发布到本机回环：对外提供服务请放在反向代理 / TLS 终结之后，不要改成 0.0.0.0
     ports:
-      - "3001:3001"
+      - "127.0.0.1:3001:3001"
+    env_file:
+      # 可选：从 .env 读取（见 .env.example）；没有该文件时不报错
+      - path: .env
+        required: false
     environment:
       PORT: 3001
       HOST: 0.0.0.0
+      GML_RUNTIME_MODE: production
       GML_DATA_DIR: /data
-      # A20：这里原来写的是 `JWT_SECRET`，而程序读的是 `GML_JWT_SECRET` ——
-      # 两个名字对不上，于是容器里**一直在用内置的演示回退密钥**，且不会报任何错。
-      # 现在统一为程序与 README 都在用的名字（`GML_JWT_SECRET`）。
-      #
-      # 本文件是**本地 / 演示栈**；生产请用编排平台（k8s / 云上 Composer）并显式给密钥。
-      # 密钥**必须显式提供**：用 `:?` 而不是 `:-默认值` —— 缺变量时 compose **自己就拒绝解析**，
-      # 报出来的那句话本身就是修复命令。为什么不兜一个默认值：任何一个写进仓库的默认密钥
-      # 都是"公开已知值"，等于没有认证；而这个文件名太普通，很容易被直接搬到有公网 IP 的机器上。
-      # （第二道闸门在程序侧、判据不同：变量**给了**但等于公开已知值 ⇒ production 下拒绝启动，
-      #   见 `server/middleware/auth.js` 的 `PUBLIC_DEFAULT_SECRETS`。）
+      # 密钥**必须显式提供**：用 `:?` 而不是 `:-默认值` —— 缺变量时 compose 自己拒绝解析，
+      # 报出来的那句话本身就是修复命令。任何写进仓库的默认密钥都是公开已知值，等于没有认证。
+      # 第二道闸门在程序侧：变量给了但等于公开已知值 ⇒ production 下拒绝启动
+      # （见 server/middleware/auth.js 的 PUBLIC_DEFAULT_SECRETS）。
       GML_JWT_SECRET: ${GML_JWT_SECRET:?GML_JWT_SECRET 必须显式提供 —— 生成并启动：GML_JWT_SECRET=$(openssl rand -hex 32) docker compose up}
+    # 根文件系统只读：程序只写 GML_DATA_DIR（/data，命名卷）；/tmp 给 tmpfs 以防库或运行时需要临时文件
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     volumes:
-      - gml-data:/data
+      - os-erp-data:/data
 
 volumes:
-  gml-data:
+  os-erp-data:

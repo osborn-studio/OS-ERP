@@ -98,14 +98,18 @@ export function createToken(db, {
     throw tokenFieldError(field, v, '字符串 / 字符串数组 / null')
   }
 
+  // 有主令牌 = 所有者的委托（ADR-0011）：所有者此刻必须存在且 active，并把其当前
+  // `auth_version` 记进令牌 —— 之后所有者任何一次撤权事件（版本递增）都会让这张令牌失效。
+  const owner = ownerAtIssue(db, ownerUserId)
+
   const { raw, hash, prefix } = generateToken()
   const scopeStr = asCsv('scopes', scopes, 'read')
   const info = db.prepare(`
-    INSERT INTO agent_tokens (name, token_hash, token_prefix, owner_user_id, org_id, industry, scopes,
+    INSERT INTO agent_tokens (name, token_hash, token_prefix, owner_user_id, owner_auth_version, org_id, industry, scopes,
                               allow_tools, deny_tools, rate_limit, expires_at, remark)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
   `).run(
-    name, hash, prefix, ownerUserId, orgId, boundIndustry, scopeStr,
+    name, hash, prefix, owner?.id ?? null, owner?.auth_version ?? null, orgId, boundIndustry, scopeStr,
     asCsv('allowTools', allowTools),
     asCsv('denyTools', denyTools),
     rateLimit, expiresAt, remark
@@ -113,12 +117,157 @@ export function createToken(db, {
   return { id: Number(info.lastInsertRowid), token: raw, prefix, name, scopes: scopeStr }
 }
 
-/** 从请求头/参数提取 Token 原文 */
+/**
+ * 从请求提取 Agent Token 原文：**只认 `Authorization: Bearer`**（ADR-0011 / F13）。
+ *
+ * 原来还收 `x-agent-token` 头、`?token=` 查询串与 `body.token`。查询串会原样落进访问日志、
+ * 代理日志与浏览器历史 —— 一张长期有效的写型凭据就这样被"记"在各处。
+ * 不收 header 之外的任何位置，也不做兼容回退：回退就是把洞留着。
+ */
 export function extractToken(req) {
-  const h = req.headers.authorization || req.headers['x-agent-token'] || ''
-  if (String(h).startsWith('Bearer ')) return String(h).slice(7).trim()
-  if (h) return String(h).trim()
-  return req.query?.token || req.body?.token || null
+  const h = String(req.headers?.authorization || '')
+  if (!/^Bearer\s/i.test(h)) return null
+  const raw = h.slice(7).trim()
+  return raw || null
+}
+
+/** 所有者相关的稳定业务码（签发侧 400；调用侧见 `delegation.js`） */
+export const TOKEN_OWNER_INVALID = 'TOKEN_OWNER_INVALID'
+export const TOKEN_OWNER_INACTIVE = 'TOKEN_OWNER_INACTIVE'
+
+/**
+ * 签发时对所有者的**唯一**判据：存在且 active，并取其当前 `auth_version` 记进令牌。
+ * 停用账号不能再被签新令牌 —— 否则"停用联动吊销"可以被"再签一张"绕过。
+ */
+function ownerAtIssue(db, ownerUserId) {
+  if (ownerUserId == null) return null
+  const u = db.prepare('SELECT id, status, auth_version FROM users WHERE id=?').get(Number(ownerUserId))
+  if (!u) {
+    const e = new Error(`令牌所有者 #${showValue(ownerUserId)} 不存在`)
+    e.status = 400
+    e.code = TOKEN_OWNER_INVALID
+    throw e
+  }
+  if (u.status !== 'active') {
+    const e = new Error(`令牌所有者 #${u.id} 已停用，不能签发委托令牌`)
+    e.status = 400
+    e.code = TOKEN_OWNER_INACTIVE
+    throw e
+  }
+  return u
+}
+
+/**
+ * 吊销某所有者名下**全部**仍有效的令牌（ADR-0011）。由账号停用在同一事务里调用；
+ * 返回吊销条数。不吞错：事务内抛错就让整笔账号变更一起回滚。
+ */
+export function revokeOwnerTokens(db, ownerUserId, remark = '所有者已停用，令牌随之吊销') {
+  if (ownerUserId == null) return 0
+  return db
+    .prepare(`UPDATE agent_tokens SET status='revoked', remark=?, revoked_reason=?, revoked_at=datetime('now','localtime')
+               WHERE owner_user_id=? AND status='active'`)
+    .run(remark, REVOKE_REASON.ownerInactive, Number(ownerUserId)).changes
+}
+
+// ---------------------------------------------------------------------------
+// 有效状态（ADR-0015）：列表 / 详情要如实回答"这张令牌现在能不能用"
+// ---------------------------------------------------------------------------
+// 判据只有一处：**调用时**以 `delegation.js` 的 `resolveDelegation` 为准（所有者存在 / active /
+// 版本对照），这里只是把同一组条件翻成一个可展示的状态码，不另起一套"谁算失效"的规则，
+// 也不在读路径上改库 —— 行状态是历史，`effective_status` 是现状；要让两者一致用 `sweepOwnerRevokedTokens`。
+
+/** `agent_tokens.revoked_reason` 的稳定码 */
+export const REVOKE_REASON = {
+  admin: 'admin', // 管理员在界面上吊销
+  ownerInactive: 'owner_inactive', // 账号停用联动吊销（ADR-0011）
+  ownerAuthChanged: 'owner_auth_changed', // 清扫：所有者 auth_version 已变
+  ownerMissing: 'owner_missing' // 清扫：所有者行已不存在
+}
+
+/** `effective_status` 的取值（对外契约，改名要同步 ADR-0015） */
+export const EFFECTIVE_STATUS = {
+  active: 'active',
+  revoked: 'revoked',
+  expired: 'expired',
+  ownerMissing: 'owner_missing',
+  ownerInactive: 'owner_inactive',
+  revokedByOwnerChange: 'revoked_by_owner_change'
+}
+
+const EFFECTIVE_REASON = {
+  revoked: '已吊销',
+  expired: '已过期',
+  owner_missing: '所有者账号已不存在，委托令牌随之失效',
+  owner_inactive: '所有者账号已停用，其名下令牌不能再使用',
+  revoked_by_owner_change: '所有者的账号安全状态已变化（改密 / 退出全部会话 / 角色或权限集变更），签发于此前的令牌已失效，需重新签发'
+}
+
+/**
+ * 由令牌行 + 所有者行算出有效状态。纯函数（不查库、不改库）；`owner` 为 `null` 表示所有者行不存在，
+ * `undefined` 表示无主令牌（不做所有者判定）。顺序与 `verifyToken` → `resolveDelegation` 一致：
+ * 先看令牌自身（吊销 / 过期），再看所有者。
+ */
+export function effectiveTokenStatus(row, owner, now = localNow()) {
+  let status = EFFECTIVE_STATUS.active
+  if (row.status !== 'active') status = EFFECTIVE_STATUS.revoked
+  else if (row.expires_at && String(row.expires_at) < now) status = EFFECTIVE_STATUS.expired
+  else if (row.owner_user_id != null) {
+    if (!owner) status = EFFECTIVE_STATUS.ownerMissing
+    else if (owner.status !== 'active') status = EFFECTIVE_STATUS.ownerInactive
+    else if (row.owner_auth_version == null || Number(row.owner_auth_version) !== Number(owner.auth_version)) {
+      status = EFFECTIVE_STATUS.revokedByOwnerChange
+    }
+  }
+  return { effective_status: status, effective_reason: EFFECTIVE_REASON[status] || null }
+}
+
+const TOKEN_LIST_SELECT = `
+  SELECT t.id, t.name, t.token_prefix, t.org_id, o.name AS org_name, t.industry, t.scopes,
+         t.allow_tools, t.deny_tools, t.rate_limit, t.expires_at, t.last_used_at, t.call_count,
+         t.status, t.remark, t.created_at, t.revoked_reason, t.revoked_at,
+         t.owner_user_id, t.owner_auth_version,
+         u.username AS owner_username, u.name AS owner_name, u.status AS owner_status, u.auth_version AS owner_current_auth_version
+    FROM agent_tokens t
+    LEFT JOIN orgs o ON o.id = t.org_id
+    LEFT JOIN users u ON u.id = t.owner_user_id`
+
+function withEffective(r) {
+  const owner = r.owner_user_id == null ? undefined : (r.owner_username == null && r.owner_status == null ? null : { status: r.owner_status, auth_version: r.owner_current_auth_version })
+  const { owner_status, owner_current_auth_version, ...rest } = r
+  return { ...rest, ...effectiveTokenStatus(r, owner) }
+}
+
+/** 管理员列表：每行带 `effective_status` / `effective_reason`（只读，不改库） */
+export function listTokensWithStatus(db) {
+  return db.prepare(`${TOKEN_LIST_SELECT} ORDER BY t.id DESC`).all().map(withEffective)
+}
+
+/** 单张令牌详情（同一份字段），不存在返回 null */
+export function getTokenWithStatus(db, id) {
+  const r = db.prepare(`${TOKEN_LIST_SELECT} WHERE t.id=?`).get(Number(id))
+  return r ? withEffective(r) : null
+}
+
+/**
+ * 清扫：把"行仍 active、但按所有者判定已失效"的有主令牌真正置为 `revoked` 并记原因。
+ * 只处理所有者**版本变化**与**所有者行不存在**两类 —— 停用已由 `revokeOwnerTokens` 在停用事务里处理；
+ * 过期令牌的 `expires_at` 本身就是事实，不改写。返回 `{ swept, ids }`。
+ */
+export function sweepOwnerRevokedTokens(db, { actor = null } = {}) {
+  const rows = db.prepare(`${TOKEN_LIST_SELECT} WHERE t.status='active' AND t.owner_user_id IS NOT NULL`).all().map(withEffective)
+  const targets = rows.filter((r) => r.effective_status === EFFECTIVE_STATUS.revokedByOwnerChange || r.effective_status === EFFECTIVE_STATUS.ownerMissing)
+  const upd = db.prepare(`UPDATE agent_tokens SET status='revoked', revoked_reason=?, revoked_at=datetime('now','localtime'), remark=COALESCE(?, remark)
+                           WHERE id=? AND status='active'`)
+  const who = actor ? `由 ${actor} 清扫` : '系统清扫'
+  const ids = []
+  const run = db.transaction(() => {
+    for (const r of targets) {
+      const reason = r.effective_status === EFFECTIVE_STATUS.ownerMissing ? REVOKE_REASON.ownerMissing : REVOKE_REASON.ownerAuthChanged
+      if (upd.run(reason, `${who}：${r.effective_reason}`, r.id).changes === 1) ids.push(r.id)
+    }
+  })
+  run()
+  return { swept: ids.length, ids }
 }
 
 /** 校验 Token，返回 { token } 或 { error } */
@@ -157,8 +306,10 @@ export function touchToken(db, id) {
   db.prepare("UPDATE agent_tokens SET last_used_at=datetime('now','localtime'), call_count=call_count+1 WHERE id=?").run(id)
 }
 
-export function revokeToken(db, id, remark = null) {
-  db.prepare("UPDATE agent_tokens SET status='revoked', remark=COALESCE(?, remark) WHERE id=?").run(remark, id)
+export function revokeToken(db, id, remark = null, reason = REVOKE_REASON.admin) {
+  db.prepare(`UPDATE agent_tokens SET status='revoked', remark=COALESCE(?, remark),
+                revoked_reason=COALESCE(revoked_reason, ?), revoked_at=COALESCE(revoked_at, datetime('now','localtime'))
+              WHERE id=?`).run(remark, reason, id)
 }
 
 /**
@@ -191,4 +342,4 @@ export function ensureDemoTokens(db, { industry = 'cosmetic', orgId = null } = {
   return created
 }
 
-export default { createToken, verifyToken, revokeToken, extractToken, tokenScopes, tokenAllow, tokenDeny, touchToken, ensureDemoTokens, SCOPE_LABEL }
+export default { createToken, verifyToken, revokeToken, revokeOwnerTokens, extractToken, tokenScopes, tokenAllow, tokenDeny, touchToken, ensureDemoTokens, SCOPE_LABEL, effectiveTokenStatus, listTokensWithStatus, getTokenWithStatus, sweepOwnerRevokedTokens, REVOKE_REASON, EFFECTIVE_STATUS }
