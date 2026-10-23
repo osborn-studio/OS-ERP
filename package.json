@@ -27,6 +27,7 @@
     "sbom": "node scripts/gen-sbom.mjs",
     "notices": "node scripts/gen-third-party-notices.mjs",
     "changelog": "node scripts/gen-changelog.mjs",
+    "codemap": "node scripts/gen-codemap.mjs",
     "test:runtime": "node --test tests/runtime-isolation.test.mjs",
     "bootstrap:admin": "node scripts/bootstrap-admin.mjs",
     "test:bootstrap": "node --test tests/admin-bootstrap.test.mjs",

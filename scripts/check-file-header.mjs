@@ -50,6 +50,7 @@ const DECLARED = [
   'scripts/check-mcp-coverage.mjs',
   'scripts/gen-sbom.mjs',
   'scripts/gen-changelog.mjs',
+  'scripts/gen-codemap.mjs',
   'scripts/lib/runtime-closure.mjs',
   'scripts/gen-third-party-notices.mjs',
   'scripts/check-file-header.mjs',
