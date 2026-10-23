@@ -180,6 +180,12 @@ GML_LOCAL_PORT=3011 node scripts/local-manage.mjs start</code></pre>
 <pre><code># Windows PowerShell
 $env:GML_LOCAL_PORT=&quot;3011&quot;
 node scripts/local-manage.mjs start</code></pre>
+<p>同一份代码上要为<strong>第二家企业</strong>再开一个实例（各自独立的 <code>data/</code>、<code>.local/config.json</code> 签名密钥与 <code>backups/</code>）时，</p>
+<p>指定一个<strong>绝对路径</strong>的实例目录（相对路径会被拒绝）；不指定时实例目录就是本代码副本的根目录，行为与以前完全一致：</p>
+<pre><code>GML_LOCAL_INSTANCE=/srv/erp/company-b GML_LOCAL_PORT=3012 node scripts/local-manage.mjs setup
+GML_LOCAL_INSTANCE=/srv/erp/company-b GML_LOCAL_PORT=3012 node scripts/local-manage.mjs start
+# 等价写法：node scripts/local-manage.mjs start --instance=/srv/erp/company-b</code></pre>
+<p><code>doctor</code> 与 <code>backup</code> 同样按实例目录工作；<code>doctor</code> 的输出里 <code>instance</code> / <code>dataDirectory</code> / <code>backupDirectory</code> 三项说明当前实例落在哪里。</p>
 <p>更换端口后，登录、POS、商城和 MCP 端点中的端口均应同步更改。离线手册的“返回系统”链接默认仍指向 3001；此时手动输入实际地址。</p>
 <p>本地工具强制使用本副本 data 目录，不继承外部 GML_DATA_DIR、GML_DB 或旧 JWT_SECRET。开发者如需自定义存储或局域网访问，应走开发部署路径并自行做安全评估。</p>
 <h2 id="八-备份和恢复">八 备份和恢复</h2>
