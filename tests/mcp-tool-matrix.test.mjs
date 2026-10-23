@@ -88,10 +88,13 @@ function outcome(r) {
 
 // 允许的"范围外"拒绝码：ORG_OUT_OF_SCOPE 是约定码；单据类工具按"越界当作不存在"报 404 类码（不泄露存在性）
 const SCOPE_DENY_CODES = new Set(['ORG_OUT_OF_SCOPE', 'NOT_FOUND', 'TARGET_NOT_FOUND', 'DOC_NOT_FOUND', 'REQUISITION_NOT_FOUND', 'ORDER_NOT_FOUND', 'WAREHOUSE_NOT_FOUND', 'APPROVAL_NOT_FOUND'])
+const DOC_READ_TOOLS = new Set(['doc.list_types', 'doc.query', 'doc.get'])
 const PERM_DENY_CODES = new Set(['TOKEN_OWNER_PERM_DENIED', 'PERM_DENIED'])
-// 这几个读工具在 HTTP 侧（dashboard / docflow / 组织树）同样只要登录、没有功能权限点，MCP 与之同口径；
+// 这两个读工具在 HTTP 侧（dashboard / 组织树）同样只要登录、没有功能权限点，MCP 与之同口径；
 // 它们的"权限状态"格子记为 NO_PERM_POINT（不是漏判），范围与停用两格仍照常断言。
-const PERM_FREE_READS = new Set(['report.dashboard_kpi', 'org.tree', 'doc.list_types', 'doc.query', 'doc.get'])
+// X5：doc.list_types / doc.query / doc.get 已按单据类型校验所有者的查看权限（server/mcp/doc-perms.js），
+// 不再属于此列表——权限移除状态下它们必须是 DENIED（TOKEN_OWNER_PERM_DENIED）。
+const PERM_FREE_READS = new Set(['report.dashboard_kpi', 'org.tree'])
 // 读工具在范围外的期望：'empty' = 列表必须为空；'global' = 主数据 / 字典 / 无组织归属，不按组织过滤（与 HTTP 同口径）
 const READ_SCOPE_EXPECT = {
   'master.search_products': 'global', 'master.get_product_360': 'global', 'master.list_partners': 'global',
@@ -286,6 +289,8 @@ test('MCP delegation matrix: every tool x {owner inactive, permission removed, s
       if (needs.length) result = PERM_DENY_CODES.has(r.final.code) && r.final.kind === 'tool_error' ? 'DENIED' : 'LEAK'
       else if (PERM_FREE_READS.has(tool.name)) result = r.final.kind === 'ok' ? 'NO_PERM_POINT' : 'LEAK'
       else result = r.final.kind === 'tool_error' && PERM_DENY_CODES.has(r.final.code) ? 'DENIED' : 'LEAK'
+      // X5：通用单据读工具必须是精确的 TOKEN_OWNER_PERM_DENIED，不是别的 403/404
+      if (DOC_READ_TOOLS.has(tool.name) && !(result === 'DENIED' && r.final.code === 'TOKEN_OWNER_PERM_DENIED')) result = 'LEAK'
       if (changed.length) result = 'LEAK'
       record(tool, 'permission_removed', { result, code: r.final.code, removed: permFree ? 'ALL_ROLE_PERMS' : needs, rows_changed: changed })
       if (result === 'LEAK') failures.push(`permission_removed ${tool.name}: ${r.final.kind}/${r.final.code} ${changed.join(';')}`)

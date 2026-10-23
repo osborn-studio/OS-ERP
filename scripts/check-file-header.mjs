@@ -39,6 +39,7 @@ const DECLARED = [
   'server/version.js',
   'server/mcp/catalog.js',
   'server/mcp/delegation.js',
+  'server/mcp/doc-perms.js',
   'server/mcp/tokens.js',
   'server/db/migrations/053_agent_token_owner_version.cjs',
   'server/lib/outbound-url.js',
