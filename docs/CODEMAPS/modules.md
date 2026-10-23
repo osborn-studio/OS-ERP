@@ -539,7 +539,7 @@ HTTP 响应与错误归一：`ok` / `fail` / `wrap` 的**唯一实现**（统一
 |---|---|---|---|---|
 | `GENERIC_5XX_MESSAGE` | const | — | — | — |
 | `bizFail` | fn | 8 条：auth.js×1, demand.js×1, notify.js×1, outsourcing.js×1, quote.js×1, sales.js×3 | — | — |
-| `fail` | fn | 194 条：accounting.js×1, ai.js×1, approval.js×5, ar.js×4, auth.js×2, costing.js×1, credit.js×5, dealers.js×10, demand.js×9, dms.js×7, docflow.js×8, im.js×3, inventory.js×18, invoice.js×2, mall.js×7, manufacture.js×5, master.js×11, meta.js×3, notify.js×1, oms.js×10, order-center.js×8, outsourcing.js×7, pos.js×9, pricing.js×3, promo.js×5, purchase-chain.js×10, purchase.js×8, qc.js×2, qc2.js×4, qimen.js×1, quote.js×2, refund.js×1, requisitions.js×11, sales.js×10 | — | lib/crud.js |
+| `fail` | fn | 190 条：accounting.js×1, ai.js×1, approval.js×5, ar.js×4, auth.js×2, costing.js×1, credit.js×5, dealers.js×10, demand.js×9, dms.js×7, docflow.js×8, im.js×3, inventory.js×14, invoice.js×2, mall.js×7, manufacture.js×5, master.js×11, meta.js×3, notify.js×1, oms.js×10, order-center.js×8, outsourcing.js×7, pos.js×9, pricing.js×3, promo.js×5, purchase-chain.js×10, purchase.js×8, qc.js×2, qc2.js×4, qimen.js×1, quote.js×2, refund.js×1, requisitions.js×11, sales.js×10 | — | lib/crud.js |
 | `failFromError` | fn | 164 条：accounting.js×18, auth.js×1, dms.js×17, mall.js×3, meta.js×2, pos.js×3, promo.js×40, purchase-chain.js×33, purchase.js×4, refund.js×4, report.js×39 | — | — |
 | `hidesInternals` | fn | — | — | — |
 | `newIncidentId` | fn | — | — | — |
@@ -959,7 +959,7 @@ HTTP 响应与错误归一：`ok` / `fail` / `wrap` 的**唯一实现**（统一
 | `PURCHASE_ORDER_SELECT` | const | — | — | — |
 | `PurchaseError` | class | — | — | — |
 | `assertNotParamOnly` | fn | — | purchase.advance_order, purchase.advance_requisition | mcp/tools.js |
-| `assertPurchaseDocInScope` | fn | 14 条：purchase-chain.js×14 | — | — |
+| `assertPurchaseDocInScope` | fn | 17 条：purchase-chain.js×14, purchase.js×3 | — | — |
 | `buildSettlement` | fn | POST /api/purchase/settlements | purchase.build_settlement | mcp/tools.js |
 | `checkOverReceive` | fn | POST /api/purchase/price-preview<br>POST /api/purchase/orders/:id/receive-check | — | — |
 | `checkSupplyCatalog` | fn | GET /api/purchase/price<br>POST /api/purchase/price-preview | — | — |
@@ -1347,6 +1347,8 @@ HTTP 响应与错误归一：`ok` / `fail` / `wrap` 的**唯一实现**（统一
 | `applyStockGain` | fn | POST /api/inventory/adjust<br>POST /api/inventory/checks/:id/adjust | inventory.adjust | lib/pos2.js, mcp/tools.js |
 | `applyStockIn` | fn | POST /api/inventory/assembly/:id/confirm<br>POST /api/outsourcing/orders/:id/receive<br>POST /api/requisitions/store/shipments/:id/receive | — | lib/mfg.js, lib/pos2.js, lib/purchase.js, lib/returns.js, lib/transfer.js |
 | `applyStockOut` | fn | 7 条：inventory.js×3, oms.js×1, outsourcing.js×1, requisitions.js×1, sales.js×1 | — | lib/mfg.js, lib/pos2.js, lib/purchase.js, lib/qc2.js, lib/transfer.js |
+| `assertStockDocInScope` | fn | 7 条：inventory.js×7 | — | — |
+| `assertWarehouseInScope` | fn | 6 条：inventory.js×3, purchase.js×3 | — | lib/transfer.js |
 | `availableQty` | fn | — | — | — |
 | `clearInvTypeCache` | fn | POST /api/master/inv-txn-types<br>PUT /api/master/inv-txn-types/:code | — | — |
 | `clearParamCache` | fn | — | — | — |
@@ -1367,6 +1369,8 @@ HTTP 响应与错误归一：`ok` / `fail` / `wrap` 的**唯一实现**（统一
 | `resolveCurrency` | fn | — | — | — |
 | `resolveOwnerOrg` | fn | — | inventory.adjust, inventory.get_cost, inventory.ownership_transfer, inventory.pick_suggestion, inventory.stock_in, inventory.stock_out, inventory.transfer | mcp/tools.js |
 | `setStockNowProvider` | fn | — | — | — |
+| `stockScopeSql` | fn | 13 条：inventory.js×13 | — | lib/transfer.js |
+| `warehouseInScope` | fn | GET /api/inventory/serials/trace/:serialNo | — | — |
 
 ## `server/lib/transfer.js`
 
@@ -1375,9 +1379,12 @@ HTTP 响应与错误归一：`ok` / `fail` / `wrap` 的**唯一实现**（统一
 | 导出 | 类型 | 路由 | MCP 工具 | 被模块调用 |
 |---|---|---|---|---|
 | `TRANSFER_TYPES` | const | — | — | — |
+| `assertTransferInScope` | fn | GET /api/inventory/transfers/:id<br>POST /api/inventory/transfers/:id/ship<br>POST /api/inventory/transfers/:id/receive<br>POST /api/inventory/transfers/:id/submit<br>POST /api/inventory/transfers/:id/cancel | — | — |
+| `assertTransferTargetsInScope` | fn | POST /api/inventory/transfers | — | — |
 | `createTransfer` | fn | POST /api/inventory/transfers | — | lib/qc2.js |
 | `receiveTransfer` | fn | POST /api/inventory/transfers/:id/receive | — | lib/qc2.js |
 | `shipTransfer` | fn | POST /api/inventory/transfers/:id/ship | — | lib/qc2.js |
+| `transferScopeSql` | fn | GET /api/inventory/transfers | — | — |
 
 ## `server/lib/trust-proxy.js`
 
