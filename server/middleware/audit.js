@@ -17,6 +17,7 @@ import { getDb } from '../db/index.js'
 import { bizFail, statusOf, newIncidentId } from '../lib/http.js'
 import { insertAuditRow, auditStrictRow } from '../lib/audit-trail.js'
 import { redactUrl } from '../lib/redact.js'
+import { logger } from '../lib/logger.js'
 
 // ===========================================================================
 // 留痕：**存在性优先于明细**
@@ -85,7 +86,7 @@ function rowOf(req, payload) {
 
 /**
  * 记一条留痕。**调用方不需要 try/catch** —— 本函数保证不抛（留痕失败不该打断业务），
- * 但失败会打日志（`console.error('[audit]', ...)`），不会静默。
+ * 但失败会打结构化日志（`logger.error`，component=audit），不会静默。
  */
 export function audit(req, payload = {}) {
   try {
@@ -98,16 +99,16 @@ export function audit(req, payload = {}) {
       // （列超长、库被锁、老库缺列…），但"记录必须存在"这条口径不变 ——
       // 写不进去就把明细让出去，而不是整条放弃。
       // 注意：单条 INSERT 是原子的，第一次失败不会留下半条，重试不会造成重复。
-      console.error('[audit] 首次写入失败，去掉明细重试：', e.message)
+      logger.warn('audit write failed, retrying without detail', { component: 'audit', err_message: e.message })
       try {
         insertAuditRow(db, row, { withDetail: false })
       } catch (e2) {
-        console.error('[audit]', e2.message)
+        logger.error('audit write failed', { component: 'audit', err_message: e2.message })
       }
     }
   } catch (e) {
     // 连 getDb() 都拿不到（例如行业上下文没进请求）—— 同样只报不抛
-    console.error('[audit]', e.message)
+    logger.error('audit unavailable', { component: 'audit', err_message: e.message })
   }
 }
 
@@ -137,7 +138,10 @@ export function errorHandler(err, req, res, _next) {
   // 5xx：先发一个事件号，日志与响应都带它 —— 生产环境响应体不再回显 `err.message`（见 `bizFail`），
   // 运维凭事件号到日志里找完整错误。URL 先脱敏（查询串里的 token= 之类不进日志）。
   const incidentId = status >= 500 ? newIncidentId() : null
-  if (incidentId) console.error('[error]', incidentId, req.method, redactUrl(req.originalUrl), err)
+  if (incidentId) {
+    if (res.locals) res.locals.incident_id = incidentId
+    logger.error('request failed', { incident_id: incidentId, req_id: req.id, method: req.method, route: redactUrl(req.originalUrl), status, user_id: req.user?.uid ?? null, err })
+  }
   // 形状构造只有一处（http.js 的 bizFail）：这里曾经自己拼对象，结果是业务码只落在顶层
   // `error`、`detail` 里没有，与路由层的读法对不上。
   bizFail(res, err, incidentId)
