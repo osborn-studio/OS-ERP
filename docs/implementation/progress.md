@@ -2,6 +2,10 @@
 
 更新：2026-10-22。全新公开仓库：[osborn-studio/OS-ERP](https://github.com/osborn-studio/OS-ERP)，采用 MIT，仅导入清理后的当前文件快照。旧仓库保留为私有归档，其 PR/Actions/历史对象不导入本仓库。未发布正式 Release、未部署。来源及旧 checkout 使用限制见 [PUBLICATION_HISTORY](../PUBLICATION_HISTORY.md)，MIT 决策不替代第三方权属核验。
 
+## 第十批当前状态（2026-10-23）
+
+按 [roadmap-v6](roadmap-v6.md) 的 AA1–AA12，12 路 Sonnet 5.5 subagent 并行实现并各自经 Codex（gpt-6.1-sol）审计后集成到 `batch-ten`（将作为 PR #6）：AA1 MCP `order.trace_document`/`doc.query` 改走 `DOC_SCOPE_RESOLVERS`（ADR-0041）；AA2 OMS 写路由与 MCP 库存工具按仓库组织范围（ADR-0042）；AA3 审批模板维护权限 `system:approval:template`（ADR-0043，迁移 063）；AA4 质检处置/仓库主数据/采购收货退货/POS 门店库存接入仓库范围（ADR-0038 补充）；AA5 低库存口径统一为 `listBelowSafe`、看板剖析与 30 s 缓存（ADR-0044；缓存命中 p95 约 42 ms，未命中约 400 ms）；AA6 审计日志索引与封顶计数（迁移 065）；AA7 发行候选 `--run-tests`/`--ci-run auto` 与证据校验；AA8 浏览器场景 my-scope/audit-logs/inventory-paging；AA9 POS 作废与差异结算权限码（迁移 066）；AA10 Prometheus 指标导出（ADR-0045）；AA11 迁移升级演练脚本与夜间可选步骤；AA12 安装/操作手册补第七至九批功能。集成时合并 AA1/AA2/AA5 在 `mcp/tools.js` 的改动（`stock_alert` 低库存走 `listBelowSafe`，临期行保留 AA2 仓库过滤）。OpenAPI 版本 1.38.0。验证以托管 CI 为准。
+
 ## 第九批当前状态（2026-10-23）
 
 按 [roadmap-v5](roadmap-v5.md) 的 Z1–Z12，12 路 Sonnet 5.5 subagent 并行实现并各自经 Codex（gpt-6.1-sol）审计后集成到 `batch-nine`（将作为 PR #5）：Z1 库存域与采购订单状态/收货按仓库组织范围（ADR-0038）；Z2 OMS 读接口与 MCP `doc.get` 走解析表（ADR-0039）；Z3 热点查询改造与库存列表键集分页（迁移 061，`/inventory/stocks` p95 2078→151 ms）；Z4 `GML_TRUST_PROXY` 统一受信代理（ADR-0040）；Z5 发行候选打包与证据包；Z6 `/api/auth/my-scope` 与"我的数据范围"页；Z7 审计日志查看器与 CSV 导出（迁移 062）；Z8 MCP 幂等/确认缓存命中前重验；Z9 `approval_manager_global` 开关（危险键 17→18）；Z10 夜间容量基线工作流；Z11 依赖补丁刷新（braces 链仍无修复）；Z12 代码地图与 ADR 索引生成并入 CI。集成时合并 Z1 与 Z3 在库存域的改动：`listBelowSafe`/`countBelowSafe` 叠加调用者组织范围。验证以托管 CI 为准。

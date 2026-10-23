@@ -1190,7 +1190,7 @@ export function buildOpenApi() {
     openapi: '3.0.3',
     info: {
       title: 'GML 供应链协同系统 API',
-      version: '1.37.0',
+      version: '1.38.0',
       description:
         '化妆品 / 服装 双行业轻量级供应链协同系统接口文档。覆盖主数据、采购、销售、存货、经销商、门店要货、委外管理、计划与生产、生产制造（BOM / 领料 / 完工入库）、质量检验、线上 OMS 与经营看板。\n\n' +
         '**多行业**：登录 `POST /api/auth/login` 时传 `industry`（`cosmetic` / `apparel`）选择行业版本；' +
