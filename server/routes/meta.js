@@ -16,7 +16,7 @@
 import { Router } from 'express'
 import { getDb } from '../db/index.js'
 import { ok, wrap, fail, failFromError } from '../lib/http.js'
-import { requireAuth, requireRole, bearerToken } from '../middleware/auth.js'
+import { requireAuth, requireRole, sessionToken } from '../middleware/auth.js'
 import { auditStrict } from '../middleware/audit.js'
 import { DOC_TYPE_LABEL } from '../lib/stock.js'
 // 仓库类型文案的**唯一出处**在 `lib/warehouse.js`（与"新建/改仓"接口的取值域同一份）——
@@ -81,11 +81,11 @@ function stockDocTypes(db) {
 const isOpsAdmin = (u) => Boolean(u) && (u.role === 'admin' || Number(u.is_super) === 1)
 
 /**
- * 可选鉴权：没带 Bearer ⇒ 匿名放行（探活、Docker HEALTHCHECK 不带令牌）；
+ * 可选鉴权：没带 Bearer（cookie 传输模式下含会话 Cookie）⇒ 匿名放行（探活、Docker HEALTHCHECK 不带令牌）；
  * 带了就走完整的 `requireAuth`（令牌无效 ⇒ 401，而不是悄悄当匿名——带了凭据又不对，调用方应当知道）。
  */
 function optionalAuth(req, res, next) {
-  return bearerToken(req) ? requireAuth(req, res, next) : next()
+  return sessionToken(req).token ? requireAuth(req, res, next) : next()
 }
 
 r.get(

@@ -36,6 +36,8 @@ const DECLARED = [
   'server/lib/logger.js',
   'server/lib/redact.js',
   'server/middleware/audit.js',
+  'server/middleware/security-headers.js',
+  'server/middleware/session-transport.js',
   'server/version.js',
   'server/mcp/catalog.js',
   'server/mcp/delegation.js',
@@ -79,6 +81,7 @@ const DECLARED = [
   'src/utils/scope-notice.ts',
   'src/components/ScopeNotice.tsx',
   'tests/scope-notice.test.mjs',
+  'tests/security-headers.test.mjs',
   // 授信投影（ADR-0014）：credit_hold 的唯一写入者与对账守卫
   'tests/credit-hold-projection.test.mjs',
   // 待办范围与 Agent Token 有效状态（ADR-0015）
