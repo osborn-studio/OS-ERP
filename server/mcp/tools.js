@@ -44,7 +44,7 @@ import {
   assertNotParamOnly
 } from '../lib/purchase.js'
 import {
-  DocFlowError, getDocType, assertEdgePermitted, dispatchTransition
+  DocFlowError, getDocType, assertEdgePermitted, dispatchTransition, docInScope
 } from '../lib/docflow.js'
 // 金额/数量与权限点的**唯一判据**（与 HTTP 入口同一个）
 import { numAmount, numQty, permContext, hasPerm, resolveOrgScope } from '../middleware/auth.js'
@@ -2158,8 +2158,12 @@ export const TOOLS = [
         throw err
       }
       // 越界不报"无权查看"：报 403 等于确认"这张单存在但不是你的"
-      const e = scopeEntityIds(ctx, db)
-      if (!entityRowVisible(e, row, ownershipColumnsOf(db, table)) || !rowInBinding(db, ctx, type, row)) {
+      // ADR-0039：范围判据是 docflow 的 DOC_SCOPE_RESOLVERS（与 /api/docflow/history 同一份），不再按列名推断归属
+      // （此前 dealer_id 推断会让持有某经销商范围的令牌读到仅归他组织仓 / 门店的单据及其留痕）；
+      // 门店 / 经销商 / 订货主体绑定（Y6）仍叠加。留痕只在单据通过范围判定后才读。
+      const scopeUser = ctx.ownerUserId != null ? db.prepare('SELECT id, store_id, dealer_id FROM users WHERE id=?').get(Number(ctx.ownerUserId)) : null
+      const inScope = docInScope({ db, user: scopeUser, orgScope: ctx.scope || { scope: 'all', orgIds: null } }, type.code, row.id)
+      if (!inScope || !rowInBinding(db, ctx, type, row)) {
         const err = new Error(`${type.name}不存在（doc_type=${type.code}）`)
         err.code = 'NOT_FOUND'
         err.status = 404

@@ -375,6 +375,45 @@ test('MCP delegation matrix: every tool x {owner inactive, permission removed, s
     }
   }
 
+  // ---- 状态 5（Z2）：单据历史工具（doc.get）按 DOC_SCOPE_RESOLVERS 判范围 ----
+  // 经销商属于所有者组织、但出货仓归他组织的销售订单：旧的列名推断（dealer_id）会放行并连同留痕一起吐出；
+  // 现在与 HTTP 的 salesScopeSql 同判据，必须 NOT_FOUND 且零写。无组织归属的全局类型（OM）同样 NOT_FOUND。
+  matrix.history_scope_state = { state: 'owner_scope_org_with_dealer_inferred_doc', tool: 'doc.get', cases: {} }
+  {
+    for (const p of ['sales.order.view', 'oms.order.view']) grant.run('warehouse', p)
+    const ownerOrg = wh.org_id
+    const dealerOwn = Number(db.prepare("INSERT INTO dealers (code, name, org_id) VALUES ('MX-Z2-D','MX经销商',?)").run(ownerOrg).lastInsertRowid)
+    const soOther = Number(db.prepare(`INSERT INTO sales_orders (doc_no, channel, dealer_id, order_date, status, total_qty, goods_amount, receivable_amount, warehouse_id)
+      VALUES ('MX-Z2-SO','dealer',?,date('now','localtime'),'draft',1,10,10,?)`).run(dealerOwn, wh2.id).lastInsertRowid)
+    const soOwn = Number(db.prepare(`INSERT INTO sales_orders (doc_no, channel, dealer_id, order_date, status, total_qty, goods_amount, receivable_amount, warehouse_id)
+      VALUES ('MX-Z2-SO-OWN','dealer',?,date('now','localtime'),'draft',1,10,10,?)`).run(dealerOwn, wh.id).lastInsertRowid)
+    const omId = db.prepare('SELECT id FROM oms_orders ORDER BY id LIMIT 1').get()?.id
+    const insEv = db.prepare("INSERT INTO doc_events (doc_type, doc_id, doc_no, action, from_state, to_state, actor_name) VALUES (?,?,?,'z2matrix','a','b','z2')")
+    insEv.run('SO', soOther, 'MX-Z2-SO'); insEv.run('SO', soOwn, 'MX-Z2-SO-OWN')
+    assert.notEqual(wh2.org_id, ownerOrg, 'fixture: two warehouses in different orgs')
+    db.prepare('UPDATE users SET org_id=?, data_scope=? WHERE id=?').run(ownerOrg, 'org', ownerId)
+    try {
+      const cases = [
+        ['SO dealer-inferred, warehouse in another org', 'SO', soOther, 'NOT_FOUND'],
+        ['SO in owner warehouse org', 'SO', soOwn, null],
+        ...(omId ? [['OM (global-only type)', 'OM', omId, 'NOT_FOUND']] : [])
+      ]
+      for (const [label, docType, id, want] of cases) {
+        const before = snapshot()
+        const r = await mcp('tools/call', { name: 'doc.get', arguments: { doc_type: docType, id } }, token)
+        const o = outcome(r)
+        const changed = diff(before, snapshot())
+        const events = payload(r)?.events || []
+        const ok = want ? o.kind === 'tool_error' && o.code === want && events.length === 0 && changed.length === 0 : o.kind === 'ok' && events.some((e) => e.action === 'z2matrix')
+        matrix.history_scope_state.cases[label] = { result: ok ? (want ? 'DENIED' : 'ALLOWED') : 'LEAK', code: o.code, events: events.length }
+        if (!ok) failures.push(`history_scope ${label}: ${o.kind}/${o.code} events=${events.length} ${changed.join(';')}`)
+      }
+    } finally {
+      db.prepare('UPDATE users SET org_id=NULL, data_scope=? WHERE id=?').run('all', ownerId)
+      restorePerms()
+    }
+  }
+
   // ---- 产出矩阵并断言覆盖 ----
   const file = path.join(f.dir, 'mcp-tool-matrix.json')
   writeFileSync(file, JSON.stringify(matrix, null, 2))
@@ -384,6 +423,7 @@ test('MCP delegation matrix: every tool x {owner inactive, permission removed, s
   assert.equal(covered, TOOLS.length, 'matrix must cover every tool in every state')
   assert.equal(saved.tool_count, TOOLS.length)
   assert.ok(Object.keys(saved.binding_state.types).length >= 6 && Object.values(saved.binding_state.types).every((x) => x.result === 'DENIED'), 'every store/dealer bound type is denied to an unbound owner')
+  assert.ok(Object.keys(saved.history_scope_state.cases).length >= 2 && Object.values(saved.history_scope_state.cases).every((x) => x.result !== 'LEAK'), 'history tool honors the owner scope')
   assert.deepEqual(failures, [], `tools that slipped through:\n${failures.join('\n')}`)
   assert.ok(Object.values(saved.tools).every((x) => Object.values(x.states).every((c) => c.result !== 'LEAK')))
 })

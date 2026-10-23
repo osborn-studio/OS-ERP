@@ -90,6 +90,28 @@ export function salesScopeSql(orgScope, kind = 'order', alias = '') {
   return { sql: byParty(alias), params: [...ids, ...ids], empty: false }
 }
 
+/**
+ * OMS 读范围（ADR-0039）：平台绑定组织 = 其履约仓 `platforms.warehouse_id` 所属组织 `warehouses.org_id`（ADR-0034）。
+ * `omsPlatformScopeSql` 作用在 `platforms` 行（别名 `alias`）；`omsOrderScopeSql` 作用在 `oms_orders` 行（经 platform_id）。
+ * 全局范围不加过滤；空 / `dealer` / `none` 范围 ⇒ `1=0`；没有履约仓或履约仓没有组织的平台对受限范围不可见。
+ */
+export function omsPlatformScopeSql(orgScope, alias = 'pf') {
+  const { all, ids } = scopeIds(orgScope)
+  if (all) return { sql: '1=1', params: [], empty: false }
+  if (!ids.length) return { sql: '1=0', params: [], empty: true }
+  return {
+    sql: `(SELECT org_id FROM warehouses WHERE id=${alias}.warehouse_id) IN (${ids.map(() => '?').join(',')})`,
+    params: [...ids],
+    empty: false
+  }
+}
+export function omsOrderScopeSql(orgScope, alias = 'o') {
+  const p = omsPlatformScopeSql(orgScope, 'scpf')
+  if (p.empty) return p
+  if (p.sql === '1=1') return p
+  return { sql: `${alias}.platform_id IN (SELECT scpf.id FROM platforms scpf WHERE ${p.sql})`, params: p.params, empty: false }
+}
+
 /** 单据是否在范围内；返回该行。范围外与不存在同形（404 + 同一句话）。 */
 export function assertSalesDocInScope(db, kind, id, orgScope) {
   const def = DOC_KINDS[kind]

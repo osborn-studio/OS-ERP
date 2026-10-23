@@ -23,7 +23,7 @@ import { nextDocNo } from '../lib/docno.js'
 import { advanceStatus, tryTransition, nowText, logEvent } from '../lib/docflow.js'
 import { publicPlatform } from '../lib/qimen-auth.js'
 import { applyStockOut, pickBatches, releaseStock, reserveStock, reserveForDoc, planShipment, releaseForDoc } from '../lib/stock.js'
-import { assertSalesTargetInScope, SalesOrderError } from '../lib/sales-order.js'
+import { assertSalesTargetInScope, SalesOrderError, omsPlatformScopeSql, omsOrderScopeSql } from '../lib/sales-order.js'
 
 const r = Router()
 r.use(requireAuth, requireInternal('总部线上订单'))
@@ -107,8 +107,10 @@ function platformOrderNo(pf, d) {
 r.get(
   '/platforms',
   requireAuth,
-  wrap((_req, res) => {
+  attachOrgScope,
+  wrap((req, res) => {
     const db = getDb()
+    const ps = omsPlatformScopeSql(scopeOf(req), 'pf')
     const rows = db
       .prepare(
         `SELECT pf.*, w.name AS warehouse_name,
@@ -116,9 +118,9 @@ r.get(
           (SELECT COUNT(*) FROM oms_orders o WHERE o.platform_id=pf.id AND o.status='pending') AS pending_count,
           (SELECT COALESCE(SUM(o.pay_amount),0) FROM oms_orders o WHERE o.platform_id=pf.id AND o.status NOT IN ('refunded','cancelled','closed')) AS gmv,
           (SELECT MAX(created_at) FROM oms_sync_logs l WHERE l.platform_id=pf.id) AS last_log_at
-         FROM platforms pf LEFT JOIN warehouses w ON w.id=pf.warehouse_id ORDER BY pf.id`
+         FROM platforms pf LEFT JOIN warehouses w ON w.id=pf.warehouse_id WHERE ${ps.sql} ORDER BY pf.id`
       )
-      .all()
+      .all(...ps.params)
     // 封存的奇门密钥不出库：只给 has_secret / secret_rotated_at（ADR-0033）
     return ok(res, rows.map(publicPlatform))
   })
@@ -227,11 +229,14 @@ r.post(
 r.get(
   '/orders',
   requireAuth,
+  attachOrgScope,
   wrap((req, res) => {
     const db = getDb()
     const { page, pageSize, offset } = pageParams(req)
-    const conds = []
-    const params = []
+    // ADR-0039：先落范围谓词（平台绑定组织），再叠加调用方的过滤参数
+    const os = omsOrderScopeSql(scopeOf(req), 'o')
+    const conds = [os.sql]
+    const params = [...os.params]
     if (req.query.platform_id) {
       conds.push('o.platform_id = ?')
       params.push(Number(req.query.platform_id))
@@ -267,9 +272,12 @@ r.get(
 r.get(
   '/orders/:id',
   requireAuth,
+  attachOrgScope,
   wrap((req, res) => {
     const db = getDb()
-    const o = db.prepare(`SELECT ${OMS_SELECT} FROM ${OMS_FROM} WHERE o.id=?`).get(Number(req.params.id))
+    const os = omsOrderScopeSql(scopeOf(req), 'o')
+    // 范围外与不存在同形（同一句 404），不泄漏线上单存在性
+    const o = db.prepare(`SELECT ${OMS_SELECT} FROM ${OMS_FROM} WHERE o.id=? AND ${os.sql}`).get(Number(req.params.id), ...os.params)
     if (!o) return fail(res, '线上订单不存在', 404)
     o.items = db
       .prepare(
@@ -620,11 +628,13 @@ r.post(
 r.get(
   '/sync-logs',
   requireAuth,
+  attachOrgScope,
   wrap((req, res) => {
     const db = getDb()
     const { page, pageSize, offset } = pageParams(req)
-    const conds = []
-    const params = []
+    const ls = omsPlatformScopeSql(scopeOf(req), 'pf')
+    const conds = [ls.sql]
+    const params = [...ls.params]
     if (req.query.platform_id) {
       conds.push('l.platform_id = ?')
       params.push(Number(req.query.platform_id))
@@ -634,7 +644,7 @@ r.get(
       params.push(req.query.sync_type)
     }
     const where = conds.length ? `WHERE ${conds.join(' AND ')}` : ''
-    const FROM = 'oms_sync_logs l LEFT JOIN platforms pf ON pf.id=l.platform_id'
+    const FROM = 'oms_sync_logs l LEFT JOIN platforms pf ON pf.id=l.platform_id'  // 日志无平台（pf 为空）⇒ 子查询 NULL，仅全局范围可见
     const total = db.prepare(`SELECT COUNT(*) c FROM ${FROM} ${where}`).get(...params).c
     const rows = db
       .prepare(`SELECT l.*, pf.name AS platform_name FROM ${FROM} ${where} ORDER BY l.id DESC LIMIT ? OFFSET ?`)
@@ -647,9 +657,13 @@ r.get(
 r.get(
   '/stats',
   requireAuth,
+  attachOrgScope,
   wrap((req, res) => {
     const db = getDb()
     const days = Number(req.query.days || 30)
+    const ps = omsPlatformScopeSql(scopeOf(req), 'pf')
+    const os = omsOrderScopeSql(scopeOf(req), 'o')
+    const os0 = omsOrderScopeSql(scopeOf(req), 'oms_orders')
     const from = `date('now','localtime','-${days} day')`
     const byPlatform = db
       .prepare(
@@ -658,31 +672,31 @@ r.get(
                 COALESCE(SUM(CASE WHEN o.status='pending' THEN 1 ELSE 0 END),0) pending,
                 COALESCE(SUM(CASE WHEN o.status='refunded' THEN o.pay_amount ELSE 0 END),0) refund_amount
          FROM platforms pf LEFT JOIN oms_orders o ON o.platform_id=pf.id AND date(o.order_time) >= ${from}
-         GROUP BY pf.id ORDER BY gmv DESC`
+         WHERE ${ps.sql} GROUP BY pf.id ORDER BY gmv DESC`
       )
-      .all()
+      .all(...ps.params)
     const trend = db
       .prepare(
         `SELECT date(order_time) AS date, COUNT(*) orders, COALESCE(SUM(pay_amount),0) amount
-         FROM oms_orders WHERE date(order_time) >= ${from} GROUP BY date(order_time) ORDER BY date`
+         FROM oms_orders WHERE date(order_time) >= ${from} AND ${os0.sql} GROUP BY date(order_time) ORDER BY date`
       )
-      .all()
+      .all(...os0.params)
     const total = db
       .prepare(
         `SELECT COUNT(*) orders, COALESCE(SUM(pay_amount),0) gmv,
                 COALESCE(AVG(pay_amount),0) avg_amount,
                 COALESCE(SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END),0) pending,
                 COALESCE(SUM(CASE WHEN status='refunded' THEN 1 ELSE 0 END),0) refunded
-         FROM oms_orders WHERE date(order_time) >= ${from}`
+         FROM oms_orders WHERE date(order_time) >= ${from} AND ${os0.sql}`
       )
-      .get()
+      .get(...os0.params)
     const topSkus = db
       .prepare(
         `SELECT i.title, SUM(i.qty) qty, SUM(i.amount) amount FROM oms_order_items i
-         JOIN oms_orders o ON o.id=i.oms_order_id WHERE date(o.order_time) >= ${from}
+         JOIN oms_orders o ON o.id=i.oms_order_id WHERE date(o.order_time) >= ${from} AND ${os.sql}
          GROUP BY i.title ORDER BY amount DESC LIMIT 10`
       )
-      .all()
+      .all(...os.params)
     return ok(res, { byPlatform, trend, total, topSkus })
   })
 )
@@ -692,15 +706,17 @@ r.get(
 r.get(
   '/qimen-message/:orderId',
   requireAuth,
+  attachOrgScope,
   wrap((req, res) => {
     const db = getDb()
+    const os = omsOrderScopeSql(scopeOf(req), 'o')
     const o = db
       .prepare(
         `SELECT o.*, pf.name AS platform_name, pf.platform_code, pf.shop_code, w.code AS warehouse_code
          FROM oms_orders o JOIN platforms pf ON pf.id=o.platform_id LEFT JOIN warehouses w ON w.id=pf.warehouse_id
-         WHERE o.id=?`
+         WHERE o.id=? AND ${os.sql}`
       )
-      .get(Number(req.params.orderId))
+      .get(Number(req.params.orderId), ...os.params)
     if (!o) return fail(res, '线上订单不存在', 404)
     const items = db.prepare('SELECT * FROM oms_order_items WHERE oms_order_id=?').all(o.id)
     const expressCode = o.express_no || `SF${Math.floor(100000000000 + Math.random() * 8e11)}`
@@ -763,9 +779,11 @@ r.get(
 r.get(
   '/qimen-stock-message/:platformId',
   requireAuth,
+  attachOrgScope,
   wrap((req, res) => {
     const db = getDb()
-    const pf = db.prepare('SELECT pf.*, w.code AS warehouse_code FROM platforms pf LEFT JOIN warehouses w ON w.id=pf.warehouse_id WHERE pf.id=?').get(Number(req.params.platformId))
+    const ps = omsPlatformScopeSql(scopeOf(req), 'pf')
+    const pf = db.prepare(`SELECT pf.*, w.code AS warehouse_code FROM platforms pf LEFT JOIN warehouses w ON w.id=pf.warehouse_id WHERE pf.id=? AND ${ps.sql}`).get(Number(req.params.platformId), ...ps.params)
     if (!pf) return fail(res, '平台不存在', 404)
     const stocks = db
       .prepare(

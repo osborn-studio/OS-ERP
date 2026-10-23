@@ -115,6 +115,8 @@ const DECLARED = [
   'tests/sales-scope.test.mjs',
   // 单据流读接口按账号数据范围过滤（ADR-0032）
   'tests/docflow-scope.test.mjs',
+  // OMS 读接口与 MCP 单据历史按组织范围收口（ADR-0039）
+  'tests/oms-scope.test.mjs',
   'server/lib/doc-scope-registry.js',
   // 脚本数据目录卫生与单实例安装验收（ADR-0019）
   'scripts/check-data-paths.mjs',
