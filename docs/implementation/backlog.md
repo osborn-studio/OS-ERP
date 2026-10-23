@@ -57,11 +57,11 @@
 
 | 位置 | 缺口 | 建议 |
 |---|---|---|
-| `server/routes/pos.js` 19 条 | 只要求门店绑定（storeCtx），任何门店账号可做交班批准/驳回等 | 补 `requireStore` + 按动作权限码；交班审批需第二人 |
-| `server/routes/sales.js` 订单/发货/退货/统计读 | `scopeFilter` 只按经销商/门店绑定限制，内部 `data_scope=org` 账号可读其他组织 | 复用 ADR-0017 组织范围谓词 |
-| `server/routes/order-center.js` 16 条 | 同上，总览/客户树返回全局数据 | 同上 |
-| `server/routes/docflow.js` `POST /no-issue` | 任意登录账号可消耗真实单号 | 要求对应单据类型的创建权限 |
-| `server/routes/auth.js` `GET /orgs` | 返回整张组织表 | 限管理员或按范围裁剪 |
-| `server/routes/qimen.js` `POST /` | 缺 `app_key` 视为未认证放行（生产已 503 关闭） | 重新开放前强制认证 |
-| `server/routes/purchase-chain.js` 写路径 | `POST /payments`、`/settlements` 自动分配/来源选择不按组织范围 | 与 ADR-0020 对称收口 |
-| MCP `doc.query`/`doc.get` | 无按单据类型的查看权限点 | 产品决策后补权限点 |
+| `server/routes/pos.js` | 第七批已收口（ADR-0025）：31 条门店路由 requireStore + 按动作权限，跨店 404，交班批准/驳回需非发起人 | 前端 POS 按钮尚未按权限隐藏 |
+| `server/routes/sales.js` | 第七批已收口（ADR-0026）：订单按仓库或门店所属组织，发货/退货随订单；越权 404 | `quote.js`、MCP `sales.*` 工具、OMS 同步入口未按组织范围 |
+| `server/routes/order-center.js` | 第七批已收口（ADR-0027）：按客户归属组织 | `/api/docflow/events|history|trace` 对 OC/OCS 仍只要求内部角色 |
+| `server/routes/docflow.js` `POST /no-issue` | 第七批已收口（ADR-0028）：按单据类型创建权限 + 组织/仓库范围 | `docflow` 的 `/events`、`/overview`、`/history`、`/trace` 读接口仍无组织过滤 |
+| `server/routes/auth.js` `GET /orgs` | 第七批已收口（ADR-0028）：非管理员按范围裁剪 | — |
+| `server/routes/qimen.js` `POST /` | 第七批已收口（ADR-0028）：缺 app_key/签名 401，平台只能查绑定仓 | 签名秘密仍是公开演示常量；`/capabilities` 向任意登录用户列出各平台 app_key；生产仍 503 |
+| `server/routes/purchase-chain.js` 写路径 | 第七批已收口自动分配与来源选择（ADR-0028） | `/:id/:action`、`/requisitions/:id/convert`、`/payments/:id/review`、`/orders/:id/receive-check` 仍无单据范围判定；MCP `purchase.settlement.build`/`payment.create` 未传 orgScope |
+| MCP `doc.query`/`doc.get`/`doc.list_types` | 第七批已收口：40 类型全部映射查看权限（ADR-0011 补充） | RC/YQ/SH 的 HTTP 角色名/门店绑定门禁未在 MCP 复刻（记录为残留） |

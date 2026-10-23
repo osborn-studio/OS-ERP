@@ -2,6 +2,10 @@
 
 更新：2026-10-22。全新公开仓库：[osborn-studio/OS-ERP](https://github.com/osborn-studio/OS-ERP)，采用 MIT，仅导入清理后的当前文件快照。旧仓库保留为私有归档，其 PR/Actions/历史对象不导入本仓库。未发布正式 Release、未部署。来源及旧 checkout 使用限制见 [PUBLICATION_HISTORY](../PUBLICATION_HISTORY.md)，MIT 决策不替代第三方权属核验。
 
+## 第七批当前状态（2026-10-23）
+
+按 [roadmap-v3](roadmap-v3.md) 的 X1–X12，12 路 Sonnet 5.5 subagent 并行实现并各自经 Codex（gpt-6.1-sol）审计后集成：X1 POS 按动作权限 + 跨店 404 + 交班二人分离（ADR-0025，迁移 058）；X2 销售域组织范围（ADR-0026）；X3 订货中心按客户归属组织范围（ADR-0027）；X4 `no-issue`/`orgs`/奇门认证/采购自动分配范围（ADR-0028）；X5 MCP 文档读工具按单据类型权限（40 类型全映射）；X6 托管 CI 浏览器 job 与两个新场景（首次 CI 运行待验证）；X7 登录节流只计失败、成功清零（ADR-0005 修订）；X8 健康/指标 ops 块与备份失败告警（ADR-0029）；X9 日志保留与个人信息导出/擦除工具（ADR-0030，危险键 14→17）；X10 EXPLAIN 守卫与 21 个索引（迁移 059）；X11 用户页组织/数据范围编辑；X12 上游复用来源锁定与相似度核对（Medusa/Medici/casbin 代码重合率 ≤0.41%）。`check-route-authz` 待处理项从 49 降到约 30。验证以托管 CI 为准。
+
 ## 第六批当前状态（2026-10-23）
 
 按 [roadmap-v2](roadmap-v2.md) 的 W1–W12，12 路 Sonnet 5.5 subagent 并行实现，每路完成后用 Codex CLI（gpt-6.1-sol，只读沙箱）独立审计并修复其高危发现，再由主执行器集成：W1 采购链详情/预览读接口范围（ADR-0020）；W2 路由授权清单守卫 `check-route-authz`（ADR-0021，638 条路由分类，暴露 POS/销售/订货中心组织范围、`docflow/no-issue`、`auth/orgs`、奇门缺 app_key 放行等真实缺口）；W3 前端 403/空范围/能力关闭统一提示；W4 出站 TLS/SNI 固定地址联调测试；W5 MCP 40 工具 × 3 所有者状态矩阵（修复 4 个工具级越权，含确认人绕过）；W6 备份 AES-256-GCM 加密与三库一致性点（ADR-0022）；W7 结构化 JSON 日志与 request-id（ADR-0023）；W8 发行包验收改为生产初始化流程；W9 运行时 SBOM 与生成式第三方声明 + CI 漂移校验；W10 安装/操作手册生产口径重写；W11 容量基线脚本；W12 付款释放台账与原子作废（ADR-0024，迁移 057）。验证以托管 CI 为准。
