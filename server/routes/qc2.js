@@ -48,7 +48,7 @@
 import { Router } from 'express'
 import { getDb } from '../db/index.js'
 import { ok, fail, wrap, pageParams, paged, bizFail } from '../lib/http.js'
-import { requireAuth, requirePerm, currentUser } from '../middleware/auth.js'
+import { requireAuth, requirePerm, currentUser, attachOrgScope } from '../middleware/auth.js'
 import { audit } from '../middleware/audit.js'
 import {
   QC2Error, SOURCE_LABEL, RESULT_LABEL, MODE_LABEL, DISPOSITION_LABEL, DEFECT_CODES,
@@ -257,19 +257,20 @@ r.get('/inspections/:id', requireAuth, requirePerm(P_VIEW), guard((req, res) => 
 // 不良品处理（DH）
 // ===========================================================================
 
-r.get('/handlings', requireAuth, requirePerm(P_VIEW), wrap((req, res) => {
+r.get('/handlings', requireAuth, requirePerm(P_VIEW), attachOrgScope, wrap((req, res) => {
   const { page, pageSize } = pageParams(req)
   const out = listHandlings(getDb(), {
     page, pageSize,
     status: req.query.status || null,
     mode: req.query.mode || null,
     inspectionId: req.query.inspection_id ? Number(req.query.inspection_id) : null,
-    keyword: req.query.keyword || null
+    keyword: req.query.keyword || null,
+    orgScope: req.orgScope
   })
   return paged(res, out)
 }))
 
-r.post('/handlings', requireAuth, requirePerm(P_HANDLE), guard((req, res) => {
+r.post('/handlings', requireAuth, requirePerm(P_HANDLE), attachOrgScope, guard((req, res) => {
   const db = getDb()
   const b = req.body || {}
   const out = createHandling(db, {
@@ -281,14 +282,15 @@ r.post('/handlings', requireAuth, requirePerm(P_HANDLE), guard((req, res) => {
     reason: b.reason || null,
     defectCode: b.defect_code || null,
     remark: b.remark || null,
-    actor: actorOf(req)
+    actor: actorOf(req),
+    orgScope: req.orgScope
   })
   audit(req, { action: 'CREATE', module: 'quality', entity: 'qc_defect_handlings', entityId: out.id })
   return ok(res, out)
 }))
 
-r.post('/handlings/:id/confirm', requireAuth, requirePerm(P_HANDLE), guard((req, res) => {
-  const out = confirmHandling(getDb(), { id: Number(req.params.id), actor: actorOf(req), remark: req.body?.remark || null })
+r.post('/handlings/:id/confirm', requireAuth, requirePerm(P_HANDLE), attachOrgScope, guard((req, res) => {
+  const out = confirmHandling(getDb(), { id: Number(req.params.id), actor: actorOf(req), remark: req.body?.remark || null, orgScope: req.orgScope })
   audit(req, {
     action: 'QC_HANDLE_CONFIRM', module: 'quality', entity: 'qc_defect_handlings', entityId: out.id,
     detail: { mode: out.mode, qty: out.qty, out_doc_no: out.out_doc_no }
@@ -296,13 +298,13 @@ r.post('/handlings/:id/confirm', requireAuth, requirePerm(P_HANDLE), guard((req,
   return ok(res, out)
 }))
 
-r.post('/handlings/:id/cancel', requireAuth, requirePerm(P_HANDLE), guard((req, res) => {
-  const out = cancelHandling(getDb(), { id: Number(req.params.id), reason: req.body?.reason || null, actor: actorOf(req) })
+r.post('/handlings/:id/cancel', requireAuth, requirePerm(P_HANDLE), attachOrgScope, guard((req, res) => {
+  const out = cancelHandling(getDb(), { id: Number(req.params.id), reason: req.body?.reason || null, actor: actorOf(req), orgScope: req.orgScope })
   return ok(res, out)
 }))
 
-r.get('/handlings/:id', requireAuth, requirePerm(P_VIEW), guard((req, res) => {
-  const data = getHandling(getDb(), Number(req.params.id))
+r.get('/handlings/:id', requireAuth, requirePerm(P_VIEW), attachOrgScope, guard((req, res) => {
+  const data = getHandling(getDb(), Number(req.params.id), req.orgScope)
   if (!data) return fail(res, '不良品处理单不存在', 404)
   return ok(res, data)
 }))

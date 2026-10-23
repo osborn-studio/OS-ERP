@@ -2118,7 +2118,7 @@ export function purchaseScopeSql(orgScope, alias = '') {
 const SCOPED_DOC_TABLES = {
   PRQ: ['purchase_requisitions', 'org'], PI: ['purchase_invoices', 'org'],
   PST: ['purchase_settlements', 'org'], PAY: ['purchase_payments', 'org'],
-  PO: ['purchase_orders', 'wh'], GR: ['purchase_receipts', 'wh']
+  PO: ['purchase_orders', 'wh'], GR: ['purchase_receipts', 'wh'], PRT: ['purchase_returns', 'wh']
 }
 export function assertPurchaseDocInScope(db, docType, id, orgScope) {
   const def = SCOPED_DOC_TABLES[docType]

@@ -16,7 +16,8 @@
 import { Router } from 'express'
 import { getDb } from '../db/index.js'
 import { ok, fail, wrap, pageParams, paged } from '../lib/http.js'
-import { requireAuth, requireRole, requireInternal } from '../middleware/auth.js'
+import { requireAuth, requireRole, requireInternal, attachOrgScope } from '../middleware/auth.js'
+import { stockScopeSql, assertWarehouseInScope } from '../lib/stock.js'
 import { audit } from '../middleware/audit.js'
 import { crudRouter } from '../lib/crud.js'
 import invTxnTypesRoutes from './inv-txn-types.js'
@@ -434,10 +435,13 @@ r.put(
 r.get(
   '/locations',
   requireAuth,
+  attachOrgScope,
   wrap((req, res) => {
     const db = getDb()
-    const conds = []
-    const params = []
+    // ADR-0038 补充：货位挂在仓库下，随仓库的组织范围裁剪（used_rows 也是该仓库存的汇总）
+    const scope = stockScopeSql(req.orgScope, 'loc')
+    const conds = [scope.sql]
+    const params = [...scope.params]
     if (req.query.warehouse_id) {
       conds.push('loc.warehouse_id = ?')
       params.push(Number(req.query.warehouse_id))
@@ -458,10 +462,12 @@ r.post(
   '/locations',
   requireAuth,
   requireRole('admin', 'warehouse'),
+  attachOrgScope,
   wrap((req, res) => {
     const db = getDb()
     const { warehouse_id, code, name, type = 'storage', max_capacity, remark } = req.body || {}
     if (!warehouse_id || !code) return fail(res, '仓库与货位编码必填')
+    assertWarehouseInScope(db, warehouse_id, req.orgScope)
     if (db.prepare('SELECT id FROM warehouse_locations WHERE warehouse_id=? AND code=?').get(warehouse_id, code)) {
       return fail(res, '该仓库下货位编码已存在')
     }
