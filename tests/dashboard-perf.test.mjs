@@ -104,7 +104,7 @@ test('metric below_safe: same as original except disabled SKUs are no longer cou
 })
 
 test('MCP inventory.stock_alert: same rows as the original for active SKUs that have stock rows; scope follows the warehouse org', (t) => {
-  const { db, ids } = fixture(t)
+  const { db, ids, w1 } = fixture(t)
   const tool = TOOL_MAP.get('inventory.stock_alert')
   const call = (scope) => tool.handler({ db, args: {}, ctx: { scope } }).data.below_safe
   // 全局：旧查询只含有库存行的 SKU 且不看状态；新口径多了"无库存行"的缺货 SKU、少了停用 SKU
@@ -120,13 +120,23 @@ test('MCP inventory.stock_alert: same rows as the original for active SKUs that 
   // 缺口大者在前
   const shortage = all.map((r) => r.safe_stock - r.qty_on_hand)
   assert.deepEqual(shortage, [...shortage].sort((a, b) => b - a))
-  // 受限范围：只累计范围内仓库的库存；与旧的货主过滤在夹具上给出同样的数量
+  // 受限范围：只累计范围内仓库的库存。夹具里货主组织 = 仓库组织，所以与旧的"按货主过滤的库存行"逐行相同（有库存行、active 的 SKU）
   const only101 = call({ scope: 'org', orgIds: [101] })
-  const old101 = db.prepare(OLD_MCP(' AND k.id IN (SELECT sku_id FROM inventory_stocks WHERE owner_org_id IN (101))')).all()
-  assert.ok(only101.every((r) => r.sku_id !== ids.onlyW2 || r.qty_on_hand === 0))
-  const multi101 = only101.find((r) => r.sku_id === ids.multiLow)
-  assert.equal(multi101.qty_on_hand, 30, 'only org 101 warehouse counted')
-  assert.ok(old101.length > 0)
+  const old101 = db.prepare(OLD_MCP(' AND s.owner_org_id IN (101)')).all().filter((r) => r.sku_id !== ids.inactive)
+  // 新口径还会列出"范围内没有任何库存行"的缺货 SKU（nostock、onlyW2 在 101 范围内为 0），旧查询看不到它们——文档化的差异
+  const new101 = only101.filter((r) => r.sku_id !== ids.nostock && r.sku_id !== ids.onlyW2)
+  const rowKey = (r) => `${r.sku_id}|${r.sku_code}|${r.sku_name}|${r.safe_stock}|${r.qty_on_hand}`
+  assert.deepEqual(new Set(new101.map(rowKey)), new Set(old101.map(rowKey)), 'complete rows equal the original owner-filtered query')
+  assert.equal(only101.find((r) => r.sku_id === ids.multiLow).qty_on_hand, 30, 'only the org 101 warehouse is counted')
+  assert.equal(only101.find((r) => r.sku_id === ids.onlyW2).qty_on_hand, 0, 'org 202 stock is invisible to org 101 (shown as 0, not leaked)')
+  // 货主与仓库组织不一致时（文档化的差异）：新口径以仓库所属组织为准，旧口径以 owner_org_id 为准
+  db.pragma('foreign_keys=OFF')
+  db.prepare('UPDATE inventory_stocks SET owner_org_id = 202 WHERE sku_id = ? AND warehouse_id = ?').run(ids.tieA, w1)
+  db.pragma('foreign_keys=ON')
+  const tieA = (rows) => rows.find((r) => r.sku_id === ids.tieA)
+  assert.equal(tieA(call({ scope: 'org', orgIds: [101] })).qty_on_hand, 10, 'warehouse org 101 sees the stock regardless of owner_org_id')
+  assert.equal(tieA(call({ scope: 'org', orgIds: [202] })).qty_on_hand, 0, 'org 202 owns the lot but does not hold the warehouse')
+  assert.equal(tieA(db.prepare(OLD_MCP(' AND s.owner_org_id IN (202)')).all())?.qty_on_hand, 10, 'original filter followed owner_org_id')
   // 空范围不是全库
   assert.deepEqual(call({ scope: 'none', orgIds: [] }), [])
   assert.deepEqual(call({ scope: 'org', orgIds: [] }), [])
