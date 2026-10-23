@@ -50,8 +50,9 @@ function fingerprint(dir, relative = '') {
   }
 }
 // .github 也进副本：tests/docker-smoke-policy.test.mjs 静态核对 CI 工作流。
-for (const name of ['server', 'src', 'scripts', 'tests', 'public', 'reusable', '.github']) {
-  if (existsSync(path.join(ROOT, name))) cpSync(path.join(ROOT, name), path.join(repo, name), { recursive: true })
+// docs/implementation 与 docs/legal 也进副本：浏览器 CI 策略测试与上游来源测试要读它们（evidence/图片等不复制）。
+for (const name of ['server', 'src', 'scripts', 'tests', 'public', 'reusable', '.github', 'docs/implementation', 'docs/legal', 'docs/operations']) {
+  if (existsSync(path.join(ROOT, name))) { mkdirSync(path.dirname(path.join(repo, name)), { recursive: true }); cpSync(path.join(ROOT, name), path.join(repo, name), { recursive: true }) }
 }
 for (const item of readdirSync(ROOT, { withFileTypes: true })) {
   // .env* 不进副本（可能含真实密钥）；.env.example 是无值模板，Docker 策略测试要读它。
