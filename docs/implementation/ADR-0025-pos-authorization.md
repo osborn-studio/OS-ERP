@@ -10,7 +10,7 @@
 
 ### 一、每条门店路由 = `requireAuth` + `requireStore()` + `requirePerm(动作权限点)`
 
-`requireStore()` 仍只放行 `store` 角色和 `admin`；`requirePerm` 校验权限点（admin / 超管恒真）。权限点沿用 005 / 024 已登记的字典项，**不另造同义词**，只补两处缺口：
+`requireStore()` 放行 `admin` 与**绑定了门店**（`store_id`）的账号，不再硬编码 `role==='store'`（独立审计 P2：否则只带日常权限的自定义角色用不了 POS）；真正的闸是紧随其后的 `requirePerm` 权限点（admin / 超管恒真）。未绑门店且非 admin 一律 403。权限点沿用 005 / 024 已登记的字典项，**不另造同义词**，只补两处缺口：
 
 | 权限点 | 覆盖的路由 |
 |---|---|
@@ -18,7 +18,7 @@
 | `pos.store.stock` | `GET /stocks` |
 | `pos.cashier` | `POST /orders`、`POST /quote` |
 | `pos.refund` | `POST /orders/:id/void`、`POST /returns` |
-| `pos.shift` | `POST /shifts/open`、`/shifts/:id/declare`、`/shifts/close`、`/shifts/:id/cancel` |
+| `pos.shift` | `POST /shifts/open`、`/shifts/:id/declare`、`/shifts/close`、`/shifts/:id/cancel`（取消**已报数**的班次另需 `pos.shift.review`，因为状态机上这条边要核款权限而 `advanceStatus` 不校验边权限） |
 | `pos.shift.review` | `POST /shifts/:id/approve`、`/shifts/:id/reject` |
 | `pos.cashdrop` | `POST /cash-drops`、`/cash-drops/:id/cancel` |
 | `pos.cashdrop.receive`（新） | `POST /cash-drops/:id/receive`（交钱与收钱是两个动作，分开授权） |
@@ -31,7 +31,7 @@
 
 写入 `pos.view`、`pos.cashdrop.receive` 两个字典项；授予 `admin` 与内置 `store`（店长）角色这两项，并补上 024 当年漏给 `store` 的 `pos.cashdrop`（否则门店账号接上权限闸后发起不了缴款）。其他内置角色不授予。授权只在 `up()` 首次执行时给，`verify()` 只查字典，不查授权集合（ADR-0007）：管理员事后削减 `store` 角色的授权，正常重启不会被恢复 —— 测试里实际削减后连跑两次迁移检查来证明。
 
-内置角色里只有一个 `store`（店长，本店收银 / 库存 / 要货），没有单独的"店员"角色，所以日常权限与审批权限目前都给了它。要把店员和店长分开，需要管理员建一个只带日常权限的自定义角色（不含 `pos.shift.review` / `pos.cashdrop.receive`）；自审拒绝（下一节）保证即使同一角色里也不是同一个人批自己的班。
+内置角色里只有一个 `store`（店长，本店收银 / 库存 / 要货），没有单独的"店员"角色，所以日常权限与审批权限目前都给了它。要把店员和店长分开，需要管理员建一个只带日常权限的自定义角色（不含 `pos.shift.review` / `pos.cashdrop.receive`），并把店员账号的主角色设为它（主角色仍是 `store` 会继承 `store` 的全部授权）；自审拒绝（下一节）保证即使同一角色里也不是同一个人批自己的班。
 
 ### 三、跨店一律 404
 

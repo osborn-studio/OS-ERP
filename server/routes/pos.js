@@ -17,7 +17,7 @@ import { Router } from 'express'
 import { localDate } from '../lib/dates.js'
 import { getDb } from '../db/index.js'
 import { ok, fail, wrap, failFromError } from '../lib/http.js'
-import { requireAuth, requireRole, requirePerm } from '../middleware/auth.js'
+import { requireAuth, requireRole, requirePerm, permContext, hasPerm } from '../middleware/auth.js'
 import { audit } from '../middleware/audit.js'
 import { advanceStatus } from '../lib/docflow.js'
 import {
@@ -68,7 +68,8 @@ function storeCtx(req) {
 function requireStore() {
   return (req, res, next) => {
     if (req.user.role === 'admin') return next() // 总部可代门店操作（演示）
-    if (req.user.role !== 'store') return fail(res, '仅门店店员/店长可使用 POS', 403, 403)
+    // 绑了门店的账号才进得来；能做什么由紧随其后的 requirePerm 决定（ADR-0025）。
+    // 这样"只带日常权限的自定义角色"也能用 POS，而不是被硬编码的 role==='store' 挡在门外。
     if (!req.user.store_id) return fail(res, '当前账号未绑定门店，请联系总部', 403, 403)
     next()
   }
@@ -532,7 +533,11 @@ r.post(
   wrap((req, res) => {
     const { db, store } = storeCtx(req)
     const id = Number(req.params.id)
-    assertShiftOfStore(db, id, store.id)
+    const shift = assertShiftOfStore(db, id, store.id)
+    // 已报数的班次作废等于推翻收银员报数，状态机要求核款权限（advanceStatus 不校验边权限，这里补上）
+    if (shift.status === 'declared' && !hasPerm(permContext(db, req.user), 'pos.shift.review')) {
+      return fail(res, '作废已报数的班次需要 pos.shift.review 权限', 403, 403)
+    }
     const detail = cancelShift(db, req, { shiftId: id, remark: req.body?.remark || null })
     audit(req, { action: 'CANCEL', module: 'pos', entity: 'pos_shifts', entityId: id, detail: detail.shift.doc_no })
     return ok(res, detail)

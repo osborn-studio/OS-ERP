@@ -195,14 +195,24 @@ test('HTTP: every POS store route requires its permission point', { timeout: 300
     db.prepare("DELETE FROM role_permissions WHERE role_code='store' AND perm_code=?").run(code)
     for (const r of own) assert.equal((await call(r)).status, 403, `${r[1]} ${r[2]} must be 403 without ${code}`)
     db.prepare("INSERT OR IGNORE INTO role_permissions (role_code,perm_code) VALUES ('store',?)").run(code)
-    for (const r of own) assert.notEqual((await call(r)).status, 403, `${r[1]} ${r[2]} must pass the permission gate with ${code}`)
+    for (const r of own) {
+      const { status } = await call(r)
+      // 过了权限闸：只会是业务结果（2xx / 400 / 404 / 409），不是 401 / 403 / 5xx
+      assert.ok(status < 500 && status !== 401 && status !== 403, `${r[1]} ${r[2]} must pass the permission gate with ${code}, got ${status}`)
+    }
   }
   // 反过来：只拿对一个权限点不能顺带放行别的动作（approve 需要 review，不是 shift）
   const fresh = makeShift(db, { storeId: 1, openerId: 9, openerName: 'someone-else' })
   db.prepare("DELETE FROM role_permissions WHERE role_code='store' AND perm_code='pos.shift.review'").run()
   assert.equal((await api(`/api/pos/shifts/${fresh.id}/approve`, { token: clerk.token, body: { counted_cash: 100 } })).status, 403)
   assert.equal(shiftRow(db, fresh.id).status, 'declared', 'forbidden approve changed nothing')
-  // 非门店角色不能碰 POS 门店路由
+  // 取消已报数班次还要 review 权限（Codex 审计 P2）：只有 pos.shift 不够
+  const declaredFresh = makeShift(db, { storeId: 1, openerId: 9, openerName: 'someone-else' })
+  assert.equal((await api(`/api/pos/shifts/${declaredFresh.id}/cancel`, { token: clerk.token, body: {} })).status, 403)
+  assert.equal(shiftRow(db, declaredFresh.id).status, 'declared')
+  db.prepare("INSERT OR IGNORE INTO role_permissions (role_code,perm_code) VALUES ('store','pos.shift.review')").run()
+  assert.equal((await api(`/api/pos/shifts/${declaredFresh.id}/cancel`, { token: clerk.token, body: {} })).status, 200)
+  // 非门店且无门店绑定的角色不能碰 POS 门店路由
   const sales = await f.account('pos_sales_user', 'sales', { data_scope: 'all' })
   assert.equal((await api('/api/pos/context', { token: sales.token })).status, 403)
   assert.equal((await api(`/api/pos/shifts/${fresh.id}/approve`, { token: sales.token, body: {} })).status, 403)
