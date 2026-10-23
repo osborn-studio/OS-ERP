@@ -36,7 +36,7 @@ import {
   buildSettlement, getSettlement, transitionSettlement,
   createPayment, getPayment, transitionPayment, planAllocation,
   refreshOrderStats, refreshCloseFlags,
-  purchaseOverview, purchaseTodos, purchaseActions, PO_READ_PERMS, purchaseScopeSql, assertPurchaseDocInScope
+  purchaseOverview, purchaseTodos, purchaseActions, PO_READ_PERMS, purchaseScopeSql, assertPurchaseDocInScope, invoiceOrderIds
 } from '../lib/purchase.js'
 import { explainLifecycle, assertEdgePermitted, getDocType } from '../lib/docflow.js'
 // 付款执行的证据闸 + 二人复核（ADR-0018）。`pay` 是采购域唯一真正动钱的动作，与收款确认走同一份判据。
@@ -81,6 +81,32 @@ function assertWarehouseInScope(db, warehouseId, orgScope) {
   if (!exists) throw new PurchaseError('仓库不存在', { code: 'DOC_NOT_FOUND', httpStatus: 404 })
 }
 
+/**
+ * 单据动作会连带改写的**关联单据**也必须在调用者范围内（ADR-0031，Codex 审计补）：
+ *   · 发票流转会重算其明细行关联的订单统计 / 关闭标记，入库行关联入库单；
+ *   · 结算流转改写其来源入库 / 发票 / 订单；
+ *   · 付款流转按核销明细回写结算单已付。
+ * 单据自身的 `org_id` 在范围内不等于它引用的别组织单据也在 —— 全局范围账号建的单可以引用任意组织。
+ * 全局范围不判（关联悬空不应让管理员无法处理）；受限范围任一关联在范围外 ⇒ 404 `DOC_NOT_FOUND`，不产生写。
+ */
+function assertLinkedDocsInScope(db, docType, id, orgScope) {
+  if (!orgScope || orgScope.scope === 'all') return
+  const need = (type, ids) => { for (const x of new Set(ids.filter((v) => v != null))) assertPurchaseDocInScope(db, type, Number(x), orgScope) }
+  if (docType === 'PI') {
+    need('PO', invoiceOrderIds(db, id))
+    need('GR', db.prepare('SELECT receipt_id FROM purchase_invoice_items WHERE invoice_id=?').all(id).map((x) => x.receipt_id))
+  } else if (docType === 'PAY') {
+    need('PST', db.prepare('SELECT settle_id FROM purchase_payment_items WHERE payment_id=?').all(id).map((x) => x.settle_id))
+  } else if (docType === 'PST') {
+    const items = db.prepare('SELECT source_type, source_id FROM purchase_settlement_items WHERE settle_id=?').all(id)
+    const of = (...types) => items.filter((x) => types.includes(x.source_type)).map((x) => x.source_id)
+    need('GR', of('receipt'))
+    need('PO', of('order'))
+    need('PI', of('invoice', 'fee'))
+    need('PI', db.prepare('SELECT id FROM purchase_invoices WHERE settle_id=?').all(id).map((x) => x.id))
+  }
+}
+
 const actorOf = (req) => {
   const u = currentUser(req)
   return { id: u.id || u.uid || null, name: u.name || u.username || null, ip: req.ip || null }
@@ -112,6 +138,7 @@ function assertActionPermitted(req, db, docType, id) {
   // ADR-0031：动作权限之后、任何写之前判单据范围（范围外与不存在同形 404）。
   // 顺序沿用既有契约（无权限者仍得 403 PERM_DENIED）；持有动作权限者——唯一能产生写的人群——够不到范围外单据。
   assertPurchaseDocInScope(db, docType, id, req.orgScope)
+  assertLinkedDocsInScope(db, docType, id, req.orgScope)
   return edge
 }
 
@@ -386,8 +413,10 @@ r.post(
     const db = getDb()
     const id = Number(req.params.id)
     // ADR-0031：请购单与（显式指定的）入库仓都必须在调用者范围内；范围外 404，不产生写
-    assertPurchaseDocInScope(db, 'PRQ', id, req.orgScope)
-    if (req.body?.warehouse_id) assertWarehouseInScope(db, Number(req.body.warehouse_id), req.orgScope)
+    const prqRow = assertPurchaseDocInScope(db, 'PRQ', id, req.orgScope)
+    // 生效的入库仓 = body 显式给的，否则请购单自带的（lib 的取舍同此）；两者都要在范围内
+    const effWh = req.body?.warehouse_id ? Number(req.body.warehouse_id) : prqRow.warehouse_id
+    if (effWh != null) assertWarehouseInScope(db, Number(effWh), req.orgScope)
     const out = convertRequisitionToOrder(db, {
       reqId: id,
       lines: req.body?.lines || null,
@@ -821,6 +850,7 @@ r.post(
     const db = getDb()
     const id = Number(req.params.id)
     assertPurchaseDocInScope(db, 'PAY', id, req.orgScope)
+    assertLinkedDocsInScope(db, 'PAY', id, req.orgScope)
     const actor = actorOf(req)
     const b = req.body || {}
     const out = reviewFunds(db, {

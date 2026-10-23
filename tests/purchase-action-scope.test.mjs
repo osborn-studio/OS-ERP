@@ -174,6 +174,44 @@ test('purchase action routes and MCP purchase tools respect document org scope',
     assert.equal(count('purchase_orders'), before)
   })
 
+  await t.test('convert validates the effective warehouse even when the body omits it', async () => {
+    const before = count('purchase_orders')
+    const cross = prq('PRQ-ACT-XW', whA.org_id, whB.id, 'approved')
+    notFound(await api(`/api/purchase/requisitions/${cross}/convert`, { token: a.token, body: {} }), 'prq warehouse in B')
+    assert.equal(count('purchase_orders'), before)
+    assert.equal(db.prepare('SELECT status FROM purchase_requisitions WHERE id=?').get(cross).status, 'approved')
+  })
+
+  await t.test('actions on an in-scope document cannot rewrite linked documents outside the scope', async () => {
+    // 付款 A 的核销明细指向 B 的结算单（由全局范围账号建出）：void / review / pay 都不得改动 B 的结算单
+    const payX = pay('PAY-ACT-X', whA.org_id)
+    db.prepare("UPDATE purchase_payments SET status='approved', settled_amount=10 WHERE id=?").run(payX)
+    db.prepare("INSERT INTO purchase_payment_items (payment_id, settle_id, settle_doc_no, amount) VALUES (?,?,?,10)").run(payX, PST.B, 'PST-ACT-B')
+    const stBefore = rowOf('purchase_settlements', PST.B)
+    for (const action of ['void', 'pay']) notFound(await api(`/api/purchase/payments/${payX}/${action}`, { token: a.token, body: {} }), `pay ${action}`)
+    notFound(await api(`/api/purchase/payments/${payX}/review`, { token: a.token, body: { decision: 'approve' } }), 'pay review')
+    assert.equal(rowOf('purchase_settlements', PST.B), stBefore)
+    assert.equal(db.prepare('SELECT status FROM purchase_payments WHERE id=?').get(payX).status, 'approved')
+    // 发票 A 的表头订单是 B 的订单：流转会重算订单统计 / 关闭标记
+    const piX = inv('PI-ACT-XO', whA.org_id)
+    db.prepare('UPDATE purchase_invoices SET order_id=? WHERE id=?').run(poB.id, piX)
+    const poBefore = rowOf('purchase_orders', poB.id)
+    notFound(await api(`/api/purchase/invoices/${piX}/submit`, { token: a.token, body: {} }), 'invoice linked to B order')
+    assert.equal(rowOf('purchase_orders', poB.id), poBefore)
+    assert.equal(db.prepare('SELECT status FROM purchase_invoices WHERE id=?').get(piX).status, 'draft')
+    // 结算 A 的来源入库单在 B 仓
+    const grB = db.prepare('SELECT id FROM purchase_receipts WHERE warehouse_id IS NOT NULL ORDER BY id LIMIT 1').get()
+    if (grB) {
+      db.prepare('UPDATE purchase_receipts SET warehouse_id=? WHERE id=?').run(whB.id, grB.id)
+      const pstX = st('PST-ACT-XR', whA.org_id)
+      db.prepare("INSERT INTO purchase_settlement_items (settle_id, source_type, source_id, qty, price, amount) VALUES (?,?,?,1,1,1)").run(pstX, 'receipt', grB.id)
+      notFound(await api(`/api/purchase/settlements/${pstX}/audit`, { token: a.token, body: {} }), 'settlement linked to B receipt')
+      assert.equal(db.prepare('SELECT status FROM purchase_settlements WHERE id=?').get(pstX).status, 'draft')
+    }
+    // 全局范围账号不受关联判定限制
+    okData(await api(`/api/purchase/invoices/${piX}/submit`, { token: f.admin, body: {} }))
+  })
+
   await t.test('receive-check and review require the internal read gate', async () => {
     const storeId = Number(db.prepare("INSERT INTO stores (code,name) VALUES ('AS1','Action store')").run().lastInsertRowid)
     const store = await f.account('act_store', 'store', { store_id: storeId })
