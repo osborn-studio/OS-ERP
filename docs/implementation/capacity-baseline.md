@@ -87,3 +87,93 @@ node scripts/bench-api.mjs --concurrency 4 --iterations 30 --out "$GML_DATA_DIR/
 0 错误，`SQLITE_BUSY` 0。因为 HTTP 数字不可用，补一份**进程内逐语句计时**（同一进程里交替执行"前库/后库"各 300 次，排除网络与调度，但机器仍有负载，只看量级）：语句 p50 变化——`stock.txn_by_doc` 34→1 µs，`sales.items` 20→2 µs，`sales.list_page` 715→188 µs（p95 22.1→2.1 ms，子查询 `COUNT(*) FROM sales_order_items WHERE order_id=…` 不再逐行全表扫），`dash.sales_today` 52→3 µs，`stock.expiring` 30→8 µs，`rpt.sales_value` 18→6 µs，`rpt.purchase_value` 7→2 µs，`rpt.sales_cost` 76→43 µs，`po.refresh_invoice_amount` 4→1 µs；61 条里没有 p50 退化超过 15% 且绝对值超过 10 µs 的语句（唯一超 15% 的 `dash.sales_unpaid` 计划未变，是噪声）。
 
 **局限**：夹具库最大表约 1500 行，绝对数字小到不代表生产；要作为证据，需要在 `dmserver` 上用生产规模副本复跑 `explain-audit.mjs` 与 `bench-api.mjs`。新增索引的写放大（每个索引每次 INSERT/UPDATE 多维护一棵 B 树）未做写路径压测；`inventory_transactions` 新增 2 个（`doc_type, doc_id` 与 `doc_type, substr(biz_date,1,7)`），是写最频繁的表。
+
+## Y10 大库规模演练（**Mac mini / 合成数据 / 非目标主机**）
+
+> **范围声明**：下面所有数字来自开发机 Mac mini（Apple M4, 10 核, 16 GB, Node v22.22.1, SQLite 3.49.2）上**一次**合成数据演练，机器当时还在跑别的任务（见每张表的负载）。
+> **不是目标主机（`dmserver`）结果、不是容量承诺、不是 RPO/RTO 证据、不是验收证据**。合成数据是均匀随机、单行业、单管理员，不代表真实业务分布。
+> 实际跑过的**最大规模**是 `large`（2 万 SKU / 5 万单据 / 25 万库存流水），**没有**跑 roadmap 写的 10 万 SKU / 20 万单据 / 100 万流水：开发机内部盘只剩约 16 GiB 且已用 92%，整条流水线（库 + 两份备份 + 两份恢复副本 + 压测副本）峰值约 10 GB，会挤占同机其他任务。该规模需在 `dmserver` 上用同一脚本复跑。
+
+### 做了什么
+
+- `scripts/synth-data.mjs`：在全新的空 `GML_DATA_DIR` 生成**生产分类**合成库。迁移走真实运行器；管理员走 `bootstrapAdmin`；采购走 `createPurchaseOrder → transitionPurchaseOrder → receivePurchaseOrder`；销售走 `createQuote → transitionQuote → convertQuote → 确认 → 发货 →（少量）cancelOrder`；盘盈盘亏走 `applyStockGain/applyStockOut` 补足流水目标。
+  - **唯一直接 INSERT 的是主数据**（品牌/品类/商品/SKU/仓库/供应商/供货关系/经销商）：这些在路由里是通用 CRUD，没有可调用的领域函数，也不涉及跨表不变量；授信账户走 `ensureAccount/updateAccount`。
+  - **订单确认与发货是对 `server/routes/sales.js` 对应处理器的镜像**（确认/发货逻辑只存在于 HTTP 处理器内，领域层没有同名函数）：用的仍是 `checkCredit / reserveForDoc / occupy / planShipment / applyStockOut / applyTransition / logEvent`，但**编排**是镜像的，路由改了要同步（文件头与代码注释已标）。
+  - 确定性：种子 `--seed`（mulberry32）、业务日期锚在 `--anchor`、生成时固定 `TZ=UTC`；摘要里的 `digest` 只哈希业务列，同参数两次运行相同（测试断言，且断言不同时区相同）。
+  - 不变量（生成末尾必跑，`tests/synth-data.test.mjs` 对最小规模再独立核对并证明篡改会红）：`integrity_check`、`foreign_key_check` 为空（无孤儿行）、库存 = 流水净额（逐 仓×SKU×批次，双向）、无负库存、预留 ≤ 现存、收货/发货单明细 = PUR_IN/SAL_OUT 流水 = 订单行已收/已发、表头 = 明细合计、每张单据有 `doc_events` 且无孤儿事件、`reconcileOrderHolds` 为空、`auditCredit` 平衡。
+- `scripts/synth-pipeline.mjs`：串联 生成 → `db-backup`（明文）→ `db-backup`（`GML_BACKUP_KEY` 加密）→ 两份 `db-restore-drill`（探针全部比对）→ `explain-audit` → 压测副本预热 → `bench-api`，输出带来源身份（提交、脏工作区指纹、SQLite/Node 版本）与负载的 JSON。原始报告：`capacity-evidence/y10-medium-20261023.json`、`capacity-evidence/y10-large-20261023.json`（提交 `51382ce`，工作区干净）。
+
+### 规模
+
+| | medium | large（最大已跑） |
+|---|---|---|
+| 参数 | `--skus 20000 --docs 30000 --txns 150000` | `--skus 20000 --docs 50000 --txns 250000` |
+| SKU / 库存行（批次）| 20 000 / 84 736 | 20 000 / 141 425 |
+| 库存流水 | 150 000 | 250 000 |
+| 采购订单 / 收货单 | 12 000 / 10 774 | 20 000 / 17 992 |
+| 报价→销售订单 / 发货单 | 18 000 / 12 607 | 30 000 / 21 163 |
+| 授信台账行 / 单据事件 | 18 858 / 170 747 | 31 495 / 285 053 |
+| 库文件 | 248.6 MB | 410.5 MB |
+| 生成总耗时（其中 采购/销售/盘点/自检）| 205.8 s（52.5 / 94.7 / 6.8 / 50.4）| 509.8 s（106.2 / 224.8 / 14.3 / 162.6）|
+| 不变量 | 全绿 | 全绿 |
+| 开始/结束 loadavg(1m) | 3.6 / 5.8 | 5.6 / 10.9 |
+
+生成是单线程领域调用，约 100–150 单据/秒；medium 在 10 分钟预算内。
+
+### 备份 / 恢复演练 / 索引审计 / 压测（单次墙钟）
+
+| 步骤 | medium | large |
+|---|---|---|
+| `db-backup` 明文（墙钟 / 写冻结窗口 / 快照大小）| 2.0 s / 579 ms / 235.5 MB | 3.8 s / 1 020 ms / 388.3 MB |
+| `db-backup` 加密（同上）| 2.5 s / 634 ms / 235.5 MB | 4.2 s / 1 034 ms / 388.3 MB |
+| `db-restore-drill` 明文（总耗时；sha256 核对 / 迁移 / 服务就绪 / 探针）| 1.6 s（546 / 103 / 640 / 242 ms）| 2.0 s（811 / 115 / 740 / 254 ms）|
+| `db-restore-drill` 加密（同上）| 1.7 s（329 / 96 / 639 / 242 ms）| 2.2 s（654 / 98 / 642 / 249 ms）|
+| `explain-audit`（61 条语句）| 63 ms，**3 处违规** | 65 ms，**3 处违规** |
+| 压测副本预热（见下）| 25.3 s | 44.2 s |
+| `bench-api`（并发 4 × 100 次，登录 10 次）| 910 请求 / 0 错误 / 18.3 s / SQLITE_BUSY 0 | 910 请求 / 0 错误 / 29.7 s / SQLITE_BUSY 0 |
+
+恢复演练的"耗时"只代表本机、热页缓存、备份与目标在同一块盘上的复制+迁移+起服务；**不是 RTO**，也没有网络与冷盘。备份的写冻结窗口随库大小线性增长（约 2.6 ms/MB）。
+
+### `bench-api` p95（ms）
+
+| 接口 | 夹具库（W11 基线）p95 | medium p95 | large p95 |
+|---|---|---|---|
+| POST /api/auth/login | 407.5 | 1 512.6 | 1 515.3 |
+| GET /api/dashboard/summary | 10.1 | 198.5 | 282.6 |
+| GET /api/purchase/orders | 2.6 | 8.8 | 14.7 |
+| GET /api/purchase/orders/:id | 3.0 | 1.6 | 2.4 |
+| GET /api/inventory/stocks | 7.0 | 704.1 | 1 092.1 |
+| GET /api/ar/receipts | 5.4 | 2.4 | 2.0 |
+| GET /api/reports/operating | 10.3 | 33.8 | 69.0 |
+| GET /api/meta/health | 2.3 | 0.7 | 1.0 |
+| GET /api/order-center/overview | 8.3 | 3.5 | 5.1 |
+| GET /api/notify/meta | 3.5 | 1.2 | 1.0 |
+
+夹具列来自本文上面的 W11 默认档（不同负载、不同次数，仅作量级参照）。登录 p95 是 bcrypt 同步计算在单线程事件循环里排队，与数据量无关（本次登录 10 次、并发 4）。
+
+### 发现（给后续批次，不在本工作流内修）
+
+1. **`GET /api/inventory/stocks` 随库存行数线性变慢**（84.7k 行 → p95 704 ms；141k 行 → 1 092 ms）。与 X10 记录的残余一致：`qty_on_hand <> 0` 的几乎不过滤列表，索引解决不了，需要分页游标或物化。
+2. **`explain-audit` 在规模下出现 3 处新违规**（夹具规模下为 0）：`dash.todo_counts` 全表扫 `product_skus`（2 万行）与 `dealers`（750/1 250 行）、`stock.below_safe` 全表扫 `product_skus`。X10 的结论"夹具规模下无裸 SCAN"在这里被规模推翻了一部分；需要 `product_skus(status, safe_stock)` 一类的索引或改写，并重新审计。
+3. **`GET /api/dashboard/summary` 随单据增长**（夹具 10 ms → 5 万单据 283 ms），与 2 同源的扫描有关，改索引后应复测。
+4. 生成器自检曾发现的一个性能坑：`inventory_transactions` 分组 `NOT EXISTS + COALESCE(batch_no,'')` 失去索引，25 万流水上要 2 分钟；已改为 LEFT JOIN 走唯一索引（`verifyInvariants` 现在 51–163 s 主要是 `integrity_check`）。
+
+### 压测库与生成库不是同一份（必须一起读）
+
+`bench-api` 只接受 `demo/test` 分类的库、且它起的 test 模式 `server/index.js` 启动时会执行 `db/boot.js` 的演示种子。所以流水线把生成库**复制**成一次性副本，**只在副本上**把 `os_egp_runtime.mode` 改成 `test`（整条流水线唯一一次对分类标记的直接写入；原库与两份备份仍是 production），并先单独预热一遍同一个 `bootAll` 以免撞 bench 的 60 s 启动等待。副作用已实测并记入报告 `bench_dataset`：演示种子叠加少量演示行（SKU/流水/单据量级变化 <1%），**并重置了 `credit_ledger`/`credit_accounts`/`sales_quotes` 一族**（`quote-seed.js` 清表重灌），另建 food/apparel 两份演示库；副本里 `order_received_qty_equals_receipt_items` 自检为红（来自叠加的演示采购单，生成库本身为绿）。因此压测读到的是"合成体量 + 演示叠加"，授信相关表为空。
+
+### 复现
+
+```bash
+export PATH="/opt/homebrew/opt/node@22/bin:$PATH"
+# 最小规模（测试用，几秒）
+GML_RUNTIME_MODE=production GML_DATA_DIR=$(mktemp -d /tmp/synth.XXXXXX)/data GML_DB= node scripts/synth-data.mjs
+# 整条演练（--out 须是尚不存在的新文件；--dir 默认跑完删除，加 --keep 保留）
+node scripts/synth-pipeline.mjs --dir /tmp/synth-large --skus 20000 --txns 250000 --docs 50000 --seed 20261023 --out /tmp/large-report.json
+```
+
+跑之前确认磁盘余量（large 峰值约 4 GB，roadmap 全量约 10 GB）与机器负载（报告里有 `loadavg_start/end`）；同种子、同提交、同 SQLite 版本下 `digest` 应一致，**计时不会一致**。
+
+### 仍需目标主机
+
+在 `dmserver` 上用同一条命令跑 roadmap 全量（10 万 SKU / 20 万单据 / 100 万流水），并保留 JSON；这时才谈得上 RPO/RTO 与容量。本次没有覆盖：写路径并发（生成是单线程）、长时间 soak、内存增长、真实反向代理与网络、冷盘恢复。
