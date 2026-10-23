@@ -94,16 +94,20 @@ export default function Users() {
         const scope = DATA_SCOPES.find((x) => x.value === (form.data_scope || ''))
         return (
           <div className="mb-3 space-y-2 text-[12px]">
-            {scope && (
-              <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2 text-slate-600" data-testid="scope-hint">
-                数据范围「{scope.label}」：{scope.hint}
-                {scope.value === 'all' && <b className="text-red-600"> 将可见全部组织数据。</b>}
+            {form.role === 'admin' && (
+              <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-red-700" data-testid="admin-scope-note">
+                管理员角色恒为「全部数据」，下面选择的数据范围对管理员不生效。
               </div>
             )}
+            <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2 text-slate-600" data-testid="scope-hint">
+              {scope
+                ? <>数据范围「{scope.label}」：{scope.hint}{scope.value === 'all' && <b className="text-red-600"> 将可见全部组织数据。</b>}</>
+                : <>未选择数据范围：新建账号沿用所选角色的默认范围，编辑时保持账号当前设置（更换角色会改变沿用的默认范围）。部分角色（如老板/财务/访客）默认是全部数据，请确认。</>}
+            </div>
             <div className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-amber-800" role="alert" data-testid="revoke-warning">
               安全提示：保存时若该账号的角色、状态、所属组织、数据范围、绑定经销商/门店或密码实际发生变化，
               该用户的所有登录会话会立即失效，需要重新登录（修改自己的账号也会把你自己登出）；仅修改姓名、部门、手机不会。
-              未改动的字段、选择「不修改」的字段不会发送。
+              填写新密码即使与旧密码相同也会登出。选择「不修改」的所属组织/数据范围不会发送，保持账号当前值。
             </div>
           </div>
         )
