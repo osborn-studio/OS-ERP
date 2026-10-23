@@ -347,6 +347,66 @@ test('MCP delegation matrix: every tool x {owner inactive, permission removed, s
     db.prepare('UPDATE users SET org_id=NULL, data_scope=? WHERE id=?').run('all', ownerId)
   }
 
+  // ---- 状态 5（Z8）：写型工具先成功一次（幂等缓存落下），所有者随后失权 / 缩范围，再用同一幂等键重放 ----
+  // 重放必须得到**当前**错误（权限点 / 数据范围），而不是缓存里的旧结果；业务表行数不变；
+  // 失权恢复之后同一键才回放缓存（_idempotent_replay），且仍不新增任何业务行。
+  matrix.replay_state = { state: 'replay_after_permission_loss', tools: {} }
+  {
+    const replayFailures = []
+    for (const tool of tools.filter((x) => x.level === 'write')) {
+      const needs = tool.perms || []
+      const key = `matrix-replay-${tool.name}-${Date.now()}-${++seq}`
+      const args = { ...baseline[tool.name].args, idempotency_key: key }
+      const first = await mcp('tools/call', { name: tool.name, arguments: args }, token)
+      if (outcome(first).kind !== 'ok') {
+        matrix.replay_state.tools[tool.name] = { result: 'NO_CACHE', first: outcome(first).code }
+        continue
+      }
+      const cell = {}
+      // ① 权限点被撤
+      dropPerms(needs.length ? needs : fullRolePerms)
+      try {
+        const before = snapshot()
+        const r = await mcp('tools/call', { name: tool.name, arguments: args }, token)
+        const o = outcome(r)
+        const changed = diff(before, snapshot())
+        cell.permission_removed = { code: o.code, replayed: r.body?.result?._idempotent_replay === true, rows_changed: changed }
+        if (!(o.kind === 'tool_error' && PERM_DENY_CODES.has(o.code)) && !(o.kind === 'tool_error' && SCOPE_DENY_CODES.has(o.code)) || cell.permission_removed.replayed || changed.length) {
+          replayFailures.push(`replay permission_removed ${tool.name}: ${o.kind}/${o.code} replayed=${cell.permission_removed.replayed} ${changed.join(';')}`)
+        }
+      } finally {
+        restorePerms()
+      }
+      // ② 数据范围被缩到无关组织
+      db.prepare("UPDATE users SET org_id=?, data_scope='org' WHERE id=?").run(outsideOrg.id, ownerId)
+      try {
+        const before = snapshot()
+        const r = await mcp('tools/call', { name: tool.name, arguments: args }, token)
+        const o = outcome(r)
+        const changed = diff(before, snapshot())
+        cell.scope_excluded = { code: o.code, replayed: r.body?.result?._idempotent_replay === true, rows_changed: changed }
+        if (!(o.kind === 'tool_error' && SCOPE_DENY_CODES.has(o.code)) || cell.scope_excluded.replayed || changed.length) {
+          replayFailures.push(`replay scope_excluded ${tool.name}: ${o.kind}/${o.code} replayed=${cell.scope_excluded.replayed} ${changed.join(';')}`)
+        }
+      } finally {
+        db.prepare('UPDATE users SET org_id=NULL, data_scope=? WHERE id=?').run('all', ownerId)
+      }
+      // ③ 全部恢复：同一键回放缓存，不再动业务行
+      {
+        const before = snapshot()
+        const r = await mcp('tools/call', { name: tool.name, arguments: args }, token)
+        const changed = diff(before, snapshot())
+        cell.restored = { replayed: r.body?.result?._idempotent_replay === true, rows_changed: changed }
+        if (!cell.restored.replayed || changed.length) replayFailures.push(`replay restored ${tool.name}: replayed=${cell.restored.replayed} ${changed.join(';')}`)
+      }
+      cell.result = replayFailures.some((x) => x.includes(` ${tool.name}:`)) ? 'LEAK' : 'DENIED'
+      matrix.replay_state.tools[tool.name] = cell
+    }
+    failures.push(...replayFailures)
+    const covered = Object.values(matrix.replay_state.tools).filter((x) => x.result === 'DENIED').length
+    assert.ok(covered >= 4, `expected several write tools to exercise the replay state, got ${covered}`)
+  }
+
   // ---- 状态 4（Y6）：所有者缺门店 / 经销商绑定 ----
   // 通用单据读工具对「HTTP 侧按门店 / 经销商绑定」的类型，在所有者拥有查看权限点但没有绑定时必须拒绝
   // （TOKEN_OWNER_BINDING_REQUIRED），list_types 不列出；有绑定后只放行绑定对象自己的单据。
@@ -424,6 +484,7 @@ test('MCP delegation matrix: every tool x {owner inactive, permission removed, s
   assert.equal(saved.tool_count, TOOLS.length)
   assert.ok(Object.keys(saved.binding_state.types).length >= 6 && Object.values(saved.binding_state.types).every((x) => x.result === 'DENIED'), 'every store/dealer bound type is denied to an unbound owner')
   assert.ok(Object.keys(saved.history_scope_state.cases).length >= 2 && Object.values(saved.history_scope_state.cases).every((x) => x.result !== 'LEAK'), 'history tool honors the owner scope')
+  assert.ok(Object.values(saved.replay_state.tools).every((x) => x.result !== 'LEAK'), 'no write tool replays a cached result after owner permission / scope loss')
   assert.deepEqual(failures, [], `tools that slipped through:\n${failures.join('\n')}`)
   assert.ok(Object.values(saved.tools).every((x) => Object.values(x.states).every((c) => c.result !== 'LEAK')))
 })
