@@ -110,8 +110,9 @@ test('sales reads and writes follow the caller org scope; dealer / store binding
   const oN = mkOrder('XSC-N', { amount: 800, wh: null })
   const oAD = mkOrder('XSC-AD', { amount: 1, wh: whA.id, status: 'draft' })
   const oBD = mkOrder('XSC-BD', { amount: 2, wh: whB.id, status: 'draft' })
+  const oSD = mkOrder('XSC-SD', { channel: 'store', store: store1.id, amount: 3, wh: whB.id, status: 'draft' })
   const insItem = db.prepare('INSERT INTO sales_order_items (order_id, sku_id, qty, price, amount) VALUES (?,?,1,10,10)')
-  for (const id of [oA, oB, oS, oN, oAD, oBD]) insItem.run(id, sku)
+  for (const id of [oA, oB, oS, oN, oAD, oBD, oSD]) insItem.run(id, sku)
 
   const insDl = db.prepare(`INSERT INTO sales_deliveries (doc_no, order_id, warehouse_id, delivery_date, status, total_qty, total_amount)
     VALUES (?,?,?,date('now','localtime'),'shipped',1,10)`)
@@ -128,6 +129,9 @@ test('sales reads and writes follow the caller org scope; dealer / store binding
   const rWS = Number(insRt.run('XSR-WS', null, 'store', null, store1.id, null).lastInsertRowid) // 无单：按自己的门店
   const rN = Number(insRt.run('XSR-N', null, 'dealer', dealer1, null, null).lastInsertRowid)
 
+  db.prepare("UPDATE sales_returns SET idempotency_key='XSR-KEY-B' WHERE id=?").run(rB)
+  db.prepare("UPDATE sales_returns SET idempotency_key='XSR-KEY-WA' WHERE id=?").run(rWA)
+
   const nos = (r, prefix) => okData(r).list.map((x) => x.doc_no).filter((n) => n.startsWith(prefix)).sort()
   const orders = (token) => api('/api/sales/orders?pageSize=500&keyword=XSC-', { token })
   const deliveries = (token) => api('/api/sales/deliveries?pageSize=500', { token })
@@ -143,7 +147,7 @@ test('sales reads and writes follow the caller org scope; dealer / store binding
 
   await t.test('admin and data_scope=all keep the global view (NULL-owner rows included); anonymous is 401', async () => {
     for (const tk of [f.admin, accountAll.token]) {
-      assert.deepEqual(nos(await orders(tk), 'XSC-'), ['XSC-A', 'XSC-AD', 'XSC-B', 'XSC-BD', 'XSC-N', 'XSC-S'])
+      assert.deepEqual(nos(await orders(tk), 'XSC-'), ['XSC-A', 'XSC-AD', 'XSC-B', 'XSC-BD', 'XSC-N', 'XSC-S', 'XSC-SD'])
       assert.deepEqual(nos(await deliveries(tk), 'XSD-'), ['XSD-A', 'XSD-B', 'XSD-N'])
       assert.deepEqual(nos(await returns(tk), 'XSR-'), ['XSR-A', 'XSR-B', 'XSR-N', 'XSR-WA', 'XSR-WB', 'XSR-WS'])
     }
@@ -161,21 +165,21 @@ test('sales reads and writes follow the caller org scope; dealer / store binding
 
   await t.test('org-B account sees B orders (incl. the store order fulfilled from B) but none of A or NULL', async () => {
     const tk = accountB.token
-    assert.deepEqual(nos(await orders(tk), 'XSC-'), ['XSC-B', 'XSC-BD', 'XSC-S'])
+    assert.deepEqual(nos(await orders(tk), 'XSC-'), ['XSC-B', 'XSC-BD', 'XSC-S', 'XSC-SD'])
     assert.deepEqual(nos(await deliveries(tk), 'XSD-'), ['XSD-B'])
     assert.deepEqual(nos(await returns(tk), 'XSR-'), ['XSR-B', 'XSR-WB'])
   })
 
   await t.test('the store org sees the store order and the walk-in return of its own store, not other orgs', async () => {
     const tk = accountS.token
-    assert.deepEqual(nos(await orders(tk), 'XSC-'), ['XSC-S'])
+    assert.deepEqual(nos(await orders(tk), 'XSC-'), ['XSC-S', 'XSC-SD'])
     assert.deepEqual(nos(await returns(tk), 'XSR-'), ['XSR-WS'])
     assert.deepEqual(nos(await deliveries(tk), 'XSD-'), [])
   })
 
   await t.test('subtree at the parent sees A, B and the store order, never the NULL-owner rows', async () => {
     const tk = accountSub.token
-    assert.deepEqual(nos(await orders(tk), 'XSC-'), ['XSC-A', 'XSC-AD', 'XSC-B', 'XSC-BD', 'XSC-S'])
+    assert.deepEqual(nos(await orders(tk), 'XSC-'), ['XSC-A', 'XSC-AD', 'XSC-B', 'XSC-BD', 'XSC-S', 'XSC-SD'])
     assert.deepEqual(nos(await deliveries(tk), 'XSD-'), ['XSD-A', 'XSD-B'])
     assert.deepEqual(nos(await returns(tk), 'XSR-'), ['XSR-A', 'XSR-B', 'XSR-WA', 'XSR-WB', 'XSR-WS'])
   })
@@ -316,11 +320,45 @@ test('sales reads and writes follow the caller org scope; dealer / store binding
     assert.equal(db.prepare('SELECT COUNT(*) c FROM sales_returns').get().c, nRet)
   })
 
+  await t.test('shared documents: a reader whose warehouse is outside the scope cannot move that warehouse stock', async () => {
+    const S = accountS.token // 门店组织：能读 B 仓发出的门店单，但 B 仓不在其范围内
+    const c = await api(`/api/sales/orders/${oSD}/confirm`, { token: S, body: {} })
+    assert.equal(c.status, 403, JSON.stringify(c.body))
+    assert.equal(db.prepare('SELECT status FROM sales_orders WHERE id=?').get(oSD).status, 'draft')
+    assert.equal(db.prepare("SELECT COUNT(*) c FROM inventory_reservations WHERE source_doc_type='SO' AND source_doc_id=?").get(oSD).c, 0)
+    const x = await api(`/api/sales/orders/${oS}/cancel`, { token: S, body: {} })
+    assert.equal(x.status, 403, JSON.stringify(x.body))
+    assert.equal(db.prepare('SELECT status FROM sales_orders WHERE id=?').get(oS).status, 'confirmed')
+    const d = await api(`/api/sales/orders/${oS}/deliver`, { token: S, body: {} })
+    assert.equal(d.status, 403, JSON.stringify(d.body))
+    // 仓所属组织的账号不被拦（后续是否成功取决于库存，但不是范围错误）
+    const ok = await api(`/api/sales/orders/${oSD}/confirm`, { token: accountB.token, body: {} })
+    assert.ok(![403, 404].includes(ok.status), JSON.stringify(ok.body))
+  })
+
+  await t.test('returns: restricted accounts cannot fall back to the default warehouse or replay another org return', async () => {
+    const A = accountA.token
+    const n0 = db.prepare('SELECT COUNT(*) c FROM sales_returns').get().c
+    const noWh = await api('/api/sales/returns', { token: A, body: { items: [{ sku_id: sku, qty: 1, price: 1 }] } })
+    assert.equal(noWh.status, 400, JSON.stringify(noWh.body))
+    const emptyScope = await api('/api/sales/returns', { token: accountNone.token, body: { items: [{ sku_id: sku, qty: 1, price: 1 }] } })
+    assert.equal(emptyScope.status, 400, JSON.stringify(emptyScope.body))
+    const replayB = await api('/api/sales/returns', { token: A, body: { warehouse_id: whA.id, idempotency_key: 'XSR-KEY-B', items: [{ sku_id: sku, qty: 1, price: 1 }] } })
+    assert.equal(replayB.status, 404, JSON.stringify(replayB.body))
+    assert.ok(!JSON.stringify(replayB.body).includes('XSR-B'))
+    assert.equal(db.prepare('SELECT COUNT(*) c FROM sales_returns').get().c, n0)
+    // 自己组织的重放仍然是幂等重放
+    const replayA = await api('/api/sales/returns', { token: A, body: { warehouse_id: whA.id, idempotency_key: 'XSR-KEY-WA', items: [{ sku_id: sku, qty: 1, price: 1 }] } })
+    assert.equal(replayA.status, 200, JSON.stringify(replayA.body))
+    assert.equal(replayA.body.data.replayed, true)
+    assert.equal(db.prepare('SELECT COUNT(*) c FROM sales_returns').get().c, n0)
+  })
+
   await t.test('dealer and store bound accounts keep their principal-only view, independent of org', async () => {
     const storeUser = await f.account('xs_store', 'store', { store_id: store1.id })
     const dealerUser = await f.account('xs_dealer', 'dealer', { dealer_id: dealer1 })
     // 门店：只看自己店的单（仓属 B 组织也照看；不受组织谓词影响）
-    assert.deepEqual(nos(await orders(storeUser.token), 'XSC-'), ['XSC-S'])
+    assert.deepEqual(nos(await orders(storeUser.token), 'XSC-'), ['XSC-S', 'XSC-SD'])
     assert.deepEqual(nos(await returns(storeUser.token), 'XSR-'), ['XSR-WS'])
     assert.equal((await api(`/api/sales/orders/${oS}`, { token: storeUser.token })).status, 200)
     const other = await api(`/api/sales/orders/${oA}`, { token: storeUser.token })
