@@ -1212,6 +1212,36 @@ export function costOf(db, { warehouseId, ownerOrgId = null, skuId, batchNo = ''
   }
 }
 
+// ---------------------------------------------------------------------------
+// 低于安全库存（Z3）：看板计数、预警列表、看板 Top N 共用一份口径。
+// 口径（与改写前逐字等价）：status='active' 且 safe_stock>0 的 SKU，跨仓现存量合计（无库存行按 0）< safe_stock。
+// 写法：product_skus 走 (status, safe_stock) 范围搜索；每个候选 SKU 的库存合计是一次覆盖索引
+// idx_stock_sku_qty(sku_id, qty_on_hand) 上的范围读（不回表）。曾试过「先按 sku_id 预聚合再 LEFT JOIN」：
+// SQLite 会为物化子查询建 AUTOMATIC INDEX，且在 2 万 SKU / 8.5 万库存行实测更慢，所以没有采用（数字见 capacity-baseline.md Z3 一节）。
+// 老写法是 LEFT JOIN inventory_stocks + GROUP BY sk.id，要建两棵临时 B 树。
+// ---------------------------------------------------------------------------
+const SKU_STOCK_QTY = 'COALESCE((SELECT SUM(st.qty_on_hand) FROM inventory_stocks st WHERE st.sku_id = sk.id),0)'
+
+export function countBelowSafe(db) {
+  return db
+    .prepare(`SELECT COUNT(*) c FROM product_skus sk WHERE sk.status='active' AND sk.safe_stock>0 AND ${SKU_STOCK_QTY} < sk.safe_stock`)
+    .get().c
+}
+
+/** 缺口最大的前 limit 个 SKU；并列时按 sku id 升序，保证结果稳定（老写法并列顺序未定义）。 */
+export function listBelowSafe(db, limit = 50) {
+  return db
+    .prepare(
+      `SELECT x.sku_id, x.sku_code, x.sku_name, p.name AS product_name, x.safe_stock, x.q qty_on_hand, x.safe_stock - x.q shortage
+       FROM (SELECT sk.id AS sku_id, sk.product_id, sk.sku_code, sk.name AS sku_name, sk.safe_stock, ${SKU_STOCK_QTY} q
+               FROM product_skus sk WHERE sk.status='active' AND sk.safe_stock>0) x
+       JOIN products p ON p.id = x.product_id
+       WHERE x.q < x.safe_stock
+       ORDER BY shortage DESC, x.sku_id LIMIT ?`
+    )
+    .all(limit)
+}
+
 export default {
   applyStockIn,
   applyStockOut,
@@ -1233,5 +1263,7 @@ export default {
   clearParamCache,
   clearInvTypeCache,
   getStockRow,
+  countBelowSafe,
+  listBelowSafe,
   DOC_TYPE_LABEL
 }

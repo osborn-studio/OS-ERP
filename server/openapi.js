@@ -303,7 +303,7 @@ export function buildOpenApi() {
     '/api/sales/returns/{id}/complete': { post: { tags: ['销售'], summary: '退货完成（已确认 → 已完成；状态不对返回 409；组织范围外 404）', parameters: [idParam], responses: { 200: jsonResp(null), 404: jsonResp(null), 409: jsonResp(null) } } },
     '/api/sales/stats': { get: { tags: ['销售'], summary: '销售分析（渠道/趋势/商品/经销商/门店排行；内部账号只含组织范围内订单）', parameters: [q('days', '统计天数，默认 30')], responses: { 200: jsonResp(null) } } },
 
-    '/api/inventory/stocks': { get: { tags: ['存货'], summary: '库存明细（仓库/批次/效期/可用量）', parameters: [q('warehouse_id', '仓库'), q('sku_id', 'SKU'), q('batch_no', '批次'), q('keyword', '关键字'), q('expiring', 'N 天内临期')], responses: { 200: jsonResp(null) } } },
+    '/api/inventory/stocks': { get: { tags: ['存货'], summary: '库存明细（仓库/批次/效期/可用量）', parameters: [q('warehouse_id', '仓库'), q('sku_id', 'SKU'), q('batch_no', '批次'), q('keyword', '关键字'), q('expiring', 'N 天内临期'), q('pageSize', '每页条数，默认 50，上限 500'), q('after_id', '游标：上一页最后一行 id（按 id 升序；total/summary 仅首页返回）')], responses: { 200: jsonResp(null) } } },
     '/api/inventory/stocks/by-sku': { get: { tags: ['存货'], summary: '按 SKU 汇总库存（跨仓库）', responses: { 200: jsonResp(null) } } },
     '/api/inventory/transactions': { get: { tags: ['存货'], summary: '库存流水（收发明细）', parameters: [q('sku_id', 'SKU'), q('warehouse_id', '仓库'), q('doc_type', '单据类型'), q('startDate', '开始日期'), q('endDate', '结束日期')], responses: { 200: jsonResp(null) } } },
     '/api/inventory/ledger': { get: { tags: ['存货'], summary: '收发存台账（期初/入库/出库/期末）', parameters: [q('sku_id', 'SKU（必填）', true), q('warehouse_id', '仓库'), q('startDate', '开始日期'), q('endDate', '结束日期')], responses: { 200: jsonResp(null) } } },

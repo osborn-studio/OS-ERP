@@ -208,3 +208,58 @@ node scripts/synth-pipeline.mjs --dir /tmp/synth-large --skus 20000 --txns 25000
 ### 仍需目标主机
 
 在 `dmserver` 上用同一条命令跑 roadmap 全量（10 万 SKU / 20 万单据 / 100 万流水），并保留 JSON；这时才谈得上 RPO/RTO 与容量。本次没有覆盖：写路径并发（生成是单线程）、长时间 soak、内存增长、真实反向代理与网络、冷盘恢复。
+
+## Z3 大库热点查询改造：迁移 061 前后（**Mac mini / 合成 medium 库 / 非目标主机**）
+
+> **范围声明**：数字来自开发机 Mac mini，合成 `medium` 库（`synth-data.mjs --skus 20000 --docs 30000 --txns 150000`，种子 20261023，`digest` 与 Y10 的 medium 一致；2 万 SKU / 84 736 库存行 / 15 万流水 / 750 经销商）。**不是目标主机（`dmserver`）结果、不是容量承诺、不是验收证据**。测量时机器还有其他任务在跑（HTTP 级 p95 抖动 ±数十 ms，见下），所以下面把"逐语句进程内计时"和"HTTP p95"分开写，并说明各自可信到什么程度。
+
+### 改了什么
+- 迁移 `061_hot_query_indexes`：`product_skus(status, safe_stock)`、`dealers(status, credit_limit)`、`inventory_stocks(sku_id, qty_on_hand)`（覆盖索引，库存按 SKU 汇总不回表；`idx_stock_sku` 是它的前缀，因 059 的 verify 仍要求其存在而保留）。只加非 UNIQUE 索引，应用到 medium 库耗时约 3.1 s。
+- `server/lib/stock.js` 新增 `countBelowSafe` / `listBelowSafe`，看板（计数与 Top 10）与 `GET /inventory/alerts` 共用一份口径；并列缺口按 sku id 升序（原写法并列顺序未定义）。
+- `GET /api/inventory/stocks`：强制分页，`pageSize` 默认 50、上限 500；游标 `after_id`，排序改为 `st.id` 升序（原为 仓库 / SKU 编码 / 到期日，跨三表无法键集定位）；响应 `{list, pageSize, has_more, next_after_id}`，`total` 与 `summary` 只在首页（无 `after_id`）返回，且只连接过滤条件用到的表。**契约变化**：`page` / `offset` 不再支持（忽略）、`page`/`totalPages` 字段不再返回、排序变化；前端库存页改为"上一页 / 下一页"游标翻页，仓库与关键字过滤交给服务端。
+- `explain-audit` 语句集 61 → 65：`dash.todo_counts` 去掉 below_safe 子查询并新增 `dash.below_safe_count`、`dash.stock_alerts`；`stock.query_*` 改为键集形态并新增 `stock.query_after`、`stock.query_total`；`stock.query_page` 的旧豁免换成"首页沿 rowid 升序取够 n 行即停"的带前提豁免，`stock.query_total` 为整表聚合豁免（只在首页执行）。`tests/hot-queries.test.mjs` 证明：没有 061 时 `dash.todo_counts×dealers`、`dash.below_safe_count×product_skus`、`stock.below_safe×product_skus` 报红，有 061 时零违规。
+
+### EXPLAIN 前后（medium 库）
+| 语句 | 改前 | 改后 |
+|---|---|---|
+| `dash.todo_counts`（经销商预警） | `SCAN dealers`（750 行）| `SEARCH dealers USING INDEX idx_dealers_status_credit (status=? AND credit_limit>?)` |
+| 看板 below_safe 计数 | `SCAN sk`（2 万行）+ 相关子查询 `SEARCH st USING INDEX idx_stock_sku` | `SEARCH sk USING COVERING INDEX idx_sku_status_safe (status=? AND safe_stock>?)` + `SEARCH st USING COVERING INDEX idx_stock_sku_qty` |
+| `stock.below_safe` | `SCAN sk` + LEFT JOIN + 两棵临时 B 树（GROUP BY / ORDER BY）| `SEARCH sk USING INDEX idx_sku_status_safe` + 覆盖索引上的相关子查询 + 一棵 ORDER BY 临时树 |
+| `GET /stocks` 翻页 | 每页 `COUNT` + `SUM` + 全量排序后 `LIMIT/OFFSET`（读满足条件的全部行）| 首页 `SCAN st`（rowid 升序，LIMIT 51 即停）+ 一次 `COUNT/SUM`；后续页 `SEARCH st USING INTEGER PRIMARY KEY (rowid>?)` |
+
+`explain-audit`（medium 库）：改前 61 条语句 **3 处违规**（与 Y10 一致）；改后 65 条语句 **0 违规**，豁免 16（含新增的 2 条，见上）、索引全扫 2。
+
+**没有采用"先预聚合再 JOIN"**：试过 `LEFT JOIN (SELECT sku_id, SUM(qty_on_hand) FROM inventory_stocks GROUP BY sku_id) t`，SQLite 会为物化子查询建 `AUTOMATIC COVERING INDEX`（explain-audit 判违规），且在 8.5 万库存行上更慢（计数 13.3 ms vs 相关子查询 9.7 ms，列表 32 ms vs 5–19 ms，进程内多次测量的量级）。覆盖索引 + 相关子查询既无自动索引又更快。残余：`listBelowSafe` 的相关子查询因子查询被展平，计划里出现 3 次，实际每个候选 SKU 最多算 3 次（同一覆盖索引范围读），2 万 SKU 全部候选时仍是 O(候选数)。
+
+### 数据口径（必须读）
+合成库里**所有 SKU 的 `safe_stock = 0`、经销商 `credit_limit = 0`**（生成器不造这两类数据），所以 `safe_stock>0` 的谓词在 061 之后直接命中空范围，"改后"在原样数据上看起来几乎免费——这是数据特征，不是通用收益。为不夸大，补了一档**增强库**：在副本上执行 `UPDATE product_skus SET safe_stock=(id%5)*40; UPDATE dealers SET credit_limit=100000, credit_used=(id%10)*10000`（80% SKU 设安全库存，186 个低于安全库存）。下面两档都给。
+
+### 逐语句进程内计时（增强库，只读连接，15 次取中位数，ms；机器有负载，只看量级）
+| 语句 | 改前（无 061，旧 SQL）| 改后（061 + 新 SQL）|
+|---|---|---|
+| below_safe 计数（看板）| 113.0 | 46.0 |
+| below_safe 列表 Top 50（预警页）| 132.7 | 38.7 |
+| 经销商信用预警计数（750 行）| 0.06 | 0.05（本表太小，索引只保证量级，不改变毫秒）|
+| 库存列表首页（含 total + summary）| 385.2 | 36.0 |
+| 库存列表第二页 | 141.5（OFFSET 50）| 0.14（`after_id`）|
+
+### `bench-api` p95（ms，`--concurrency 4 --iterations 100`，每次用同一份预热库的新拷贝，交错前/后各 3 次取中位数）
+"前"= 本分支基线提交的代码（只有 060），"后"= 含 061 与上述改动。压测库 = 合成库 + 演示种子叠加（同 Y10，见"压测库与生成库不是同一份"）。三次运行的 p95 抖动很大（见括号内原始值），**只有量级差异大的行可信**。
+
+| 接口 | 原样合成库 前 | 后 | 增强库 前 | 后 |
+|---|---|---|---|---|
+| GET /api/inventory/stocks | **2 077.8**（2127 / 2078 / 1672）| **150.5**（151 / 166 / 127）| **1 997.8**（1709 / 1998 / 2178）| **140.1**（140 / 47 / 164）|
+| GET /api/dashboard/summary | 474.9 | 431.6 | 477.3 | 403.0 |
+| GET /api/purchase/orders | 58.8 | 14.2 | 61.5 | 24.9 |
+| GET /api/reports/operating | 120.1 | 112.8 | 113.1 | 101.5 |
+| GET /api/ar/receipts | 20.4 | 16.4 | 13.9 | 2.1 |
+| GET /api/meta/health（噪声基准）| 5.7 | 7.7 | 1.8 | 16.3 |
+| GET /api/order-center/overview（未改，噪声基准）| 33.1 | 27.4 | 4.0 | 33.5 |
+
+读法：`/inventory/stocks` 约 14 倍的下降超出噪声（前三次最小值 1 672 ms 仍远大于后三次最大值 166 ms）。看板 summary 只下降约 10–15%，且在噪声之内（未改接口 `meta/health`、`order-center/overview` 在同一轮里也波动 ±10–30 ms）；看板仍是 ~400 ms，说明它的主要耗时在别处（`inventory_stocks` 整表聚合 `dash.stock_total`、销售/采购汇总等，已在 X10 里作为"整表聚合"豁免），**本工作流没有解决看板整体慢，后续需单独剖析**。0 错误，`SQLITE_BUSY` 0。和 Y10 记录的 stocks 704 ms 不同（本轮基线 ~2 000 ms）是因为测量时整机负载更高，且该接口随库存行数线性，数字不可跨轮比较。
+
+### 仍需目标主机 / 未覆盖
+- `dmserver` 上用生产规模副本复跑 `explain-audit` 与 `bench-api`；large 规模未重跑（只跑了 medium）。
+- `qty_on_hand <> 0` 的首页在头部有大段零库存行时会多读；`total` 仍是一次整表聚合（每次进入页面 / 改过滤条件付一次，翻页不付）。
+- `server/lib/metrics.js` 的 `below_safe` 指标（口径不含 `status='active'`，不同于看板）与 `routes/ai.js`、`mcp/tools.js` 里各自的低库存查询未改，仍是原写法；`metrics.js` 注册表里并没有 `dash.todo_counts`，那条语句实际在 `server/routes/dashboard.js`，本次改动落在那里。
+- 新增索引的写放大：`inventory_stocks` 每次库存变动多维护一棵 B 树（未单独测写路径）。

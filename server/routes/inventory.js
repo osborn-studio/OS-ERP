@@ -23,7 +23,7 @@ import { withWriteRetry } from '../lib/tx.js'
 import { nextDocNo } from '../lib/docno.js'
 // findAction / applyTransition 曾用于调拨的原地实现，现已收进 `lib/transfer.js`，这里不再直接用。
 import { advanceStatus, tryTransition, nowText } from '../lib/docflow.js'
-import { applyStockIn, applyStockOut, applyStockGain, pickBatches, getStockRow, DOC_TYPE_LABEL } from '../lib/stock.js'
+import { applyStockIn, applyStockOut, applyStockGain, pickBatches, getStockRow, listBelowSafe, DOC_TYPE_LABEL } from '../lib/stock.js'
 // 调拨单的建单 / 出库 / 入库只有一份实现（`lib/transfer.js`）——
 // 质检的不良品处置（让步→不合格仓、返工→待检仓）也要产生调拨单，
 // 服务层不能反向依赖路由，两份实现必然在「成本回写」上分叉。这里只负责权限、审计与 HTTP 外壳。
@@ -57,7 +57,13 @@ r.get(
   requireAuth,
   wrap((req, res) => {
     const db = getDb()
-    const { page, pageSize, offset } = pageParams(req)
+    // 分页（Z3）：强制分页，pageSize 默认 50、上限 500；游标 after_id = 上一页最后一行的 st.id，按 st.id 升序。
+    // 用 st.id 而不是 (仓库, SKU 编码, 到期日)：后者跨三张表，无法用索引做键集定位，且并发插入会让 OFFSET 翻页重复或漏行；
+    // st.id 单调递增，新插入的行只会出现在末尾，已翻过的页不会变。`page`/`offset` 不再支持（忽略）。
+    const pageSize = Math.min(Math.max(parseInt(req.query.pageSize || '50', 10) || 50, 1), 500)
+    const hasCursor = req.query.after_id !== undefined && req.query.after_id !== ''
+    const afterId = hasCursor ? Number(req.query.after_id) : 0
+    if (hasCursor && (!Number.isSafeInteger(afterId) || afterId < 0)) return fail(res, 'after_id 必须是非负整数')
     const conds = ['st.qty_on_hand <> 0']
     const params = []
     if (req.query.warehouse_id) {
@@ -90,17 +96,25 @@ r.get(
       const days = Number(req.query.expiring)
       conds.push(`st.expire_date IS NOT NULL AND st.expire_date <> '' AND st.expire_date <= date('now','localtime','+${days} day')`)
     }
-    const where = conds.length ? `WHERE ${conds.join(' AND ')}` : ''
-    const total = db.prepare(`SELECT COUNT(*) c FROM ${STOCK_FROM} ${where}`).get(...params).c
+    const where = `WHERE ${conds.join(' AND ')}`
     const rows = db
-      .prepare(`SELECT ${STOCK_SELECT} FROM ${STOCK_FROM} ${where} ORDER BY w.id, sk.sku_code, st.expire_date LIMIT ? OFFSET ?`)
-      .all(...params, pageSize, offset)
-    const sum = db
-      .prepare(
-        `SELECT COALESCE(SUM(st.qty_on_hand),0) qty, COALESCE(SUM(st.qty_on_hand*st.cost_price),0) amount FROM ${STOCK_FROM} ${where}`
-      )
-      .get(...params)
-    return paged(res, { rows, total, page, pageSize, summary: sum })
+      .prepare(`SELECT ${STOCK_SELECT} FROM ${STOCK_FROM} ${where}${hasCursor ? ' AND st.id > ?' : ''} ORDER BY st.id LIMIT ?`)
+      .all(...params, ...(hasCursor ? [afterId] : []), pageSize + 1)
+    const hasMore = rows.length > pageSize
+    if (hasMore) rows.pop()
+    const data = { list: rows, pageSize, has_more: hasMore, next_after_id: hasMore ? rows[rows.length - 1].id : null }
+    // total / summary 要扫满足条件的全部行，只在第一页（无游标）算一次，后续翻页不再付这个代价。
+    // 只连接过滤条件真正用到的表（有 FK，st 每行必有 sku/product/warehouse，连接不改变计数）。
+    if (!hasCursor) {
+      const needSkuProduct = /\b(sk|p)\./.test(conds.join(' '))
+      const from = `inventory_stocks st${needSkuProduct ? ' JOIN product_skus sk ON sk.id = st.sku_id JOIN products p ON p.id = sk.product_id' : ''}`
+      const agg = db
+        .prepare(`SELECT COUNT(*) c, COALESCE(SUM(st.qty_on_hand),0) qty, COALESCE(SUM(st.qty_on_hand*st.cost_price),0) amount FROM ${from} ${where}`)
+        .get(...params)
+      data.total = agg.c
+      data.summary = { qty: agg.qty, amount: agg.amount }
+    }
+    return ok(res, data)
   })
 )
 
@@ -245,17 +259,7 @@ r.get(
   requireAuth,
   wrap((_req, res) => {
     const db = getDb()
-    const belowSafe = db
-      .prepare(
-        `SELECT sk.id AS sku_id, sk.sku_code, sk.name AS sku_name, p.name AS product_name, sk.safe_stock,
-                COALESCE(SUM(st.qty_on_hand),0) qty_on_hand, sk.safe_stock - COALESCE(SUM(st.qty_on_hand),0) shortage
-         FROM product_skus sk JOIN products p ON p.id=sk.product_id
-         LEFT JOIN inventory_stocks st ON st.sku_id=sk.id
-         WHERE sk.status='active' AND sk.safe_stock > 0
-         GROUP BY sk.id HAVING COALESCE(SUM(st.qty_on_hand),0) < sk.safe_stock
-         ORDER BY shortage DESC LIMIT 50`
-      )
-      .all()
+    const belowSafe = listBelowSafe(db, 50)
     const expiring = db
       .prepare(
         `SELECT st.id, st.batch_no, st.expire_date, st.qty_on_hand, st.warehouse_id, sk.sku_code, sk.name AS sku_name,

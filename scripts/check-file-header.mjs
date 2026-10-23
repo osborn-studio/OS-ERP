@@ -93,6 +93,8 @@ const DECLARED = [
   // 待办范围与 Agent Token 有效状态（ADR-0015）
   'server/db/migrations/055_agent_token_revoke_reason.cjs',
   'server/db/migrations/059_indexes.cjs',
+  'server/db/migrations/061_hot_query_indexes.cjs',
+  'tests/hot-queries.test.mjs',
   'scripts/explain-audit.mjs',
   // 大库规模演练（Y10）
   'scripts/synth-data.mjs',

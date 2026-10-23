@@ -18,9 +18,9 @@
  * 页面：库存查询
  */
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import api from '../../api/client'
-import { Card, Field, Modal, Pagination, StatCard, Status, Table, Tabs, fmtInt, fmtMoney, toast, useFetch, useList } from '../../components/ui'
+import { Card, Field, Modal, StatCard, Status, Table, Tabs, fmtInt, fmtMoney, toast, useFetch, useList } from '../../components/ui'
 import { FilterBar, Inp, Sel } from '../../components/DataPage'
 import { useOpts } from '../../hooks/opts'
 import { Boxes, RefreshCw } from 'lucide-react'
@@ -29,17 +29,38 @@ export default function Stocks() {
   const o = useOpts()
   const [keyword, setKeyword] = useState('')
   const [warehouseId, setWarehouseId] = useState('')
-  const { list, total, loading, page, pageSize, setPage, reload } = useList('/inventory/stocks', { pageSize: 20 })
+  // 游标分页（Z3）：服务端按 st.id 升序，after_id = 上一页最后一行的 id；total / summary 只有第一页返回。
+  // cursors 是"已翻过页的起点栈"：[null] = 第一页，[null, 120] = 第二页（after_id=120）。过滤条件交给服务端。
+  const PAGE = 50
+  const [debounced, setDebounced] = useState('')
+  // 栈与过滤条件绑在一起：条件一变，旧栈立刻失效（同一次渲染里就回到第一页，不会拿旧游标去查新条件）
+  const filterKey = `${debounced}|${warehouseId}`
+  const [stackState, setStackState] = useState<{ key: string; stack: (number | null)[] }>({ key: '', stack: [null] })
+  const cursors = stackState.key === filterKey ? stackState.stack : [null]
+  const setCursors = (stack: (number | null)[]) => setStackState({ key: filterKey, stack })
+  const [firstPage, setFirstPage] = useState<{ total: number; summary?: any } | null>(null)
+  useEffect(() => {
+    const t = setTimeout(() => setDebounced(keyword.trim()), 300)
+    return () => clearTimeout(t)
+  }, [keyword])
+  const after = cursors[cursors.length - 1]
+  const { data, loading, reload } = useFetch<any>(
+    '/inventory/stocks',
+    { pageSize: PAGE, keyword: debounced || undefined, warehouse_id: warehouseId || undefined, after_id: after ?? undefined },
+    [cursors.length, filterKey]
+  )
+  useEffect(() => {
+    if (data && data.total !== undefined) setFirstPage({ total: data.total, summary: data.summary })
+  }, [data])
+  const list: any[] = data?.list || []
+  const total = firstPage?.total ?? 0
+  const hasMore = !!data?.has_more
   const { data: stats } = useFetch<any>('/inventory/stats')
   const [adj, setAdj] = useState<any>(null)
   const [adjForm, setAdjForm] = useState<any>({})
   const [saving, setSaving] = useState(false)
-
-  const filtered = list.filter((r: any) => {
-    if (warehouseId && String(r.warehouse_id) !== String(warehouseId)) return false
-    if (keyword && !`${r.sku_code} ${r.sku_name} ${r.product_name} ${r.batch_no}`.toLowerCase().includes(keyword.toLowerCase())) return false
-    return true
-  })
+  const shownFrom = (cursors.length - 1) * PAGE + (list.length ? 1 : 0)
+  const shownTo = (cursors.length - 1) * PAGE + list.length
 
   const adjust = async () => {
     setSaving(true)
@@ -126,11 +147,23 @@ export default function Stocks() {
               )
             }
           ]}
-          data={filtered}
+          data={list}
           loading={loading}
         />
         <div className="px-3 pb-3">
-          <Pagination page={page} pageSize={pageSize} total={total} onChange={setPage} />
+          <div className="flex items-center justify-between text-[12px] text-ink-700 pt-2">
+            <span>{list.length ? `第 ${shownFrom}–${shownTo} 条 / 共 ${total} 条` : `共 ${total} 条`}</span>
+            <span className="flex gap-2">
+              <button className="btn-ghost btn-sm" disabled={cursors.length <= 1 || loading} onClick={() => setCursors(cursors.slice(0, -1))}>上一页</button>
+              <button
+                className="btn-ghost btn-sm"
+                disabled={!hasMore || loading}
+                onClick={() => setCursors([...cursors, data.next_after_id])}
+              >
+                下一页
+              </button>
+            </span>
+          </div>
         </div>
       </Card>
 
