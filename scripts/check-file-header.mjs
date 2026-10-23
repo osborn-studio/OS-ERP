@@ -64,6 +64,10 @@ const DECLARED = [
   'tests/credit-reversal.test.mjs',
   'tests/credit-effect-format.test.mjs',
   'src/utils/credit-effect.ts',
+  // 前端 403 / 空范围 / 功能关闭提示（W3）
+  'src/utils/scope-notice.ts',
+  'src/components/ScopeNotice.tsx',
+  'tests/scope-notice.test.mjs',
   // 授信投影（ADR-0014）：credit_hold 的唯一写入者与对账守卫
   'tests/credit-hold-projection.test.mjs',
   // 待办范围与 Agent Token 有效状态（ADR-0015）

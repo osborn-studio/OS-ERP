@@ -20,6 +20,7 @@
 
 import { useState } from 'react'
 import api from '../../api/client'
+import ScopeNotice, { ScopeBlocked, firstFailure, isBlocked } from '../../components/ScopeNotice'
 import { Card, Field, Modal, StatCard, Table, Tabs, fmtInt, toast, useFetch } from '../../components/ui'
 import { FilterBar, Inp, Sel } from '../../components/DataPage'
 import { useAuth } from '../../store/auth'
@@ -45,9 +46,10 @@ export default function Notify() {
   const [tab, setTab] = useState('channels')
   const [edit, setEdit] = useState<any>(null)
 
-  const { data: meta } = useFetch<any>('/notify/meta', undefined, [])
-  const { data: ov, reload: reloadOv } = useFetch<any>('/notify/overview', undefined, [])
-  const { data: chData, loading: chLoading, reload: reloadCh } = useFetch<any>('/notify/channels', undefined, [])
+  const { data: meta, errorStatus: ms, errorCode: mc } = useFetch<any>('/notify/meta', undefined, [])
+  const { data: ov, reload: reloadOv, errorStatus: os, errorCode: oc } = useFetch<any>('/notify/overview', undefined, [])
+  const { data: chData, loading: chLoading, reload: reloadCh, errorStatus: cs, errorCode: cc } = useFetch<any>('/notify/channels', undefined, [])
+  const failure = firstFailure({ errorStatus: ms, errorCode: mc }, { errorStatus: os, errorCode: oc }, { errorStatus: cs, errorCode: cc })
 
   const channels: any[] = chData?.list || []
   const providerLabel = (code: string) =>
@@ -69,6 +71,8 @@ export default function Notify() {
     }
   }
 
+  if (isBlocked(failure)) return <ScopeBlocked failure={failure} onRetry={reloadAll} />
+
   return (
     <div>
       <div className="flex items-end justify-between mb-3 gap-3 flex-wrap">
@@ -82,6 +86,8 @@ export default function Notify() {
           <RefreshCw size={13} /> 刷新
         </button>
       </div>
+
+      <ScopeNotice failure={failure} loading={chLoading} />
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
         <StatCard label="推送渠道" value={fmtInt(ov?.channels || 0)} icon={<BellRing size={15} />} sub={`可用 ${ov?.ready || 0}`} />

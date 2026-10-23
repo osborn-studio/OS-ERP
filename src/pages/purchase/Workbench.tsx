@@ -20,6 +20,7 @@
 
 import { useNavigate } from 'react-router-dom'
 import api from '../../api/client'
+import ScopeNotice, { ScopeBlocked, firstFailure, isBlocked } from '../../components/ScopeNotice'
 import { Card, StatCard, Status, fmtInt, fmtMoney, toast, useFetch } from '../../components/ui'
 import { RefreshCw, ArrowRight, Factory } from 'lucide-react'
 
@@ -62,9 +63,10 @@ const TODO_META: Record<string, { label: string; path: string; tone: 'amber' | '
 
 export default function PurchaseWorkbench() {
   const nav = useNavigate()
-  const { data: ov, reload: r1, loading } = useFetch<any>('/purchase/chain/overview')
-  const { data: flow, reload: r2 } = useFetch<any>('/purchase/chain/flow')
-  const { data: todos, reload: r3 } = useFetch<any>('/purchase/chain/todos')
+  const { data: ov, reload: r1, loading, errorStatus: s1, errorCode: c1 } = useFetch<any>('/purchase/chain/overview')
+  const { data: flow, reload: r2, errorStatus: s2, errorCode: c2 } = useFetch<any>('/purchase/chain/flow')
+  const { data: todos, reload: r3, errorStatus: s3, errorCode: c3 } = useFetch<any>('/purchase/chain/todos')
+  const failure = firstFailure({ errorStatus: s1, errorCode: c1 }, { errorStatus: s2, errorCode: c2 }, { errorStatus: s3, errorCode: c3 })
   const refresh = () => {
     r1()
     r2()
@@ -78,6 +80,7 @@ export default function PurchaseWorkbench() {
   const inv = ov?.invoice || {}
   const st = ov?.settlement || {}
   const pay = ov?.payment || {}
+  const scopeRows = ov ? list.length + Number(req.total || 0) + Number(order.total || 0) + Number(inv.total || 0) + Number(st.open || 0) + Number(pay.total || 0) : null
 
   /** 每个业务流节点挂的待办数（按 kind 归并，界面上一眼看出堵在哪） */
   const pendingByStep: Record<string, number> = {}
@@ -103,6 +106,8 @@ export default function PurchaseWorkbench() {
     return acc
   }, {})
 
+  if (isBlocked(failure)) return <ScopeBlocked failure={failure} onRetry={refresh} />
+
   return (
     <div>
       <div className="flex items-end justify-between mb-3 gap-3 flex-wrap">
@@ -116,6 +121,8 @@ export default function PurchaseWorkbench() {
           <RefreshCw size={13} /> 刷新
         </button>
       </div>
+
+      <ScopeNotice failure={failure} rows={scopeRows} loading={loading} />
 
       {/* ---- 九环节业务流 ---- */}
       <Card className="mb-3">

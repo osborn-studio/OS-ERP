@@ -20,6 +20,7 @@
 
 import { useState } from 'react'
 import api from '../../api/client'
+import ScopeNotice, { ScopeBlocked, firstFailure, isBlocked } from '../../components/ScopeNotice'
 import { Card, Field, Modal, StatCard, Status, Table, Tabs, fmtInt, fmtMoney, toast, useFetch, useList } from '../../components/ui'
 import { FilterBar, Inp, Sel } from '../../components/DataPage'
 import { handleApprovalPending } from '../../api/approval'
@@ -69,7 +70,8 @@ export default function Payments() {
   const o = useOpts()
   const [tab, setTab] = useState('')
   const [supplierId, setSupplierId] = useState('')
-  const { list, summary, loading, reload } = useList('/purchase/payments', {})
+  const { list, summary, loading, reload, errorStatus, errorCode } = useList('/purchase/payments', {})
+  const failure = { errorStatus, errorCode }
   const [createOpen, setCreateOpen] = useState(false)
   const [detailId, setDetailId] = useState<number | null>(null)
   const { data: me } = useFetch<any>('/auth/me', undefined, [])
@@ -118,6 +120,8 @@ export default function Payments() {
     }
   }
 
+  if (isBlocked(failure)) return <ScopeBlocked failure={failure} onRetry={reload} />
+
   return (
     <div>
       <div className="flex items-end justify-between mb-3 gap-3 flex-wrap">
@@ -136,6 +140,8 @@ export default function Payments() {
           </button>
         </div>
       </div>
+
+      <ScopeNotice failure={failure} rows={loading ? null : list} loading={loading} />
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-3">
         <StatCard label="付款单张数" value={fmtInt(filtered.length)} sub="不含已作废" />
