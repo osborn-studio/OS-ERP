@@ -60,6 +60,16 @@ function Why({ a }: { a: PosActionState }) {
   return !a.enabled && a.reason ? <div role="note" data-testid="pos-action-reason" className="text-[11px] text-amber-700 mt-1 max-w-[260px]">{a.reason}</div> : null
 }
 
+/** 权限加载失败时的提示 + 重试（失败时所有受控按钮都被隐藏，必须给用户一条路） */
+function PermRetry({ failed, retry }: { failed: boolean; retry: () => void }) {
+  if (!failed) return null
+  return (
+    <div role="status" data-testid="pos-perms-failed" className="rounded-lg border border-amber-200 bg-amber-50 text-amber-800 text-[12px] p-2 mb-3">
+      权限信息加载失败，相关操作按钮暂时隐藏（不代表没有权限）。<button className="underline ml-2" onClick={retry}>重试</button>
+    </div>
+  )
+}
+
 /** 差异着色沿用中国习惯：正数（长款）用红，负数（短款）用绿 —— 这里按"钱多了"标红提醒 */
 const vColor = (v: number) => (Math.abs(v) < 0.005 ? 'text-slate-500' : v > 0 ? 'text-red-600' : 'text-emerald-600')
 
@@ -87,7 +97,7 @@ export function ShiftCenter({ ctx, reloadCtx }: { ctx: any; reloadCtx: () => voi
   const [modal, setModal] = useState<'' | 'open' | 'declare' | 'approve' | 'settle' | 'reject'>('')
   const [busy, setBusy] = useState(false)
   const [failure, setFailure] = useState<FetchFailure>({})
-  const { permissions, currentUser } = usePosPermissions()
+  const { permissions, currentUser, failed: permsFailed, retry: retryPerms } = usePosPermissions()
   const act = selectPosActions({ permissions, currentUser })
 
   const load = () => {
@@ -123,6 +133,7 @@ export function ShiftCenter({ ctx, reloadCtx }: { ctx: any; reloadCtx: () => voi
   return (
     <div className="p-3 h-full overflow-auto">
       <ScopeNotice failure={failure} loading={false} />
+      <PermRetry failed={permsFailed} retry={retryPerms} />
       {/* 当前班次 */}
       <div className="bg-white border border-ink-300 rounded-lg p-3 mb-3">
         <div className="flex items-start justify-between gap-3 flex-wrap">
@@ -164,7 +175,7 @@ export function ShiftCenter({ ctx, reloadCtx }: { ctx: any; reloadCtx: () => voi
                 <Why a={curAct.shift_approve} />
               </div>
             )}
-            <button className="btn-ghost btn-sm" onClick={() => { load(); reloadCtx() }}>
+            <button className="btn-ghost btn-sm" onClick={() => { load(); reloadCtx(); retryPerms() }}>
               <RefreshCw size={13} /> 刷新
             </button>
           </div>
@@ -862,7 +873,7 @@ export function CashDropPanel() {
   const [ref, setRef] = useState('')
   const [busy, setBusy] = useState(false)
   const [failure, setFailure] = useState<FetchFailure>({})
-  const { permissions, currentUser } = usePosPermissions()
+  const { permissions, currentUser, failed: permsFailed, retry: retryPerms } = usePosPermissions()
   const act = selectPosActions({ permissions, currentUser })
 
   const load = () => {
@@ -880,6 +891,7 @@ export function CashDropPanel() {
   return (
     <div className="p-3 h-full overflow-auto">
       <ScopeNotice failure={failure} loading={false} />
+      <PermRetry failed={permsFailed} retry={retryPerms} />
       <div className="bg-white border border-ink-300 rounded-lg p-3 mb-3">
         <div className="text-[13px] font-medium text-ink-900 title-serif mb-1">现金缴款</div>
         <p className="text-[12px] text-slate-500 leading-5 mb-2">
@@ -1025,7 +1037,7 @@ function StoreCheckPanel() {
   const [busy, setBusy] = useState(false)
   const [reason, setReason] = useState('')
   const [failure, setFailure] = useState<FetchFailure>({})
-  const { permissions, currentUser } = usePosPermissions()
+  const { permissions, currentUser, failed: permsFailed, retry: retryPerms } = usePosPermissions()
   const act = selectPosActions({ permissions, currentUser })
 
   const load = () => api.get('/pos/stock-checks').then((r: any) => { setRows(r.data || r); setFailure({}) }).catch((e: any) => setFailure(toFailure(e)))
@@ -1053,6 +1065,7 @@ function StoreCheckPanel() {
   return (
     <div className="space-y-3">
       <ScopeNotice failure={failure} loading={false} />
+      <PermRetry failed={permsFailed} retry={retryPerms} />
       <div className="bg-white border border-ink-300 rounded-lg p-3">
         <div className="flex items-start justify-between gap-2 flex-wrap">
           <div>

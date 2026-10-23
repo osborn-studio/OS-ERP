@@ -17,13 +17,15 @@ export function toFailure(e: unknown): FetchFailure {
 
 export function usePosPermissions() {
   const [permissions, setPermissions] = useState<string[] | null>(null)
+  const [failed, setFailed] = useState(false)
+  const [tick, setTick] = useState(0)
   useEffect(() => {
     let live = true
     api.get('/auth/my-permissions')
-      .then((r: any) => { if (live) setPermissions(Array.isArray(r.data?.permissions) ? r.data.permissions : null) })
-      .catch(() => { if (live) setPermissions(null) })
+      .then((r: any) => { if (live) { setPermissions(Array.isArray(r.data?.permissions) ? r.data.permissions : null); setFailed(!Array.isArray(r.data?.permissions)) } })
+      .catch(() => { if (live) { setPermissions(null); setFailed(true) } })
     return () => { live = false }
-  }, [])
+  }, [tick])
   const u = getUser()
-  return { permissions, currentUser: u ? { id: u.id, name: u.name, username: u.username } : null }
+  return { permissions, failed, retry: () => setTick((n) => n + 1), currentUser: u ? { id: u.id, name: u.name, username: u.username } : null }
 }

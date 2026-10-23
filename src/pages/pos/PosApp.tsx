@@ -33,6 +33,9 @@ import { PAY_METHODS, ShiftCenter, CashDropPanel, StoreOps } from './ShiftPanels
 import { ScopeBlocked, isBlocked, type FetchFailure } from '../../components/ScopeNotice'
 import { toFailure } from './usePosPermissions'
 
+/** 依赖 /pos/context（需要 pos.view）的页签；库存 / 要货 / 收货 / 缴款 / 订单各有自己的权限点与失败提示，不能被 context 的 403 一并挡掉 */
+const CTX_TABS: string[] = ['cash', 'shift', 'storeop']
+
 /** 门店 POS 收银：独立触屏界面，本地单 + 日结上传总部 */
 export default function PosApp() {
   const nav = useNavigate()
@@ -122,12 +125,12 @@ export default function PosApp() {
 
       {/* 内容区 */}
       <div className="flex-1 overflow-hidden">
-        {isBlocked(ctxFailure) && (
+        {isBlocked(ctxFailure) && CTX_TABS.includes(tab) && (
           <div className="p-3">
             <ScopeBlocked failure={ctxFailure} onRetry={() => api.get('/pos/context').then((r: any) => { setCtx(r.data || r); setCtxFailure({}) }).catch((e: any) => setCtxFailure(toFailure(e)))} />
           </div>
         )}
-        {!isBlocked(ctxFailure) && <>
+        {!(isBlocked(ctxFailure) && CTX_TABS.includes(tab)) && <>
         {tab === 'cash' && <Cashier ctx={ctx} onSynced={() => api.get('/pos/context').then((r: any) => setCtx(r.data || r))} />}
         {tab === 'shift' && <ShiftCenter ctx={ctx} reloadCtx={() => api.get('/pos/context').then((r: any) => setCtx(r.data || r)).catch(() => {})} />}
         {tab === 'drop' && <CashDropPanel />}
