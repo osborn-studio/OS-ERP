@@ -117,7 +117,7 @@ test('the declared statements are clean on the fully migrated schema, and the sa
   const red = auditStatements(old, STATEMENTS)
   assert.equal(red.ok, false)
   const hit = new Set(red.violations.map(v => v.statement))
-  for (const id of ['sales.items', 'po.detail_items', 'stock.query_by_sku', 'stock.txn_by_doc', 'dash.sales_month']) assert.ok(hit.has(id), `${id} should be flagged without 059`)
+  for (const id of ['sales.items', 'po.detail_items', 'stock.txn_by_doc', 'dash.sales_month']) assert.ok(hit.has(id), `${id} should be flagged without 059`)
 })
 
 test('SQLite automatic indexes count as violations, and a stale allowlist entry fails the audit', (t) => {

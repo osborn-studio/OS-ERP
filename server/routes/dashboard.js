@@ -17,6 +17,7 @@ import { Router } from 'express'
 import { getDb } from '../db/index.js'
 import { ok, wrap } from '../lib/http.js'
 import { requireAuth, requireInternal, requireGlobalData } from '../middleware/auth.js'
+import { countBelowSafe, listBelowSafe } from '../lib/stock.js'
 
 const r = Router()
 r.use(requireAuth, requireInternal('总部经营看板'), requireGlobalData('总部经营看板'))
@@ -55,17 +56,18 @@ r.get(
       `SELECT COALESCE(SUM(receivable_amount - paid_amount),0) unpaid FROM sales_orders WHERE status NOT IN ('cancelled','draft')`
     )
     const payable = one(`SELECT COALESCE(SUM(total_amount),0) amount FROM purchase_orders WHERE status IN ('submitted','approved','received')`)
-    const alerts = one(
+    const alertsRow = one(
       `SELECT
         (SELECT COUNT(*) FROM sales_orders WHERE status='confirmed') AS pending_delivery,
         (SELECT COUNT(*) FROM purchase_orders WHERE status IN ('submitted','approved')) AS pending_receipt,
         (SELECT COUNT(*) FROM oms_orders WHERE status='pending') AS oms_pending,
-        (SELECT COUNT(*) FROM product_skus sk WHERE sk.status='active' AND sk.safe_stock>0
-           AND COALESCE((SELECT SUM(qty_on_hand) FROM inventory_stocks st WHERE st.sku_id=sk.id),0) < sk.safe_stock) AS below_safe,
         (SELECT COUNT(*) FROM inventory_stocks st WHERE st.qty_on_hand>0 AND st.expire_date IS NOT NULL AND st.expire_date <> ''
            AND st.expire_date <= date('now','localtime','+90 day')) AS expiring,
         (SELECT COUNT(*) FROM dealers WHERE status='active' AND credit_limit>0 AND credit_used*1.0/credit_limit>=0.8) AS credit_alert`
     )
+    // below_safe 走 lib/stock.js 的预聚合口径（Z3）；对象键顺序保持与改写前一致
+    const { pending_delivery, pending_receipt, oms_pending, expiring, credit_alert } = alertsRow
+    const alerts = { pending_delivery, pending_receipt, oms_pending, below_safe: countBelowSafe(db), expiring, credit_alert }
     const growth = lastMonth.amount > 0 ? Number((((month.amount - lastMonth.amount) / lastMonth.amount) * 100).toFixed(1)) : null
 
     return ok(res, { today, month, lastMonth, purchaseMonth, omsMonth, inventory, receivable, payable, alerts, growth })
@@ -175,16 +177,8 @@ r.get(
          FROM oms_orders o JOIN platforms pf ON pf.id=o.platform_id WHERE o.status='pending' ORDER BY o.order_time LIMIT 10`
       )
       .all()
-    const stockAlerts = db
-      .prepare(
-        `SELECT sk.id AS sku_id, sk.sku_code, sk.name AS sku_name, p.name AS product_name, sk.safe_stock,
-                COALESCE(SUM(st.qty_on_hand),0) qty_on_hand
-         FROM product_skus sk JOIN products p ON p.id=sk.product_id LEFT JOIN inventory_stocks st ON st.sku_id=sk.id
-         WHERE sk.status='active' AND sk.safe_stock>0
-         GROUP BY sk.id HAVING COALESCE(SUM(st.qty_on_hand),0) < sk.safe_stock
-         ORDER BY (sk.safe_stock - COALESCE(SUM(st.qty_on_hand),0)) DESC LIMIT 10`
-      )
-      .all()
+    // 与预警页同一口径（lib/stock.js），看板只取前 10 且不带 shortage 字段
+    const stockAlerts = listBelowSafe(db, 10).map(({ shortage, ...row }) => row)
     const expiring = db
       .prepare(
         `SELECT st.id, st.batch_no, st.expire_date, st.qty_on_hand, sk.sku_code, sk.name AS sku_name, w.name AS warehouse_name,
