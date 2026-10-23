@@ -52,6 +52,7 @@ import { assertWarehouseUsable, assertWarehouseAllowedForDoc } from './warehouse
 // 读未登记的键会抛 `SETTING_UNKNOWN`（宁可炸，也不要安静地用某个默认值）——
 // 这正是三个"幽灵配置"的成因。
 import { readSetting } from './settings.js'
+import { registerDocScopeBuilder } from './doc-scope-registry.js'
 
 const nowStr = () => localNow()
 // 业务日一律走 dates.js 的本地口径。原来是 `toISOString()` 截取 —— UTC 日期，
@@ -2617,3 +2618,10 @@ claimTransitionEffect(
     }),
   { entry: 'POST /api/purchase/payments/:id/:action' }
 )
+
+// 单据流读接口（ADR-0032）：把采购范围谓词登记给 docflow 的 DOC_SCOPE_RESOLVERS。`spec.via` ∈ 'org' | 'wh'，
+// 判据仍只有上面的 purchaseScopeSql 一份；这里只做形状适配（对别名 t 的完整谓词）。
+registerDocScopeBuilder('purchase', ({ orgScope }, spec) => {
+  const s = purchaseScopeSql(orgScope, 't')
+  return s.empty ? null : { sql: s[spec.via], params: s.params }
+})

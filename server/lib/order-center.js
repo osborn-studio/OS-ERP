@@ -41,6 +41,7 @@ import { localDate, localNow, addDays } from './dates.js'
 import { writeOcCredit, releaseByOrder, reoccupyByOrder, ocCreditUsed } from './oc-credit.js'
 import { ensureAr, ensureOcAr, AR_SOURCE_OC } from './ar.js'
 import { readSetting } from './settings.js'
+import { registerDocScopeBuilder } from './doc-scope-registry.js'
 // 仓库类型的**唯一出处**。可发货仓型不再在本文件手写清单（那正是下面那处缺陷的成因）：
 // 手写的 `('normal','regional','central','kitchen','consignment')` 里 `regional` 是拼错的
 // （真值 `region`）、`consignment` 不在值域里 ⇒ 区域仓被整类漏掉且**不报错**。
@@ -1468,3 +1469,14 @@ export default {
   buildStatement, getStatement, settleStatement, confirmStatement,
   statementBalance, closeStatement, voidStatement, overview
 }
+
+// 单据流读接口（ADR-0032）：订货中心范围谓词登记给 docflow 的 DOC_SCOPE_RESOLVERS（按 customer_id 收口，同 ocScope）。
+registerDocScopeBuilder('order-center', ({ db, user, orgScope }) => {
+  let s
+  try {
+    s = ocScope(db, { user: user || {}, orgScope }, 't.customer_id')
+  } catch {
+    return null // 外部主体未绑定订货主体等：失败关闭
+  }
+  return s.empty ? null : { sql: s.sql, params: s.params }
+})

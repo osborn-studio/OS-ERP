@@ -95,6 +95,9 @@ const DECLARED = [
   'tests/order-center-scope.test.mjs',
   // 销售域组织范围收口（ADR-0026）
   'tests/sales-scope.test.mjs',
+  // 单据流读接口按账号数据范围过滤（ADR-0032）
+  'tests/docflow-scope.test.mjs',
+  'server/lib/doc-scope-registry.js',
   // 脚本数据目录卫生与单实例安装验收（ADR-0019）
   'scripts/check-data-paths.mjs',
   'scripts/check-route-authz.mjs',
