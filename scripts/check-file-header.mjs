@@ -94,6 +94,12 @@ const DECLARED = [
   'server/db/migrations/055_agent_token_revoke_reason.cjs',
   'server/db/migrations/059_indexes.cjs',
   'scripts/explain-audit.mjs',
+  // 大库规模演练（Y10）
+  'scripts/synth-data.mjs',
+  'scripts/synth-pipeline.mjs',
+  'scripts/lib/safe-path.mjs',
+  'scripts/lib/source-identity.mjs',
+  'tests/synth-data.test.mjs',
   'tests/authz-followups.test.mjs',
   // 采购链读接口范围收口（ADR-0017）
   'tests/purchase-chain-scope.test.mjs',
