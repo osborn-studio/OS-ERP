@@ -13,6 +13,9 @@ const MALL_TOKEN_KEY = 'gml_mall_token'
 const MALL_GENERATION_KEY = 'os_egp_mall_generation'
 export const AUTH_CHANGED_EVENT = 'os-egp:auth-changed'
 export const FEATURE_DISABLED_EVENT = 'os-egp:feature-disabled'
+/** Cookie transport (ADR-0036): the JWT lives only in an HttpOnly cookie; localStorage keeps this non-secret marker so tab sync and 401 handling work unchanged. */
+export const COOKIE_SESSION_MARKER = '__os_erp_cookie_session__'
+const CSRF_COOKIE = 'gml_csrf'
 export type AuthSnapshot = { token: string; generation: string }
 
 const changed = () => window.dispatchEvent(new CustomEvent(AUTH_CHANGED_EVENT))
@@ -37,6 +40,12 @@ export function setSession(token: string, user: any, industry: string) {
   localStorage.setItem(GENERATION_KEY, generation())
   localStorage.removeItem(NOTICE_KEY)
   changed()
+}
+export function setCookieSession(user: any, industry: string) { setSession(COOKIE_SESSION_MARKER, user, industry) }
+function csrfToken() {
+  const pair = (typeof document === 'undefined' ? '' : document.cookie || '').split(';').map(p => p.trim()).find(p => p.startsWith(`${CSRF_COOKIE}=`))
+  if (!pair) return ''
+  try { return decodeURIComponent(pair.slice(CSRF_COOKIE.length + 1)) } catch { return '' }
 }
 export function setToken(token: string) {
   localStorage.removeItem(USER_KEY)
@@ -100,11 +109,14 @@ function prepare(path: string, options: RequestInit = {}, json = true) {
   const snapshot = getAuthSnapshot()
   const mall = { token: getMallToken(), generation: localStorage.getItem(MALL_GENERATION_KEY) || '' }
   const headers = new Headers(options.headers)
-  headers.delete('Authorization'); headers.delete('x-mall-token'); headers.delete('x-industry')
+  headers.delete('Authorization'); headers.delete('x-mall-token'); headers.delete('x-industry'); headers.delete('x-csrf-token')
   if (json) headers.set('Content-Type', 'application/json')
   if (!isLogin) {
     if (isMall && mall.token) headers.set('x-mall-token', mall.token)
-    else if (!isMall && snapshot.token) headers.set('Authorization', `Bearer ${snapshot.token}`)
+    else if (!isMall && snapshot.token === COOKIE_SESSION_MARKER) {
+      // Cookie transport: the browser attaches the session cookie; unsafe methods must echo the CSRF cookie (double submit).
+      if (!/^(?:GET|HEAD|OPTIONS)$/i.test(options.method || 'GET')) { const csrf = csrfToken(); if (csrf) headers.set('x-csrf-token', csrf) }
+    } else if (!isMall && snapshot.token) headers.set('Authorization', `Bearer ${snapshot.token}`)
   }
   const industry = getIndustry()
   if (industry) headers.set('x-industry', industry)

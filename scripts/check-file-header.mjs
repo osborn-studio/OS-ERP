@@ -34,11 +34,15 @@ const DECLARED = [
   'server/index.js',
   'server/lib/audit-trail.js',
   'server/lib/logger.js',
+  'server/lib/trust-proxy.js',
   'server/lib/redact.js',
   'server/middleware/audit.js',
+  'server/middleware/security-headers.js',
+  'server/middleware/session-transport.js',
   'server/version.js',
   'server/mcp/catalog.js',
   'server/mcp/delegation.js',
+  'server/mcp/doc-perms.js',
   'server/mcp/tokens.js',
   'server/db/migrations/053_agent_token_owner_version.cjs',
   'server/lib/outbound-url.js',
@@ -46,10 +50,18 @@ const DECLARED = [
   'server/lib/backup-crypto.js',
   'scripts/check-mcp-coverage.mjs',
   'scripts/gen-sbom.mjs',
+  'scripts/release-candidate.mjs',
+  'scripts/gen-changelog.mjs',
+  'scripts/gen-codemap.mjs',
   'scripts/lib/runtime-closure.mjs',
   'scripts/gen-third-party-notices.mjs',
   'scripts/check-file-header.mjs',
   'scripts/db-backup.mjs',
+  // 数据保留与个人信息处理（ADR-0030）
+  'scripts/retention.mjs',
+  'scripts/privacy-export.mjs',
+  'scripts/privacy-erase.mjs',
+  'scripts/lib/privacy-common.mjs',
   'server/db/migrations/runner.js',
   'server/lib/backup-dir.js',
   // 恢复 / 升级回退演练（ADR-0016）：共用底座 + 两个演练入口
@@ -62,28 +74,64 @@ const DECLARED = [
   'src/constants/brand.ts',
   'src/constants/capabilities.ts',
   'src/pages/system/McpCenter.tsx',
+  'src/pages/system/MyScope.tsx',
+  'tests/my-scope.test.mjs',
   'tailwind.config.js',
   // 授信释放台账（ADR-0013）：释放/逆向的唯一实现、建表迁移与守卫测试
   'server/lib/credit-release.js',
   'server/db/migrations/052_credit_release_ledger.cjs',
   'tests/credit-reversal.test.mjs',
+  'tests/release-candidate.test.mjs',
   'tests/credit-effect-format.test.mjs',
   'src/utils/credit-effect.ts',
   // 前端 403 / 空范围 / 功能关闭提示（W3）
   'src/utils/scope-notice.ts',
   'src/components/ScopeNotice.tsx',
   'tests/scope-notice.test.mjs',
+  // 奇门网关凭据（ADR-0033）
+  'server/lib/qimen-auth.js',
+  'server/db/migrations/060_qimen_secrets.cjs',
+  'src/utils/qimen-sign.ts',
+  'tests/qimen-auth.test.mjs',
+  'tests/security-headers.test.mjs',
   // 授信投影（ADR-0014）：credit_hold 的唯一写入者与对账守卫
   'tests/credit-hold-projection.test.mjs',
   // 待办范围与 Agent Token 有效状态（ADR-0015）
   'server/db/migrations/055_agent_token_revoke_reason.cjs',
+  'server/db/migrations/059_indexes.cjs',
+  'server/db/migrations/061_hot_query_indexes.cjs',
+  'tests/hot-queries.test.mjs',
+  'scripts/explain-audit.mjs',
+  // 大库规模演练（Y10）
+  'scripts/synth-data.mjs',
+  'scripts/synth-pipeline.mjs',
+  'scripts/lib/safe-path.mjs',
+  'scripts/lib/source-identity.mjs',
+  'tests/synth-data.test.mjs',
   'tests/authz-followups.test.mjs',
   // 采购链读接口范围收口（ADR-0017）
   'tests/purchase-chain-scope.test.mjs',
   'tests/purchase-chain-detail-scope.test.mjs',
+  // 审批域组织范围（ADR-0037）
+  'tests/approval-scope.test.mjs',
+  'tests/purchase-action-scope.test.mjs',
+  'tests/inventory-scope.test.mjs',
+  // 杂项授权缺口收口（ADR-0028）
+  'tests/authz-misc.test.mjs',
+  // 订货中心组织范围（ADR-0027）
+  'tests/order-center-scope.test.mjs',
+  // 销售域组织范围收口（ADR-0026）
+  'tests/sales-scope.test.mjs',
+  // 单据流读接口按账号数据范围过滤（ADR-0032）
+  'tests/docflow-scope.test.mjs',
+  // OMS 读接口与 MCP 单据历史按组织范围收口（ADR-0039）
+  'tests/oms-scope.test.mjs',
+  'server/lib/doc-scope-registry.js',
   // 脚本数据目录卫生与单实例安装验收（ADR-0019）
   'scripts/check-data-paths.mjs',
   'scripts/check-route-authz.mjs',
+  'scripts/upstream-similarity.mjs',
+  'tests/upstream-provenance.test.mjs',
   'tests/route-authz-guard.test.mjs',
   'scripts/db-inventory.mjs',
   'scripts/local-manage.mjs',
@@ -95,7 +143,19 @@ const DECLARED = [
   'tests/funds-maker-checker.test.mjs',
   // 付款释放台账（ADR-0024）
   'server/db/migrations/057_payment_release_ledger.cjs',
-  'tests/payment-reversal.test.mjs'
+  'tests/payment-reversal.test.mjs',
+  // 门店 POS 路由授权（ADR-0025）
+  'server/db/migrations/058_pos_permissions.cjs',
+  'tests/pos-authz.test.mjs',
+  // POS 前端按权限显示（Y5）
+  'src/utils/pos-actions.ts',
+  'src/pages/pos/usePosPermissions.ts',
+  'tests/pos-actions.test.mjs',
+  // 写路径并发与 SQLITE_BUSY 治理（ADR-0035）
+  'server/lib/tx.js',
+  'scripts/lib/bench-contender.mjs',
+  'tests/write-contention.test.mjs',
+  'tests/fixtures/write-contention-worker.mjs'
 ]
 
 /** 参与覆盖率统计的源文件（**排除** node_modules / dist / data） */

@@ -11,7 +11,7 @@
  */
 
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react'
-import api, { getUser, setUser, getIndustry, setSession, getAuthSnapshot, isCurrentSession, subscribeAuth, getSessionNotice, dismissSessionNotice } from '../api/client'
+import api, { getUser, setUser, getIndustry, setSession, setCookieSession, getAuthSnapshot, isCurrentSession, subscribeAuth, getSessionNotice, dismissSessionNotice } from '../api/client'
 import { logoutAll, changePassword, type LogoutResult } from './session'
 
 type AuthState = {
@@ -84,10 +84,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       const code = ind || industry
       const res = await api.post('/auth/login', { username, password, industry: code })
-      const { token: tk, user: u } = res.data
+      const { token: tk, user: u, transport } = res.data
       if (sequence !== loginSequence.current || !isCurrentSession(snapshot)) throw new Error('登录状态已在其他操作中变更，请重试。')
-      if (typeof tk !== 'string' || !tk || !u) throw new Error('登录响应缺少有效会话。')
-      setSession(tk, u, code)
+      if (transport === 'cookie') {
+        // Cookie transport (ADR-0036): the server set the HttpOnly session cookie; no JWT reaches JavaScript.
+        if (!u) throw new Error('登录响应缺少有效会话。')
+        setCookieSession(u, code)
+      } else {
+        if (typeof tk !== 'string' || !tk || !u) throw new Error('登录响应缺少有效会话。')
+        setSession(tk, u, code)
+      }
       return u
     } finally {
       if (sequence === loginSequence.current) setLoading(false)

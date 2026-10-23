@@ -50,12 +50,19 @@ function fingerprint(dir, relative = '') {
   }
 }
 // .github 也进副本：tests/docker-smoke-policy.test.mjs 静态核对 CI 工作流。
-for (const name of ['server', 'src', 'scripts', 'tests', 'public', 'reusable', '.github']) {
-  if (existsSync(path.join(ROOT, name))) cpSync(path.join(ROOT, name), path.join(repo, name), { recursive: true })
-}
-for (const item of readdirSync(ROOT, { withFileTypes: true })) {
-  // .env* 不进副本（可能含真实密钥）；.env.example 是无值模板，Docker 策略测试要读它。
-  if (item.isFile() && (!item.name.startsWith('.env') || item.name === '.env.example')) cpSync(path.join(ROOT, item.name), path.join(repo, item.name))
+// 副本内容 = git 跟踪的全部文件 + 未忽略的新文件（`git ls-files -co --exclude-standard`），
+// 这样新测试读到的任何仓库文件（docs/本地交付、CHANGELOG、LICENSE…）都在副本里，不再靠目录白名单追着补。
+// 排除：data/（运行库）、.env*（可能含真实密钥，.env.example 例外）、node_modules（下面单独 symlink）。
+const tracked = spawnSync('git', ['ls-files', '-co', '--exclude-standard', '-z'], { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
+if (tracked.status !== 0) throw new Error('git ls-files failed; the isolated copy needs a git checkout')
+for (const rel of tracked.stdout.split('\0').filter(Boolean)) {
+  if (rel === 'data' || rel.startsWith('data/') || rel.startsWith('node_modules/')) continue
+  const base = path.basename(rel)
+  if (base.startsWith('.env') && base !== '.env.example') continue
+  const src = path.join(ROOT, rel)
+  if (!existsSync(src)) continue
+  mkdirSync(path.dirname(path.join(repo, rel)), { recursive: true })
+  cpSync(src, path.join(repo, rel))
 }
 fingerprint(repo)
 symlinkSync(path.join(ROOT, 'node_modules'), path.join(repo, 'node_modules'))

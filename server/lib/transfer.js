@@ -33,7 +33,7 @@
 
 import { applyTransition, findAction } from './docflow.js'
 import { nextDocNo } from './docno.js'
-import { applyStockIn, applyStockOut } from './stock.js'
+import { applyStockIn, applyStockOut, stockScopeSql, assertWarehouseInScope } from './stock.js'
 import { localDate } from './dates.js'
 
 const num = (v) => Number(v) || 0
@@ -212,4 +212,49 @@ export function receiveTransfer(db, id, actorRaw = {}, { receiveDate = null, rem
   return { id, doc_no: head.doc_no }
 }
 
-export default { createTransfer, shipTransfer, receiveTransfer, TRANSFER_TYPES }
+// ---------------------------------------------------------------------------
+// 组织范围（ADR-0038）：调拨单有调出 / 调入两个仓，各自归属组织不一定相同。
+//   · 读（列表 / 详情）：任一端在范围内即可见；
+//   · 写（建单 / 出库 / 收货 / 提交 / 作废）：两端都必须在范围内 —— 否则一次调拨就能把货从别的组织的仓搬走，
+//     或把货塞进别的组织的仓。建单的目标越界 ⇒ 403；既有单据一端越界 ⇒ 403（可读但不可动）；两端皆外 ⇒ 与不存在同形 404。
+// 判据只有 `stockScopeSql` 一份；全局范围恒通过，lib 内部调用（质检处置等）不传 orgScope 口径不变。
+// ---------------------------------------------------------------------------
+
+/** 调拨单读范围谓词（任一端在范围内）。`alias` 是 `stock_transfers` 的别名。 */
+export function transferScopeSql(orgScope, alias = 't') {
+  const f = stockScopeSql(orgScope, alias, 'from_warehouse_id')
+  const t = stockScopeSql(orgScope, alias, 'to_warehouse_id')
+  if (f.empty) return { sql: '1=0', params: [], empty: true }
+  if (!f.params.length) return { sql: '1=1', params: [], empty: false }
+  return { sql: `(${f.sql} OR ${t.sql})`, params: [...f.params, ...t.params], empty: false }
+}
+
+/** 建单目标：调出 / 调入仓都必须在范围内，否则 403。 */
+export function assertTransferTargetsInScope(db, fromWarehouseId, toWarehouseId, orgScope) {
+  assertWarehouseInScope(db, fromWarehouseId, orgScope)
+  assertWarehouseInScope(db, toWarehouseId, orgScope)
+}
+
+/**
+ * 取调拨单并判范围；`write: true` 时两端都须在范围内。返回表头行。
+ * 两端皆外 / 不存在 ⇒ 404（同形）；可见但写时一端越界 ⇒ 403。
+ */
+export function assertTransferInScope(db, id, orgScope, { write = false } = {}) {
+  const sc = transferScopeSql(orgScope, 't')
+  const head = Number.isFinite(Number(id))
+    ? db.prepare(`SELECT t.* FROM stock_transfers t WHERE t.id=? AND ${sc.sql}`).get(Number(id), ...sc.params)
+    : null
+  if (!head) {
+    const e = new Error('调拨单不存在')
+    e.status = 404
+    e.code = 'DOC_NOT_FOUND'
+    throw e
+  }
+  if (write) assertTransferTargetsInScope(db, head.from_warehouse_id, head.to_warehouse_id, orgScope)
+  return head
+}
+
+export default {
+  createTransfer, shipTransfer, receiveTransfer, TRANSFER_TYPES,
+  transferScopeSql, assertTransferTargetsInScope, assertTransferInScope
+}

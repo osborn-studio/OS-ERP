@@ -17,6 +17,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 import Database from 'better-sqlite3'
 import { createToken } from '../server/mcp/tokens.js'
 import { TOOLS } from '../server/mcp/tools.js'
+import { DOC_VIEW_PERMS } from '../server/mcp/doc-perms.js'
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url))
 const secret = () => randomBytes(24).toString('base64url')
@@ -88,10 +89,13 @@ function outcome(r) {
 
 // 允许的"范围外"拒绝码：ORG_OUT_OF_SCOPE 是约定码；单据类工具按"越界当作不存在"报 404 类码（不泄露存在性）
 const SCOPE_DENY_CODES = new Set(['ORG_OUT_OF_SCOPE', 'NOT_FOUND', 'TARGET_NOT_FOUND', 'DOC_NOT_FOUND', 'REQUISITION_NOT_FOUND', 'ORDER_NOT_FOUND', 'WAREHOUSE_NOT_FOUND', 'APPROVAL_NOT_FOUND'])
+const DOC_READ_TOOLS = new Set(['doc.list_types', 'doc.query', 'doc.get'])
 const PERM_DENY_CODES = new Set(['TOKEN_OWNER_PERM_DENIED', 'PERM_DENIED'])
-// 这几个读工具在 HTTP 侧（dashboard / docflow / 组织树）同样只要登录、没有功能权限点，MCP 与之同口径；
+// 这两个读工具在 HTTP 侧（dashboard / 组织树）同样只要登录、没有功能权限点，MCP 与之同口径；
 // 它们的"权限状态"格子记为 NO_PERM_POINT（不是漏判），范围与停用两格仍照常断言。
-const PERM_FREE_READS = new Set(['report.dashboard_kpi', 'org.tree', 'doc.list_types', 'doc.query', 'doc.get'])
+// X5：doc.list_types / doc.query / doc.get 已按单据类型校验所有者的查看权限（server/mcp/doc-perms.js），
+// 不再属于此列表——权限移除状态下它们必须是 DENIED（TOKEN_OWNER_PERM_DENIED）。
+const PERM_FREE_READS = new Set(['report.dashboard_kpi', 'org.tree'])
 // 读工具在范围外的期望：'empty' = 列表必须为空；'global' = 主数据 / 字典 / 无组织归属，不按组织过滤（与 HTTP 同口径）
 const READ_SCOPE_EXPECT = {
   'master.search_products': 'global', 'master.get_product_360': 'global', 'master.list_partners': 'global',
@@ -286,6 +290,8 @@ test('MCP delegation matrix: every tool x {owner inactive, permission removed, s
       if (needs.length) result = PERM_DENY_CODES.has(r.final.code) && r.final.kind === 'tool_error' ? 'DENIED' : 'LEAK'
       else if (PERM_FREE_READS.has(tool.name)) result = r.final.kind === 'ok' ? 'NO_PERM_POINT' : 'LEAK'
       else result = r.final.kind === 'tool_error' && PERM_DENY_CODES.has(r.final.code) ? 'DENIED' : 'LEAK'
+      // X5：通用单据读工具必须是精确的 TOKEN_OWNER_PERM_DENIED，不是别的 403/404
+      if (DOC_READ_TOOLS.has(tool.name) && !(result === 'DENIED' && r.final.code === 'TOKEN_OWNER_PERM_DENIED')) result = 'LEAK'
       if (changed.length) result = 'LEAK'
       record(tool, 'permission_removed', { result, code: r.final.code, removed: permFree ? 'ALL_ROLE_PERMS' : needs, rows_changed: changed })
       if (result === 'LEAK') failures.push(`permission_removed ${tool.name}: ${r.final.kind}/${r.final.code} ${changed.join(';')}`)
@@ -341,6 +347,133 @@ test('MCP delegation matrix: every tool x {owner inactive, permission removed, s
     db.prepare('UPDATE users SET org_id=NULL, data_scope=? WHERE id=?').run('all', ownerId)
   }
 
+  // ---- 状态 5（Z8）：写型工具先成功一次（幂等缓存落下），所有者随后失权 / 缩范围，再用同一幂等键重放 ----
+  // 重放必须得到**当前**错误（权限点 / 数据范围），而不是缓存里的旧结果；业务表行数不变；
+  // 失权恢复之后同一键才回放缓存（_idempotent_replay），且仍不新增任何业务行。
+  matrix.replay_state = { state: 'replay_after_permission_loss', tools: {} }
+  {
+    const replayFailures = []
+    for (const tool of tools.filter((x) => x.level === 'write')) {
+      const needs = tool.perms || []
+      const key = `matrix-replay-${tool.name}-${Date.now()}-${++seq}`
+      const args = { ...baseline[tool.name].args, idempotency_key: key }
+      const first = await mcp('tools/call', { name: tool.name, arguments: args }, token)
+      if (outcome(first).kind !== 'ok') {
+        matrix.replay_state.tools[tool.name] = { result: 'NO_CACHE', first: outcome(first).code }
+        continue
+      }
+      const cell = {}
+      // ① 权限点被撤
+      dropPerms(needs.length ? needs : fullRolePerms)
+      try {
+        const before = snapshot()
+        const r = await mcp('tools/call', { name: tool.name, arguments: args }, token)
+        const o = outcome(r)
+        const changed = diff(before, snapshot())
+        cell.permission_removed = { code: o.code, replayed: r.body?.result?._idempotent_replay === true, rows_changed: changed }
+        if (!(o.kind === 'tool_error' && PERM_DENY_CODES.has(o.code)) && !(o.kind === 'tool_error' && SCOPE_DENY_CODES.has(o.code)) || cell.permission_removed.replayed || changed.length) {
+          replayFailures.push(`replay permission_removed ${tool.name}: ${o.kind}/${o.code} replayed=${cell.permission_removed.replayed} ${changed.join(';')}`)
+        }
+      } finally {
+        restorePerms()
+      }
+      // ② 数据范围被缩到无关组织
+      db.prepare("UPDATE users SET org_id=?, data_scope='org' WHERE id=?").run(outsideOrg.id, ownerId)
+      try {
+        const before = snapshot()
+        const r = await mcp('tools/call', { name: tool.name, arguments: args }, token)
+        const o = outcome(r)
+        const changed = diff(before, snapshot())
+        cell.scope_excluded = { code: o.code, replayed: r.body?.result?._idempotent_replay === true, rows_changed: changed }
+        if (!(o.kind === 'tool_error' && SCOPE_DENY_CODES.has(o.code)) || cell.scope_excluded.replayed || changed.length) {
+          replayFailures.push(`replay scope_excluded ${tool.name}: ${o.kind}/${o.code} replayed=${cell.scope_excluded.replayed} ${changed.join(';')}`)
+        }
+      } finally {
+        db.prepare('UPDATE users SET org_id=NULL, data_scope=? WHERE id=?').run('all', ownerId)
+      }
+      // ③ 全部恢复：同一键回放缓存，不再动业务行
+      {
+        const before = snapshot()
+        const r = await mcp('tools/call', { name: tool.name, arguments: args }, token)
+        const changed = diff(before, snapshot())
+        cell.restored = { replayed: r.body?.result?._idempotent_replay === true, rows_changed: changed }
+        if (!cell.restored.replayed || changed.length) replayFailures.push(`replay restored ${tool.name}: replayed=${cell.restored.replayed} ${changed.join(';')}`)
+      }
+      cell.result = replayFailures.some((x) => x.includes(` ${tool.name}:`)) ? 'LEAK' : 'DENIED'
+      matrix.replay_state.tools[tool.name] = cell
+    }
+    failures.push(...replayFailures)
+    const covered = Object.values(matrix.replay_state.tools).filter((x) => x.result === 'DENIED').length
+    assert.ok(covered >= 4, `expected several write tools to exercise the replay state, got ${covered}`)
+  }
+
+  // ---- 状态 4（Y6）：所有者缺门店 / 经销商绑定 ----
+  // 通用单据读工具对「HTTP 侧按门店 / 经销商绑定」的类型，在所有者拥有查看权限点但没有绑定时必须拒绝
+  // （TOKEN_OWNER_BINDING_REQUIRED），list_types 不列出；有绑定后只放行绑定对象自己的单据。
+  // 订货中心（OC/OCS）的 subject 绑定只约束外部主体（dealer/store 角色），由 mcp-doc-perms.test.mjs 覆盖。
+  matrix.binding_state = { state: 'owner_lacks_binding', types: {} }
+  {
+    const hard = Object.entries(DOC_VIEW_PERMS).filter(([, e]) => e.binding === 'store' || e.binding === 'dealer')
+    assert.ok(hard.length >= 6, 'expected store/dealer bound doc types')
+    for (const [, e] of hard) for (const p of e.perms) grant.run('warehouse', p)
+    db.prepare('UPDATE users SET store_id=NULL, dealer_id=NULL WHERE id=?').run(ownerId)
+    try {
+      const lt = await mcp('tools/call', { name: 'doc.list_types', arguments: {} }, token)
+      const listedCodes = payload(lt)?.doc_types?.map((x) => x.code) || []
+      for (const [code, e] of hard) {
+        const any = db.prepare(`SELECT id FROM ${db.prepare('SELECT table_name FROM doc_types WHERE code=?').get(code).table_name} ORDER BY id LIMIT 1`).get()
+        const before = snapshot()
+        const q = outcome(await mcp('tools/call', { name: 'doc.query', arguments: { doc_type: code } }, token))
+        const g = outcome(await mcp('tools/call', { name: 'doc.get', arguments: { doc_type: code, id: any.id } }, token))
+        const changed = diff(before, snapshot())
+        const ok = q.code === 'TOKEN_OWNER_BINDING_REQUIRED' && g.code === 'TOKEN_OWNER_BINDING_REQUIRED' && !listedCodes.includes(code) && changed.length === 0
+        matrix.binding_state.types[code] = { binding: e.binding, result: ok ? 'DENIED' : 'LEAK', query: q.code, get: g.code, listed: listedCodes.includes(code) }
+        if (!ok) failures.push(`owner_lacks_binding ${code}: query=${q.kind}/${q.code} get=${g.kind}/${g.code} listed=${listedCodes.includes(code)} ${changed.join(';')}`)
+      }
+    } finally {
+      restorePerms()
+    }
+  }
+
+  // ---- 状态 5（Z2）：单据历史工具（doc.get）按 DOC_SCOPE_RESOLVERS 判范围 ----
+  // 经销商属于所有者组织、但出货仓归他组织的销售订单：旧的列名推断（dealer_id）会放行并连同留痕一起吐出；
+  // 现在与 HTTP 的 salesScopeSql 同判据，必须 NOT_FOUND 且零写。无组织归属的全局类型（OM）同样 NOT_FOUND。
+  matrix.history_scope_state = { state: 'owner_scope_org_with_dealer_inferred_doc', tool: 'doc.get', cases: {} }
+  {
+    for (const p of ['sales.order.view', 'oms.order.view']) grant.run('warehouse', p)
+    const ownerOrg = wh.org_id
+    const dealerOwn = Number(db.prepare("INSERT INTO dealers (code, name, org_id) VALUES ('MX-Z2-D','MX经销商',?)").run(ownerOrg).lastInsertRowid)
+    const soOther = Number(db.prepare(`INSERT INTO sales_orders (doc_no, channel, dealer_id, order_date, status, total_qty, goods_amount, receivable_amount, warehouse_id)
+      VALUES ('MX-Z2-SO','dealer',?,date('now','localtime'),'draft',1,10,10,?)`).run(dealerOwn, wh2.id).lastInsertRowid)
+    const soOwn = Number(db.prepare(`INSERT INTO sales_orders (doc_no, channel, dealer_id, order_date, status, total_qty, goods_amount, receivable_amount, warehouse_id)
+      VALUES ('MX-Z2-SO-OWN','dealer',?,date('now','localtime'),'draft',1,10,10,?)`).run(dealerOwn, wh.id).lastInsertRowid)
+    const omId = db.prepare('SELECT id FROM oms_orders ORDER BY id LIMIT 1').get()?.id
+    const insEv = db.prepare("INSERT INTO doc_events (doc_type, doc_id, doc_no, action, from_state, to_state, actor_name) VALUES (?,?,?,'z2matrix','a','b','z2')")
+    insEv.run('SO', soOther, 'MX-Z2-SO'); insEv.run('SO', soOwn, 'MX-Z2-SO-OWN')
+    assert.notEqual(wh2.org_id, ownerOrg, 'fixture: two warehouses in different orgs')
+    db.prepare('UPDATE users SET org_id=?, data_scope=? WHERE id=?').run(ownerOrg, 'org', ownerId)
+    try {
+      const cases = [
+        ['SO dealer-inferred, warehouse in another org', 'SO', soOther, 'NOT_FOUND'],
+        ['SO in owner warehouse org', 'SO', soOwn, null],
+        ...(omId ? [['OM (global-only type)', 'OM', omId, 'NOT_FOUND']] : [])
+      ]
+      for (const [label, docType, id, want] of cases) {
+        const before = snapshot()
+        const r = await mcp('tools/call', { name: 'doc.get', arguments: { doc_type: docType, id } }, token)
+        const o = outcome(r)
+        const changed = diff(before, snapshot())
+        const events = payload(r)?.events || []
+        const ok = want ? o.kind === 'tool_error' && o.code === want && events.length === 0 && changed.length === 0 : o.kind === 'ok' && events.some((e) => e.action === 'z2matrix')
+        matrix.history_scope_state.cases[label] = { result: ok ? (want ? 'DENIED' : 'ALLOWED') : 'LEAK', code: o.code, events: events.length }
+        if (!ok) failures.push(`history_scope ${label}: ${o.kind}/${o.code} events=${events.length} ${changed.join(';')}`)
+      }
+    } finally {
+      db.prepare('UPDATE users SET org_id=NULL, data_scope=? WHERE id=?').run('all', ownerId)
+      restorePerms()
+    }
+  }
+
   // ---- 产出矩阵并断言覆盖 ----
   const file = path.join(f.dir, 'mcp-tool-matrix.json')
   writeFileSync(file, JSON.stringify(matrix, null, 2))
@@ -349,6 +482,9 @@ test('MCP delegation matrix: every tool x {owner inactive, permission removed, s
   if (process.env.MCP_MATRIX_PRINT) console.log(JSON.stringify(saved, null, 1))
   assert.equal(covered, TOOLS.length, 'matrix must cover every tool in every state')
   assert.equal(saved.tool_count, TOOLS.length)
+  assert.ok(Object.keys(saved.binding_state.types).length >= 6 && Object.values(saved.binding_state.types).every((x) => x.result === 'DENIED'), 'every store/dealer bound type is denied to an unbound owner')
+  assert.ok(Object.keys(saved.history_scope_state.cases).length >= 2 && Object.values(saved.history_scope_state.cases).every((x) => x.result !== 'LEAK'), 'history tool honors the owner scope')
+  assert.ok(Object.values(saved.replay_state.tools).every((x) => x.result !== 'LEAK'), 'no write tool replays a cached result after owner permission / scope loss')
   assert.deepEqual(failures, [], `tools that slipped through:\n${failures.join('\n')}`)
   assert.ok(Object.values(saved.tools).every((x) => Object.values(x.states).every((c) => c.result !== 'LEAK')))
 })

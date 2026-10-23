@@ -42,6 +42,7 @@ import { nextDocNoAuto } from './docno.js'
 import { checkCredit } from './credit.js'
 import { readSetting } from './settings.js'
 import { createOrder } from './order-center.js'
+import { SalesOrderError, quoteScopeSql, assertQuoteInScope, assertQuoteTargetInScope, assertSalesDocInScope } from './sales-order.js'
 
 export class QuoteError extends Error {
   constructor(message, { code = 'QUOTE_ERROR', httpStatus = 400, detail = null } = {}) {
@@ -139,8 +140,12 @@ function listPriceOf(sku) {
  */
 export function priceQuote(db, {
   items = [], customerType = 'dealer', dealerId = null, customerId = null,
-  storeId = null, channel = null, warehouseId = null, freight = 0, taxRate = 0, at = null
+  storeId = null, channel = null, warehouseId = null, freight = 0, taxRate = 0, at = null, orgScope
 } = {}) {
+  // 试算会回显指定仓库的库存可供量：给了仓 / 门店 / 订货客户就必须在范围内（不要求必须给）
+  if (orgScope !== undefined && (warehouseId || storeId || customerId)) {
+    guardTarget(db, { warehouseId: warehouseId || null, storeId: storeId || null, customerId: customerId || null }, orgScope)
+  }
   if (!Array.isArray(items) || !items.length) {
     throw new QuoteError('请至少添加一行报价商品', { code: 'NO_ITEMS', httpStatus: 400 })
   }
@@ -231,6 +236,21 @@ export function priceQuote(db, {
 }
 
 // ---------------------------------------------------------------------------
+// 组织范围（ADR-0034）：判据在 sales-order.js（quoteScopeSql / assertQuote*），这里只做入口接线。
+// `orgScope === undefined` ⇒ 不加范围（系统内部调用）；HTTP 路由必须显式传 `req.orgScope`（缺失按 none，fail-closed）。
+// ---------------------------------------------------------------------------
+const asQuoteError = (e) =>
+  e instanceof SalesOrderError ? new QuoteError(e.message, { code: e.code, httpStatus: e.status, detail: e.detail }) : e
+function guardInScope(db, id, orgScope) {
+  if (orgScope === undefined) return
+  try { assertQuoteInScope(db, id, orgScope) } catch (e) { throw asQuoteError(e) }
+}
+function guardTarget(db, target, orgScope) {
+  if (orgScope === undefined) return
+  try { assertQuoteTargetInScope(db, target, orgScope) } catch (e) { throw asQuoteError(e) }
+}
+
+// ---------------------------------------------------------------------------
 // 二、建单 / 查询
 // ---------------------------------------------------------------------------
 
@@ -239,8 +259,10 @@ export function createQuote(db, {
   channel = null, warehouseId = null, currency = 'CNY',
   quoteDate = null, validFrom = null, validTo = null, validDays = null,
   items = [], freight = 0, taxRate = 0, remark = null,
-  actor = null, source = 'api', sourceQuoteId = null
+  actor = null, source = 'api', sourceQuoteId = null, orgScope
 } = {}) {
+  guardTarget(db, { warehouseId: warehouseId || null, storeId: storeId || null, customerId: customerId || null }, orgScope)
+  if (sourceQuoteId) guardInScope(db, sourceQuoteId, orgScope)
   const q = priceQuote(db, { items, customerType, dealerId, customerId, storeId, channel, warehouseId, freight, taxRate })
   const d = quoteDate || today()
   const from = validFrom || d
@@ -312,8 +334,9 @@ const Q_FROM = `
   LEFT JOIN warehouses w ON w.id=q.warehouse_id
 `
 
-export function getQuote(db, id) {
-  const q = db.prepare(`SELECT ${Q_SELECT} FROM ${Q_FROM} WHERE q.id=?`).get(Number(id))
+export function getQuote(db, id, { orgScope } = {}) {
+  const sc = orgScope === undefined ? { sql: '1=1', params: [] } : quoteScopeSql(orgScope, 'q')
+  const q = db.prepare(`SELECT ${Q_SELECT} FROM ${Q_FROM} WHERE q.id=? AND ${sc.sql}`).get(Number(id), ...sc.params)
   if (!q) return null
   q.items = db
     .prepare(
@@ -331,10 +354,14 @@ export function getQuote(db, id) {
 
 export function listQuotes(db, {
   status = null, customerType = null, dealerId = null, customerId = null,
-  keyword = null, validOnly = false, page = 1, pageSize = 20
+  keyword = null, validOnly = false, page = 1, pageSize = 20, orgScope
 } = {}) {
   const conds = []
   const params = []
+  if (orgScope !== undefined) {
+    const sc = quoteScopeSql(orgScope, 'q')
+    conds.push(sc.sql); params.push(...sc.params)
+  }
   if (status) { conds.push('q.status=?'); params.push(status) }
   if (customerType) { conds.push('q.customer_type=?'); params.push(customerType) }
   if (dealerId) { conds.push('q.dealer_id=?'); params.push(dealerId) }
@@ -363,7 +390,8 @@ export function listQuotes(db, {
 // ---------------------------------------------------------------------------
 
 /** 报价流转。需审批的单在 submit 时把审批结论落到单上（审批流本身走模块 22） */
-export function transitionQuote(db, { id, action, actor = null, remark = null, source = 'api' }) {
+export function transitionQuote(db, { id, action, actor = null, remark = null, source = 'api', orgScope }) {
+  guardInScope(db, id, orgScope)
   const q = db.prepare('SELECT * FROM sales_quotes WHERE id=?').get(Number(id))
   if (!q) throw new QuoteError(`报价单 #${id} 不存在`, { code: 'QUOTE_NOT_FOUND', httpStatus: 404 })
 
@@ -389,11 +417,12 @@ export function transitionQuote(db, { id, action, actor = null, remark = null, s
 }
 
 /** 批量把过期报价置为 expired（系统动作，不是人点的按钮） */
-export function expireQuotes(db, { at = null, actor = null } = {}) {
+export function expireQuotes(db, { at = null, actor = null, orgScope } = {}) {
   const day = at || today()
+  const sc = orgScope === undefined ? { sql: '1=1', params: [] } : quoteScopeSql(orgScope, 'q')
   const rows = db
-    .prepare("SELECT * FROM sales_quotes WHERE status IN ('submitted','approved') AND valid_to < ?")
-    .all(day)
+    .prepare(`SELECT q.* FROM sales_quotes q WHERE q.status IN ('submitted','approved') AND q.valid_to < ? AND ${sc.sql}`)
+    .all(day, ...sc.params)
   let n = 0
   for (const r of rows) {
     applyTransition({
@@ -419,11 +448,22 @@ export function expireQuotes(db, { at = null, actor = null } = {}) {
  *
  * 幂等：同一张报价已转过单就返回原单，不会转出第二张订单。
  */
-export function convertQuote(db, { id, target = 'SO', actor = null, force = false, reason = null, orderDate = null, remark = null, source = 'api' }) {
-  const q = getQuote(db, Number(id))
+export function convertQuote(db, { id, target = 'SO', actor = null, force = false, reason = null, orderDate = null, remark = null, source = 'api', orgScope }) {
+  const q = getQuote(db, Number(id), { orgScope })
   if (!q) throw new QuoteError(`报价单 #${id} 不存在`, { code: 'QUOTE_NOT_FOUND', httpStatus: 404 })
+  // 转单会建新单据：写比读严，报价的仓 / 门店 / 订货客户须都在范围内（已转过单的幂等返回也不例外）
+  guardTarget(db, { warehouseId: q.warehouse_id, storeId: q.store_id, customerId: q.customer_id }, orgScope)
   if (q.converted_order_id) {
+    // 幂等返回的订单也要在**当前**范围内（订单仓 / 门店可能在转单后被改走）：范围外按「订单不存在」，不泄漏单号
+    if (orgScope !== undefined && q.converted_type !== 'OC') {
+      try { assertSalesDocInScope(db, 'order', q.converted_order_id, orgScope) } catch (e) { throw asQuoteError(e) }
+    }
     return { reused: true, quote: q, order: loadConverted(db, q), credit: null }
+  }
+  // 转成销售订单时订单的归属只来自仓 / 门店（订货客户不会写进销售订单）：目标是 SO 就必须由这两者落进范围，
+  // 否则会造出调用者自己都看不到的无主订单。订货单（OC）归订货客户，已在上面判过。
+  if (target !== 'OC') {
+    guardTarget(db, { warehouseId: q.warehouse_id, storeId: q.customer_type === 'store' ? q.store_id : null }, orgScope)
   }
   if (q.status !== 'approved') {
     throw new QuoteError(
@@ -555,8 +595,8 @@ function buildSalesOrder(db, { q, actor, orderDate, remark, source }) {
 }
 
 /** 复制报价（改版）：生成一张新的 draft，version +1 */
-export function copyQuote(db, { id, actor = null, validDays = null, remark = null }) {
-  const src = getQuote(db, Number(id))
+export function copyQuote(db, { id, actor = null, validDays = null, remark = null, orgScope }) {
+  const src = getQuote(db, Number(id), { orgScope })
   if (!src) throw new QuoteError(`报价单 #${id} 不存在`, { code: 'QUOTE_NOT_FOUND', httpStatus: 404 })
   return createQuote(db, {
     customerType: src.customer_type,
@@ -572,7 +612,8 @@ export function copyQuote(db, { id, actor = null, validDays = null, remark = nul
     validDays: validDays || readSetting(db, 'quote.valid_days'),
     remark: remark || `复制自 ${src.doc_no}（v${src.version}）`,
     actor,
-    sourceQuoteId: src.source_quote_id || src.id
+    sourceQuoteId: src.source_quote_id || src.id,
+    orgScope
   })
 }
 
@@ -580,22 +621,23 @@ export function copyQuote(db, { id, actor = null, validDays = null, remark = nul
 // 五、概览
 // ---------------------------------------------------------------------------
 
-export function quoteOverview(db) {
+export function quoteOverview(db, { orgScope } = {}) {
+  const sc = orgScope === undefined ? { sql: '1=1', params: [] } : quoteScopeSql(orgScope, 'q')
   const byStatus = {}
   for (const [k, label] of Object.entries(QUOTE_STATUS)) {
-    byStatus[k] = { value: k, label, count: db.prepare('SELECT COUNT(*) c FROM sales_quotes WHERE status=?').get(k).c }
+    byStatus[k] = { value: k, label, count: db.prepare(`SELECT COUNT(*) c FROM sales_quotes q WHERE q.status=? AND ${sc.sql}`).get(k, ...sc.params).c }
   }
   const day = today()
   const expiringSoon = db
     .prepare(
-      `SELECT id, doc_no, valid_to, total_amount, dealer_id, customer_id FROM sales_quotes
-        WHERE status='approved' AND valid_to >= ? AND valid_to <= ? ORDER BY valid_to LIMIT 20`
+      `SELECT q.id, q.doc_no, q.valid_to, q.total_amount, q.dealer_id, q.customer_id FROM sales_quotes q
+        WHERE q.status='approved' AND q.valid_to >= ? AND q.valid_to <= ? AND ${sc.sql} ORDER BY q.valid_to LIMIT 20`
     )
-    .all(day, addDays(day, 7))
+    .all(day, addDays(day, 7), ...sc.params)
   const pendingApproval = db
-    .prepare("SELECT COUNT(*) c FROM sales_quotes WHERE status='submitted'").get().c
+    .prepare(`SELECT COUNT(*) c FROM sales_quotes q WHERE q.status='submitted' AND ${sc.sql}`).get(...sc.params).c
   const convertedAmount = db
-    .prepare("SELECT COALESCE(SUM(total_amount),0) s FROM sales_quotes WHERE status='converted'").get().s
+    .prepare(`SELECT COALESCE(SUM(q.total_amount),0) s FROM sales_quotes q WHERE q.status='converted' AND ${sc.sql}`).get(...sc.params).s
 
   return {
     status_counts: byStatus,

@@ -36,7 +36,8 @@ import {
   ApprovalError, approvalGate, matchTemplate, amountOf,
   submitApproval, getInstance, decideApproval, cancelApproval,
   listInstances, pendingForMe, listTemplates,
-  approvalOverview, approvalTodosFor, describeApprover, stepsOfTemplate
+  approvalOverview, approvalTodosFor, describeApprover, stepsOfTemplate,
+  approvalDocScope, instanceVisibleTo
 } from '../lib/approval.js'
 
 const r = Router()
@@ -44,6 +45,10 @@ r.use((req, res, next) => {
   if (req.method !== 'GET') return next()
   return requireAuth(req, res, () => requireInternal('总部审批管理；订货方请查看自己的订货单审批记录')(req, res, next))
 })
+
+// 组织数据范围（ADR-0037）：审批实例跟着它指向的单据走。读路由用 attachOrgScope 取 req.orgScope，
+// 判据在 lib/approval.js（approvalDocScope / instanceVisibleTo），路由不另写第二份。
+const scopeOf = (req) => ({ orgScope: req.orgScope, user: req.user })
 
 const actorOf = (req) => {
   const u = currentUser(req)
@@ -88,7 +93,7 @@ r.get('/meta', requireAuth, wrap((_req, res) => {
   })
 }))
 
-r.get('/overview', requireAuth, wrap((_req, res) => ok(res, approvalOverview(getDb()))))
+r.get('/overview', requireAuth, attachOrgScope, wrap((req, res) => ok(res, approvalOverview(getDb(), { actor: actorOf(req), scopeCtx: scopeOf(req) }))))
 
 // ---------------------------------------------------------------------------
 // 模板
@@ -177,6 +182,7 @@ r.post(
 r.get(
   '/check',
   requireAuth,
+  attachOrgScope,
   wrap((req, res) => {
     const db = getDb()
     const docType = String(req.query.doc_type || '')
@@ -187,6 +193,8 @@ r.get(
     if (!t) return fail(res, '未知单据类型', 400)
     const row = db.prepare(`SELECT * FROM ${t.table_name} WHERE id=?`).get(docId)
     if (!row) return fail(res, '单据不存在', 404)
+    // ADR-0037：闸门查询会回显待审实例，范围外的单据与不存在同形
+    if (!approvalDocScope(db, docType, docId, scopeOf(req))) return fail(res, '单据不存在', 404)
     const gate = approvalGate(db, { docType, docId, action, row })
     if (!gate) return ok(res, { need_approval: false })
     return ok(res, {
@@ -222,6 +230,8 @@ r.post(
     if (INTERNAL_MODULES.has(type.module) && isExternalUser(req)) {
       return fail(res, `当前角色无权操作「${type.name}」`, 403)
     }
+    // ADR-0037：目标单据必须在调用者的组织范围内；范围外与不存在同形（404），且不建实例
+    if (!approvalDocScope(db, b.doc_type, row.id, scopeOf(req))) return fail(res, `单据 #${b.doc_id} 不存在`, 404)
     const inst = submitApproval(db, {
       docType: b.doc_type,
       docId: Number(b.doc_id),
@@ -242,11 +252,14 @@ r.post(
 r.get(
   '/instances',
   requireAuth,
+  attachOrgScope,
   wrap((req, res) => {
     const { page, pageSize } = pageParams(req)
     return ok(res, listInstances(getDb(), {
       page,
       pageSize,
+      actor: actorOf(req),
+      scopeCtx: scopeOf(req),
       status: req.query.status || null,
       docType: req.query.doc_type || null,
       mine: req.query.mine === '1' ? (currentUser(req).id || null) : null
@@ -254,14 +267,16 @@ r.get(
   })
 )
 
-r.get('/pending', requireAuth, wrap((req, res) => {
+r.get('/pending', requireAuth, attachOrgScope, wrap((req, res) => {
   const { page, pageSize } = pageParams(req)
-  return ok(res, pendingForMe(getDb(), actorOf(req), { page, pageSize }))
+  return ok(res, pendingForMe(getDb(), actorOf(req), { page, pageSize, scopeCtx: scopeOf(req) }))
 }))
 
-r.get('/instances/:id', requireAuth, wrap((req, res) => {
-  const inst = getInstance(getDb(), Number(req.params.id))
-  if (!inst) return fail(res, '审批实例不存在', 404)
+// 详情（含 records 即审批历史）：范围外与不存在同形（同一句 404），不泄漏存在性（ADR-0037）
+r.get('/instances/:id', requireAuth, attachOrgScope, wrap((req, res) => {
+  const db = getDb()
+  const inst = getInstance(db, Number(req.params.id))
+  if (!inst || !instanceVisibleTo(db, inst, actorOf(req), scopeOf(req))) return fail(res, '审批实例不存在', 404)
   return ok(res, inst)
 }))
 
@@ -275,13 +290,15 @@ r.get(
   '/todos',
   requireAuth,
   requirePerm('system:approval:view', 'system:approval:decide', 'system:approval:manage'),
-  wrap((req, res) => ok(res, approvalTodosFor(getDb(), actorOf(req))))
+  attachOrgScope,
+  wrap((req, res) => ok(res, approvalTodosFor(getDb(), actorOf(req), scopeOf(req))))
 )
 
 r.post(
   '/instances/:id/decide',
   requireAuth,
   requirePerm('system:approval:decide'),
+  attachOrgScope,
   guard((req, res) => {
     const db = getDb()
     const b = req.body || {}
@@ -290,7 +307,8 @@ r.post(
       instanceId: Number(req.params.id),
       decision: String(b.decision || ''),
       comment: b.comment || null,
-      actor
+      actor,
+      scopeCtx: scopeOf(req)
     })
     audit(req, {
       action: b.decision === 'reject' ? 'REJECT' : 'APPROVE',
@@ -306,12 +324,14 @@ r.post(
 r.post(
   '/instances/:id/cancel',
   requireAuth,
+  attachOrgScope,
   guard((req, res) => {
     const db = getDb()
     const inst = cancelApproval(db, {
       instanceId: Number(req.params.id),
       actor: actorOf(req),
-      comment: (req.body || {}).comment || null
+      comment: (req.body || {}).comment || null,
+      scopeCtx: scopeOf(req)
     })
     audit(req, { action: 'CANCEL', module: 'approval', entity: 'approval_instances', entityId: Number(req.params.id) })
     return ok(res, inst)

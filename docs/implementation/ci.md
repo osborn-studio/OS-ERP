@@ -4,13 +4,33 @@
 
 ## 2026-10-22 托管 Actions 决定
 
-用户决定：仓库公开且尚未开始收费期间，Linux/Node/Python 验证使用 GitHub 托管 runner（`.github/workflows/ci.yml`，`ubuntu-latest`）。触发方式：push 到 main、pull request、手动 dispatch（可指定回归轮数）。工作流分三段：
+用户决定：仓库公开且尚未开始收费期间，Linux/Node/Python 验证使用 GitHub 托管 runner（`.github/workflows/ci.yml`，`ubuntu-latest`）。触发方式：push 到 main、pull request、手动 dispatch（可指定回归轮数）。工作流分四段（`checks` / `regression` / `docker` / `browser`）：
 
 1. `checks`：锁文件安装、显式重建 better-sqlite3/esbuild、`tsc --noEmit`、Vite 构建、`npm run test:focused`。
 2. `regression`：在独立 venv 安装 `requirements-test.txt` 固定版本的 openpyxl，执行 `scripts/regress-isolated.mjs`（PR/push 默认 1 轮；手动 dispatch 默认 3 轮），只打印白名单汇总行并上传 `summary.json`，原始日志不上传。
 3. `docker`（依赖 `checks`，15 分钟超时）：`docker build --platform linux/amd64 --build-arg GML_BUILD_SHA=$GITHUB_SHA -t os-erp:ci .`（不登录、不推送任何 registry），然后执行 `node scripts/docker-smoke.mjs --image os-erp:ci --expect-sha $GITHUB_SHA`。冒烟内容与 ADR-0012「验证」的手工步骤一致：(a) 不给 `GML_JWT_SECRET` ⇒ 非零退出且日志含 `JWT_SECRET_MISSING_IN_PRODUCTION`；(b) 给公开已知值 ⇒ 同样拒绝；(c) 随机密钥 + 命名卷 `/data` + 只读根 + `cap_drop ALL` + `no-new-privileges` + 只发布到 `127.0.0.1:<随机空闲端口>` ⇒ `/api/meta/health` 200 且 `version` 等于 package.json、`build_sha` 等于提交 SHA；`POST /mcp` 返回 503 `FEATURE_DISABLED`；`docker exec id -u` 为 10001；PID 1 为 tini；`touch /app/…` 报只读；`/data` 内已有 SQLite 库；容器日志不含随机密钥。脚本只用 Node 内建模块、以数组参数调用 `docker` CLI（不经 shell），随机密钥只经 `-e GML_JWT_SECRET`（不带值，从脚本进程环境继承）传入，输出只有 `ok:` / `FAIL:` / `smoke:` 定格行，失败诊断块对 32 位以上不透明串打码；无论成败 `finally` 里删除容器与卷。`tests/docker-smoke-policy.test.mjs` 静态守卫：job 存在且 `needs: checks`、Actions 全部按 40 位 SHA 固定、无 push/login、脚本从不回显密钥。维护者本机可直接复跑同一脚本（Mac mini 为 linux/arm64；**linux/amd64 只在托管 runner 上实际构建与运行**）。通过只代表该提交的运行镜像满足启动闸门与运行契约，不是生产部署验收。
 
+4. `browser`（依赖 `checks`，25 分钟超时，X6）：在 `ubuntu-latest` 上跑 `tests/browser/*.mjs` 的真实 Chromium 场景。流程：`npm ci --ignore-scripts` + 显式重建 better-sqlite3/esbuild → `npx --no-install playwright install --with-deps chromium` → `npm run build` → `node scripts/browser-ci.mjs --out=artifacts/browser-ci`。
+   - **Chromium 来源**：`playwright` 作为**精确版本**（1.64.0，发布于 2026-10-07）的 devDependency 写入 `package.json` 与 `package-lock.json`（`playwright` / `playwright-core` 两条，带 sha512 完整性），所以 `npm ci` 校验的就是锁定的包；浏览器二进制由 `playwright install` 按该版本下载，系统库用 `--with-deps`（托管 runner 上的 apt，一次性虚拟机）。不使用 `npx playwright@latest`。锁文件改动是在本机用 `npm install --package-lock-only --ignore-scripts` 生成的，**本机没有 `npm ci` 校验过**，以托管 runner 的 `npm ci` 为准。
+   - **驱动脚本** `scripts/browser-ci.mjs`：先探测 Chromium 沙箱（开启可用则保持开启；若 runner 内核策略禁止非特权 userns 才回退到 `GML_CHROMIUM_SANDBOX=0`，并把取值写进摘要）；再在全新临时 `GML_DATA_DIR`（演示种子）、随机回环端口、随机 `GML_JWT_SECRET`、`GML_RUNTIME_MODE=test` 下启动 `server/index.js`；然后依次运行 5 个场景：`runtime-capabilities` / `session` / `user-editor`（既有，拦截式夹具）与 `funds-review` / `scope-notice`（新增，连真实服务）。场景与服务端的原始输出被捕获，只打印 `PASS` 行和脱敏尾部（32 位以上不透明串打码）；结束时无论成败都停服务并删除临时目录。
+   - **funds-review**（ADR-0018）：两个新建 finance 账号（随机密码）；发起人在收款单详情无凭证点「确认收款」→ 服务端 400 `FUNDS_EVIDENCE_REQUIRED` 且仍是草稿；填凭证号再确认 → 响应 `pending_review`、状态仍 draft、应收核销为 0，界面显示「你是发起人，需由另一人复核」，没有「复核通过」按钮和授信效果面板；发起人调复核接口 → 409 `FUNDS_SELF_REVIEW`；第二人在界面点「复核通过」→ 响应 `confirmed` / `approved` 且复核人是第二人，授信效果面板出现、带本单单号，且行数/空态与响应里的 `credit_released` 一致（夹具是手工应收、无授信占用，所以释放为 0，不证明非零释放），应收核销金额等于收款金额，再次批准 → 409 `FUNDS_NOT_PENDING`、金额不变。
+   - **scope-notice**（ADR-0017 / W3）：无组织的受限账号（`purchase`、`data_scope=org`）访问采购工作台 → 接口 200 且总览为 0，页面 `data-kind=empty_scope`（非阻断，标题仍在）；对照 admin 同页面没有范围提示；门店账号（`store`，绑定一家演示门店）→ 接口 403，页面 `data-kind=forbidden`（阻断，工作台标题不渲染，也不被画成空范围）。
+   - **上传**：只上传白名单文件 `summary.json`（场景名、结果、耗时、Chromium 版本、沙箱取值）、`evidence-<场景>.json`（场景名与浏览器版本；`session` 与 `user-editor` 各写一份，因为它们用独占创建）和失败时的 `screenshots/failure-<场景>-<序号>.png`（文件名不含账号、单号或令牌）。原始 stdout/stderr、服务端日志、数据库、环境变量一律不上传。
+   - `tests/browser-ci-policy.test.mjs` 静态守卫：job 存在且 `needs: checks`、25 分钟、Actions 固定 SHA、Chromium 只来自锁定的 playwright、上传路径等于白名单、驱动脚本用随机密钥/临时目录/回环端口且不继承输出、tests/browser 下每个场景都登记且语法有效、新场景断言的是服务端状态而不只是文案。
+   - **状态：这 5 个浏览器场景（尤其新增的两个）尚未在托管 runner 上执行。** 本机是 macOS，场景断言 `linux`，只做了 `node --check` 与静态守卫；选择器、文案和时序是否与真实页面一致，要等第一次托管 CI 运行才知道，失败时按摘要与截图修场景，不得放宽断言。通过只代表该提交的源码级浏览器证据，不是发行包验收或生产就绪。
+
 开始收费后切回专用 Linux 主机 `dmserver`（下文 `linux-validation.yml`）。托管 runner 的通过只代表对应提交的隔离源码回归，不是发行包验收或生产就绪。
+
+## 夜间容量基线（Z10，`nightly-capacity.yml`）
+
+状态：工作流已编写，**尚未在 GitHub 上执行**；本机只验证了 YAML 可解析、流水线与摘要脚本在最小规模下可运行、静态守卫通过。第一次定时或手动运行才是它的第一次真实检验。
+
+- **触发**：每天一次定时（UTC 03:17，定时任务只在默认分支上生效）和 `workflow_dispatch`（输入 `scale`：`small` 2 000 SKU / `medium` 2 万 SKU、3 万单据、15 万流水 / `large` 2 万 SKU、5 万单据、25 万流水，默认 `medium`）。`ubuntu-latest`，60 分钟超时，仅 `contents: read`，Actions 全部按 40 位 SHA 固定，`npm ci --ignore-scripts` 后只显式重建 better-sqlite3/esbuild。
+- **步骤**：`scripts/synth-pipeline.mjs --keep`（生成 → 明文/加密备份 → 两份恢复演练 → `explain-audit` → 压测副本预热 → `bench-api` 读档）写入 `$RUNNER_TEMP`；再把流水线留下的压测副本复制一份跑 `bench-api --profile=write --max-error-rate 0`（管理员密码由工作流随机生成、`::add-mask::` 打码，经环境变量 `GML_PIPELINE_ADMIN_PASSWORD` 交给流水线，不打印不上传）；最后 `scripts/capacity-summary.mjs` 把两份 JSON 缩减为白名单摘要并打印到作业日志。
+- **何时标红**：只有三类——(1) 流水线任一步骤失败；(2) `explain-audit` 报告违规（>0）；(3) 读档或写档压测错误数 >0（写档另含完整性核对失败）。延迟只记录、不设阈值。注意 Y10 在 medium 规模曾记录过 3 处审计违规，若仍存在，首次运行就会红，这是如实暴露而不是工作流故障。
+- **上传**：只上传 `capacity-summary.json` 一个文件（保留 30 天）。数据库、备份、恢复副本、原始流水线/压测报告、日志一律不上传，步骤末尾也会删除。摘要脚本只输出白名单数值/布尔/短名字段，不输出路径、主机名、密钥、错误原文或违规明细文本；`tests/nightly-capacity-policy.test.mjs` 做静态与行为守卫。
+- **数字的含义（重要）**：GitHub 托管 runner 是共享虚拟机，硬件与邻居负载每天不同，数据是合成的、单次墙钟。这些数字**只是趋势指示**（同一规模下逐日对比有没有明显恶化），**不是**目标主机 `dmserver` 的结果、不是容量承诺、不是 RPO/RTO 证据，也不是发行包或生产验收。需要容量结论时，仍须按 [capacity-baseline.md](capacity-baseline.md) 在目标主机上实测。
+- 开始收费后与 `ci.yml` 一样应评估是否切回专用 Linux 主机；那时需要单独授权，本工作流不处理。
 
 ## 平台边界
 

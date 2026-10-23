@@ -68,6 +68,8 @@ const ALLOW = {
   'scripts/accept/selfcheck.mjs': '闸门：自检"数据目录不是开发库"，需要知道仓库 data/ 在哪',
   'scripts/test-flows.mjs': 'isDevDataDir 告警判据（自证开发库目录会被认出来）',
   'scripts/test-guards.mjs': 'isDevDataDir 告警判据（自证开发库目录会被认出来）',
+  'tests/retention.test.mjs': '闸门测试：证明 retention.mjs 拒绝把仓库 data/ 当 GML_DATA_DIR（只传路径，不读写）',
+  'tests/privacy-tools.test.mjs': '闸门测试：证明 privacy-export.mjs 拒绝把仓库 data/ 当 GML_DATA_DIR（只传路径，不读写）',
   // (b) 根目录就是数据根
   'scripts/regress-isolated.mjs': '隔离副本：reseed-all 显式收到 GML_DATA_DIR=<副本>/data，再 backup 到 run-data',
   'tests/local-instance.test.mjs': '安装验收：对临时实例目录（GML_LOCAL_INSTANCE）内的 data/ 断言，不是开发仓库',

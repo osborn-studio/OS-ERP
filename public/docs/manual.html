@@ -146,6 +146,10 @@
 <a class="toc-l3" data-depth="3" href="#221-先判断是哪种情况">22.1 先判断是哪种情况</a>
 <a class="toc-l3" data-depth="3" href="#222-管理员核对步骤">22.2 管理员核对步骤</a>
 <a class="toc-l2" data-depth="2" href="#二十三-备份校验恢复演练与升级回退">二十三 备份校验、恢复演练与升级回退</a>
+<a class="toc-l2" data-depth="2" href="#二十四-日志保留清理与个人信息处理">二十四 日志保留清理与个人信息处理</a>
+<a class="toc-l3" data-depth="3" href="#241-日志保留清理">24.1 日志保留清理</a>
+<a class="toc-l3" data-depth="3" href="#242-个人信息导出访问请求">24.2 个人信息导出（访问请求）</a>
+<a class="toc-l3" data-depth="3" href="#243-个人信息抹除删除请求">24.3 个人信息抹除（删除请求）</a>
   </nav>
   <main id="doc">
 <h1 id="伴圆ai原生erp-操作手册">伴圆AI原生ERP 操作手册</h1>
@@ -307,6 +311,18 @@
 <tr><td>升级时</td><td>迁移状态 / 校验和</td><td><code>node scripts/migrate.mjs --status</code>、<code>node scripts/verify-migrations.mjs</code>（同样需要上述三个环境变量）</td><td>无待执行异常；校验和全部一致</td></tr></tbody></table></div>
 <p>操作要点：</p>
 <ul><li>演练目标目录必须是<strong>空的新目录</strong>，不能是线上数据目录（<code>DRILL_TARGET_IS_LIVE</code>）；不要清空旧目录复用，旧报告是证据。演练结束归档报告，再删除目标目录（里面有线上数据副本）。</li><li>备份文件 sha256 与报告不符（<code>RESTORE_SHA256_MISMATCH</code>）说明该备份不可用，立刻检查介质并重新备份。</li><li>演练密码一律经管道 stdin 传入（密码管理器或隐藏输入），不要写在命令行、环境变量或日志里。</li><li>升级失败：不要重试、不要手工改迁移登记表、不要收养校验和；停服，切回旧代码，必要时按恢复手册用升级前备份恢复，并把失败迁移的报错原文与回退演练报告交开发。</li><li>如实告知边界：演练耗时不是生产 RTO，需在目标主机实测；三库不是同一业务时刻的备份；没有备份加密与异地副本；备份应保密并另行复制到异地。</li></ul>
+<h2 id="二十四-日志保留清理与个人信息处理">二十四 日志保留清理与个人信息处理</h2>
+<p>面向运维人员（ADR-0030）。三个脚本都要求显式绝对 <code>GML_DATA_DIR</code>（不能是仓库 <code>data/</code>），生产模式命令前缀同第二十三章：<code>GML_RUNTIME_MODE=production GML_DATA_DIR=&lt;数据目录&gt; GML_DB=</code>。<strong>先备份再执行</strong>（第二十三章），清理与抹除都是不可逆的。</p>
+<h3 id="241-日志保留清理">24.1 日志保留清理</h3>
+<div class="table-wrap"><table><thead><tr><th>步骤</th><th>命令</th><th>判据</th></tr></thead><tbody><tr><td>演练（默认）</td><td><code>node scripts/retention.mjs</code>（可加行业名、<code>--json</code>）</td><td>按行业打印将删除的 <code>audit_logs</code> / <code>notify_logs</code> / <code>mcp_call_logs</code> 行数；不改库</td></tr>
+<tr><td>执行</td><td><code>node scripts/retention.mjs --execute --actor &lt;你的用户名&gt;</code></td><td>退出码 0；每个行业库新增一条 <code>RETENTION_PURGE</code> 审计（含各表删除行数）；审计写不进则该库一行都不删</td></tr></tbody></table></div>
+<ul><li>保留天数在「系统设置 → 运维」：审计日志 365 天（下限 90）、通知发送日志 90 天、MCP 调用日志 90 天（下限 7）。三项都是<strong>危险配置</strong>，修改必须写理由。设置值非法时脚本拒绝清理（退出码 1），不会悄悄换成默认值。</li><li>审计只清理白名单模块（主数据维护 master、通知渠道 notify）；财务、配置、账号权限、审批、隐私、保留摘要，以及采购/销售/POS/经销/库存等所有业务单据模块的审计（它们是账务证据）、未知或空模块、<code>FUNDS_</code> 资金复核审计一律保留；级别为 danger 的 MCP 调用也保留。因此审计保留天数目前只影响上述低价值模块，扩大范围需政策变更。</li><li>建议用计划任务每月跑一次演练，核对数字后再执行；清理不会缩小 SQLite 文件，需要时另行 <code>VACUUM</code>。</li></ul>
+<h3 id="242-个人信息导出访问请求">24.2 个人信息导出（访问请求）</h3>
+<p><code>node scripts/privacy-export.mjs &lt;11 位手机号&gt; --out &lt;绝对路径.json&gt; [--industry cosmetic]</code></p>
+<ul><li>导出该手机号的商城客户、会员账户与积分流水、购物车、H5 订单（含明细）、收货地址（来自订单）、关联销售单（含 POS 日结上传生成的）与门店会员单，以及（Y8）关联的退款单、订货中心客户 / 地址 / 订单 / 对账单、含原号码或与其单据绑定的审计 / 通知日志行；仅凭遮盖号码命中的日志行只给行数。凭据类字段遮盖；手机号/姓名/地址按本人数据原样给出。</li><li><code>--out</code> 必须是绝对路径、不能在仓库目录内、不能覆盖已有文件；文件权限 0600，不向屏幕打印个人数据。导出文件本身就是个人信息：用加密渠道交付，交付后销毁。退出码 1 表示该号码没有数据。</li></ul>
+<h3 id="243-个人信息抹除删除请求">24.3 个人信息抹除（删除请求）</h3>
+<p><code>node scripts/privacy-erase.mjs &lt;手机号&gt; --confirm --actor &lt;admin 用户名&gt; [--industry cosmetic]</code></p>
+<ul><li>先导出留存（24.2），再执行。必须带 <code>--confirm</code>，<code>--actor</code> 必须是该库中启用的管理员；没有 <code>--confirm</code> 退出码 2，什么都不改。</li><li>做法是<strong>脱敏不删行</strong>：姓名、手机号、收货人/电话/地址换成 <code>erased:&lt;带钥哈希&gt;</code>；订单号、金额、数量、状态、积分流水、行 id 全部保留，财务对账不受影响。同一手机号在各表得到同一伪名（<code>erased:&lt;哈希&gt;-&lt;客户id&gt;</code>，同号再注册后再抹除会得到新的后缀）。哈希密钥取自 <code>GML_SECRET_KEY</code>（或非公开的 <code>GML_JWT_SECRET</code>）；生产环境用公开/缺省密钥会被拒绝。<strong>更换密钥后旧伪名不再可复算</strong>，抹除记录请以审计为准。</li><li>有未完结订单（待发货/已发货/退款中等）时拒绝（退出码 1），完结后再抹除；确需先抹除可加 <code>--allow-open-orders</code>，在途订单将无法按原收货信息履约。</li><li>重复执行是安全的：已抹除的号码返回 <code>already-erased</code>，不再写审计；跨库中途失败后直接重跑即可。每个行业库写一条 <code>PRIVACY_ERASE</code> 审计（不含原手机号）。</li><li><strong>先看影响面</strong>：<code>node scripts/privacy-erase.mjs &lt;手机号&gt; --report [--industry cosmetic]</code>（只读，不需要 <code>--confirm</code> / <code>--actor</code>）逐表打印“将改多少行、哪些列”、遮盖片段命中但默认不动的日志行数（<code>ambiguous_masked</code>）、执行后预计仍含该原号码的表.列及行数（<code>raw_phone_not_covered</code>，与执行输出的 <code>residual_raw_phone</code> 一致）、需人工复核的主数据电话（<code>manual_review</code>，如经销商 / 门店 / 供应商 / 员工表里恰好相同的电话）。<code>--dry-run --actor &lt;admin&gt;</code> 额外做真实执行的管理员与在途订单检查，同样不写库。报告数字与执行输出、审计里的行数是同一份计划，不一致会回滚。</li><li>覆盖面（Y8）：除商城客户 / 订单 / 销售单 / POS 外，还抹除退款单客户名（会员退款，或关联主体销售单且名字等于主体姓名的退款）、电话等于主体的订货中心客户 / 地址及其订单、对账单、往来单据上的名称快照，以及审计与通知日志中出现的原号码和关联单据的部分遮盖号码（如 <code>138****5678</code>）。仅凭“前 3 后 4”命中的其它日志行无法证明是同一个人，默认不动；确认可接受误伤再加 <code>--include-ambiguous-masked</code>。金额、单号、状态、银行账号 / 流水号不会改。</li><li>执行后输出里的 <code>residual_raw_phone</code> 列出库里仍含该原号码的列（如主数据电话、其它业务自由文本），这些<strong>没有被改</strong>，需要人工判断与处理。</li><li>边界（如实告知申请人）：不改历史备份文件；Y8 之前已抹除过的号码不会被追补；残留扫描只认精确 11 位原号码，不认带分隔符或其它写法；姓名 / 地址出现在自由文本里发现不了。备份按第二十三章的保留份数自然过期。</li></ul>
   </main>
 </div>
 <div class="foot">
