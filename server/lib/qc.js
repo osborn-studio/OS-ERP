@@ -42,6 +42,7 @@
 //   单独作为一步更安全，故本次先保证「单据分开 + 判退有后果」这一层。
 
 import { applyTransition } from './docflow.js'
+import { stockScopeSql } from './stock.js'
 import { localDate, localNow } from './dates.js'
 import {
   PurchaseError, createPurchaseReturn, refreshOrderStats, refreshCloseFlags
@@ -121,7 +122,8 @@ export function getReceiptForInspect(db, receiptId) {
  *   所以：草稿也算「待质检」，并把草稿单号一起带出去，前端据此打开草稿而不是新建
  *   （新建会撞 uq_inspection_receipt 唯一约束，报一个与真实原因无关的错）。
  */
-export function pendingReceipts(db, { limit = 50 } = {}) {
+export function pendingReceipts(db, { limit = 50, orgScope = null } = {}) {
+  const scope = stockScopeSql(orgScope, 'rc')
   return db
     .prepare(
       `SELECT rc.id, rc.doc_no, rc.receipt_date, rc.total_qty, rc.total_amount,
@@ -134,7 +136,7 @@ export function pendingReceipts(db, { limit = 50 } = {}) {
          LEFT JOIN suppliers s ON s.id = rc.supplier_id
          LEFT JOIN warehouses w ON w.id = rc.warehouse_id
          LEFT JOIN purchase_orders o ON o.id = rc.order_id
-        WHERE rc.status = 'received'
+        WHERE rc.status = 'received' AND ${scope.sql}
           AND NOT EXISTS (
             SELECT 1 FROM purchase_inspections i
              WHERE i.receipt_id = rc.id AND i.status NOT IN ('cancelled', 'draft')
@@ -142,7 +144,7 @@ export function pendingReceipts(db, { limit = 50 } = {}) {
         ORDER BY rc.receipt_date DESC, rc.id DESC
         LIMIT ?`
     )
-    .all(limit)
+    .all(...scope.params, limit)
 }
 
 /**
@@ -287,9 +289,12 @@ export function getInspection(db, id) {
 }
 
 export function listInspections(db, q = {}) {
-  const { page = 1, pageSize = 20, status = null, result = null, supplierId = null, receiptId = null } = q
+  const { page = 1, pageSize = 20, status = null, result = null, supplierId = null, receiptId = null, orgScope = null } = q
   const where = []
   const args = []
+  // ADR-0038 补充：质检单随到货仓的组织范围裁剪（orgScope 不传 = 全局）
+  const scope = stockScopeSql(orgScope, 'i')
+  where.push(scope.sql); args.push(...scope.params)
   if (status) { where.push('i.status = ?'); args.push(status) }
   if (result) { where.push('i.result = ?'); args.push(result) }
   if (supplierId) { where.push('i.supplier_id = ?'); args.push(supplierId) }

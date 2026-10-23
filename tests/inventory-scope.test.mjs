@@ -461,3 +461,262 @@ test('MCP inventory tools follow the owner warehouse-org scope (ADR-0042)', { ti
     assert.equal(txCount(), t1 + 2)
   })
 })
+
+// ---------------------------------------------------------------------------
+// AA4（ADR-0038 补充）：质检处置调拨 / 仓库主数据 / 收货单与退货单 / POS 门店库存
+// ---------------------------------------------------------------------------
+test('AA4: QC disposition, warehouse master, purchase receipts/returns and POS store stock stay inside the scope', { timeout: 300000 }, async (t) => {
+  const f = await server(t)
+  const { db, api } = f
+  const whA = db.prepare("SELECT id, org_id FROM warehouses WHERE code='WH01'").get()
+  const whB = db.prepare("SELECT id, org_id FROM warehouses WHERE code='WH03'").get()
+  assert.notEqual(whA.org_id, whB.org_id)
+  const mkWh = (code, org, type = 'normal', storeId = null) =>
+    Number(db.prepare("INSERT INTO warehouses (code, name, type, status, org_id, store_id) VALUES (?,?,?,'active',?,?)").run(code, code, type, org, storeId).lastInsertRowid)
+  const sku = db.prepare('SELECT id FROM product_skus ORDER BY id LIMIT 1').get().id
+  const count = (table) => db.prepare(`SELECT COUNT(*) c FROM ${table}`).get().c
+  const supplierId = db.prepare('SELECT id FROM suppliers ORDER BY id LIMIT 1').get().id
+
+  const grant = db.prepare('INSERT OR IGNORE INTO role_permissions (role_code, perm_code) VALUES (?,?)')
+  for (const p of ['quality.qc.view', 'quality.handle.approve', 'quality.inspect', 'quality.inspect.view', 'quality.inspect.edit', 'purchase.order.view', 'purchase.inbound', 'purchase.return', 'pos.view', 'pos.store.stock']) {
+    grant.run('warehouse', p); grant.run('store', p)
+  }
+  const A = await f.account('aa4_wh_a', 'warehouse', { org_id: whA.org_id, data_scope: 'org' })
+  const NONE = await f.account('aa4_wh_none', 'warehouse', { data_scope: 'org' })
+  db.prepare('UPDATE users SET org_id=NULL WHERE id=?').run(NONE.id)
+  const NONEtoken = await f.login(NONE.username, NONE.password)
+
+  const adjust = async (wh, batch, qty = 20) => okData(await api('/api/inventory/adjust', { token: f.admin, body: { warehouse_id: wh, sku_id: sku, batch_no: batch, qty, direction: 'in', reason: 'aa4' } }))
+  const whA2 = mkWh('AA4A2', whA.org_id)
+  await adjust(whA.id, 'AA4'); await adjust(whB.id, 'AA4'); await adjust(whA.id, 'AA4Q')
+
+  await t.test('QC disposition: source warehouse out of scope is 404, quarantine target out of scope is 403, in-scope target is chosen', async () => {
+    // 先把种子里的隔离仓都归到 B 组织：A 的范围内没有任何隔离仓
+    db.prepare("UPDATE warehouses SET org_id=? WHERE type IN ('defect','quarantine')").run(whB.org_id)
+    const insReq = db.prepare("INSERT INTO qc_requests (doc_no, source_type, request_date, warehouse_id, status) VALUES (?,?,date('now','localtime'),?, 'submitted')")
+    const insIns = db.prepare("INSERT INTO qc_inspections (doc_no, request_id, warehouse_id, inspect_date, result, status) VALUES (?,?,?,date('now','localtime'),'unqualified','inspected')")
+    const insItem = db.prepare("INSERT INTO qc_request_items (request_id, line_no, sku_id, batch_no, qty) VALUES (?,1,?,?,5)")
+    const insDh = db.prepare(`INSERT INTO qc_defect_handlings (doc_no, inspection_id, inspection_no, request_id, warehouse_id, sku_id, batch_no, qty, mode, reason, stock_direction, status)
+      VALUES (?,?,?,?,?,?, ?, 1, ?, 'aa4', 'out', 'draft')`)
+    let n = 0
+    const dh = (wh, mode, batch = 'AA4Q') => {
+      n++
+      const rq = Number(insReq.run(`AA4-QR-${n}`, 'inventory', wh).lastInsertRowid)
+      const ci = Number(insIns.run(`AA4-QI-${n}`, rq, wh).lastInsertRowid)
+      insItem.run(rq, sku, batch)
+      return Number(insDh.run(`AA4-DH-${n}`, ci, `AA4-QI-${n}`, rq, wh, sku, batch, mode).lastInsertRowid)
+    }
+    const stockQty = (wh) => db.prepare('SELECT COALESCE(SUM(qty_on_hand),0) q FROM inventory_stocks WHERE warehouse_id=? AND sku_id=?').get(wh, sku).q
+    const snap = (id) => JSON.stringify(db.prepare('SELECT status,out_doc_id FROM qc_defect_handlings WHERE id=?').get(id))
+    const dB = dh(whB.id, 'scrap', 'AA4'); const dBc = dh(whB.id, 'concession', 'AA4')
+    const dAc = dh(whA.id, 'concession'); const dAs = dh(whA.id, 'scrap')
+    const dAshared = dh(whA.id, 'concession', 'AA4') // 同一批次在 B 仓也有库存
+
+    // 源仓在范围外 ⇒ 与不存在同形 404，且不动库存、不动单据
+    const txBefore = count('inventory_transactions'); const bQty = stockQty(whB.id)
+    for (const id of [dB, dBc]) {
+      const b = snap(id)
+      expectStatus(await api(`/api/qc/handlings/${id}/confirm`, { token: A.token, body: {} }), 404, `confirm ${id}`)
+      expectStatus(await api(`/api/qc/handlings/${id}/cancel`, { token: A.token, body: {} }), 404, `cancel ${id}`)
+      expectStatus(await api(`/api/qc/handlings/${id}`, { token: A.token }), 404, `get ${id}`)
+      assert.equal(snap(id), b)
+    }
+    const hid = await api(`/api/qc/handlings/${dB}/confirm`, { token: A.token, body: {} })
+    const mis = await api('/api/qc/handlings/999999/confirm', { token: A.token, body: {} })
+    assert.deepEqual(hid.body, mis.body)
+    assert.equal(stockQty(whB.id), bQty); assert.equal(count('inventory_transactions'), txBefore)
+    const names = okData(await api('/api/qc/handlings?pageSize=500', { token: A.token })).list.map((r) => r.doc_no).filter((x) => x.startsWith('AA4-'))
+    assert.deepEqual(names.sort(), ['AA4-DH-3', 'AA4-DH-4', 'AA4-DH-5'])
+    // 检验单读（内嵌处置单）同一道门：B 仓检验单 404，列表不含，A 仓的可见
+    const ciOf = (no) => db.prepare('SELECT id FROM qc_inspections WHERE doc_no=?').get(no).id
+    expectStatus(await api(`/api/qc/inspections/${ciOf('AA4-QI-1')}`, { token: A.token }), 404, 'inspection B')
+    assert.equal((await api(`/api/qc/inspections/${ciOf('AA4-QI-3')}`, { token: A.token })).status, 200)
+    assert.equal((await api(`/api/qc/inspections/${ciOf('AA4-QI-1')}`, { token: f.admin })).status, 200)
+    const insNames = okData(await api('/api/qc/inspections?pageSize=500', { token: A.token })).list.map((r) => r.doc_no).filter((x) => x.startsWith('AA4-'))
+    assert.deepEqual(insNames.sort(), ['AA4-QI-3', 'AA4-QI-4', 'AA4-QI-5'])
+    assert.equal(okData(await api('/api/qc/handlings?pageSize=500', { token: NONEtoken })).list.length, 0)
+
+    // 检验单 / 报检单 / 待检来源的其余入口同一道门：提交结论会改写批次级可售状态
+    const qiB = ciOf('AA4-QI-1'); const rqB = db.prepare('SELECT request_id r FROM qc_inspections WHERE id=?').get(qiB).r
+    const ciSnap = () => JSON.stringify([db.prepare('SELECT * FROM qc_inspections WHERE id=?').get(qiB), db.prepare('SELECT * FROM qc_requests WHERE id=?').get(rqB)])
+    const c0 = ciSnap()
+    for (const act of ['submit', 'close', 'cancel']) expectStatus(await api(`/api/qc/inspections/${qiB}/${act}`, { token: A.token, body: {} }), 404, `inspection ${act}`)
+    for (const act of ['submit', 'close', 'cancel']) expectStatus(await api(`/api/qc/requests/${rqB}/${act}`, { token: A.token, body: {} }), 404, `request ${act}`)
+    expectStatus(await api(`/api/qc/requests/${rqB}`, { token: A.token }), 404, 'request get')
+    assert.equal(ciSnap(), c0)
+    const rqNames = okData(await api('/api/qc/requests?pageSize=500', { token: A.token })).list.map((r) => r.doc_no).filter((x) => x.startsWith('AA4-'))
+    assert.deepEqual(rqNames.sort(), ['AA4-QR-3', 'AA4-QR-4', 'AA4-QR-5'])
+    const insGrQ = db.prepare("INSERT INTO purchase_receipts (doc_no, supplier_id, warehouse_id, receipt_date, status) VALUES (?,?,?,date('now','localtime'),'received')")
+    const grQB = Number(insGrQ.run('ZQ-QGR-B', supplierId, whB.id).lastInsertRowid)
+    expectStatus(await api(`/api/qc/pending/detail?source_type=purchase_receipt&source_id=${grQB}`, { token: A.token }), 404, 'pending detail B')
+    assert.equal((await api(`/api/qc/pending/detail?source_type=purchase_receipt&source_id=${grQB}`, { token: f.admin })).status, 200)
+    assert.ok(!okData(await api('/api/qc/pending', { token: A.token })).list.some((r) => r.source_id === grQB))
+    assert.ok(okData(await api('/api/qc/pending', { token: f.admin })).list.some((r) => r.source_id === grQB))
+    expectStatus(await api('/api/qc/requests', { token: A.token, body: { source_type: 'purchase_receipt', source_id: grQB } }), 404, 'request from foreign receipt')
+
+    // 目标隔离仓不在范围内 ⇒ 403，不出库不建调拨单
+    const tfBefore = count('stock_transfers'); const aQty = stockQty(whA.id)
+    const b1 = snap(dAc)
+    expectStatus(await api(`/api/qc/handlings/${dAc}/confirm`, { token: A.token, body: {} }), 403, 'concession target out of scope')
+    assert.equal(snap(dAc), b1); assert.equal(count('stock_transfers'), tfBefore); assert.equal(stockQty(whA.id), aQty)
+    // 同一批次在范围外仓仍有库存 ⇒ 让步 / 返工会改变别组织货的可售结论，403 且不动
+    const qcStatus = () => JSON.stringify(db.prepare("SELECT warehouse_id FROM inventory_stocks WHERE sku_id=? AND batch_no='AA4' ORDER BY id").all(sku))
+    const bq0 = db.prepare("SELECT qc_status FROM inventory_batches WHERE sku_id=? AND batch_no='AA4'").all(sku)
+    expectStatus(await api(`/api/qc/handlings/${dAshared}/confirm`, { token: A.token, body: {} }), 403, 'shared batch')
+    assert.deepEqual(db.prepare("SELECT qc_status FROM inventory_batches WHERE sku_id=? AND batch_no='AA4'").all(sku), bq0)
+    assert.equal(count('stock_transfers'), tfBefore); assert.ok(qcStatus())
+    // 报废只需要源仓在范围内
+    okData(await api(`/api/qc/handlings/${dAs}/confirm`, { token: A.token, body: {} }))
+    assert.equal(stockQty(whA.id), aQty - 1)
+
+    // A 组织自己的隔离仓（id 比 B 的大）⇒ 优先选范围内的仓
+    const defA = mkWh('AA4DEF', whA.org_id, 'defect')
+    const defId = db.prepare("SELECT MIN(id) m FROM warehouses WHERE type='defect'").get().m
+    assert.notEqual(defId, defA, 'a lower-id defect warehouse (other org) exists')
+    okData(await api(`/api/qc/handlings/${dAc}/confirm`, { token: A.token, body: {} }))
+    assert.equal(db.prepare('SELECT to_warehouse_id w FROM stock_transfers WHERE id=(SELECT MAX(id) FROM stock_transfers)').get().w, defA)
+    // admin 全局：照旧选最小 id 的隔离仓，可处置 B 仓单据
+    okData(await api(`/api/qc/handlings/${dB}/confirm`, { token: f.admin, body: {} }))
+    okData(await api(`/api/qc/handlings/${dBc}/confirm`, { token: f.admin, body: {} }))
+    assert.equal(db.prepare('SELECT to_warehouse_id w FROM stock_transfers WHERE id=(SELECT MAX(id) FROM stock_transfers)').get().w, defId)
+  })
+
+  await t.test('warehouse master: reads trimmed to scope, writes need global scope', async () => {
+    const list = okData(await api('/api/master/warehouses?all=1', { token: A.token }))
+    assert.ok(list.length > 0)
+    for (const w of list) assert.equal(w.org_id, whA.org_id, `leaked warehouse ${w.code}`)
+    const paged = okData(await api('/api/master/warehouses?pageSize=500', { token: A.token }))
+    assert.equal(paged.total, paged.list.length)
+    assert.ok(paged.list.every((w) => w.org_id === whA.org_id))
+    assert.ok(okData(await api('/api/master/warehouses?all=1', { token: f.admin })).some((w) => w.org_id !== whA.org_id), 'admin stays global')
+    expectStatus(await api(`/api/master/warehouses/${whA.id}`, { token: A.token }), 200, 'detail in scope')
+    const hid = await api(`/api/master/warehouses/${whB.id}`, { token: A.token })
+    const mis = await api('/api/master/warehouses/999999', { token: A.token })
+    expectStatus(hid, 404, 'detail out of scope'); assert.equal(hid.body.detail.code, mis.body.detail.code)
+    assert.equal(okData(await api('/api/master/warehouses?all=1', { token: NONEtoken })).length, 0)
+    // 写入：受限范围一律 403，库不变
+    const snap = () => JSON.stringify(db.prepare('SELECT * FROM warehouses ORDER BY id').all())
+    const s0 = snap()
+    expectStatus(await api('/api/master/warehouses', { token: A.token, body: { code: 'AA4NEW', name: 'x' } }), 403, 'create')
+    expectStatus(await api(`/api/master/warehouses/${whA.id}`, { token: A.token, method: 'PUT', body: { name: 'hijack' } }), 403, 'put in scope')
+    expectStatus(await api(`/api/master/warehouses/${whB.id}`, { token: A.token, method: 'PUT', body: { status: 'inactive' } }), 403, 'put out of scope')
+    expectStatus(await api(`/api/master/warehouses/${whB.id}`, { token: A.token, method: 'DELETE' }), 403, 'delete')
+    assert.equal(snap(), s0)
+    okData(await api('/api/master/warehouses', { token: f.admin, body: { code: 'AA4NEW', name: 'x' } }))
+    okData(await api(`/api/master/warehouses/${whB.id}`, { token: f.admin, method: 'PUT', body: { name: 'WH03-renamed' } }))
+    // 货位：读按范围裁剪，写入目标仓需在范围内
+    db.prepare("INSERT INTO warehouse_locations (warehouse_id, code, name, type) VALUES (?, 'AA4-LA', 'la', 'storage')").run(whA.id)
+    db.prepare("INSERT INTO warehouse_locations (warehouse_id, code, name, type) VALUES (?, 'AA4-LB', 'lb', 'storage')").run(whB.id)
+    const locs = okData(await api('/api/master/locations', { token: A.token })).map((l) => l.code)
+    assert.ok(locs.includes('AA4-LA') && !locs.includes('AA4-LB'))
+    assert.ok(okData(await api('/api/master/locations', { token: f.admin })).some((l) => l.code === 'AA4-LB'))
+    const lc = count('warehouse_locations')
+    expectStatus(await api('/api/master/locations', { token: A.token, body: { warehouse_id: whB.id, code: 'AA4-LX' } }), 403, 'location create out of scope')
+    assert.equal(count('warehouse_locations'), lc)
+  })
+
+  await t.test('purchase receipts and returns: document scope 404, target warehouse 403', async () => {
+    const insGr = db.prepare("INSERT INTO purchase_receipts (doc_no, supplier_id, warehouse_id, receipt_date, status) VALUES (?,?,?,date('now','localtime'),'received')")
+    const insPrt = db.prepare("INSERT INTO purchase_returns (doc_no, supplier_id, warehouse_id, return_date, status) VALUES (?,?,?,date('now','localtime'),?)")
+    const GR = { A: Number(insGr.run('AA4-GR-A', supplierId, whA.id).lastInsertRowid), B: Number(insGr.run('AA4-GR-B', supplierId, whB.id).lastInsertRowid) }
+    const PRT = {
+      A: Number(insPrt.run('AA4-PRT-A', supplierId, whA.id, 'draft').lastInsertRowid),
+      B: Number(insPrt.run('AA4-PRT-B', supplierId, whB.id, 'draft').lastInsertRowid),
+      Bc: Number(insPrt.run('AA4-PRT-BC', supplierId, whB.id, 'confirmed').lastInsertRowid)
+    }
+    const row = (table, id) => JSON.stringify(db.prepare(`SELECT * FROM ${table} WHERE id=?`).get(id))
+    const grNos = (r) => okData(r).list.map((x) => x.doc_no).filter((x) => x.startsWith('AA4-'))
+    assert.deepEqual(grNos(await api('/api/purchase/receipts?pageSize=500', { token: A.token })), ['AA4-GR-A'])
+    assert.equal(grNos(await api('/api/purchase/receipts?pageSize=500', { token: f.admin })).length, 2)
+    assert.deepEqual(grNos(await api('/api/purchase/returns?pageSize=500', { token: A.token })), ['AA4-PRT-A'])
+    assert.equal(grNos(await api('/api/purchase/returns?pageSize=500', { token: f.admin })).length, 3)
+    assert.equal(okData(await api('/api/purchase/receipts?pageSize=500', { token: NONEtoken })).total, 0)
+    assert.equal((await api(`/api/purchase/receipts/${GR.A}`, { token: A.token })).status, 200)
+    const hid = await api(`/api/purchase/receipts/${GR.B}`, { token: A.token })
+    expectStatus(hid, 404, 'receipt detail B')
+    assert.deepEqual(hid.body, (await api('/api/purchase/receipts/999999', { token: A.token })).body)
+    assert.equal((await api(`/api/purchase/receipts/${GR.B}`, { token: f.admin })).status, 200)
+    // 关闭到货单 / 作废 / 完成退货单：范围外 404 且行不变
+    const g0 = row('purchase_receipts', GR.B)
+    expectStatus(await api(`/api/purchase/receipts/${GR.B}/close`, { token: A.token, body: {} }), 404, 'close B')
+    assert.equal(row('purchase_receipts', GR.B), g0)
+    for (const [k, act] of [['B', 'cancel'], ['Bc', 'complete']]) {
+      const p0 = row('purchase_returns', PRT[k])
+      expectStatus(await api(`/api/purchase/returns/${PRT[k]}/${act}`, { token: A.token, body: {} }), 404, `${act} ${k}`)
+      assert.equal(row('purchase_returns', PRT[k]), p0)
+    }
+    okData(await api(`/api/purchase/returns/${PRT.A}/cancel`, { token: A.token, body: {} }))
+    // 建退货单：目标仓不在范围内 403，且不出库
+    const stockSnap = () => JSON.stringify(db.prepare('SELECT * FROM inventory_stocks ORDER BY id').all())
+    const s0 = stockSnap(); const r0 = count('purchase_returns')
+    for (const wh of [whB.id, 999999]) {
+      expectStatus(await api('/api/purchase/returns', { token: A.token, body: { supplier_id: supplierId, warehouse_id: wh, items: [{ sku_id: sku, batch_no: 'AA4', qty: 1 }] } }), 403, `return wh ${wh}`)
+    }
+    assert.equal(stockSnap(), s0); assert.equal(count('purchase_returns'), r0)
+    okData(await api('/api/purchase/returns', { token: A.token, body: { supplier_id: supplierId, warehouse_id: whA.id, items: [{ sku_id: sku, batch_no: 'AA4', qty: 1 }] } }))
+    okData(await api('/api/purchase/returns', { token: f.admin, body: { supplier_id: supplierId, warehouse_id: whB.id, items: [{ sku_id: sku, batch_no: 'AA4', qty: 1 }] } }))
+    okData(await api(`/api/purchase/returns/${PRT.B}/cancel`, { token: f.admin, body: {} }))
+    okData(await api(`/api/purchase/receipts/${GR.B}/close`, { token: f.admin, body: {} }).then((r) => (r.status === 409 ? { status: 200, body: { data: {} } } : r)))
+    // 收货建议：订单范围外 404
+    const [poA, poB] = db.prepare('SELECT id FROM purchase_orders ORDER BY id LIMIT 2').all()
+    db.prepare('UPDATE purchase_orders SET warehouse_id=? WHERE id=?').run(whA.id, poA.id)
+    db.prepare('UPDATE purchase_orders SET warehouse_id=? WHERE id=?').run(whB.id, poB.id)
+    assert.equal((await api(`/api/purchase/orders/${poA.id}/receive-suggest`, { token: A.token })).status, 200)
+    expectStatus(await api(`/api/purchase/orders/${poB.id}/receive-suggest`, { token: A.token }), 404, 'suggest B')
+  })
+
+  await t.test('legacy QC (module 07): inspections follow the receipt warehouse scope and cannot return foreign stock', async () => {
+    const insGr = db.prepare("INSERT INTO purchase_receipts (doc_no, supplier_id, warehouse_id, receipt_date, status) VALUES (?,?,?,date('now','localtime'),'received')")
+    const insQi = db.prepare("INSERT INTO purchase_inspections (doc_no, receipt_id, supplier_id, warehouse_id, inspect_date, status) VALUES (?,?,?,?,date('now','localtime'),'draft')")
+    const gB = Number(insGr.run('AA4-LGR-B', supplierId, whB.id).lastInsertRowid)
+    const gA = Number(insGr.run('AA4-LGR-A', supplierId, whA.id).lastInsertRowid)
+    const qB = Number(insQi.run('AA4-LQ-B', gB, supplierId, whB.id).lastInsertRowid)
+    const qA = Number(insQi.run('AA4-LQ-A', gA, supplierId, whA.id).lastInsertRowid)
+    const prtBefore = count('purchase_returns'); const stockSnap = JSON.stringify(db.prepare('SELECT * FROM inventory_stocks ORDER BY id').all())
+    const snap = () => JSON.stringify(db.prepare('SELECT * FROM purchase_inspections WHERE id=?').get(qB))
+    const s0 = snap()
+    expectStatus(await api(`/api/purchase/inspections/${qB}`, { token: A.token }), 404, 'legacy get')
+    for (const act of ['submit', 'close', 'cancel']) expectStatus(await api(`/api/purchase/inspections/${qB}/${act}`, { token: A.token, body: { lines: [] } }), 404, act)
+    expectStatus(await api('/api/purchase/inspections', { token: A.token, body: { receipt_id: gB } }), 404, 'create from foreign receipt')
+    expectStatus(await api(`/api/purchase/inspections/receipt/${gB}`, { token: A.token }), 404, 'receipt fill')
+    assert.equal(snap(), s0); assert.equal(count('purchase_returns'), prtBefore)
+    assert.equal(JSON.stringify(db.prepare('SELECT * FROM inventory_stocks ORDER BY id').all()), stockSnap)
+    const nos = okData(await api('/api/purchase/inspections?pageSize=500', { token: A.token })).list.map((r) => r.doc_no).filter((x) => x.startsWith('AA4-'))
+    assert.deepEqual(nos, ['AA4-LQ-A'])
+    assert.equal((await api(`/api/purchase/inspections/${qA}`, { token: A.token })).status, 200)
+    const pend = okData(await api('/api/purchase/inspections/pending', { token: A.token })).list.map((r) => r.doc_no)
+    assert.ok(!pend.includes('AA4-LGR-B'))
+    assert.equal((await api(`/api/purchase/inspections/${qB}`, { token: f.admin })).status, 200)
+  })
+
+  await t.test('POS store stock covers all active warehouses of the bound store and nothing else', async () => {
+    const stores = db.prepare('SELECT id FROM stores ORDER BY id LIMIT 2').all()
+    const [s1, s2] = stores.map((s) => s.id)
+    db.prepare("UPDATE warehouses SET store_id=NULL WHERE store_id IN (?,?)").run(s1, s2)
+    const w1a = mkWh('AA4S1A', whA.org_id, 'store', s1)
+    const w1b = mkWh('AA4S1B', whA.org_id, 'store', s1)
+    const w2 = mkWh('AA4S2', whB.org_id, 'store', s2)
+    const w1off = mkWh('AA4S1OFF', whA.org_id, 'store', s1)
+    db.prepare("UPDATE warehouses SET status='inactive' WHERE id=?").run(w1off)
+    for (const [wh, b] of [[w1a, 'S1A'], [w1b, 'S1B'], [w2, 'S2'], [w1off, 'S1OFF']]) await adjust(wh, b, 7)
+    const st1 = await f.account('aa4_store1', 'store', { store_id: s1 })
+    const st2 = await f.account('aa4_store2', 'store', { store_id: s2 })
+    const batches = async (acct) => okData(await api('/api/pos/stocks', { token: acct.token })).map((r) => r.batch_no).sort()
+    assert.deepEqual(await batches(st1), ['S1A', 'S1B'])
+    assert.deepEqual(await batches(st2), ['S2'])
+    // 商品列表的 store_stock 也只汇总本店启用仓
+    const prod = okData(await api(`/api/pos/products?kw=`, { token: st1.token })).find((p) => p.sku_id === sku)
+    assert.equal(Number(prod.store_stock), 14)
+    const prod2 = okData(await api(`/api/pos/products?kw=`, { token: st2.token })).find((p) => p.sku_id === sku)
+    assert.equal(Number(prod2.store_stock), 7)
+    // 门店绑定 + 组织范围冲突：带 A 组织的门店账号，门店下挂了 B 组织的仓 ⇒ 读不到 B 仓库存
+    const w1x = mkWh('AA4S1X', whB.org_id, 'store', s1)
+    await adjust(w1x, 'S1X', 7)
+    const stOrg = await f.account('aa4_store_orgA', 'store', { store_id: s1, org_id: whA.org_id, data_scope: 'org' })
+    assert.deepEqual(await batches(stOrg), ['S1A', 'S1B'])
+    assert.deepEqual(await batches(st1), ['S1A', 'S1B', 'S1X'], 'store binding alone stays authoritative for accounts without an org')
+    // 未绑定门店的非 admin 账号读不到任何库存
+    const unbound = await f.account('aa4_store_none', 'store')
+    expectStatus(await api('/api/pos/stocks', { token: unbound.token }), 403, 'unbound')
+  })
+})

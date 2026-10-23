@@ -39,11 +39,11 @@
 
 import { applyTransition } from './docflow.js'
 import { nextDocNoAuto } from './docno.js'
-import { applyStockOut } from './stock.js'
+import { applyStockOut, stockScopeSql, warehouseInScope } from './stock.js'
 import { createPurchaseReturn } from './purchase.js'
 // 处置即调拨：让步 / 返工要**自动生成一张真实的调拨单**（原仓出库 + 隔离仓入库）。
 // 出入库与成本回写的实现只有一份（`lib/transfer.js`，库存页面开调拨单走的是同一份）。
-import { createTransfer, receiveTransfer, shipTransfer } from './transfer.js'
+import { createTransfer, receiveTransfer, shipTransfer, assertTransferTargetsInScope } from './transfer.js'
 
 // ---------------------------------------------------------------------------
 // 基础工具：一律用**本地时间**。
@@ -171,6 +171,9 @@ function judge(defectQty, ac) {
 export function pendingSources(db, q = {}) {
   const where = []
   const args = []
+  // ADR-0038 补充：待检来源随来源仓的组织范围（orgScope 不传 = 全局）
+  const scope = stockScopeSql(q.orgScope, '')
+  where.push(scope.sql); args.push(...scope.params)
   if (q.sourceType) {
     where.push('source_type = ?')
     args.push(q.sourceType)
@@ -506,9 +509,11 @@ export function getRequest(db, id) {
 }
 
 export function listRequests(db, q = {}) {
-  const { page = 1, pageSize = 20, status = null, sourceType = null, keyword = null } = q
+  const { page = 1, pageSize = 20, status = null, sourceType = null, keyword = null, orgScope = null } = q
   const where = []
   const args = []
+  const scope = stockScopeSql(orgScope, 'rq')
+  where.push(scope.sql); args.push(...scope.params)
   if (status) { where.push('rq.status = ?'); args.push(status) }
   if (sourceType) { where.push('rq.source_type = ?'); args.push(sourceType) }
   if (keyword) {
@@ -539,7 +544,7 @@ export function listRequests(db, q = {}) {
 // 四、检验（QCI）
 // ---------------------------------------------------------------------------
 
-export function getInspection(db, id) {
+export function getInspection(db, id, orgScope = null) {
   const head = db
     .prepare(
       `SELECT ci.*, w.name AS warehouse_name, s.name AS supplier_name
@@ -550,6 +555,8 @@ export function getInspection(db, id) {
     )
     .get(id)
   if (!head) return null
+  // ADR-0038 补充：检验单随其仓的范围；范围外与不存在同形（调用方给 404）。内嵌处置单同一道门，不另漏
+  if (orgScope && orgScope.scope !== 'all' && !warehouseInScope(db, head.warehouse_id, orgScope)) return null
   const items = db
     .prepare('SELECT * FROM qc_request_items WHERE request_id=? ORDER BY line_no')
     .all(head.request_id)
@@ -603,9 +610,11 @@ export function getInspection(db, id) {
 }
 
 export function listInspections(db, q = {}) {
-  const { page = 1, pageSize = 20, status = null, result = null, keyword = null } = q
+  const { page = 1, pageSize = 20, status = null, result = null, keyword = null, orgScope = null } = q
   const where = []
   const args = []
+  const scope = stockScopeSql(orgScope, 'ci')
+  where.push(scope.sql); args.push(...scope.params)
   if (status) { where.push('ci.status = ?'); args.push(status) }
   if (result) { where.push('ci.result = ?'); args.push(result) }
   if (keyword) {
@@ -860,10 +869,14 @@ export function directionOf(mode) {
  * 取不到就**拒绝执行**而不是静默跳过 —— 静默跳过的后果是「处置单显示已执行、
  * 货却还在可售仓里」，这正是本次要修掉的那类静默失效。
  */
-function quarantineWarehouse(db, targetType) {
-  const row = db
-    .prepare("SELECT id, code, name FROM warehouses WHERE type=? AND status='active' ORDER BY id LIMIT 1")
-    .get(targetType)
+function quarantineWarehouse(db, targetType, orgScope = null) {
+  const rows = db
+    .prepare("SELECT id, code, name FROM warehouses WHERE type=? AND status='active' ORDER BY id")
+    .all(targetType)
+  // ADR-0038 补充（AA4）：受限范围优先选范围内的隔离仓；没有任何范围内的仓 ⇒ 不退回全局仓，交给调用方的目标仓校验 403。
+  const row = (!orgScope || orgScope.scope === 'all')
+    ? rows[0]
+    : rows.find((w) => warehouseInScope(db, w.id, orgScope)) || rows[0]
   if (!row) {
     throw new QC2Error(
       `没有找到「${DISPOSITION_TARGET_LABEL[targetType] || targetType}」（warehouses.type='${targetType}'），` +
@@ -872,6 +885,17 @@ function quarantineWarehouse(db, targetType) {
     )
   }
   return row
+}
+
+/**
+ * 处置单的源仓是否在范围内（ADR-0038 补充）。`orgScope` 不传 = 全局（lib 内部 / 种子 / MCP 口径不变）；
+ * 范围外与不存在同形 404（`QC2_NOT_FOUND`），不泄漏存在性。
+ */
+function assertHandlingInScope(db, dh, orgScope) {
+  if (!orgScope || orgScope.scope === 'all') return
+  if (!warehouseInScope(db, dh.warehouse_id, orgScope)) {
+    throw new QC2Error('不良品处理单不存在', { code: 'QC2_NOT_FOUND', httpStatus: 404 })
+  }
 }
 
 /**
@@ -902,12 +926,16 @@ function returnUnitPrice(db, dh) {
  *   ③ 处理数量不能超过该行还没处置的量 —— 否则同一批不良品会被处置两次（退两次货）。
  */
 export function createHandling(db, p = {}) {
-  const { inspectionId, skuId, batchNo = '', qty, mode, reason = null, defectCode = null, remark = null, actor: actorRaw = null } = p
+  const { inspectionId, skuId, batchNo = '', qty, mode, reason = null, defectCode = null, remark = null, actor: actorRaw = null, orgScope = null } = p
   const actor = actorOf(actorRaw)
   if (!inspectionId) throw new QC2Error('缺少检验单', { code: 'QC2_NO_INSPECTION' })
   if (!MODE_LABEL[mode]) throw new QC2Error(`不认识的处置方式：${mode}`, { code: 'QC2_BAD_MODE' })
   const ci = db.prepare('SELECT * FROM qc_inspections WHERE id=?').get(inspectionId)
   if (!ci) throw new QC2Error('检验单不存在', { code: 'QC2_NOT_FOUND', httpStatus: 404 })
+  // ADR-0038 补充：检验单所在仓在范围外 ⇒ 与不存在同形 404（先于任何状态 / 数量校验，避免用错误文案探测）
+  if (orgScope && orgScope.scope !== 'all' && !warehouseInScope(db, ci.warehouse_id, orgScope)) {
+    throw new QC2Error('检验单不存在', { code: 'QC2_NOT_FOUND', httpStatus: 404 })
+  }
   if (ci.status === 'draft') throw new QC2Error('请先提交检验结论，再决定不良品怎么处理', { code: 'QC2_NOT_INSPECTED', httpStatus: 409 })
   if (ci.status === 'cancelled') throw new QC2Error('检验单已取消', { code: 'QC2_STATE_INVALID', httpStatus: 409 })
   if (ci.result !== 'unqualified') {
@@ -987,10 +1015,11 @@ function recalcHandlingCount(db, inspectionId) {
  * 为什么让步 / 返工也要走「执行」这一步：它们是**决策**，需要有人批准、需要留痕；
  * 而且现在它们都真的动库存，不执行就没有任何库存后果。
  */
-export function confirmHandling(db, { id, actor = {}, remark = null, source = 'api' }) {
+export function confirmHandling(db, { id, actor = {}, remark = null, source = 'api', orgScope = null }) {
   actor = actorOf(actor)
   const dh = db.prepare('SELECT * FROM qc_defect_handlings WHERE id=?').get(id)
   if (!dh) throw new QC2Error('不良品处理单不存在', { code: 'QC2_NOT_FOUND', httpStatus: 404 })
+  assertHandlingInScope(db, dh, orgScope)
   if (dh.status !== 'draft') {
     throw new QC2Error(`处理单当前为「${dh.status}」，只有待处理能执行`, { code: 'QC2_STATE_INVALID', httpStatus: 409 })
   }
@@ -1007,6 +1036,19 @@ export function confirmHandling(db, { id, actor = {}, remark = null, source = 'a
         '请先在报检/检验明细上补上批次号再执行。',
       { code: 'QC2_HANDLE_NO_BATCH', httpStatus: 409, detail: { handling_id: dh.id, mode: dh.mode } }
     )
+  }
+
+  // ADR-0038 补充：让步 / 返工会改写 `inventory_batches.qc_status`，它是 sku+批次级（跨仓）的可售结论。
+  // 受限账号不得借此改变范围外仓库同一批次货的可售性：该批次在范围外仍有库存 ⇒ 403，整笔不动。
+  if ((dh.mode === 'concession' || dh.mode === 'rework') && orgScope && orgScope.scope !== 'all') {
+    const outside = stockScopeSql(orgScope, 'st')
+    const shared = db
+      .prepare(`SELECT 1 FROM inventory_stocks st WHERE st.sku_id=? AND st.batch_no=? AND st.qty_on_hand>0 AND NOT (${outside.sql}) LIMIT 1`)
+      .get(dh.sku_id, dh.batch_no, ...outside.params)
+    if (shared) {
+      const e = new QC2Error('该批次在您的组织范围外的仓库仍有库存，让步 / 返工会改变其可售状态，请由有全局范围的账号处置', { code: 'TARGET_OUT_OF_SCOPE', httpStatus: 403 })
+      throw e
+    }
   }
 
   const tx = db.transaction(() => {
@@ -1087,7 +1129,9 @@ export function confirmHandling(db, { id, actor = {}, remark = null, source = 'a
       // 两步都在本事务内，任一步失败整笔回滚 —— 不会出现「出库了但没入库」的半截账。
       // 这张单在库存 → 调拨页面里能查到、能反查流水，与人工开的调拨单完全同构。
       const targetType = DISPOSITION_TARGET[dh.mode]
-      const targetWh = quarantineWarehouse(db, targetType)
+      const targetWh = quarantineWarehouse(db, targetType, orgScope)
+      // ADR-0038 补充：调拨两端（源仓 + 隔离仓）都必须在操作者范围内，先于建单；越界 403 且整笔不动
+      assertTransferTargetsInScope(db, dh.warehouse_id, targetWh.id, orgScope)
       // 流水的备注要把**来源**写清（客户口径：出入库单上的类型要能看出这是什么单）——
       // 出/入两条流水的 remark 都带上质检单号 + 处置单号 + 处置方式。
       const src = `质检${MODE_LABEL[dh.mode]}（${dh.inspection_no}）处置单 ${dh.doc_no}`
@@ -1177,10 +1221,11 @@ export function confirmHandling(db, { id, actor = {}, remark = null, source = 'a
   return { ...getHandling(db, id), stock_effect: out }
 }
 
-export function cancelHandling(db, { id, reason = null, actor = {}, source = 'api' }) {
+export function cancelHandling(db, { id, reason = null, actor = {}, source = 'api', orgScope = null }) {
   actor = actorOf(actor)
   const dh = db.prepare('SELECT * FROM qc_defect_handlings WHERE id=?').get(id)
   if (!dh) throw new QC2Error('不良品处理单不存在', { code: 'QC2_NOT_FOUND', httpStatus: 404 })
+  assertHandlingInScope(db, dh, orgScope)
   const tx = db.transaction(() => {
     applyTransition({
       db, docType: 'DH', id, action: 'cancel',
@@ -1208,7 +1253,7 @@ export function recalcDisposition(db, inspectionId) {
   return disposition
 }
 
-export function getHandling(db, id) {
+export function getHandling(db, id, orgScope = null) {
   const row = db
     .prepare(
       `SELECT dh.*, w.name AS warehouse_name, s.name AS supplier_name
@@ -1219,6 +1264,7 @@ export function getHandling(db, id) {
     )
     .get(id)
   if (!row) return null
+  if (orgScope && orgScope.scope !== 'all' && !warehouseInScope(db, row.warehouse_id, orgScope)) return null
   const events = db
     .prepare(
       `SELECT action, action_name, from_state, to_state, actor_name, remark, created_at
@@ -1234,9 +1280,11 @@ export function getHandling(db, id) {
 }
 
 export function listHandlings(db, q = {}) {
-  const { page = 1, pageSize = 20, status = null, mode = null, inspectionId = null, keyword = null } = q
+  const { page = 1, pageSize = 20, status = null, mode = null, inspectionId = null, keyword = null, orgScope = null } = q
   const where = []
   const args = []
+  const scope = stockScopeSql(orgScope, 'dh')
+  where.push(scope.sql); args.push(...scope.params)
   if (status) { where.push('dh.status = ?'); args.push(status) }
   if (mode) { where.push('dh.mode = ?'); args.push(mode) }
   if (inspectionId) { where.push('dh.inspection_id = ?'); args.push(inspectionId) }

@@ -17,7 +17,8 @@ import { Router } from 'express'
 import { localDate } from '../lib/dates.js'
 import { getDb } from '../db/index.js'
 import { ok, fail, wrap, failFromError } from '../lib/http.js'
-import { requireAuth, requireRole, requirePerm, permContext, hasPerm } from '../middleware/auth.js'
+import { requireAuth, requireRole, requirePerm, permContext, hasPerm, resolveOrgScope } from '../middleware/auth.js'
+import { warehouseInScope } from '../lib/stock.js'
 import { audit } from '../middleware/audit.js'
 import { advanceStatus } from '../lib/docflow.js'
 import {
@@ -59,10 +60,18 @@ function storeCtx(req) {
   if (!u.store_id) throw Object.assign(new Error('当前账号未绑定门店'), { status: 403 })
   const store = db.prepare('SELECT * FROM stores WHERE id=?').get(u.store_id)
   if (!store) throw Object.assign(new Error('门店不存在'), { status: 404 })
-  const wh = db
-    .prepare("SELECT * FROM warehouses WHERE store_id=? AND status='active' ORDER BY id LIMIT 1")
-    .get(store.id)
-  return { db, store, wh, u }
+  // ADR-0038 补充（AA4）：库存读取覆盖**本店全部启用仓**（`whs`）；
+  // `wh`（范围内首个启用仓）是写路径（收银出库 / 日结 / 盘点等）的默认仓。
+  // 账号另带组织范围（org / subtree + 具体组织）时再叠加仓库归属组织：门店绑定不能把别组织的仓挂进来读。
+  // 没有组织（none / self / all 等）时门店绑定仍是唯一依据（ADR-0025，门店账号通常不带组织）。
+  const os = resolveOrgScope(db, u)
+  const orgRestricted = (os.scope === 'org' || os.scope === 'subtree') && os.orgIds?.length
+  const whs = db
+    .prepare("SELECT * FROM warehouses WHERE store_id=? AND status='active' ORDER BY id")
+    .all(store.id)
+    .filter((w) => !orgRestricted || warehouseInScope(db, w.id, os))
+  // 写路径默认仓（收银 / 日结 / 盘点出库）同样只取范围内的首个启用仓；无组织限制时与原来的首个启用仓一致
+  return { db, store, wh: whs[0] || null, whs, u }
 }
 
 function requireStore() {
@@ -136,7 +145,7 @@ r.get(
   requireStore(),
   requirePerm('pos.view'),
   wrap((req, res) => {
-    const { db, store, wh } = storeCtx(req)
+    const { db, whs } = storeCtx(req)
     const kw = (req.query.kw || '').trim()
     let where = "s.status='active' AND p.item_type='product'"
     const params = []
@@ -158,13 +167,15 @@ r.get(
          LIMIT 200`
       )
       .all(...params)
+    const whIds = whs.map((w) => w.id)
+    const whIn = whIds.map(() => '?').join(',')
     for (const row of rows) {
-      const st = wh
+      const st = whIds.length
         ? db
             .prepare(
-              'SELECT COALESCE(SUM(qty_on_hand - qty_reserved),0) a FROM inventory_stocks WHERE warehouse_id=? AND sku_id=?'
+              `SELECT COALESCE(SUM(qty_on_hand - qty_reserved),0) a FROM inventory_stocks WHERE warehouse_id IN (${whIn}) AND sku_id=?`
             )
-            .get(wh.id, row.sku_id)
+            .get(...whIds, row.sku_id)
         : { a: 0 }
       row.store_stock = st.a
     }
@@ -352,8 +363,8 @@ r.get(
   requireStore(),
   requirePerm('pos.store.stock'),
   wrap((req, res) => {
-    const { db, wh } = storeCtx(req)
-    if (!wh) return ok(res, [])
+    const { db, whs } = storeCtx(req)
+    if (!whs.length) return ok(res, [])
     const rows = db
       .prepare(
         `SELECT st.sku_id, st.batch_no, st.expire_date, st.qty_on_hand, st.qty_reserved,
@@ -362,10 +373,10 @@ r.get(
          FROM inventory_stocks st
          JOIN product_skus sk ON sk.id=st.sku_id
          JOIN products p ON p.id=sk.product_id
-         WHERE st.warehouse_id=? AND st.qty_on_hand > 0
-         ORDER BY p.category_id, sk.sku_code`
+         WHERE st.warehouse_id IN (${whs.map(() => '?').join(',')}) AND st.qty_on_hand > 0
+         ORDER BY p.category_id, sk.sku_code, st.warehouse_id`
       )
-      .all(wh.id)
+      .all(...whs.map((w) => w.id))
     return ok(res, rows)
   })
 )
