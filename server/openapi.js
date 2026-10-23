@@ -36,7 +36,10 @@ const p = (name, desc, schema = { type: 'string' }) => ({ name, in: 'path', requ
 export function buildOpenApi() {
   const paths = {
     '/api/meta/health': {
-      get: { tags: ['系统'], summary: '健康检查', security: [], responses: { 200: jsonResp(null, '服务状态') } }
+      get: { tags: ['系统'], summary: '健康检查（匿名只返回 status/版本/构建 SHA/时间；带 admin 令牌另返回 database 与 ops 运维块，ADR-0029）', security: [], responses: { 200: jsonResp(null, '服务状态') } }
+    },
+    '/api/meta/metrics': {
+      get: { tags: ['系统'], summary: '运维计数器（备份年龄/迁移校验和不一致/节流存储/磁盘；仅 admin 或 is_super，ADR-0029）', responses: { 200: jsonResp(null, '计数器') } }
     },
     '/api/meta/dict': {
       get: { tags: ['系统'], summary: '枚举字典（状态/角色/单据类型）', security: [], responses: { 200: jsonResp(null, '字典') } }
