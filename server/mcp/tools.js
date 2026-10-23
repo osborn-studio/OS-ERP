@@ -27,7 +27,7 @@ import { pickBatches, queryBalance, costOf, getInvParam, resolveOwnerOrg, applyS
 import { localDate, localNow } from '../lib/dates.js'
 // D5：MCP 工具不再"平行实现"业务 —— 有领域服务的一律调领域服务
 import { decideApproval, ApprovalError } from '../lib/approval.js'
-import { cancelOrder, SalesOrderError } from '../lib/sales-order.js'
+import { cancelOrder, SalesOrderError, salesScopeSql } from '../lib/sales-order.js'
 import { logPriceChange } from '../lib/pricing.js'
 // 采购域领域服务（批次 K）。**每一个采购写型工具只做两件事**：
 // 校验入参与组织归属，然后把动作交给下面这些函数 —— 一行业务 SQL 都不在这里写。
@@ -47,7 +47,8 @@ import {
   DocFlowError, getDocType, assertEdgePermitted, dispatchTransition
 } from '../lib/docflow.js'
 // 金额/数量与权限点的**唯一判据**（与 HTTP 入口同一个）
-import { numAmount, numQty, permContext, hasPerm } from '../middleware/auth.js'
+import { numAmount, numQty, permContext, hasPerm, resolveOrgScope } from '../middleware/auth.js'
+import { assertCanViewDocType, canViewDocType, bindingWhere, rowInBinding, TOKEN_OWNER_PERM_DENIED } from './doc-perms.js'
 
 /**
  * `perms`（ADR-0011）：有主令牌调用该工具时，**令牌所有者此刻**必须持有其中任一权限点
@@ -894,16 +895,13 @@ export const TOOLS = [
       if (args.channel) { where.push('so.channel=?'); params.push(args.channel) }
       if (args.store_id) { where.push('so.store_id=?'); params.push(args.store_id) }
       if (args.start_date) { where.push('so.order_date >= ?'); params.push(args.start_date) }
-      // A03 增量：同一份组织范围映射到 门店 / 经销商 / 发货仓 三种归属
-      const f = entityScopeClause(
-        scopeEntityIds(ctx, db),
-        { stores: ['store_id'], dealers: ['dealer_id'], warehouses: ['warehouse_id'] },
-        { alias: 'so' }
-      )
+      // ADR-0034：与 `GET /api/sales/orders` 同一个判据（salesScopeSql：出货仓 / 门店组织，任一在范围内可见；
+      // 空范围 = 1=0）。此前这里用另一套「门店 / 经销商 / 仓」映射，两个入口看到的订单集合不一致。
+      const f = salesScopeSql(ctx.scope, 'order', 'so')
       const rows = db.prepare(`
         SELECT so.*,
                (SELECT COUNT(*) FROM sales_order_items i WHERE i.order_id=so.id) AS item_count
-        FROM sales_orders so WHERE ${where.join(' AND ')} ${f.sql} ORDER BY so.id DESC LIMIT ?`).all(...params, ...f.params, limit)
+        FROM sales_orders so WHERE ${where.join(' AND ')} AND ${f.sql} ORDER BY so.id DESC LIMIT ?`).all(...params, ...f.params, limit)
       return ok({ count: rows.length, list: rows }, `销售订单 ${rows.length} 张`)
     }
   },
@@ -1336,16 +1334,12 @@ export const TOOLS = [
       // 原来这里只有一行 `UPDATE sales_orders SET status='cancelled'`：
       // 库存占用没释放（那批货永远卖不出去）、授信没还回去（额度只减不增），
       // 而单子看起来"已作废"，一切正常。
-      // 与 `sales.list_orders` 同一份范围映射：列表里看不到的订单，也不能作废（W5 矩阵验收发现此前缺这一道）
-      const so = db.prepare('SELECT * FROM sales_orders WHERE id=?').get(Number(args.order_id))
-      const soScope = scopeEntityIds(ctx, db)
-      if (so && !entityRowVisible(soScope, so, { stores: ['store_id'], dealers: ['dealer_id'], warehouses: ['warehouse_id'] })) {
-        const e = new Error('销售订单不存在'); e.code = 'ORDER_NOT_FOUND'; e.status = 404; throw e
-      }
+      // ADR-0034：范围判定在领域服务里（`orgScope` = 令牌 ∩ 所有者当前数据范围），与 `sales.list_orders` 同一判据；
+      // 范围外与不存在同形（ORDER_NOT_FOUND 404，早于状态校验）。
       const actor = ctx?.confirmedBy?.id
         ? { id: ctx.confirmedBy.id, name: ctx.confirmedBy.name }
         : { id: null, name: `MCP:${ctx?.tokenName || ''}` }
-      const out = cancelOrder(db, { id: args.order_id, reason: args.reason, actor, source: 'mcp' })
+      const out = cancelOrder(db, { id: args.order_id, reason: args.reason, actor, source: 'mcp', orgScope: ctx.scope || { scope: 'all', orgIds: null } })
       return ok(
         {
           order_id: out.order.id,
@@ -1405,11 +1399,16 @@ export const TOOLS = [
       }
       // 审批实例挂在某张单据上：单据不在本次调用的数据范围内，就不能替它签字（W5 矩阵验收发现此前缺这一道）
       assertDocInScope(ctx, db, inst.doc_type, inst.doc_id, { code: 'APPROVAL_NOT_FOUND', label: `审批实例 #${inst.id} 对应的单据` })
+      // ADR-0037：签字人不只是"在场的人"，还要对这张单据有组织范围——Agent 令牌范围之外再叠一层人的范围，
+      // 否则 HTTP 侧按组织拒绝的审批可以绕到 MCP 由同一个人确认后签掉（Y12 审计发现）。
+      const signerRow = db.prepare('SELECT id, role FROM users WHERE id=?').get(actor.id)
+      const signerScope = signerRow ? resolveOrgScope(db, { uid: signerRow.id, role: signerRow.role }) : { scope: 'none', orgIds: [] }
       const out = decideApproval(db, {
         instanceId: inst.id,
         decision: 'approve',
         comment: args.comment || null,
-        actor
+        actor,
+        scopeCtx: { orgScope: signerScope, user: { uid: actor.id, name: actor.name } }
       })
       return ok(
         {
@@ -1672,7 +1671,9 @@ export const TOOLS = [
         periodEnd: args.period_end || null,
         settleMode: args.settle_mode || 'auto',
         remark: args.remark || null,
-        actor
+        actor,
+        // ADR-0031：来源选择按委托生效范围（令牌范围 ∩ 所有者当前范围），与 HTTP 同一谓词
+        orgScope: ctx.scope
       })
       return ok(
         { id: row.id, doc_no: row.doc_no, status: row.status, settle_amount: row.settle_amount, diff_amount: row.diff_amount },
@@ -1726,7 +1727,9 @@ export const TOOLS = [
         voucherNo: args.voucher_no || null,
         remark: args.remark || null,
         allocations,
-        actor
+        actor,
+        // ADR-0031：FIFO 与手工核销都限在委托生效范围内（范围外结算单 ⇒ DOC_NOT_FOUND）
+        orgScope: ctx.scope
       })
       return ok(
         { id: row.id, doc_no: row.doc_no, status: row.status, amount: row.amount, settled_amount: row.settled_amount, allocation_count: row.items.length },
@@ -2016,18 +2019,31 @@ export const TOOLS = [
   {
     name: 'doc.list_types',
     level: 'read',
-    perms: [],
+    perms: [], // X5：按单据类型的查看权限在 handler 内校验（doc-perms.js），不是整工具一个权限点
     title: '单据类型字典（AI 的入口地图）',
     description:
       '列出系统里全部单据类型：每种单据有哪些状态、在什么状态下能做哪些动作、哪些动作是高危（需人工确认）。'
       + 'AI 打算操作单据前应先调它，不要凭猜测拼 action。',
     inputSchema: { type: 'object', properties: {} },
-    handler({ db }) {
-      const types = db
+    handler({ db, ctx }) {
+      // X5：只返回所有者当前有查看权限的类型；未映射的类型（含无主令牌）也不列。有主令牌一个都看不了 ⇒ 明确拒绝。
+      const owner = ctx?.ownerUserId != null ? permContext(db, { uid: ctx.ownerUserId }) : null
+      const all = db
         .prepare(`SELECT code,name,module,table_name,has_lines FROM doc_types WHERE status='active' ORDER BY sort_order, code`)
         .all()
+      const types = all.filter((t0) => canViewDocType(db, ctx, t0, owner))
+      if (owner && !types.length) {
+        const err = new Error('令牌所有者当前没有查看任何单据类型的权限；委托令牌不能超过所有者本人的权限')
+        err.code = TOKEN_OWNER_PERM_DENIED
+        err.status = 403
+        throw err
+      }
       const states = db.prepare('SELECT doc_type,code,name,kind,is_initial,is_final FROM doc_states ORDER BY doc_type,sort_order').all()
-      const actions = db.prepare('SELECT doc_type,action,action_name,from_state,to_state,is_danger FROM doc_actions ORDER BY doc_type,sort_order').all()
+      const visible = new Set(types.map((x) => x.code))
+      const actions = db
+        .prepare('SELECT doc_type,action,action_name,from_state,to_state,is_danger FROM doc_actions ORDER BY doc_type,sort_order')
+        .all()
+        .filter((a) => visible.has(a.doc_type))
       const out = types.map((t2) => ({
         code: t2.code,
         name: t2.name,
@@ -2048,7 +2064,7 @@ export const TOOLS = [
   {
     name: 'doc.query',
     level: 'read',
-    perms: [],
+    perms: [], // X5：同上，按 doc_type 校验
     title: '查任意单据列表',
     description:
       '按单据类型（`doc.list_types` 里的 code）查单据列表，可按状态与关键词过滤。'
@@ -2065,12 +2081,19 @@ export const TOOLS = [
     },
     handler({ db, args, ctx }) {
       const type = docTypeOrThrow(db, args.doc_type)
+      assertCanViewDocType(db, ctx, type) // X5：先过类型级查看权限，再谈范围
       const table = safeTable(type.table_name)
       const statusField = type.status_field || 'status'
       const docNoField = type.doc_no_field || 'doc_no'
       const limit = Math.min(Math.max(Number(args.limit) || 20, 1), 100)
       const where = []
       const params = []
+      // Y6：绑定类型把「属于所有者门店 / 经销商 / 订货主体」下推进 SQL（不是取回后再滤，limit 才准）
+      const bw = bindingWhere(db, ctx, type)
+      if (bw) {
+        where.push(bw.sql)
+        params.push(...bw.params)
+      }
       if (args.status) {
         where.push(`${statusField}=?`)
         params.push(String(args.status))
@@ -2106,7 +2129,7 @@ export const TOOLS = [
   {
     name: 'doc.get',
     level: 'read',
-    perms: [],
+    perms: [], // X5：同上，按 doc_type 校验
     title: '查任意单据详情 + 流转留痕',
     description:
       '给单据类型与 id（或单号），返回单头字段与**完整流转留痕**（谁、什么时候、从哪个状态到哪个状态）。'
@@ -2122,6 +2145,7 @@ export const TOOLS = [
     },
     handler({ db, args, ctx }) {
       const type = docTypeOrThrow(db, args.doc_type)
+      assertCanViewDocType(db, ctx, type) // X5：权限先于取行，避免用错误码探测单据是否存在
       const table = safeTable(type.table_name)
       const docNoField = type.doc_no_field || 'doc_no'
       let row = null
@@ -2135,7 +2159,7 @@ export const TOOLS = [
       }
       // 越界不报"无权查看"：报 403 等于确认"这张单存在但不是你的"
       const e = scopeEntityIds(ctx, db)
-      if (!entityRowVisible(e, row, ownershipColumnsOf(db, table))) {
+      if (!entityRowVisible(e, row, ownershipColumnsOf(db, table)) || !rowInBinding(db, ctx, type, row)) {
         const err = new Error(`${type.name}不存在（doc_type=${type.code}）`)
         err.code = 'NOT_FOUND'
         err.status = 404

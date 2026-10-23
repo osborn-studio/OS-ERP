@@ -170,7 +170,8 @@ export const TABLES = [
   'outsourcing_receipt_items', 'outsourcing_receipts', 'outsourcing_material_items', 'outsourcing_materials',
   'outsourcing_order_items', 'outsourcing_orders',
   'store_requisition_items', 'store_requisitions',
-  'ai_query_logs', 'audit_logs', 'oms_sync_logs', 'oms_order_items', 'oms_orders', 'platforms',
+  // qimen_nonces（060）按 platform_id 记已接受的 nonce；重建后平台 id 会被复用，旧 nonce 会让新一代平台的合法请求被判重放，所以必须清
+  'ai_query_logs', 'audit_logs', 'oms_sync_logs', 'oms_order_items', 'oms_orders', 'qimen_nonces', 'platforms',
   'mall_cart_items', 'mall_customers', 'pos_daily_closes', 'pos_shifts', 'pos_order_items', 'pos_orders',
   // 模块 17 交班缴款（024）：三张新表必须登记 —— 缴款明细引用班次 id、班次差异行引用班次 id，
   // 而重建后 `pos_shifts` 的 id 会被**复用**，旧明细看起来仍然「指向一个存在的班次」，

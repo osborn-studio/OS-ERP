@@ -180,7 +180,8 @@ let fail = 0
 const rows = []
 
 // 旧 test-*.mjs 串行跑在**同一个** run-data 目录里，几十个脚本都以 admin 等账号从 127.0.0.1 登录，
-// 会撞上 ADR-0005 的持久登录节流（默认 10 次/5 分钟/账号）—— 表现是后面的脚本"登录失败/401"，
+// 会撞上 ADR-0005 的持久登录节流（默认 10 次失败/5 分钟/账号；成功登录自 X7 起不再计入账号桶，
+// 但 IP 桶仍计全部尝试，且许多旧脚本会故意失败登录）—— 表现是后面的脚本"登录失败/401"，
 // 与被测功能无关。节流策略一经写入 run-data 就固定，所以这里对**所有**旧脚本统一给足额度
 // （上限 10000 是 checkedPolicy 允许的最大值）；`tests/*.test.mjs` 各自用临时目录并自带策略，不沾这份 env。
 // 这是测试台的环境设置，不改变生产默认值；节流本身由 tests/login-throttle.test.mjs 与 auth-session A08 守着。
@@ -225,6 +226,21 @@ for (let round = 1; round <= ROUNDS; round++) {
         // 失败时把输出尾部打出来 —— 否则只有"✗"一行，还得翻回去重跑才能看原因
         console.log('    ── 输出尾部 ──')
         console.log(out.split('\n').slice(-25).map((l) => '    ' + l).join('\n'))
+        // node --test 的失败用例名在 TAP 的 `not ok` 行，往往不在尾部 25 行里；单独列出（含紧随其后的 error/location 行）
+        const lines = out.split('\n')
+        const picked = []
+        for (let i = 0; i < lines.length; i++) {
+          if (/^\s*not ok /.test(lines[i])) {
+            picked.push(lines[i])
+            for (let j = i + 1; j < Math.min(i + 12, lines.length); j++) {
+              if (/^\s+(error:|location:|code:|failureType:|ENOENT|expected|actual)/.test(lines[j])) picked.push(lines[j])
+            }
+          }
+        }
+        if (picked.length) {
+          console.log('    ── not ok 用例 ──')
+          console.log(picked.slice(0, 60).map((l) => '    ' + l).join('\n'))
+        }
       }
     }
   }

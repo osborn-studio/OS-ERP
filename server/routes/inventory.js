@@ -19,6 +19,7 @@ import { getDb } from '../db/index.js'
 import { ok, fail, wrap, pageParams, paged } from '../lib/http.js'
 import { requireAuth, requireRole, requireInternal, currentUser } from '../middleware/auth.js'
 import { audit } from '../middleware/audit.js'
+import { withWriteRetry } from '../lib/tx.js'
 import { nextDocNo } from '../lib/docno.js'
 // findAction / applyTransition 曾用于调拨的原地实现，现已收进 `lib/transfer.js`，这里不再直接用。
 import { advanceStatus, tryTransition, nowText } from '../lib/docflow.js'
@@ -391,7 +392,7 @@ r.post(
     if (!items.length) return fail(res, '请添加调拨明细')
     // 建单 / 出库的全部口径都在 `lib/transfer.js`（含单据日期兜底、G4 的 null 单价、
     // autoShip 后的成本回写）。这里只做 HTTP 层的校验与审计。
-    const { id: tid } = createTransfer(db, {
+    const { id: tid } = withWriteRetry(db, () => createTransfer(db, {
       fromWarehouseId: from_warehouse_id,
       toWarehouseId: to_warehouse_id,
       // 单据日期兜底，避免未传日期时触发 NOT NULL 约束错误
@@ -401,7 +402,7 @@ r.post(
       actor: u,
       items,
       autoShip
-    })
+    }), { label: 'transfer.create' })
     audit(req, { action: 'CREATE', module: 'inventory', entity: 'stock_transfers', entityId: tid })
     return ok(res, { id: tid })
   })
@@ -415,7 +416,7 @@ r.post(
     const db = getDb()
     const u = currentUser(req)
     const id = Number(req.params.id)
-    db.transaction(() => shipTransfer(db, id, u))()
+    withWriteRetry(db, () => shipTransfer(db, id, u), { label: 'transfer.ship' })
     audit(req, { action: 'SHIP', module: 'inventory', entity: 'stock_transfers', entityId: id })
     return ok(res, { id })
   })
@@ -433,7 +434,7 @@ r.post(
     if (!head) return fail(res, '调拨单不存在', 404)
     if (head.status !== 'shipped') return fail(res, '只有已出库的调拨单可以收货')
     // 入库口径在 `lib/transfer.js`（逐行 TR_IN + 内核流转），这里不做第二遍。
-    db.transaction(() => receiveTransfer(db, id, u, { receiveDate: req.body?.receive_date || null }))()
+    withWriteRetry(db, () => receiveTransfer(db, id, u, { receiveDate: req.body?.receive_date || null }), { label: 'transfer.receive' })
     audit(req, { action: 'RECEIVE', module: 'inventory', entity: 'stock_transfers', entityId: id })
     return ok(res, { id })
   })

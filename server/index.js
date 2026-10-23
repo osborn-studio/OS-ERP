@@ -27,6 +27,8 @@ import { errorHandler } from './middleware/audit.js'
 import { requestLogger } from './lib/logger.js'
 import { requireAuth, JWT_SECRET, assertJwtSecretPosture, isTokenInvalid } from './middleware/auth.js'
 import jwt from 'jsonwebtoken'
+import { securityHeaders } from './middleware/security-headers.js'
+import { sessionCookieToken } from './middleware/session-transport.js'
 import authRoutes from './routes/auth.js'
 import masterRoutes from './routes/master.js'
 import purchaseRoutes from './routes/purchase.js'
@@ -96,6 +98,9 @@ const app = express()
 app.disable('x-powered-by')
 // 请求号 + 访问日志：必须最先，之后所有日志行（含 errorHandler）才带 req_id（ADR-0023）
 app.use(requestLogger)
+// 安全响应头（ADR-0036）：紧随请求号；静态根 = 前端构建产物（含 public/ 拷贝），用于给带内联脚本的 html 算 CSP 哈希
+const distDir = path.join(ROOT_DIR, 'dist')
+app.use(securityHeaders({ staticRoot: distDir }))
 app.use(cors())
 app.use(express.json({ limit: '5mb' }))
 app.use(express.urlencoded({ extended: true }))
@@ -137,7 +142,8 @@ app.use((req, res, next) => {
     // ① `x-industry` 头（外部可控）：缺失 ⇒ 默认；非法 ⇒ normalizeIndustry 抛（下面 catch → 400）
     let industry = normalizeIndustry(req.headers['x-industry'])
     // ② 令牌里的行业（签发时确定）优先于头
-    const raw = String(req.headers.authorization || req.headers['x-mall-token'] || '')
+    // cookie 传输模式：后台 JWT 在会话 Cookie 里（无 Authorization / x-mall-token 时才看），行业同样以令牌为准
+    const raw = String(req.headers.authorization || req.headers['x-mall-token'] || sessionCookieToken(req) || '')
     // 只认受控头：`?token=` 不再是凭据来源（与 `requireAuth` 同一口径，F13）
     const token = raw.replace(/^Bearer\s+/i, '')
     if (token) {
@@ -260,7 +266,6 @@ app.use('/mcp', mcpRoutes)
 app.use('/api', (_req, res) => res.status(404).json({ code: 1, success: false, message: '接口不存在' }))
 
 // 前端静态资源（生产构建产物）
-const distDir = path.join(ROOT_DIR, 'dist')
 if (fs.existsSync(distDir)) {
   app.use(express.static(distDir))
   app.get('*', (_req, res) => res.sendFile(path.join(distDir, 'index.html')))

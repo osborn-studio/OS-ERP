@@ -1,0 +1,92 @@
+{
+  "repo": "flash-oss/medici",
+  "tag": "v7.2.0",
+  "commit": "bd97047ce4dc582ca506886e18bc99d7b4e583fa",
+  "tag_published_at": "2025-07-11T03:04:46Z",
+  "selection_rule": "latest non-draft, non-prerelease GitHub release whose published_at is on or before 2026-10-15",
+  "fetched_at": "2026-10-23T12:15:14Z",
+  "license_spdx_as_declared": "MIT",
+  "license_files": [
+    {
+      "file": "LICENSE",
+      "bytes": 1078,
+      "sha256": "5b20a1bce33059945d8296de53f1e3483496b167dd135f61f283f5ab8e7d9068"
+    }
+  ],
+  "files_referenced": [
+    {
+      "path": "src/helper/addReversedTransactions.ts",
+      "referenced_by": [
+        "reusable/ledger/ledger.js header 3",
+        "reusable/README.md (addReversedTransactions.ts:19-24)"
+      ],
+      "fetch_status": "ok",
+      "bytes": 927,
+      "sha256": "03ad265b9f6576ae3a20fe7fcad9d8ad9e9fd69e137867131f8a4ed1534b5d87",
+      "git_blob_sha": "9f94cd3eae8ce4ad3447346925961aecdd850174",
+      "similarity": [
+        {
+          "local": "reusable/ledger/ledger.js",
+          "tokensA": 826,
+          "tokensB": 125,
+          "unigramJaccard": 0.1221,
+          "shingleSize": 5,
+          "shinglesA": 712,
+          "shinglesB": 114,
+          "sharedShingles": 0,
+          "localInUpstream": 0,
+          "upstreamInLocal": 0
+        }
+      ]
+    },
+    {
+      "path": "src/models/transaction.ts",
+      "referenced_by": [
+        "reusable/README.md"
+      ],
+      "fetch_status": "ok",
+      "bytes": 2755,
+      "sha256": "d9609eaa634d2b750fe88a44309a3366c9b9bdafe1cf41d804969030c6e35df5",
+      "git_blob_sha": "d214be91a45f963e7c6859612a07209540a8395c",
+      "similarity": [
+        {
+          "local": "reusable/ledger/ledger.js",
+          "tokensA": 826,
+          "tokensB": 342,
+          "unigramJaccard": 0.1975,
+          "shingleSize": 5,
+          "shinglesA": 712,
+          "shinglesB": 309,
+          "sharedShingles": 0,
+          "localInUpstream": 0,
+          "upstreamInLocal": 0
+        }
+      ]
+    },
+    {
+      "path": "src/Book.ts",
+      "referenced_by": [
+        "reusable/ledger/ledger.js header 3 names medici voidJournal by description, not by path; at this tag the method is Book.void in src/Book.ts"
+      ],
+      "fetch_status": "ok",
+      "bytes": 14514,
+      "sha256": "b6ca2c1dd1b4c5c9594201199296a266239704ae7eacd869b7f9fb95b55509b3",
+      "git_blob_sha": "666e37d5329e8461e1dc6ae43430dca2ed58ceb1",
+      "similarity": [
+        {
+          "local": "reusable/ledger/ledger.js",
+          "tokensA": 826,
+          "tokensB": 1369,
+          "unigramJaccard": 0.2099,
+          "shingleSize": 5,
+          "shinglesA": 712,
+          "shinglesB": 1194,
+          "sharedShingles": 0,
+          "localInUpstream": 0,
+          "upstreamInLocal": 0
+        }
+      ]
+    }
+  ],
+  "failures": []
+}

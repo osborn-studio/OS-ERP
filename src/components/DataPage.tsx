@@ -45,6 +45,10 @@ export type FieldDef = {
   /** 表单中隐藏 */
   tableOnly?: boolean
   span?: 1 | 2
+  /** 表单中按当前表单值条件显示；不显示的字段仍留在 body 里，由页面的 preparePayload 决定是否发送。 */
+  showWhen?: (form: any) => boolean
+  /** select 空选项的文案（默认「请选择」）。 */
+  emptyLabel?: string
 }
 
 export function FilterBar({ children, onReset }: { children: ReactNode; onReset?: () => void }) {
@@ -172,6 +176,7 @@ export default function DataPage({
   hideHeader = false,
   onExtraChange,
   preparePayload,
+  formNotice,
   noCard = false
 }: {
   title: string
@@ -191,6 +196,8 @@ export default function DataPage({
   onExtraChange?: (p: { keyword: string; filters: Record<string, any>; reload: () => void; total: number }) => void
   /** Optional page-specific request contract. Other pages retain their existing field serialization. */
   preparePayload?: (body: Record<string, any>, context: { isEditing: boolean }) => Record<string, any>
+  /** Optional page-specific notice rendered above the form fields. */
+  formNotice?: (form: any, context: { isEditing: boolean }) => ReactNode
   noCard?: boolean
 }) {
   const { list, total, loading, page, pageSize, filters: f, setFilters, setPage, reload, summary } = useList(path, initParams)
@@ -425,9 +432,10 @@ export default function DataPage({
           </>
         }
       >
+        {formNotice?.(form, { isEditing: !!form.id })}
         <div className="grid grid-cols-2 gap-x-4 gap-y-3">
           {fields
-            .filter((fd) => !fd.tableOnly)
+            .filter((fd) => !fd.tableOnly && (!fd.showWhen || fd.showWhen(form)))
             .map((fd) => (
               <div key={fd.key} className={fd.span === 2 ? 'col-span-2' : ''}>
                 <Field label={fd.label} required={fd.required} hint={fd.hint}>
@@ -435,7 +443,7 @@ export default function DataPage({
                     <div className="input bg-slate-50 text-slate-500 flex items-center">{form[fd.key] ?? '—'}</div>
                   ) : fd.type === 'select' ? (
                     <select className="input" value={form[fd.key] ?? ''} onChange={(e) => setForm({ ...form, [fd.key]: e.target.value })}>
-                      <option value="">请选择</option>
+                      <option value="">{fd.emptyLabel ?? '请选择'}</option>
                       {(fd.options || []).map((o) => (
                         <option key={String(o.value)} value={o.value}>
                           {o.label}

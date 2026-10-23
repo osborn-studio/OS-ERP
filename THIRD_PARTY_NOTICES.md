@@ -18,13 +18,14 @@ as a current license declaration or as proof of complete third-party clearance.
 
 | Local paths | Declared reference and license | Verification boundary |
 | --- | --- | --- |
-| `reusable/promotion/promotion-engine.js`, `server/lib/promotion.js` | Medusa, `packages/modules/promotion`, MIT for the referenced component | Source comments describe a SQLite rewrite; exact referenced upstream commit and copying boundaries remain unverified. |
-| `reusable/ledger/ledger.js` | Medici, MIT | Source comments describe design adaptation; exact referenced upstream commit and copying boundaries remain unverified. |
-| `reusable/rbac/rbac.js` | node-casbin, Apache-2.0 | Source comments state design reference rather than a runtime dependency; exact referenced upstream commit and copying boundaries remain unverified. |
+| `reusable/promotion/promotion-engine.js`, `server/lib/promotion.js` | Medusa, `packages/modules/promotion`; pinned `v2.21.2` (`020565398e436a2bc65777a3b1ad347b4735d6df`). License and Enterprise notice: [LICENSE](docs/legal/upstream/medusa/LICENSE), [ENTERPRISE-LICENSE.md](docs/legal/upstream/medusa/ENTERPRISE-LICENSE.md), [SOURCE.json](docs/legal/upstream/medusa/SOURCE.json) | Source comments describe a SQLite rewrite. Per-file token overlap against the pinned files is recorded in [PROVENANCE.md](docs/legal/PROVENANCE.md); the version the original authors consulted is not established. |
+| `reusable/ledger/ledger.js` | Medici, MIT; pinned `v7.2.0` (`bd97047ce4dc582ca506886e18bc99d7b4e583fa`). License: [LICENSE](docs/legal/upstream/medici/LICENSE), [SOURCE.json](docs/legal/upstream/medici/SOURCE.json) | Source comments describe design adaptation; overlap results in [PROVENANCE.md](docs/legal/PROVENANCE.md). |
+| `reusable/rbac/rbac.js` | node-casbin, Apache-2.0; pinned `v5.51.1` (`2d90c7d8c3b522415605cf3d25481e763e73381e`). License: [LICENSE](docs/legal/upstream/casbin/LICENSE), [SOURCE.json](docs/legal/upstream/casbin/SOURCE.json) | Source comments state design reference rather than a runtime dependency; the pinned commit has no NOTICE file (recorded in SOURCE.json). Overlap results in [PROVENANCE.md](docs/legal/PROVENANCE.md). |
 
-These are retained source declarations, not a completed legal determination.
-Any copied third-party code must retain that version's required copyright,
-license and NOTICE material. Do not replace an existing third-party notice
+These are retained source declarations and recorded evidence, not a completed legal determination.
+The overlap metric is a rough text statistic described in [PROVENANCE.md](docs/legal/PROVENANCE.md); it
+does not show whether anything was or was not copied. Any copied third-party code must retain that
+version's required copyright, license and NOTICE material. Do not replace an existing third-party notice
 with the project's copyright notice.
 
 ## Dependencies, documents and media
