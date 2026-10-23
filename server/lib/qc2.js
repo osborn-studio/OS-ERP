@@ -539,7 +539,7 @@ export function listRequests(db, q = {}) {
 // 四、检验（QCI）
 // ---------------------------------------------------------------------------
 
-export function getInspection(db, id) {
+export function getInspection(db, id, orgScope = null) {
   const head = db
     .prepare(
       `SELECT ci.*, w.name AS warehouse_name, s.name AS supplier_name
@@ -550,6 +550,8 @@ export function getInspection(db, id) {
     )
     .get(id)
   if (!head) return null
+  // ADR-0038 补充：检验单随其仓的范围；范围外与不存在同形（调用方给 404）。内嵌处置单同一道门，不另漏
+  if (orgScope && orgScope.scope !== 'all' && !warehouseInScope(db, head.warehouse_id, orgScope)) return null
   const items = db
     .prepare('SELECT * FROM qc_request_items WHERE request_id=? ORDER BY line_no')
     .all(head.request_id)
@@ -603,9 +605,11 @@ export function getInspection(db, id) {
 }
 
 export function listInspections(db, q = {}) {
-  const { page = 1, pageSize = 20, status = null, result = null, keyword = null } = q
+  const { page = 1, pageSize = 20, status = null, result = null, keyword = null, orgScope = null } = q
   const where = []
   const args = []
+  const scope = stockScopeSql(orgScope, 'ci')
+  where.push(scope.sql); args.push(...scope.params)
   if (status) { where.push('ci.status = ?'); args.push(status) }
   if (result) { where.push('ci.result = ?'); args.push(result) }
   if (keyword) {
@@ -1027,6 +1031,19 @@ export function confirmHandling(db, { id, actor = {}, remark = null, source = 'a
         '请先在报检/检验明细上补上批次号再执行。',
       { code: 'QC2_HANDLE_NO_BATCH', httpStatus: 409, detail: { handling_id: dh.id, mode: dh.mode } }
     )
+  }
+
+  // ADR-0038 补充：让步 / 返工会改写 `inventory_batches.qc_status`，它是 sku+批次级（跨仓）的可售结论。
+  // 受限账号不得借此改变范围外仓库同一批次货的可售性：该批次在范围外仍有库存 ⇒ 403，整笔不动。
+  if ((dh.mode === 'concession' || dh.mode === 'rework') && orgScope && orgScope.scope !== 'all') {
+    const outside = stockScopeSql(orgScope, 'st')
+    const shared = db
+      .prepare(`SELECT 1 FROM inventory_stocks st WHERE st.sku_id=? AND st.batch_no=? AND st.qty_on_hand>0 AND NOT (${outside.sql}) LIMIT 1`)
+      .get(dh.sku_id, dh.batch_no, ...outside.params)
+    if (shared) {
+      const e = new QC2Error('该批次在您的组织范围外的仓库仍有库存，让步 / 返工会改变其可售状态，请由有全局范围的账号处置', { code: 'TARGET_OUT_OF_SCOPE', httpStatus: 403 })
+      throw e
+    }
   }
 
   const tx = db.transaction(() => {

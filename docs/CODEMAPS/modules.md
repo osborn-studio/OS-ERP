@@ -959,7 +959,7 @@ HTTP 响应与错误归一：`ok` / `fail` / `wrap` 的**唯一实现**（统一
 | `PURCHASE_ORDER_SELECT` | const | — | — | — |
 | `PurchaseError` | class | — | — | — |
 | `assertNotParamOnly` | fn | — | purchase.advance_order, purchase.advance_requisition | mcp/tools.js |
-| `assertPurchaseDocInScope` | fn | 22 条：purchase-chain.js×14, purchase.js×8 | — | — |
+| `assertPurchaseDocInScope` | fn | 24 条：purchase-chain.js×14, purchase.js×8, qc.js×2 | — | — |
 | `buildSettlement` | fn | POST /api/purchase/settlements | purchase.build_settlement | mcp/tools.js |
 | `checkOverReceive` | fn | POST /api/purchase/price-preview<br>POST /api/purchase/orders/:id/receive-check | — | — |
 | `checkSupplyCatalog` | fn | GET /api/purchase/price<br>POST /api/purchase/price-preview | — | — |
@@ -1347,7 +1347,7 @@ HTTP 响应与错误归一：`ok` / `fail` / `wrap` 的**唯一实现**（统一
 | `applyStockGain` | fn | POST /api/inventory/adjust<br>POST /api/inventory/checks/:id/adjust | inventory.adjust | lib/pos2.js, mcp/tools.js |
 | `applyStockIn` | fn | POST /api/inventory/assembly/:id/confirm<br>POST /api/outsourcing/orders/:id/receive<br>POST /api/requisitions/store/shipments/:id/receive | — | lib/mfg.js, lib/pos2.js, lib/purchase.js, lib/returns.js, lib/transfer.js |
 | `applyStockOut` | fn | 7 条：inventory.js×3, oms.js×1, outsourcing.js×1, requisitions.js×1, sales.js×1 | — | lib/mfg.js, lib/pos2.js, lib/purchase.js, lib/qc2.js, lib/transfer.js |
-| `assertStockDocInScope` | fn | 7 条：inventory.js×7 | — | — |
+| `assertStockDocInScope` | fn | 11 条：inventory.js×7, qc.js×4 | — | — |
 | `assertWarehouseInScope` | fn | 8 条：inventory.js×3, master.js×1, purchase.js×4 | — | lib/transfer.js |
 | `availableQty` | fn | — | — | — |
 | `clearInvTypeCache` | fn | POST /api/master/inv-txn-types<br>PUT /api/master/inv-txn-types/:code | — | — |
@@ -1369,8 +1369,8 @@ HTTP 响应与错误归一：`ok` / `fail` / `wrap` 的**唯一实现**（统一
 | `resolveCurrency` | fn | — | — | — |
 | `resolveOwnerOrg` | fn | — | inventory.adjust, inventory.get_cost, inventory.ownership_transfer, inventory.pick_suggestion, inventory.stock_in, inventory.stock_out, inventory.transfer | mcp/tools.js |
 | `setStockNowProvider` | fn | — | — | — |
-| `stockScopeSql` | fn | 16 条：inventory.js×14, master.js×1, warehouses.js×1 | — | lib/qc2.js, lib/transfer.js |
-| `warehouseInScope` | fn | GET /api/inventory/serials/trace/:serialNo<br>GET /api/master/warehouses/:id | — | lib/qc2.js |
+| `stockScopeSql` | fn | 16 条：inventory.js×14, master.js×1, warehouses.js×1 | — | lib/qc.js, lib/qc2.js, lib/transfer.js |
+| `warehouseInScope` | fn | 34 条：inventory.js×1, pos.js×32, warehouses.js×1 | — | lib/qc2.js |
 
 ## `server/lib/transfer.js`
 

@@ -17,7 +17,8 @@ import { Router } from 'express'
 import { localDate } from '../lib/dates.js'
 import { getDb } from '../db/index.js'
 import { ok, fail, wrap, failFromError } from '../lib/http.js'
-import { requireAuth, requireRole, requirePerm, permContext, hasPerm } from '../middleware/auth.js'
+import { requireAuth, requireRole, requirePerm, permContext, hasPerm, resolveOrgScope } from '../middleware/auth.js'
+import { warehouseInScope } from '../lib/stock.js'
 import { audit } from '../middleware/audit.js'
 import { advanceStatus } from '../lib/docflow.js'
 import {
@@ -64,9 +65,14 @@ function storeCtx(req) {
     .get(store.id)
   // ADR-0038 补充（AA4）：库存读取覆盖**本店全部启用仓**（`whs`），范围只由账号绑定的门店决定；
   // `wh`（首个启用仓）仍是写路径（收银出库 / 盘点等）的默认仓，口径不变。
+  // 账号另带组织范围（org / subtree + 具体组织）时再叠加仓库归属组织：门店绑定不能把别组织的仓挂进来读。
+  // 没有组织（none / self / all 等）时门店绑定仍是唯一依据（ADR-0025，门店账号通常不带组织）。
+  const os = resolveOrgScope(db, u)
+  const orgRestricted = (os.scope === 'org' || os.scope === 'subtree') && os.orgIds?.length
   const whs = db
     .prepare("SELECT * FROM warehouses WHERE store_id=? AND status='active' ORDER BY id")
     .all(store.id)
+    .filter((w) => !orgRestricted || warehouseInScope(db, w.id, os))
   return { db, store, wh, whs, u }
 }
 

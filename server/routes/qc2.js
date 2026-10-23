@@ -209,13 +209,14 @@ r.get('/requests/:id', requireAuth, requirePerm(P_VIEW), guard((req, res) => {
 // 检验单（QCI）
 // ===========================================================================
 
-r.get('/inspections', requireAuth, requirePerm(P_VIEW), wrap((req, res) => {
+r.get('/inspections', requireAuth, requirePerm(P_VIEW), attachOrgScope, wrap((req, res) => {
   const { page, pageSize } = pageParams(req)
   const out = listInspections(getDb(), {
     page, pageSize,
     status: req.query.status || null,
     result: req.query.result || null,
-    keyword: req.query.keyword || null
+    keyword: req.query.keyword || null,
+    orgScope: req.orgScope
   })
   return paged(res, out)
 }))
@@ -247,8 +248,8 @@ r.post('/inspections/:id/cancel', requireAuth, requirePerm(P_INSPECT), guard((re
   return ok(res, getInspection(db, Number(req.params.id)))
 }))
 
-r.get('/inspections/:id', requireAuth, requirePerm(P_VIEW), guard((req, res) => {
-  const data = getInspection(getDb(), Number(req.params.id))
+r.get('/inspections/:id', requireAuth, requirePerm(P_VIEW), attachOrgScope, guard((req, res) => {
+  const data = getInspection(getDb(), Number(req.params.id), req.orgScope)
   if (!data) return fail(res, '检验单不存在', 404)
   return ok(res, data)
 }))
