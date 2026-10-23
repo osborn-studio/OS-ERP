@@ -59,7 +59,7 @@ CSP：`default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; 
 ## 残余风险（诚实边界）
 
 - **XSS 仍然危险**：cookie 模式下脚本读不到 JWT，但同源脚本仍能以受害者身份直接发请求——它能读 `gml_csrf` 并带上 `x-csrf-token`，所以 CSRF 双提交**不防 XSS**，GET 读取更是不需要任何额外凭据。cookie 模式缩小的是“令牌被带走、在别处长期重放”的窗口，不是消除 XSS。真正的防线是 CSP（脚本源收紧）与不引入注入点。
-- 登录 CSRF（攻击者把受害者登录到攻击者账号）未单独处理：登录接口无会话可绑定；`SameSite=Lax` 不阻止顶层跨站表单 POST 到登录接口。
+- 登录 CSRF（攻击者把受害者登录到攻击者账号）：登录接口没有会话可绑定，`SameSite=Lax` 也不阻止顶层跨站表单 POST。cookie 模式下登录因此额外拒绝跨站浏览器请求（`Sec-Fetch-Site` 不是 `same-origin`/`none` ⇒ `403 CROSS_SITE_LOGIN_REJECTED`；缺该头的旧浏览器比较 `Origin` 与 `Host`）。无这两个头的脚本/curl 放行——它们不是被诱导的浏览器。这是独立审计（Codex）提出的 P2，已修。
 - `style-src 'unsafe-inline'`、无 `report-uri`、无 `__Host-` 前缀（需要 Secure，而 demo 为 http）。
 - HSTS 无 preload；`includeSubDomains` 要求整个注册域下的子域都能走 https。
 - CORS 仍是 `cors()` 默认（`*`、不带凭据）：浏览器不会让跨域页面带 Cookie 读响应，这与 cookie 模式相容，但本 ADR 没有收紧它。

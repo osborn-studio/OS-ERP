@@ -275,6 +275,15 @@ test('cookie mode: tampered/garbage session cookie is a 401 and gets cleared; no
   assert.ok(cookieOf(bad.setCookies, 'gml_session')?.attrs.includes('max-age=0'))
   const none = await s.call('/api/auth/me')
   assert.equal(none.status, 401); assert.deepEqual(none.setCookies, [])
+  // login CSRF: a cross-site browser request must not be able to set the session cookie
+  const creds = { username: 'admin', password: 'definitely-wrong', industry: 'cosmetic' }
+  for (const headers of [{ origin: 'https://evil.example' }, { 'sec-fetch-site': 'cross-site' }, { 'sec-fetch-site': 'same-site' }]) {
+    const r = await s.call('/api/auth/login', { headers, body: creds })
+    assert.equal(r.status, 403, JSON.stringify(headers)); assert.equal(r.body.detail?.code, 'CROSS_SITE_LOGIN_REJECTED'); assert.deepEqual(r.setCookies, [])
+  }
+  for (const headers of [{ origin: s.base }, { 'sec-fetch-site': 'same-origin' }, { 'sec-fetch-site': 'same-origin', origin: 'http://rewritten.example' }, {}]) {
+    assert.equal((await s.call('/api/auth/login', { headers, body: creds })).status, 401, JSON.stringify(headers)) // reaches the credential check
+  }
 })
 
 test('cookie Secure flag follows req.secure (trusted proxy) or GML_COOKIE_SECURE=always; a spoofed X-Forwarded-Proto is ignored', async (t) => {

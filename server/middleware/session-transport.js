@@ -73,6 +73,21 @@ export function issueSessionCookies(req, res, jwt, secret, env = process.env) {
   return true
 }
 
+/**
+ * 登录 CSRF 防护（cookie 模式）：浏览器发来的跨站请求不得设置会话 Cookie。
+ * `Sec-Fetch-Site` 不是 same-origin/none ⇒ 拒绝；没有该头的旧浏览器退而比较 `Origin` 的 host 与 `Host`，不一致 ⇒ 拒绝；
+ * 两个头都没有（脚本 / curl / 旧客户端）⇒ 放行——它们本来就不是“被诱导的浏览器”。
+ */
+export function crossSiteBrowserRequest(req) {
+  const site = req.headers['sec-fetch-site']
+  if (typeof site === 'string') return site !== 'same-origin' && site !== 'none' // 浏览器设置、页面脚本无法伪造；有它就以它为准（反向代理改写 Host 时 Origin 比较会误伤）
+  const origin = req.headers.origin
+  if (typeof origin === 'string') {
+    try { return new URL(origin).host !== req.headers.host } catch { return true }
+  }
+  return false
+}
+
 export function clearSessionCookies(req, res, env = process.env) {
   if (sessionTransport(env) !== 'cookie') return false
   const base = { sameSite: 'lax', path: '/', maxAge: 0, secure: secureFlag(req, env) }

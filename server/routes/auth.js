@@ -17,7 +17,7 @@ import { Router } from 'express'
 import bcrypt from 'bcryptjs'
 import { getDb, getDbFor, INDUSTRIES, DEFAULT_INDUSTRY, normalizeIndustry } from '../db/index.js'
 import { ok, fail, bizFail, wrap, pageParams, paged, failFromError } from '../lib/http.js'
-import { issueSessionCookies, clearSessionCookies } from '../middleware/session-transport.js'
+import { issueSessionCookies, clearSessionCookies, sessionTransport, crossSiteBrowserRequest } from '../middleware/session-transport.js'
 import { signToken, JWT_SECRET, requireAuth, requireRole, ROLES, userPermissions, resolveOrgScope } from '../middleware/auth.js'
 import { audit } from '../middleware/audit.js'
 import { createAccount, updateAccount, changePassword, logoutAll, replaceRolePermissions } from '../lib/account-security.js'
@@ -31,6 +31,8 @@ const loginFailed = res => bizFail(res, { status: 401, code: 'AUTH_INVALID_CREDE
 r.post(
   '/login',
   wrap(async (req, res) => {
+    // cookie 传输：登录会设置会话 Cookie，必须拒绝跨站浏览器发起的登录（登录 CSRF，ADR-0036）
+    if (sessionTransport() === 'cookie' && crossSiteBrowserRequest(req)) return bizFail(res, { status: 403, code: 'CROSS_SITE_LOGIN_REJECTED', message: '不允许跨站登录请求' })
     const { username, password, industry } = req.body || {}
     if (typeof username !== 'string' || !username.trim() || username.length > 64 || /[\u0000-\u001f\u007f]/u.test(username) ||
         typeof password !== 'string' || !password || Buffer.byteLength(password, 'utf8') > 1024) return fail(res, '账号与密码格式无效', 400, 'AUTH_INPUT_INVALID')
