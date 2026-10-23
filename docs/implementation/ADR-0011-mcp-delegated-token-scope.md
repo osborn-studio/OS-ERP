@@ -97,21 +97,18 @@
 1. 单一映射表 `DOC_VIEW_PERMS`（`server/mcp/doc-perms.js`）：`doc_type → 任一命中即可的权限点`。HTTP 侧有 `requirePerm` 的类型直接取同一码（采购链复用 `PO_READ_PERMS`）；HTTP 侧只有 `requireAuth` 或按角色名闸的类型，按模块「查看」权限点显式钉死（`explicit`，比 HTTP 严，委托不应比本人宽）。
 2. `doc.query` / `doc.get`：先取类型，再校验所有者**此刻**权限（`TOKEN_OWNER_PERM_DENIED`，HTTP 403 语义），然后才取行与判范围——权限判定与单据是否存在无关，不构成存在性探测。
 3. `doc.list_types`：只返回所有者有权查看的类型（及其动作）；有主令牌一个类型都看不了时直接 `TOKEN_OWNER_PERM_DENIED`。
-4. 未映射类型 fail-closed：`doc.query` / `doc.get` 报 `DOC_TYPE_UNMAPPED`（对有主与无主令牌都拒绝），`doc.list_types` 不列出；`scripts/check-mcp-coverage.mjs` 的 ②b 节在映射缺类型、含不存在的权限点、含已删除类型、含空权限列表时报红。
-5. 无主令牌（独立服务主体）没有所有者可对照，对已映射类型不查权限点（口径同 ADR-0011 既有约定）。
-6. 工具本身保持 `perms: []`（`tools/list` 仍可见），类型级判定在 handler 内；`doc.transition` 不变（边权限 `assertEdgePermitted` 已按类型判定）。
+4. 外部主体：所有者是经销商 / 门店身份时，`INTERNAL_MODULES`（purchase / inventory / produce / outsource / quality / finance，与 docflow、审批入口同一判据）及 oms / dealer 模块的类型一律拒绝，即使被授予了权限点（对应 HTTP 路由整体 `requireInternal`）。
+5. 未映射类型 fail-closed：`doc.query` / `doc.get` 报 `DOC_TYPE_UNMAPPED`（对有主与无主令牌都拒绝），`doc.list_types` 不列出；`scripts/check-mcp-coverage.mjs` 的 ②b 节在映射缺类型、含不存在的权限点、含已删除类型、含空权限列表时报红。
+6. 无主令牌（独立服务主体）没有所有者可对照，对已映射类型不查权限点（口径同 ADR-0011 既有约定）。
+7. 工具本身保持 `perms: []`（`tools/list` 仍可见），类型级判定在 handler 内；`doc.transition` 不变（边权限 `assertEdgePermitted` 已按类型判定）。
 
 **映射表**（`explicit` = HTTP 侧无 `requirePerm`，本表新定）：
 
 | doc_type | 查看权限点 | 来源 |
 |---|---|---|
-| PRQ | purchase.req.view | explicit |
-| PO / GR / PRT | purchase.order.view \| purchase.inbound \| purchase.return（`PO_READ_PERMS`） | http |
-| PI | purchase.invoice.view | explicit |
-| PST | purchase.settle.view | explicit |
-| PAY | purchase.payment.view | explicit |
-| INS / QCI / DH | quality.inspect.view | http（qc.js）/ explicit（DH） |
-| QCR | quality.qc.view | http（qc2.js） |
+| PRQ / PO / GR / PRT / PI / PST / PAY | purchase.order.view \| purchase.inbound \| purchase.return（`PO_READ_PERMS`，purchase-chain.js `readGate`） | http |
+| INS | quality.inspect.view | http（qc.js） |
+| QCI / DH / QCR | quality.qc.view | http（qc2.js） |
 | SO / DL / SR | sales.order.view | explicit |
 | QT | sales.quote.view | http |
 | SI | sales.invoice.view | http |
@@ -120,7 +117,8 @@
 | VOUCHER | finance.voucher.view | http |
 | CA | cost.view | http |
 | CK / TF / AS | inventory.stock.view | explicit |
-| MO / MR / WW / WM / WR | produce.order.view | explicit |
+| MO / MR | produce.bom.view | http（manufacture.js `P_VIEW`） |
+| WW / WM / WR | produce.order.view | explicit |
 | OC | order.view | explicit |
 | OCS | order.statement.view | http |
 | DR / DS / RB | dms.dealer.view | explicit |
@@ -131,5 +129,7 @@
 | YQ / SH | pos.store.requisition | explicit |
 
 **验收**：`tests/mcp-doc-perms.test.mjs`（映射完整性、逐类型拒绝/放行、权限实时回读、无存在性探测、未映射拒绝、无主令牌）；矩阵"权限移除"状态下这三个工具为 `DENIED` 且错误码精确为 `TOKEN_OWNER_PERM_DENIED`，不再出现 `NO_PERM_POINT`。
+
+**Codex 审计（原文要点）**：映射初版有 4 处 P1——QCI/DH 用了 `quality.inspect.view`（HTTP 为 `quality.qc.view`）、PRQ/PI/PST/PAY 用了单据自己的 view 码（HTTP 为 `PO_READ_PERMS`）、MO/MR 用了 `produce.order.view`（HTTP 为 `produce.bom.view`）、未复刻 `requireInternal` 的外部主体限制。均已修正并补测试。
 
 **产品影响**：此前依赖 AI 令牌读取其角色无权查看的单据类型的集成会开始被拒绝；需要为该角色补授上表对应权限点。

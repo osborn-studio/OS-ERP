@@ -18,7 +18,7 @@
  *   不要为了让某个测试绿而把类型映射成 `[]`（空数组 = 无人可看，等同未映射，会被覆盖脚本报错）。
  * ============================================================================
  */
-import { permContext, hasPerm } from '../middleware/auth.js'
+import { permContext, hasPerm, INTERNAL_MODULES } from '../middleware/auth.js'
 import { PO_READ_PERMS } from '../lib/purchase.js'
 import { TOKEN_OWNER_PERM_DENIED } from './delegation.js'
 
@@ -30,18 +30,18 @@ const explicit = (...perms) => ({ perms, source: 'explicit' })
 
 /** doc_type → { perms: 任一命中即可, source: 'http' | 'explicit' } */
 export const DOC_VIEW_PERMS = Object.freeze({
-  // 采购链：purchase-chain.js 的 readGate / purchase.js 的列表路由 = PO_READ_PERMS
-  PRQ: explicit('purchase.req.view'),
+  // 采购链：purchase-chain.js 的 readGate（PRQ/PO/GR/PRT/PI/PST/PAY 全部读路由）/ purchase.js 的列表路由 = PO_READ_PERMS
+  PRQ: http(...PO_READ_PERMS),
   PO: http(...PO_READ_PERMS),
   GR: http(...PO_READ_PERMS),
   PRT: http(...PO_READ_PERMS),
-  PI: explicit('purchase.invoice.view'),
-  PST: explicit('purchase.settle.view'),
-  PAY: explicit('purchase.payment.view'),
+  PI: http(...PO_READ_PERMS),
+  PST: http(...PO_READ_PERMS),
+  PAY: http(...PO_READ_PERMS),
   INS: http('quality.inspect.view'), // routes/qc.js
   // 质量
-  QCI: http('quality.inspect.view'),
-  DH: http('quality.inspect.view'),
+  QCI: http('quality.qc.view'), // routes/qc2.js /inspections
+  DH: http('quality.qc.view'), // routes/qc2.js /handlings
   QCR: http('quality.qc.view'), // routes/qc2.js /requests
   // 销售
   SO: explicit('sales.order.view'),
@@ -60,8 +60,8 @@ export const DOC_VIEW_PERMS = Object.freeze({
   TF: explicit('inventory.stock.view'),
   AS: explicit('inventory.stock.view'),
   // 生产 / 委外
-  MO: explicit('produce.order.view'),
-  MR: explicit('produce.order.view'),
+  MO: http('produce.bom.view'), // routes/manufacture.js P_VIEW
+  MR: http('produce.bom.view'),
   WW: explicit('produce.order.view'),
   WM: explicit('produce.order.view'),
   WR: explicit('produce.order.view'),
@@ -99,11 +99,29 @@ function ownerCtx(db, ctx) {
   return ctx?.ownerUserId != null ? permContext(db, { uid: ctx.ownerUserId }) : null
 }
 
-/** 某类型对本次调用是否可读（不抛错）：未映射 → false；无主令牌 → true；有主 → 所有者任一权限点命中 */
-export function canViewDocType(db, ctx, docType, owner = ownerCtx(db, ctx)) {
-  const perms = viewPermsOf(docType)
+/**
+ * 仅总部内部可见的模块（HTTP 侧 `requireInternal` / docflow 的 `INTERNAL_MODULES` 判据）：
+ * 经销商 / 门店身份的所有者即使被授予了查看权限点，也不能经 MCP 读这些类型。
+ * 在 `INTERNAL_MODULES` 之外追加 oms / dealer：对应 HTTP 路由（oms.js / dealers.js / dms.js）整体 `requireInternal`。
+ */
+const HQ_ONLY_MODULES = new Set([...INTERNAL_MODULES, 'oms', 'dealer'])
+
+/** 所有者是外部主体（经销商 / 门店）且该单据类型只对内部开放 */
+function externalOwnerBlocked(db, ctx, type) {
+  if (ctx?.ownerUserId == null || !HQ_ONLY_MODULES.has(type?.module)) return false
+  const u = db.prepare('SELECT role FROM users WHERE id=?').get(Number(ctx.ownerUserId))
+  return !u || u.role === 'dealer' || u.role === 'store'
+}
+
+/**
+ * 某类型对本次调用是否可读（不抛错）：未映射 → false；无主令牌 → true；
+ * 有主 → 所有者非外部主体（对内部类型）且任一权限点命中。`type` 需含 `code` 与 `module`。
+ */
+export function canViewDocType(db, ctx, type, owner = ownerCtx(db, ctx)) {
+  const perms = viewPermsOf(type.code)
   if (!perms) return false
   if (!owner) return true
+  if (externalOwnerBlocked(db, ctx, type)) return false
   return perms.some((p) => hasPerm(owner, p))
 }
 
@@ -111,10 +129,12 @@ export function canViewDocType(db, ctx, docType, owner = ownerCtx(db, ctx)) {
 export function assertCanViewDocType(db, ctx, type) {
   const perms = viewPermsOf(type.code)
   if (!perms) throw denied(DOC_TYPE_UNMAPPED, `单据类型「${type.name || type.code}」未登记查看权限点，默认拒绝（见 server/mcp/doc-perms.js）`)
-  if (canViewDocType(db, ctx, type.code)) return
+  if (canViewDocType(db, ctx, type)) return
   throw denied(
     TOKEN_OWNER_PERM_DENIED,
-    `令牌所有者当前没有查看「${type.name || type.code}」的权限（需 ${perms.join(' 或 ')}）；委托令牌不能超过所有者本人的权限`
+    externalOwnerBlocked(db, ctx, type)
+      ? `令牌所有者是外部主体（经销商 / 门店），无权查看总部内部单据「${type.name || type.code}」`
+      : `令牌所有者当前没有查看「${type.name || type.code}」的权限（需 ${perms.join(' 或 ')}）；委托令牌不能超过所有者本人的权限`
   )
 }
 

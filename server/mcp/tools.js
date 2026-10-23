@@ -2029,7 +2029,7 @@ export const TOOLS = [
       const all = db
         .prepare(`SELECT code,name,module,table_name,has_lines FROM doc_types WHERE status='active' ORDER BY sort_order, code`)
         .all()
-      const types = all.filter((t0) => canViewDocType(db, ctx, t0.code, owner))
+      const types = all.filter((t0) => canViewDocType(db, ctx, t0, owner))
       if (owner && !types.length) {
         const err = new Error('令牌所有者当前没有查看任何单据类型的权限；委托令牌不能超过所有者本人的权限')
         err.code = TOKEN_OWNER_PERM_DENIED

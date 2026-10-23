@@ -91,8 +91,13 @@ test('doc view permission map covers every active doc type with real permission 
     for (const p of e.perms) assert.ok(known.has(p), `${code}: unknown permission code ${p}`)
   }
   assert.deepEqual(DOC_VIEW_PERMS.PO.perms, PO_READ_PERMS, 'PO must share the HTTP read permission set')
-  assert.deepEqual(DOC_VIEW_PERMS.GR.perms, PO_READ_PERMS)
-  assert.deepEqual(DOC_VIEW_PERMS.PRT.perms, PO_READ_PERMS)
+  // purchase-chain.js 的 readGate 对 PRQ/PO/GR/PRT/PI/PST/PAY 全部读路由一视同仁
+  for (const c of ['GR', 'PRT', 'PRQ', 'PI', 'PST', 'PAY']) assert.deepEqual(DOC_VIEW_PERMS[c].perms, PO_READ_PERMS, c)
+  // Codex 审计指出的三处与 HTTP 不一致（qc2.js / manufacture.js）
+  assert.deepEqual(DOC_VIEW_PERMS.QCI.perms, ['quality.qc.view'])
+  assert.deepEqual(DOC_VIEW_PERMS.DH.perms, ['quality.qc.view'])
+  assert.deepEqual(DOC_VIEW_PERMS.MO.perms, ['produce.bom.view'])
+  assert.deepEqual(DOC_VIEW_PERMS.MR.perms, ['produce.bom.view'])
   assert.deepEqual(DOC_VIEW_PERMS.VOUCHER.perms, ['finance.voucher.view'])
   const stale = Object.keys(DOC_VIEW_PERMS).filter((c) => !types.includes(c))
   assert.deepEqual(stale, [], 'mapping must not carry types that no longer exist')
@@ -164,7 +169,32 @@ test('doc.query / doc.get / doc.list_types honour the owner view permission per 
   await t.test('any-of semantics: purchase.inbound alone is enough for the PO family (same as HTTP)', async () => {
     setPerms(['purchase.inbound'])
     assert.ok(okTool(await call('doc.query', { doc_type: 'PO' })))
-    assert.equal(toolErr(await call('doc.query', { doc_type: 'PI' })), 'TOKEN_OWNER_PERM_DENIED')
+    // 采购链全部读路由共用 PO_READ_PERMS：PI 同样放行；财务凭证仍拒绝
+    assert.ok(okTool(await call('doc.query', { doc_type: 'PI' })))
+    assert.equal(toolErr(await call('doc.query', { doc_type: 'VOUCHER' })), 'TOKEN_OWNER_PERM_DENIED')
+  })
+
+  await t.test('HTTP parity: per-document view codes that HTTP does not accept are not accepted by MCP either', async () => {
+    setPerms(['purchase.invoice.view', 'purchase.req.view', 'purchase.settle.view', 'purchase.payment.view'])
+    for (const c of ['PI', 'PRQ', 'PST', 'PAY']) assert.equal(toolErr(await call('doc.query', { doc_type: c })), 'TOKEN_OWNER_PERM_DENIED', c)
+    setPerms(['quality.inspect.view', 'produce.order.view'])
+    for (const c of ['QCI', 'DH', 'MO', 'MR']) assert.equal(toolErr(await call('doc.query', { doc_type: c })), 'TOKEN_OWNER_PERM_DENIED', c)
+    assert.ok(okTool(await call('doc.query', { doc_type: 'INS' })), 'INS is served by qc.js with quality.inspect.view')
+    setPerms(['quality.qc.view', 'produce.bom.view'])
+    for (const c of ['QCI', 'DH', 'MO', 'MR']) assert.ok(okTool(await call('doc.query', { doc_type: c })), c)
+  })
+
+  await t.test('external owners (store / dealer) cannot read HQ-internal types even with the permission code', async () => {
+    const ext = (await api('/api/auth/users', { token: admin, body: { username: 'docperm_store', name: 'Doc perm store', role: 'warehouse', password: secret(), data_scope: 'all' } })).body
+    assert.equal(ext.success, true, JSON.stringify(ext))
+    db.prepare("UPDATE users SET role='store' WHERE id=?").run(ext.data.id)
+    const extToken = createToken(db, { name: 'docperm-store', ownerUserId: ext.data.id, industry: 'cosmetic', scopes: 'read' }).token
+    db.prepare("DELETE FROM role_permissions WHERE role_code='store'").run()
+    for (const c of ['purchase.order.view', 'oms.order.view', 'dms.dealer.view', 'finance.voucher.view']) db.prepare("INSERT INTO role_permissions (role_code, perm_code) VALUES ('store',?)").run(c)
+    for (const c of ['PO', 'OM', 'DS', 'VOUCHER']) assert.equal(toolErr(await call('doc.query', { doc_type: c }, extToken)), 'TOKEN_OWNER_PERM_DENIED', c)
+    const r = await call('doc.list_types', {}, extToken)
+    const listed = okTool(r) ? toolText(r).doc_types.map((x) => x.code) : []
+    for (const c of ['PO', 'OM', 'DS', 'VOUCHER']) assert.ok(!listed.includes(c), `${c} must not be listed for an external owner`)
   })
 
   await t.test('owner with no view permission at all: query/get denied, list_types denied', async () => {
