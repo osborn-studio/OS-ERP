@@ -41,6 +41,9 @@ import { getDb } from '../db/index.js'
 import { ok, fail, wrap, bizFail } from '../lib/http.js'
 import { requireAuth, requirePerm, currentUser } from '../middleware/auth.js'
 import { audit } from '../middleware/audit.js'
+// 证据闸 + 二人复核（ADR-0018）：确认收款不再直接落地，先过 `confirmFunds`；复核走 `reviewFunds`。
+// 判据（证据必填 / 阈值 / 自审拒绝）只在 lib/funds-review.js 一处。
+import { confirmFunds, reviewFunds, assertNotPending, reviewOf, FUNDS_REVIEW_PERM, FUNDS_REVIEW_LABEL } from '../lib/funds-review.js'
 import {
   ArError, ensureAr, recalcAr, recalcArBySubject, listAr, getAr,
   createReceipt, confirmReceipt, voidReceipt, getReceipt, listReceipts,
@@ -58,7 +61,8 @@ import { localDate } from '../lib/dates.js'
 const r = Router()
 const actorOf = (req) => {
   const u = currentUser(req)
-  return { id: u.uid || u.id || null, name: u.name || u.username || null }
+  // `ip` 只给严格审计用（funds-review 的审计行），流转留痕不用它
+  return { id: u.uid || u.id || null, name: u.name || u.username || null, ip: req.ip || null }
 }
 
 function guard(fn) {
@@ -80,6 +84,8 @@ r.get('/meta', requireAuth, requirePerm('finance.receipt.view'), wrap((req, res)
   ok(res, {
     ar_status: dict(AR_STATUS_LABEL),
     rc_status: dict(RC_STATUS_LABEL),
+    funds_review_status: dict(FUNDS_REVIEW_LABEL),
+    funds_review_perm: FUNDS_REVIEW_PERM,
     pay_methods: dict(PAY_METHOD_LABEL),
     aging_buckets: Object.entries(AGING_BUCKET_LABEL).map(([value, label]) => ({ value, label })),
     rules: [
@@ -312,7 +318,7 @@ r.get('/receipts', requireAuth, requirePerm('finance.receipt.view'), wrap((req, 
 r.get('/receipts/:id', requireAuth, requirePerm('finance.receipt.view'), wrap((req, res) => {
   const row = getReceipt(getDb(), Number(req.params.id))
   if (!row) return fail(res, '收款单不存在', 404)
-  ok(res, row)
+  ok(res, { ...row, review: reviewOf(row) })
 }))
 
 r.post('/receipts', requireAuth, requirePerm('finance.receipt.edit'), guard((req, res) => {
@@ -335,17 +341,41 @@ r.post('/receipts', requireAuth, requirePerm('finance.receipt.edit'), guard((req
   ok(res, out)
 }))
 
+// 确认收款（ADR-0018）：先过证据闸；达到复核阈值只挂「待复核」（内核状态仍是 draft，应收 / 授信不动），
+// 否则在同一事务里执行 `confirmReceipt` + 严格审计。响应统一带 `review` 块。
 r.post('/receipts/:id/confirm', requireAuth, requirePerm('finance.receipt.approve'), guard((req, res) => {
   const db = getDb()
   const id = Number(req.params.id)
-  const row = confirmReceipt(db, { id, actor: actorOf(req), releaseCredit: req.body?.release_credit !== false })
-  audit(req, { action: 'RC_CONFIRM', module: 'finance', entity: 'receipts', entityId: id, detail: row.doc_no })
-  ok(res, { ...row, allocations: getReceipt(db, id)?.allocations || [] })
+  const actor = actorOf(req)
+  const b = req.body || {}
+  const out = confirmFunds(db, {
+    kind: 'receipt', id, actor,
+    evidence: { ref: b.evidence_ref, note: b.evidence_note },
+    apply: () => confirmReceipt(db, { id, actor, releaseCredit: b.release_credit !== false })
+  })
+  if (out.applied) audit(req, { action: 'RC_CONFIRM', module: 'finance', entity: 'receipts', entityId: id, detail: out.row.doc_no })
+  ok(res, { ...(out.result || out.row), review: out.review, allocations: getReceipt(db, id)?.allocations || [] })
+}))
+
+// 复核（第二人）：approve = 在同一事务里执行原确认逻辑；reject = 退回草稿并记原因。自审 409 FUNDS_SELF_REVIEW。
+r.post('/receipts/:id/review', requireAuth, requirePerm(FUNDS_REVIEW_PERM), guard((req, res) => {
+  const db = getDb()
+  const id = Number(req.params.id)
+  const actor = actorOf(req)
+  const b = req.body || {}
+  const out = reviewFunds(db, {
+    kind: 'receipt', id, actor, decision: b.decision, comment: b.comment ?? null,
+    apply: () => confirmReceipt(db, { id, actor, releaseCredit: b.release_credit !== false })
+  })
+  if (out.applied) audit(req, { action: 'RC_CONFIRM', module: 'finance', entity: 'receipts', entityId: id, detail: out.row.doc_no })
+  ok(res, { ...(out.result || out.row), review: out.review, allocations: getReceipt(db, id)?.allocations || [] })
 }))
 
 r.post('/receipts/:id/void', requireAuth, requirePerm('finance.receipt.approve'), guard((req, res) => {
   const db = getDb()
   const id = Number(req.params.id)
+  // 待复核期间不能作废：先让复核人驳回，再作废（否则"挂起的确认"会凭空消失）
+  assertNotPending(db, 'receipt', id)
   const row = voidReceipt(db, { id, actor: actorOf(req), reason: req.body?.reason || null })
   audit(req, { action: 'RC_VOID', module: 'finance', entity: 'receipts', entityId: id, detail: req.body?.reason || row.doc_no })
   ok(res, row)

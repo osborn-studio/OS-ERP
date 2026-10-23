@@ -305,6 +305,27 @@ export const SETTING_RULES = {
     impact: '应收逾期超过它，该主体的新单会被硬拦截。配成 0 表示一逾期就拦。'
   },
 
+  // ---- 资金收付（ADR-0018：无支付网关的"人工资金模式"——证据 + 二人复核） ----
+  // 收款确认 / 付款执行是本系统里**真正动钱的两个动作**，而钱不是系统收的、是人在银行收的。
+  // 所以把"钱确实到了"这件事做成两条可配的闸：证据（银行流水号 / 凭证号）与第二人复核。
+  // 三条都标危险：关掉它们等于允许一个人凭空确认收付款，改动必须写理由。
+  funds_evidence_required: {
+    group: 'funds', label: '收付款确认必须填凭证号', type: 'bool', default: '1', is_danger: true, wired: true,
+    impact: '打开（默认）：确认收款 / 执行付款时必须填写银行流水号或凭证号（`evidence_ref`），缺失拒绝（`FUNDS_EVIDENCE_REQUIRED`）。'
+      + '关闭：不强制填写，但仍可填。它不校验凭证真伪 —— 真伪由复核人看。'
+  },
+  funds_review_required: {
+    group: 'funds', label: '收付款确认需第二人复核', type: 'bool', default: '1', is_danger: true, wired: true,
+    impact: '打开（默认）：达到复核金额阈值的确认先进入「待复核」，由**另一人**（持 `finance.funds.review`）批准后才真正核销 / 释放授信 / 标记已付；'
+      + '驳回退回原状态。发起人不能复核自己发起的单（`FUNDS_SELF_REVIEW`）。关闭：确认直接生效（仍要求凭证）。'
+  },
+  funds_review_threshold: {
+    group: 'funds', label: '复核金额阈值（元）', type: 'number', default: '0', is_danger: true, wired: true,
+    min: 0,
+    impact: '单据金额 ≥ 阈值才需要第二人复核；0（默认）= 每一笔都复核。低于阈值的确认直接生效（仍要求凭证）。'
+      + '仅在「需第二人复核」打开时有意义。'
+  },
+
   // ---- 运维 ----
   backup_dir: {
     group: 'ops', label: '备份输出目录', type: 'text', default: 'data/backups', is_danger: false, wired: true,
@@ -326,6 +347,7 @@ export const SETTING_GROUPS = [
   { key: 'inv', label: '供应链参数', note: '仓库与出入库的库存口径 —— 改它会动账/动库存行为，修改必须写理由' },
   { key: 'quote', label: '销售报价', note: '报价的审批与有效期' },
   { key: 'credit', label: '信用控制', note: '逾期拦截' },
+  { key: 'funds', label: '资金收付', note: '收款确认 / 付款执行的证据与二人复核（ADR-0018）—— 关掉等于允许一人凭空确认收付款，修改必须写理由' },
   { key: 'ops', label: '运维', note: '备份等本地工具参数' }
 ]
 

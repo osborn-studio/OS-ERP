@@ -66,7 +66,11 @@ const DECLARED = [
   'tests/credit-hold-projection.test.mjs',
   // 待办范围与 Agent Token 有效状态（ADR-0015）
   'server/db/migrations/055_agent_token_revoke_reason.cjs',
-  'tests/authz-followups.test.mjs'
+  'tests/authz-followups.test.mjs',
+  // 收付款证据与二人复核（ADR-0018）
+  'server/lib/funds-review.js',
+  'server/db/migrations/056_funds_maker_checker.cjs',
+  'tests/funds-maker-checker.test.mjs'
 ]
 
 /** 参与覆盖率统计的源文件（**排除** node_modules / dist / data） */

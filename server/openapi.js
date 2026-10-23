@@ -260,7 +260,8 @@ export function buildOpenApi() {
       post: { tags: ['采购域'], summary: '新建付款单（不传核销分配则按 FIFO 自动核销）', responses: { 200: jsonResp(null) } }
     },
     '/api/purchase/payments/{id}': { get: { tags: ['采购域'], summary: '付款单详情（含核销明细）', parameters: [idParam], responses: { 200: jsonResp(null) } } },
-    '/api/purchase/payments/{id}/{action}': { post: { tags: ['采购域'], summary: '付款单流转（submit 核销生效 / pay 核销并标记已付 / void 作废并回退已付）', parameters: [idParam], responses: { 200: jsonResp(null) } } },
+    '/api/purchase/payments/{id}/review': { post: { tags: ['采购域'], summary: '付款执行的第二人复核（ADR-0018，需 finance.funds.review）：approve 在同一事务里执行 pay（核销 + 已付）+ 严格审计；reject 退回已审批并记原因。发起人自审 409 FUNDS_SELF_REVIEW；不在待复核 409 FUNDS_NOT_PENDING。响应含 review 块', parameters: [idParam], requestBody: body('FundsReview'), responses: { 200: jsonResp(null), 400: jsonResp(null), 403: jsonResp(null), 409: jsonResp(null) } } },
+    '/api/purchase/payments/{id}/{action}': { post: { tags: ['采购域'], summary: '付款单流转（submit 核销生效 / pay 执行付款 / void 作废并回退已付）。pay 过证据闸与二人复核（ADR-0018）：必须带 evidence_ref（funds_evidence_required，缺失 400 FUNDS_EVIDENCE_REQUIRED）；金额 ≥ funds_review_threshold 且 funds_review_required 时只挂待复核（review.status=pending_review，结算单不动），否则直接执行；待复核期间任何动作 409 FUNDS_REVIEW_PENDING。响应为付款单行 + review 块', parameters: [idParam], requestBody: { required: false, description: 'pay 时的证据；其它动作可空', content: { 'application/json': { schema: { $ref: '#/components/schemas/PaymentAction' } } } }, responses: { 200: jsonResp(null), 400: jsonResp(null), 409: jsonResp(null) } } },
     '/api/purchase/payment-plan': { get: { tags: ['采购域'], summary: 'FIFO 核销计划预览（按结算日期先老后新）', parameters: [q('supplier_id', '供应商', true), q('amount', '付款金额', true)], responses: { 200: jsonResp(null) } } },
 
     '/api/purchase/payables': { get: { tags: ['采购域'], summary: '应付账款（按供应商：已结算/已付/未付）+ **采购退货披露**。⚠️ 退货金额放在单独的 `returns` 块里、**不参与** settle/paid/open 口径 —— 结算怎么抵减退货是业务规则（按单抵 / 按期间抵 / 已审是否追溯），不是实现细节', parameters: [q('supplier_id', '供应商')], responses: { 200: jsonResp(null) } } },
@@ -699,7 +700,8 @@ export function buildOpenApi() {
       post: { tags: ['应收与收款'], summary: '登记收款单（草稿 + 计划核销；不传 allocations 按到期日 FIFO 自动摊）', requestBody: body('ReceiptCreate'), responses: { 200: jsonResp(null) } }
     },
     '/api/ar/receipts/{id}': { get: { tags: ['应收与收款'], summary: '收款单详情（含核销明细）', parameters: [idParam], responses: { 200: jsonResp(null), 404: jsonResp(null) } } },
-    '/api/ar/receipts/{id}/confirm': { post: { tags: ['应收与收款'], summary: '确认收款：核销生效（抵减应收）+ 按来源释放授信占用并记释放台账（响应含 credit_released）。这是本模块唯一有后果的动作', parameters: [idParam], requestBody: body('ReceiptConfirm'), responses: { 200: jsonResp(null) } } },
+    '/api/ar/receipts/{id}/confirm': { post: { tags: ['应收与收款'], summary: '确认收款：核销生效（抵减应收）+ 按来源释放授信占用并记释放台账（响应含 credit_released）。ADR-0018 证据闸与二人复核：必须带 evidence_ref（funds_evidence_required，缺失 400 FUNDS_EVIDENCE_REQUIRED）；金额 ≥ funds_review_threshold 且 funds_review_required 时只挂待复核（status 仍 draft、review.status=pending_review，应收 / 授信不动），否则直接生效。待复核期间再次确认 / 作废 409 FUNDS_REVIEW_PENDING。响应含 review 块', parameters: [idParam], requestBody: body('ReceiptConfirm'), responses: { 200: jsonResp(null), 400: jsonResp(null), 409: jsonResp(null) } } },
+    '/api/ar/receipts/{id}/review': { post: { tags: ['应收与收款'], summary: '收款确认的第二人复核（ADR-0018，需 finance.funds.review）：approve 在同一事务里执行确认（核销 + 释放授信）+ 严格审计；reject 退回草稿并记原因（comment 必填）。发起人自审 409 FUNDS_SELF_REVIEW；不在待复核 409 FUNDS_NOT_PENDING。响应含 review: {status, maker, checker, decided_at}', parameters: [idParam], requestBody: body('FundsReview'), responses: { 200: jsonResp(null), 400: jsonResp(null), 403: jsonResp(null), 409: jsonResp(null) } } },
     '/api/ar/receipts/{id}/void': { post: { tags: ['应收与收款'], summary: '作废收款：核销失效并重算应收，并按授信释放台账逐笔恢复统一授信与订货占用（响应含 credit_reversal；重复作废 409 RC_ALREADY_VOID，跨客户 409 CREDIT_REVERSAL_SUBJECT_MISMATCH）', parameters: [idParam], requestBody: body('ReceiptVoid'), responses: { 200: jsonResp(null) } } },
     '/api/ar/aging': { get: { tags: ['应收与收款'], summary: '账龄分析（未到期 / 1-30 / 31-60 / 60+；by_subject=1 时按客户汇总）', parameters: [{ name: 'by_subject', in: 'query', schema: { type: 'string' } }], responses: { 200: jsonResp(null) } } },
     '/api/ar/statement': { get: { tags: ['应收与收款'], summary: '客户对账单（应收明细 + 收款明细 + 核销明细 + 期末余额）', parameters: [{ name: 'subject_type', in: 'query', required: true, schema: { type: 'string' } }, { name: 'subject_id', in: 'query', required: true, schema: { type: 'integer' } }, { name: 'from', in: 'query', schema: { type: 'string' } }, { name: 'to', in: 'query', schema: { type: 'string' } }], responses: { 200: jsonResp(null) } } },
@@ -1164,7 +1166,7 @@ export function buildOpenApi() {
     openapi: '3.0.3',
     info: {
       title: 'GML 供应链协同系统 API',
-      version: '1.32.0',
+      version: '1.33.0',
       description:
         '化妆品 / 服装 双行业轻量级供应链协同系统接口文档。覆盖主数据、采购、销售、存货、经销商、门店要货、委外管理、计划与生产、生产制造（BOM / 领料 / 完工入库）、质量检验、线上 OMS 与经营看板。\n\n' +
         '**多行业**：登录 `POST /api/auth/login` 时传 `industry`（`cosmetic` / `apparel`）选择行业版本；' +
@@ -1417,7 +1419,25 @@ export function buildOpenApi() {
         ReceiptConfirm: {
           type: 'object',
           properties: {
-            release_credit: { type: 'boolean', description: '默认 true：确认收款即释放授信占用' }
+            release_credit: { type: 'boolean', description: '默认 true：确认收款即释放授信占用' },
+            evidence_ref: { type: 'string', description: '银行流水号 / 凭证号（funds_evidence_required=1 时必填；行上已存的证据可不重传）' },
+            evidence_note: { type: 'string', description: '证据说明（可选）' }
+          }
+        },
+        FundsReview: {
+          type: 'object',
+          required: ['decision'],
+          properties: {
+            decision: { type: 'string', enum: ['approve', 'reject'], description: 'approve 批准（执行原确认逻辑）/ reject 驳回（退回原状态）' },
+            comment: { type: 'string', description: '复核意见；驳回时必填（FUNDS_COMMENT_REQUIRED）' }
+          }
+        },
+        PaymentAction: {
+          type: 'object',
+          properties: {
+            evidence_ref: { type: 'string', description: 'pay 时：银行流水号 / 凭证号（funds_evidence_required=1 时必填）' },
+            evidence_note: { type: 'string', description: 'pay 时：证据说明（可选）' },
+            remark: { type: 'string', description: '流转备注' }
           }
         },
         ReceiptVoid: {
