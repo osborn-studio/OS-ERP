@@ -21,6 +21,17 @@
 
 开始收费后切回专用 Linux 主机 `dmserver`（下文 `linux-validation.yml`）。托管 runner 的通过只代表对应提交的隔离源码回归，不是发行包验收或生产就绪。
 
+## 夜间容量基线（Z10，`nightly-capacity.yml`）
+
+状态：工作流已编写，**尚未在 GitHub 上执行**；本机只验证了 YAML 可解析、流水线与摘要脚本在最小规模下可运行、静态守卫通过。第一次定时或手动运行才是它的第一次真实检验。
+
+- **触发**：每天一次定时（UTC 03:17，定时任务只在默认分支上生效）和 `workflow_dispatch`（输入 `scale`：`small` 2 000 SKU / `medium` 2 万 SKU、3 万单据、15 万流水 / `large` 2 万 SKU、5 万单据、25 万流水，默认 `medium`）。`ubuntu-latest`，60 分钟超时，仅 `contents: read`，Actions 全部按 40 位 SHA 固定，`npm ci --ignore-scripts` 后只显式重建 better-sqlite3/esbuild。
+- **步骤**：`scripts/synth-pipeline.mjs --keep`（生成 → 明文/加密备份 → 两份恢复演练 → `explain-audit` → 压测副本预热 → `bench-api` 读档）写入 `$RUNNER_TEMP`；再把流水线留下的压测副本复制一份跑 `bench-api --profile=write --max-error-rate 0`（管理员密码由工作流随机生成、`::add-mask::` 打码，经环境变量 `GML_PIPELINE_ADMIN_PASSWORD` 交给流水线，不打印不上传）；最后 `scripts/capacity-summary.mjs` 把两份 JSON 缩减为白名单摘要并打印到作业日志。
+- **何时标红**：只有三类——(1) 流水线任一步骤失败；(2) `explain-audit` 报告违规（>0）；(3) 读档或写档压测错误数 >0（写档另含完整性核对失败）。延迟只记录、不设阈值。注意 Y10 在 medium 规模曾记录过 3 处审计违规，若仍存在，首次运行就会红，这是如实暴露而不是工作流故障。
+- **上传**：只上传 `capacity-summary.json` 一个文件（保留 30 天）。数据库、备份、恢复副本、原始流水线/压测报告、日志一律不上传，步骤末尾也会删除。摘要脚本只输出白名单数值/布尔/短名字段，不输出路径、主机名、密钥、错误原文或违规明细文本；`tests/nightly-capacity-policy.test.mjs` 做静态与行为守卫。
+- **数字的含义（重要）**：GitHub 托管 runner 是共享虚拟机，硬件与邻居负载每天不同，数据是合成的、单次墙钟。这些数字**只是趋势指示**（同一规模下逐日对比有没有明显恶化），**不是**目标主机 `dmserver` 的结果、不是容量承诺、不是 RPO/RTO 证据，也不是发行包或生产验收。需要容量结论时，仍须按 [capacity-baseline.md](capacity-baseline.md) 在目标主机上实测。
+- 开始收费后与 `ci.yml` 一样应评估是否切回专用 Linux 主机；那时需要单独授权，本工作流不处理。
+
 ## 平台边界
 
 用户明确要求：Python 和 Linux 的 Actions 验证使用 Linux 服务器；macOS 与 Swift 构建/测试使用 Mac Studio。Mac mini 可以进行本项目的源码开发和集成，但其结果不能标为 Linux 或 Mac Studio 平台验收。

@@ -86,7 +86,9 @@ const newest = (dir, re) => fs.readdirSync(dir).filter((f) => re.test(f)).sort()
 export async function runPipeline(o) {
   fs.mkdirSync(o.dir, { recursive: true, mode: 0o700 })
   const dataDir = path.join(o.dir, 'data')
-  const adminPassword = crypto.randomBytes(18).toString('base64url')
+  // Z10: 夜间工作流需要用同一个管理员密码再对压测副本跑写档，所以允许调用方经环境变量提供（≥16 字符）；未提供则随机，行为不变。
+  const adminPassword = process.env.GML_PIPELINE_ADMIN_PASSWORD || crypto.randomBytes(18).toString('base64url')
+  if (adminPassword.length < 16) throw usage('GML_PIPELINE_ADMIN_PASSWORD 至少 16 字符')
   const backupKey = crypto.randomBytes(32).toString('base64')
   const prod = { GML_RUNTIME_MODE: 'production', GML_DATA_DIR: dataDir, GML_DB: '', TZ: 'UTC' }
   const report = {
