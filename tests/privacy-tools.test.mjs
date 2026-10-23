@@ -477,3 +477,30 @@ test('a subject that exists only as an order-center customer is found, erased on
   const again = run2(f.dir, ['13722223333', '--confirm', '--actor', 'boss'])
   assert.equal(again.status, 0, again.stderr); assert.match(again.stdout, /already-erased/)
 })
+
+test('Y8 round 2: JSON edits are lossless, protection follows ancestors, phone-named fields are not mistaken for identifiers, association uses the same boundary rules', (t) => {
+  const f = y8Fixture(t)
+  const db = open(f.dir)
+  const ins = db.prepare('INSERT INTO audit_logs (user_id,user_name,action,module,entity,entity_id,detail) VALUES (?,?,?,?,?,?,?)')
+  const tied = String(f.omsId)
+  const raw = `{ "transaction_id":9007199254740993, "n": 1.50 ,"note":"tel ${PHONE} ok","invoice":{"id":"${PHONE}"},"bank_account":{"value":"${PHONE}"},"phone_number":"${MASKED}","preferred_phone":"${PHONE}" }`
+  ins.run(1, 'boss', 'R2A', 'oms', 'oms_orders', tied, raw)
+  // 与主体无关：单号里嵌了号码，同时带一个恰好同遮盖串的号码 ⇒ 只能算"遮盖串命中"，不能算属于主体
+  ins.run(1, 'boss', 'R2B', 'oms', 'oms_orders', '3', `{"doc_no":"RC-${PHONE}","phone":"${MASKED}"}`)
+  db.prepare("INSERT INTO notify_logs (channel_code,title,payload,status) VALUES ('c','t',?,'success')").run(`{"ref":"RC-${PHONE}","who":"${MASKED}"}`)
+  db.close()
+  const rep = JSON.parse(run2(f.dir, [PHONE, '--report']).stdout).industries.cosmetic
+  assert.equal(rep.ambiguous_masked.audit_logs, 2, 'PAY row + the R2B row (its masked phone is the only match)')
+  assert.equal(rep.ambiguous_masked.notify_logs, 2)
+  assert.ok(rep.masked_fragment_columns['audit_logs.detail'] >= 3)
+  assert.equal(run2(f.dir, [PHONE, '--confirm', '--actor', 'boss']).status, 0)
+  const d = open(f.dir)
+  const pp = d.prepare('SELECT phone FROM mall_customers WHERE id=?').get(f.cid).phone
+  const a = d.prepare("SELECT detail FROM audit_logs WHERE action='R2A'").get().detail
+  assert.equal(a, `{ "transaction_id":9007199254740993, "n": 1.50 ,"note":"tel ${pp} ok","invoice":{"id":"${PHONE}"},"bank_account":{"value":"${PHONE}"},"phone_number":"${pp}","preferred_phone":"${pp}" }`, 'byte-for-byte except the personal values')
+  assert.equal(d.prepare("SELECT detail FROM audit_logs WHERE action='R2B'").get().detail, `{"doc_no":"RC-${PHONE}","phone":"${MASKED}"}`, 'unrelated row untouched')
+  d.close()
+  const out = path.join(f.dir, 'r2.json')
+  assert.equal(run('scripts/privacy-export.mjs', f.dir, [OTHER, '--out', out]).status, 0)
+  assert.ok(!readFileSync(out, 'utf8').includes('R2B'))
+})

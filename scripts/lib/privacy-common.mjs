@@ -138,14 +138,20 @@ function collectExtended(db, phone, c) {
   if (has(db, 'audit_logs')) {
     const rows = db.prepare(`SELECT * FROM audit_logs WHERE action<>? AND (${hasText(['detail'])} OR ${hasText(['detail'])}) ORDER BY id`).all(MARKER_ACTION, phone, masked)
     const tiedIds = tieSql ? new Set(db.prepare(`SELECT id FROM audit_logs WHERE ${tieSql}`).all(...tieArgs).map((r) => r.id)) : new Set()
-    for (const r of rows) (String(r.detail).includes(phone) || tiedIds.has(r.id) ? audit_logs : audit_ambiguous).push(r)
+    for (const r of rows) {
+      if (hasToken(r.detail, phone)) audit_logs.push(r)
+      else if (hasToken(r.detail, masked)) (tiedIds.has(r.id) ? audit_logs : audit_ambiguous).push(r)
+    }
   }
   const nCols = ['title', 'payload', 'error']
   const notify_logs = []
   const notify_ambiguous = []
   if (has(db, 'notify_logs')) {
     const rows = db.prepare(`SELECT * FROM notify_logs WHERE ${hasText(nCols)} OR ${hasText(nCols)} ORDER BY id`).all(...nCols.map(() => phone), ...nCols.map(() => masked))
-    for (const r of rows) (nCols.some((k) => (r[k] || '').includes(phone)) ? notify_logs : notify_ambiguous).push(r)
+    for (const r of rows) {
+      if (nCols.some((k) => hasToken(r[k], phone))) notify_logs.push(r)
+      else if (nCols.some((k) => hasToken(r[k], masked))) notify_ambiguous.push(r)
+    }
   }
   return {
     refunds, oc_customers, oc_addresses, oc_orders: byCust('oc_orders'), oc_statements: byCust('oc_statements'),
@@ -196,10 +202,81 @@ export function scanRawPhone(db, phone) {
  * 规则只改个人信息列；金额、单号、状态、数量、时间、行 id、客户 id 一律不动。
  */
 /**
- * 文本里的号码替换。**只替换独立出现的号码**：前后不能紧挨字母 / 数字 / `_` / `-`（单号 `RC-13812345678`、`13812345678-A` 不动）。
- * 明细是 JSON 时按结构处理：只改字符串值，不改数字、不改键，键名像单号 / 账号 / 金额的字符串值也不动；改完再序列化（审计明细本就由 JSON.stringify 写入，往返稳定）。
+ * 文本里的号码替换（也是"这一行是否含该号码"的唯一判据，关联与替换口径一致）。
+ *   · **只替换独立出现的号码**：前后不能紧挨字母 / 数字 / `_` / `-`（单号 `RC-13812345678`、`13812345678-A` 不动）。
+ *   · 文本是 JSON 时按结构处理，且**只做定点替换、不重新序列化**（数字、空白、转义原样保留，`9007199254740993` 不会变）：
+ *     只改字符串值，不改键；值所在的任一祖先键像单号 / 账号 / 金额 / id 时整棵子树受保护；键名含 phone / mobile / tel / contact 的显式放行（覆盖祖先保护）。
  */
-const DOCISH_KEY = /(doc|order|serial|ref|bank|account|voucher|invoice|(^|_)no$|number|code|amount|price|total)/i
+const SEGMENTS = new Set(['doc', 'order', 'serial', 'ref', 'reference', 'bank', 'account', 'acct', 'voucher', 'invoice', 'no', 'number', 'num', 'code', 'amount', 'price', 'total', 'id', 'txn', 'transaction', 'trade', 'card'])
+const PHONEISH = /phone|mobile|(^|[^a-z])tel([^a-z]|$)|contact/i
+const protectedKey = (k) => k.split(/[^A-Za-z0-9]+|(?<=[a-z])(?=[A-Z])/).some((x) => SEGMENTS.has(x.toLowerCase()))
+const keyProtection = (key, inherited) => (PHONEISH.test(key) ? false : protectedKey(key) ? true : inherited)
+
+/** 在 JSON 文本里收集需要替换的字符串值区间；解析失败返回 null（调用方按纯文本处理） */
+function jsonEdits(text, re, pp) {
+  let i = 0
+  const edits = []
+  const ws = () => { while (i < text.length && /\s/.test(text[i])) i++ }
+  const str = () => {
+    const start = i
+    i++
+    while (i < text.length && text[i] !== '"') i += text[i] === '\\' ? 2 : 1
+    if (i >= text.length) throw new Error('bad')
+    i++
+    return [start, i]
+  }
+  const value = (prot) => {
+    ws()
+    const c = text[i]
+    if (c === '"') {
+      const [st, en] = str()
+      if (!prot) {
+        const inner = text.slice(st + 1, en - 1)
+        const next = inner.replace(re, pp)
+        if (next !== inner) edits.push([st + 1, en - 1, next])
+      }
+    } else if (c === '{') {
+      i++; ws()
+      if (text[i] === '}') { i++; return }
+      for (;;) {
+        ws()
+        if (text[i] !== '"') throw new Error('bad')
+        const [ks, ke] = str()
+        const key = JSON.parse(text.slice(ks, ke))
+        ws()
+        if (text[i++] !== ':') throw new Error('bad')
+        value(keyProtection(key, prot))
+        ws()
+        if (text[i] === ',') { i++; continue }
+        if (text[i] === '}') { i++; return }
+        throw new Error('bad')
+      }
+    } else if (c === '[') {
+      i++; ws()
+      if (text[i] === ']') { i++; return }
+      for (;;) {
+        value(prot)
+        ws()
+        if (text[i] === ',') { i++; continue }
+        if (text[i] === ']') { i++; return }
+        throw new Error('bad')
+      }
+    } else {
+      const m = /^(?:-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null)/.exec(text.slice(i))
+      if (!m) throw new Error('bad')
+      i += m[0].length
+    }
+  }
+  try {
+    value(false)
+    ws()
+    if (i !== text.length) return null
+  } catch {
+    return null
+  }
+  return edits
+}
+
 export function replaceInText(text, tokens, pp) {
   if (typeof text !== 'string' || !text) return text
   const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -208,25 +285,19 @@ export function replaceInText(text, tokens, pp) {
   re.lastIndex = 0
   const t = text.trim()
   if ((t.startsWith('{') && t.endsWith('}')) || (t.startsWith('[') && t.endsWith(']'))) {
-    try {
-      let changed = false
-      const walk = (v, key) => {
-        if (typeof v === 'string') {
-          if (key && DOCISH_KEY.test(key)) return v
-          const n = v.replace(re, pp)
-          if (n !== v) changed = true
-          return n
-        }
-        if (Array.isArray(v)) return v.map((x) => walk(x, key))
-        if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, walk(x, k)]))
-        return v
-      }
-      const out = walk(JSON.parse(t), null)
-      return changed ? JSON.stringify(out) : text
-    } catch { /* 不是合法 JSON：按文本处理 */ }
+    const lead = text.indexOf(t)
+    const edits = jsonEdits(t, re, pp)
+    if (edits) {
+      let out = t
+      for (const [st, en, rep] of edits.sort((x, y) => y[0] - x[0])) out = out.slice(0, st) + rep + out.slice(en)
+      return text.slice(0, lead) + out + text.slice(lead + t.length)
+    }
   }
   return text.replace(re, pp)
 }
+
+/** 这一行里是否有该号码（与替换同一口径：被保护的单号 / 账号字段里的不算） */
+export const hasToken = (text, token) => typeof text === 'string' && replaceInText(text, [token], '\u0000') !== text
 
 export function planErase(db, phone, c, { includeAmbiguous = false } = {}) {
   const pp = phonePseudonym(phone, c.customer?.id)

@@ -31,7 +31,7 @@
  */
 import { INDUSTRIES, requireExplicitDataDir } from '../server/db/index.js'
 import { auditStrictRow } from '../server/lib/audit-trail.js'
-import { PHONE_RE, ERASED_PREFIX, OPEN_OMS, OPEN_SALES, fatal, phoneHash, alreadyErased, openIndustryDbs, collect, isEmpty, planErase, applyPlan, manualReview, scanRawPhone } from './lib/privacy-common.mjs'
+import { PHONE_RE, ERASED_PREFIX, OPEN_OMS, OPEN_SALES, fatal, phoneHash, alreadyErased, openIndustryDbs, collect, isEmpty, planErase, applyPlan, manualReview, scanRawPhone, maskedPhone } from './lib/privacy-common.mjs'
 
 const args = process.argv.slice(2)
 let confirm = false
@@ -129,6 +129,8 @@ function describe(db, ev) {
     ambiguous_masked: ev.plan.ambiguous_masked,
     raw_phone_not_covered: remaining,
     manual_review: manualReview(db, phone),
+    // 仅供参考：库里含该部分遮盖串的文本列（遮盖串不唯一，不能据此判断属于主体；日志类已在 ambiguous_masked 单列）
+    masked_fragment_columns: scanRawPhone(db, maskedPhone(phone)),
     open_orders: ev.open,
     would_refuse: ev.open.length > 0 && !allowOpen ? 'OPEN_ORDERS' : null
   }
