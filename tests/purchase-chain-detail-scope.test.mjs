@@ -185,6 +185,14 @@ test('purchase chain detail and auxiliary reads share the read gate and per-docu
     assert.ok(lines.list.length <= linesAdmin.list.length)
   })
 
+  await t.test('restricted FIFO keeps one-cent balances like the shared allocator', async () => {
+    const cent = id(`INSERT INTO purchase_settlements (doc_no, org_id, supplier_id, settle_date, settle_amount, paid_amount, diff_amount, status) VALUES ('PST-D-CENT',?,?,'2000-01-01',0.01,0,0,'audited')`, whA.org_id, supplier)
+    const wh = await f.account('dt_wh_cent', 'warehouse', { org_id: whA.org_id, data_scope: 'org' })
+    const plan = okData(await api(`/api/purchase/payment-plan?supplier_id=${supplier}&amount=0.01`, { token: wh.token }))
+    assert.deepEqual(plan.plan.map((x) => [x.settle_id, x.amount]), [[cent, 0.01]])
+    db.prepare("UPDATE purchase_settlements SET status='voided' WHERE id=?").run(cent)
+  })
+
   await t.test('subtree/global/no-org accounts', async () => {
     const glob = await f.account('dt_glob', 'purchase', { data_scope: 'all' })
     for (const k of ['A', 'B', 'N']) for (const r of DETAIL(k)) okData(await api(r, { token: glob.token }))

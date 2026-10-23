@@ -732,21 +732,22 @@ r.get(
     if (!supplierId) return fail(res, '需要 supplier_id', 400)
     // 只列 / 只核销调用者范围内的结算单（ADR-0020）；全局范围沿用 `planAllocation`，受限范围对已按范围过滤的清单做同口径 FIFO
     const scope = purchaseScopeSql(req.orgScope, 'st')
-    const open = db
+    const openAll = db
       .prepare(
         `SELECT st.id, st.doc_no, st.settle_date, st.settle_amount, st.paid_amount,
                 (st.settle_amount - st.paid_amount) open_amount
            FROM purchase_settlements st
           WHERE st.supplier_id=? AND st.status IN ('audited','settled') AND ${scope.org}
-            AND st.settle_amount - st.paid_amount > 0.01
+            AND st.settle_amount - st.paid_amount > 0.000001
           ORDER BY st.settle_date, st.id`
       )
       .all(supplierId, ...scope.params)
+    const open = openAll.filter((x) => Number(x.open_amount) > 0.01)
     let plan = []
     if (amount > 0 && (!req.orgScope || req.orgScope.scope === 'all')) plan = planAllocation(db, supplierId, amount)
     else if (amount > 0) {
       let left = amount
-      for (const x of open) {
+      for (const x of openAll) {
         if (left <= 1e-6) break
         const take = Math.min(left, Number(x.open_amount))
         plan.push({ settle_id: x.id, amount: Math.round(take * 100) / 100, remark: 'FIFO 自动核销' })

@@ -16,7 +16,9 @@
 
 ## 边界
 
-写接口门不变；`routes/purchase.js` 的订单 / 收货 / 退货详情另批。
+写接口门不变。Codex 独立审计指出的两点留作已知后续：`POST /payments` 的自动核销（`planAllocation`）与 `POST /settlements` 的来源选择（`buildSettlement`）仍按供应商全量，与受限账号看到的预览可能不一致。它们属写路径（W12 同文件、另立 ADR），本批只收口读；预览只是不泄漏范围外数据，并不承诺与跨组织落单结果相等。
+
+`routes/purchase.js` 的订单 / 收货 / 退货详情另批。
 
 ## 验证入口
 
