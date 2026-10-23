@@ -22,7 +22,7 @@ import { audit } from '../middleware/audit.js'
 import { nextDocNo } from '../lib/docno.js'
 import { advanceStatus, tryTransition, nowText, logEvent } from '../lib/docflow.js'
 import { publicPlatform } from '../lib/qimen-auth.js'
-import { applyStockOut, pickBatches, releaseStock, reserveStock, reserveForDoc, planShipment, releaseForDoc } from '../lib/stock.js'
+import { applyStockOut, pickBatches, releaseStock, reserveStock, reserveForDoc, planShipment, releaseForDoc, assertWarehouseInScope, stockScopeSql } from '../lib/stock.js'
 import { assertSalesTargetInScope, SalesOrderError, omsPlatformScopeSql, omsOrderScopeSql } from '../lib/sales-order.js'
 
 const r = Router()
@@ -60,6 +60,22 @@ function checkPlatformWrite(db, req, pf, { hideAs404 = false } = {}) {
     return { status: 422, code: 'PLATFORM_ORG_UNBOUND', message: '该平台未绑定履约仓或履约仓未归属组织，订单无法归属，请先在平台档案维护' }
   }
   return null
+}
+
+/**
+ * 写路由取线上单（ADR-0042）：先按平台绑定组织的读范围（ADR-0039 `omsOrderScopeSql`）取行，
+ * 范围外与不存在同形（同一句 404），不泄漏线上单存在性。再校验关联销售订单的出货仓
+ * （`assertWarehouseInScope`，ADR-0038）：平台在范围内、销售订单的仓却在他组织 ⇒ 403 `TARGET_OUT_OF_SCOPE`，先于任何写。
+ */
+function loadOmsOrderForWrite(db, req, id, { checkTarget = false } = {}) {
+  const os = omsOrderScopeSql(scopeOf(req), 'o')
+  const o = Number.isFinite(id) ? db.prepare(`SELECT o.* FROM oms_orders o WHERE o.id=? AND ${os.sql}`).get(id, ...os.params) : null
+  if (!o) return null
+  if (checkTarget && o.sales_order_id) {
+    const so = db.prepare('SELECT warehouse_id FROM sales_orders WHERE id=?').get(o.sales_order_id)
+    if (so) assertWarehouseInScope(db, so.warehouse_id, scopeOf(req))
+  }
+  return o
 }
 
 const OMS_SELECT = `
@@ -424,12 +440,13 @@ r.post(
 r.post(
   '/orders/:id/ship',
   requireAuth,
+  attachOrgScope,
   requireRole(...W),
   wrap((req, res) => {
     const db = getDb()
     const u = currentUser(req)
     const id = Number(req.params.id)
-    const o = db.prepare('SELECT * FROM oms_orders WHERE id=?').get(id)
+    const o = loadOmsOrderForWrite(db, req, id, { checkTarget: true })
     if (!o) return fail(res, '线上订单不存在', 404)
     if (o.status !== 'pending') return fail(res, '只有待发货订单可以发货')
     const expressCompany = req.body?.express_company || (o.platform_id ? rnd(EXPRESS) : '顺丰速运')
@@ -530,11 +547,12 @@ r.post(
 r.post(
   '/orders/:id/complete',
   requireAuth,
+  attachOrgScope,
   requireRole(...W),
   wrap((req, res) => {
     const db = getDb()
     const id = Number(req.params.id)
-    const o = db.prepare('SELECT id, platform_order_no, status FROM oms_orders WHERE id=?').get(id)
+    const o = loadOmsOrderForWrite(db, req, id)
     if (!o) return fail(res, '线上订单不存在', 404)
     advanceStatus(db, req, {
       docType: 'OM',
@@ -551,11 +569,12 @@ r.post(
 r.post(
   '/orders/:id/refund',
   requireAuth,
+  attachOrgScope,
   requireRole(...W),
   wrap((req, res) => {
     const db = getDb()
     const id = Number(req.params.id)
-    const o = db.prepare('SELECT * FROM oms_orders WHERE id=?').get(id)
+    const o = loadOmsOrderForWrite(db, req, id, { checkTarget: true })
     if (!o) return fail(res, '线上订单不存在', 404)
     const reason = req.body?.reason || '买家申请退款'
     db.transaction(() => {
@@ -588,24 +607,34 @@ r.post(
 r.post(
   '/stock-push',
   requireAuth,
+  attachOrgScope,
   requireRole(...W),
   wrap((req, res) => {
     const db = getDb()
     const platformId = req.body?.platform_id ? Number(req.body.platform_id) : null
     const started = Date.now()
-    const plats = platformId
-      ? db.prepare('SELECT * FROM platforms WHERE id=? AND sync_stock=1').all(platformId)
-      : db.prepare('SELECT * FROM platforms WHERE sync_stock=1 AND status=\'active\'').all()
+    // ADR-0042：只推范围内平台（平台绑定组织，同读路由）；指定的平台在范围外与不存在同形 404
+    const ps = omsPlatformScopeSql(scopeOf(req), 'pf')
+    let plats
+    if (platformId) {
+      const one = db.prepare(`SELECT pf.* FROM platforms pf WHERE pf.id=? AND ${ps.sql}`).get(platformId, ...ps.params)
+      if (!one) return fail(res, '平台不存在', 404)
+      plats = one.sync_stock === 1 ? [one] : []
+    } else {
+      plats = db.prepare(`SELECT pf.* FROM platforms pf WHERE pf.sync_stock=1 AND pf.status='active' AND ${ps.sql}`).all(...ps.params)
+    }
     if (!plats.length) return fail(res, '没有开启库存同步的平台')
+    // 可售库存合计只累计范围内的仓（ADR-0038 `stockScopeSql`）；全局范围谓词为 1=1，口径不变
+    const ss = stockScopeSql(scopeOf(req), 'st')
     const rows = []
     for (const pf of plats) {
       const skuCount = db.prepare("SELECT COUNT(*) c FROM product_skus WHERE status='active'").get().c
       const available = db
         .prepare(
           `SELECT COALESCE(SUM(qty_on_hand - qty_reserved),0) q FROM inventory_stocks st
-           JOIN product_skus s ON s.id=st.sku_id WHERE s.status='active'`
+           JOIN product_skus s ON s.id=st.sku_id WHERE s.status='active' AND ${ss.sql}`
         )
-        .get().q
+        .get(...ss.params).q
       const cost = Date.now() - started
       db.prepare(
         `INSERT INTO oms_sync_logs (platform_id,sync_type,direction,status,total_count,success_count,fail_count,message,payload,cost_ms)

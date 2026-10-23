@@ -8,6 +8,10 @@
 
 <!-- generated -->
 
+## 第十批（进行中）：见 roadmap-v6
+
+- [ADR-0042：OMS 写路由与 MCP 库存工具按组织范围收口](docs/implementation/ADR-0042-oms-write-mcp-inventory-scope.md) — 判据不新增：沿用 ADR-0034 / 0039 的「平台绑定组织 = 平台履约仓所属组织」（`omsOrderScopeSql` / `omsPlatformScopeSql`，`server/lib/sales-order.js`），仓库侧用 ADR-0038 的 `assertWarehouseInScope` / `stockScopeSql`（`server/lib/stock.js`）。 2. `ship` / `complete` / `refund` 增 `a…
+
 ## 第九批（进行中）：见 roadmap-v5
 
 - [ADR-0038：库存域与采购订单状态/收货路由按组织范围收口](docs/implementation/ADR-0038-inventory-scope.md) — 一处判据：`server/lib/stock.js` 的 `stockScopeSql(orgScope, alias, column='warehouse_id')`，键为 `warehouses.org_id`。不传或 `all` ⇒ `1=1`；`dealer` / `none` / 空集合 ⇒ `1=0`；仓库 `org_id` 为 NULL 对受限范围不可见。同文件还有 `warehouseInScope` / `assertWarehouseInScope`（写目…

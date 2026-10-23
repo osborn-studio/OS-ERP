@@ -474,6 +474,66 @@ test('MCP delegation matrix: every tool x {owner inactive, permission removed, s
     }
   }
 
+  // ---- 状态 6（AA2）：库存工具按所有者的**仓库组织**范围收口 ----
+  // 所有者范围 = 仓库 A 所在组织（范围内非空，区别于状态 3 的"无关组织"）：
+  //   · 读工具：货主是本组织、货却放在他组织仓 / 无组织仓里，必须不可见；本组织仓里的货可见；
+  //   · 写工具：目标（任一端）是他组织仓或无组织仓 ⇒ ORG_OUT_OF_SCOPE，且业务表零写；
+  // 与 HTTP `/api/inventory/*`（stock.js `stockScopeSql` / `assertWarehouseInScope`）同一判据。
+  matrix.inventory_scope_state = { state: 'owner_scope_org_with_foreign_and_orgless_warehouses', tools: {} }
+  {
+    const engine = await import('../server/lib/stock.js')
+    const ownerOrg = wh.org_id
+    assert.notEqual(wh2.org_id, ownerOrg, 'fixture: two warehouses in different orgs')
+    const whNull = Number(db.prepare("INSERT INTO warehouses (code, name, type, status, org_id, default_owner_org_id) VALUES ('MX-AA2-N','MX无组织仓','normal','active',NULL,?)").run(ownerOrg).lastInsertRowid)
+    const putStock = (warehouseId, batch) => engine.applyStockIn(db, { bizDate: new Date().toISOString().slice(0, 10), docType: 'ADJ_IN', docNo: `MX-AA2-${batch}`, warehouseId, ownerOrgId: ownerOrg, skuId: sku.id, batchNo: batch, qty: 5, unitCost: 2, expireAt: '2099-01-01 00:00:00', source: 'test', operator: 'matrix' })
+    putStock(wh.id, 'MX-AA2-OWN'); putStock(wh2.id, 'MX-AA2-FOREIGN'); putStock(whNull, 'MX-AA2-NOORG')
+    db.prepare('UPDATE users SET org_id=?, data_scope=? WHERE id=?').run(ownerOrg, 'org', ownerId)
+    try {
+      const batchesSeen = async (name, args) => {
+        const r = await mcp('tools/call', { name, arguments: args }, token)
+        return { out: outcome(r), text: JSON.stringify(payload(r) ?? '') }
+      }
+      for (const [name, args] of [
+        ['inventory.query_stock', { sku_id: sku.id, limit: 500 }],
+        ['inventory.list_transactions', { sku_id: sku.id, limit: 500 }],
+        ['inventory.list_batches', { sku_id: sku.id, days: 36500 }],
+        ['inventory.stock_alert', { expiring_days: 36500 }]
+      ]) {
+        const before = snapshot()
+        const { out, text } = await batchesSeen(name, args)
+        const changed = diff(before, snapshot())
+        const hides = !text.includes('MX-AA2-FOREIGN') && !text.includes('MX-AA2-NOORG')
+        const sees = text.includes('MX-AA2-OWN') || name === 'inventory.list_transactions' || name === 'inventory.stock_alert'
+        const ok = out.kind === 'ok' && hides && sees && changed.length === 0
+        matrix.inventory_scope_state.tools[name] = { result: ok ? 'SCOPED' : 'LEAK', code: out.code }
+        if (!ok) failures.push(`inventory_scope ${name}: ${out.kind}/${out.code} hides=${hides} sees=${sees} ${changed.join(';')}`)
+      }
+      for (const [name, args] of [
+        ['inventory.get_cost', { sku_id: sku.id, warehouse_id: wh2.id, owner_org_id: ownerOrg }],
+        ['inventory.get_cost', { sku_id: sku.id, warehouse_id: whNull, owner_org_id: ownerOrg }],
+        ['inventory.pick_suggestion', { sku_id: sku.id, warehouse_id: whNull, qty: 1, owner_org_id: ownerOrg }],
+        ['inventory.stock_in', { warehouse_id: whNull, sku_id: sku.id, qty: 1, unit_cost: 1, owner_org_id: ownerOrg }],
+        ['inventory.stock_in', { warehouse_id: wh2.id, sku_id: sku.id, qty: 1, unit_cost: 1, owner_org_id: ownerOrg }],
+        ['inventory.stock_out', { warehouse_id: whNull, sku_id: sku.id, qty: 1, owner_org_id: ownerOrg }],
+        ['inventory.adjust', { warehouse_id: whNull, sku_id: sku.id, delta: 1, reason: 'matrix' }],
+        ['inventory.transfer', { from_warehouse_id: wh.id, to_warehouse_id: whNull, sku_id: sku.id, qty: 1 }],
+        ['inventory.transfer', { from_warehouse_id: whNull, to_warehouse_id: wh.id, sku_id: sku.id, qty: 1 }],
+        ['inventory.ownership_transfer', { from_warehouse_id: wh.id, from_owner_org_id: ownerOrg, to_warehouse_id: whNull, to_owner_org_id: ownerOrg, sku_id: sku.id, qty: 1 }]
+      ]) {
+        const tool = TOOLS.find((x) => x.name === name)
+        const before = snapshot()
+        const r = await invoke(tool, args)
+        const changed = diff(before, snapshot())
+        const ok = r.final.kind === 'tool_error' && r.final.code === 'ORG_OUT_OF_SCOPE' && changed.length === 0
+        const key = `${name}#${JSON.stringify(Object.entries(args).filter(([k]) => k.includes('warehouse')).map(([, v]) => v))}`
+        matrix.inventory_scope_state.tools[key] = { result: ok ? 'DENIED' : 'LEAK', code: r.final.code, rows_changed: changed }
+        if (!ok) failures.push(`inventory_scope ${key}: ${r.final.kind}/${r.final.code} ${changed.join(';')}`)
+      }
+    } finally {
+      db.prepare('UPDATE users SET org_id=NULL, data_scope=? WHERE id=?').run('all', ownerId)
+    }
+  }
+
   // ---- 产出矩阵并断言覆盖 ----
   const file = path.join(f.dir, 'mcp-tool-matrix.json')
   writeFileSync(file, JSON.stringify(matrix, null, 2))
@@ -484,6 +544,7 @@ test('MCP delegation matrix: every tool x {owner inactive, permission removed, s
   assert.equal(saved.tool_count, TOOLS.length)
   assert.ok(Object.keys(saved.binding_state.types).length >= 6 && Object.values(saved.binding_state.types).every((x) => x.result === 'DENIED'), 'every store/dealer bound type is denied to an unbound owner')
   assert.ok(Object.keys(saved.history_scope_state.cases).length >= 2 && Object.values(saved.history_scope_state.cases).every((x) => x.result !== 'LEAK'), 'history tool honors the owner scope')
+  assert.ok(Object.keys(saved.inventory_scope_state.tools).length >= 14 && Object.values(saved.inventory_scope_state.tools).every((x) => x.result !== 'LEAK'), 'inventory tools honor the owner warehouse-org scope')
   assert.ok(Object.values(saved.replay_state.tools).every((x) => x.result !== 'LEAK'), 'no write tool replays a cached result after owner permission / scope loss')
   assert.deepEqual(failures, [], `tools that slipped through:\n${failures.join('\n')}`)
   assert.ok(Object.values(saved.tools).every((x) => Object.values(x.states).every((c) => c.result !== 'LEAK')))

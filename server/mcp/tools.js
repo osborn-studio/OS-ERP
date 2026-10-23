@@ -23,7 +23,7 @@
 // 设计原则：工具直接复用五维库存引擎与组织数据权限，而不是另写一套取数逻辑 ——
 //          这样 AI 看到的数据与人在界面上看到的永远一致，不会出现「AI 说还有 10 件、页面显示 0 件」。
 
-import { pickBatches, queryBalance, costOf, getInvParam, resolveOwnerOrg, applyStockGain } from '../lib/stock.js'
+import { pickBatches, queryBalance, costOf, getInvParam, resolveOwnerOrg, applyStockGain, stockScopeSql, warehouseInScope } from '../lib/stock.js'
 import { localDate, localNow } from '../lib/dates.js'
 // D5：MCP 工具不再"平行实现"业务 —— 有领域服务的一律调领域服务
 import { decideApproval, ApprovalError } from '../lib/approval.js'
@@ -111,6 +111,18 @@ function orgFilter(ctx, alias, column = 'org_id') {
   return { sql: ` AND ${alias}.${column} IN (${ids.map(() => '?').join(',')}) `, params: [...ids] }
 }
 
+/**
+ * 库存读工具的范围谓词（ADR-0042）：货主过滤（`orgFilter`，A03）**叠加**仓库组织范围（`stockScopeSql`，ADR-0038）。
+ * 货主是 A 组织、货却放在 B 组织（或无组织）的仓里，HTTP `/api/inventory/*` 对 A 不可见，MCP 也不得因货主命中而放行。
+ * `warehouseCol` 是库存行上的仓库列（缺省 `warehouse_id`）。
+ */
+function invFilter(ctx, alias, ownerCol = 'owner_org_id', warehouseCol = 'warehouse_id') {
+  const o = orgFilter(ctx, alias, ownerCol)
+  if (!ctx.scope || ctx.scope.scope === 'all') return o
+  const w = stockScopeSql(ctx.scope, alias, warehouseCol)
+  return { sql: `${o.sql} AND ${w.sql} `, params: [...o.params, ...w.params] }
+}
+
 // ---------------------------------------------------------------------------
 // 写路径的组织归属校验（A03）
 //
@@ -162,6 +174,14 @@ function assertWarehouseInScope(ctx, db, warehouseId, { ownerOrgId = null, label
     throw e
   }
   assertOrgInScope(ctx, wh.org_id, `${label} #${warehouseId} 所属组织`)
+  // ADR-0042：仓库没有组织归属（org_id 为 NULL）对受限范围同样不可达 —— 与 HTTP 的 `assertWarehouseInScope`（stock.js）同一判据
+  if (!warehouseInScope(db, warehouseId, ctx.scope)) {
+    const e = new Error(`${label} #${warehouseId} 不在本令牌的组织范围内`)
+    e.code = 'ORG_OUT_OF_SCOPE'
+    e.status = 403
+    e.detail = { warehouseId: Number(warehouseId), label }
+    throw e
+  }
   const explicit = ownerOrgId != null
   const target = explicit ? Number(ownerOrgId) : resolveOwnerOrg(db, warehouseId, null)
   assertOrgInScope(
@@ -660,7 +680,7 @@ export const TOOLS = [
       if (args.owner_org_id) { where.push('s.owner_org_id=?'); params.push(args.owner_org_id) }
       if (args.currency) { where.push('s.currency=?'); params.push(args.currency) }
       if (args.only_available) where.push('(s.qty_on_hand - s.qty_reserved) > 0')
-      const f = orgFilter(ctx, 's', 'owner_org_id')
+      const f = invFilter(ctx, 's', 'owner_org_id')
       const rows = db.prepare(`
         SELECT s.id, s.sku_id, k.sku_code, k.name AS sku_name, p.name AS product_name,
                s.warehouse_id, w.name AS warehouse_name, s.batch_no,
@@ -698,7 +718,7 @@ export const TOOLS = [
       const days = Number(args.days) || 90
       const now = new Date()
       const until = localNow(new Date(now.getTime() + days * 86400000))
-      const f = orgFilter(ctx, 's', 'owner_org_id')
+      const f = invFilter(ctx, 's', 'owner_org_id')
       const batchScope = f.sql ? `AND EXISTS (SELECT 1 FROM inventory_stocks s WHERE s.sku_id=b.sku_id AND s.batch_no=b.batch_no ${f.sql})` : ''
       const where = ["b.expire_at IS NOT NULL", "b.expire_at <> ''"]
       const params = []
@@ -796,7 +816,7 @@ export const TOOLS = [
       if (args.doc_type) { where.push('t.doc_type=?'); params.push(args.doc_type) }
       if (args.start_date) { where.push('t.biz_date >= ?'); params.push(args.start_date) }
       if (args.end_date) { where.push('t.biz_date <= ?'); params.push(args.end_date) }
-      const f = orgFilter(ctx, 't', 'owner_org_id')
+      const f = invFilter(ctx, 't', 'owner_org_id')
       const rows = db.prepare(`
         SELECT t.biz_date, t.biz_time, t.doc_type, t.doc_no, t.direction, t.qty, t.unit_cost, t.amount,
                t.balance_qty, t.currency, t.owner_org_id, o.name AS owner_name,
@@ -821,7 +841,7 @@ export const TOOLS = [
     },
     handler({ db, args, ctx }) {
       const days = Number(args.expiring_days) || Number(getInvParam(db, 'expire_warn_days', 90))
-      const f = orgFilter(ctx, 's', 'owner_org_id')
+      const f = invFilter(ctx, 's', 'owner_org_id')
       const below = db.prepare(`
         SELECT s.sku_id, k.sku_code, k.name AS sku_name, k.safe_stock, SUM(s.qty_on_hand) AS qty_on_hand
         FROM inventory_stocks s JOIN product_skus k ON k.id=s.sku_id
