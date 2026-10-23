@@ -36,7 +36,7 @@ import {
   buildSettlement, getSettlement, transitionSettlement,
   createPayment, getPayment, transitionPayment, planAllocation,
   refreshOrderStats, refreshCloseFlags,
-  purchaseOverview, purchaseTodos, purchaseActions, PO_READ_PERMS
+  purchaseOverview, purchaseTodos, purchaseActions, PO_READ_PERMS, purchaseScopeSql
 } from '../lib/purchase.js'
 import { explainLifecycle, assertEdgePermitted, getDocType } from '../lib/docflow.js'
 
@@ -103,33 +103,35 @@ function assertActionPermitted(req, db, docType, id) {
 // 一、看板与业务流
 // ===========================================================================
 
+/**
+ * 采购链读接口的**同一道门**（ADR-0015 立于待办，ADR-0017 推到看板 / 业务流 / 四张单列表 / 应付台账）：
+ * 内部主体（dealer / store 403）→ `PO_READ_PERMS` 任一（与采购订单读接口同一份清单）→ 挂上组织范围。
+ * 范围本身由 `purchaseScopeSql` 在查询里落地：范围为空的受限账号拿到的是**空列表 / 零总览**（200），
+ * 不是 403 —— 页面对"没有数据"与"没资格进门"要分得开。
+ * 原来这些接口只有 `requireAuth`：经销商 / 门店账号一个 GET 就能把全库单号与金额拉走。
+ */
+const readGate = [requireAuth, requireInternal('采购单据'), requirePerm(...PO_READ_PERMS), attachOrgScope]
+
 r.get(
   '/chain/overview',
-  requireAuth,
-  guard((req, res) => ok(res, purchaseOverview(getDb())))
+  readGate,
+  guard((req, res) => ok(res, purchaseOverview(getDb(), { orgScope: req.orgScope })))
 )
 
-/**
- * 采购待办（ADR-0015）：与采购订单读接口**同一道门**（内部主体 + `PO_READ_PERMS` 任一），
- * 再按调用者的组织范围与动作权限收窄 —— 原来只有 `requireAuth`，经销商 / 门店账号一个 GET
- * 就能把全库待审单号与金额拉走。范围为空的受限账号拿到的是**空列表**（200），
- * 不是 403：工作台页面对"没有待办"与"没资格进门"要分得开。
- */
+/** 采购待办（ADR-0015）：进门后再按组织范围与每条待办的动作权限收窄。 */
 r.get(
   '/chain/todos',
-  requireAuth,
-  requireInternal('采购待办'),
-  requirePerm(...PO_READ_PERMS),
-  attachOrgScope,
+  readGate,
   guard((req, res) => {
     const db = getDb()
     return ok(res, { list: purchaseTodos(db, { orgScope: req.orgScope, permCtx: permContext(db, req.user) }) })
   })
 )
 
+/** 业务流定义不含单据数据，但与工作台其余两块同一道门（外部主体不该看到内部流程与权限点清单）。 */
 r.get(
   '/chain/flow',
-  requireAuth,
+  readGate,
   guard((req, res) => {
     const db = getDb()
     const flow = db.prepare("SELECT * FROM biz_flows WHERE code='FLOW_PURCHASE'").get()
@@ -265,9 +267,10 @@ r.post(
 
 r.get(
   '/requisitions',
-  requireAuth,
+  readGate,
   guard((req, res) => {
     const rows = listRequisitions(getDb(), {
+      orgScope: req.orgScope,
       status: req.query.status || null,
       applicant_type: req.query.applicant_type || null,
       applicant_id: req.query.applicant_id ? Number(req.query.applicant_id) : null,
@@ -395,11 +398,12 @@ r.post(
 
 r.get(
   '/invoices',
-  requireAuth,
+  readGate,
   guard((req, res) => {
     const db = getDb()
-    const cond = ["i.status<>'voided'"]
-    const args = []
+    const scope = purchaseScopeSql(req.orgScope, 'i')
+    const cond = ["i.status<>'voided'", scope.org]
+    const args = [...scope.params]
     if (req.query.status) { cond.push('i.status=?'); args.push(req.query.status) }
     if (req.query.supplier_id) { cond.push('i.supplier_id=?'); args.push(Number(req.query.supplier_id)) }
     if (req.query.invoice_type) { cond.push('i.invoice_type=?'); args.push(req.query.invoice_type) }
@@ -541,11 +545,12 @@ r.get(
 
 r.get(
   '/settlements',
-  requireAuth,
+  readGate,
   guard((req, res) => {
     const db = getDb()
-    const cond = ["st.status<>'voided'"]
-    const args = []
+    const scope = purchaseScopeSql(req.orgScope, 'st')
+    const cond = ["st.status<>'voided'", scope.org]
+    const args = [...scope.params]
     if (req.query.status) { cond.push('st.status=?'); args.push(req.query.status) }
     if (req.query.supplier_id) { cond.push('st.supplier_id=?'); args.push(Number(req.query.supplier_id)) }
     const rows = db
@@ -660,11 +665,12 @@ r.post(
 
 r.get(
   '/payments',
-  requireAuth,
+  readGate,
   guard((req, res) => {
     const db = getDb()
-    const cond = ["p.status<>'voided'"]
-    const args = []
+    const scope = purchaseScopeSql(req.orgScope, 'p')
+    const cond = ["p.status<>'voided'", scope.org]
+    const args = [...scope.params]
     if (req.query.status) { cond.push('p.status=?'); args.push(req.query.status) }
     if (req.query.supplier_id) { cond.push('p.supplier_id=?'); args.push(Number(req.query.supplier_id)) }
     const rows = db
@@ -776,9 +782,11 @@ r.post(
 /** 应付账款台账：按供应商看已结算 / 已付 / 未付与暂估差异 */
 r.get(
   '/payables',
-  requireAuth,
+  readGate,
   guard((req, res) => {
     const db = getDb()
+    // 结算按自身 org_id、退货经仓的组织 —— 与看板 / 待办同一份 `purchaseScopeSql`（ADR-0017）
+    const scope = purchaseScopeSql(req.orgScope, 'st')
     const rows = db
       .prepare(
         `SELECT s.id AS supplier_id, s.code AS supplier_code, s.name AS supplier_name, s.settle_type,
@@ -788,10 +796,10 @@ r.get(
                 COALESCE(SUM(st.settle_amount-st.paid_amount),0) open_amount,
                 COALESCE(SUM(st.diff_amount),0) diff_amount
            FROM purchase_settlements st JOIN suppliers s ON s.id=st.supplier_id
-          WHERE st.status<>'voided'
+          WHERE st.status<>'voided' AND ${scope.org}
           GROUP BY s.id ORDER BY open_amount DESC`
       )
-      .all()
+      .all(...scope.params)
     const total = rows.reduce(
       (a, x) => ({
         settle_amount: a.settle_amount + Number(x.settle_amount || 0),
@@ -812,16 +820,17 @@ r.get(
     // 但**必须让它看得见**：本批之前，退货既不生成凭证（现已补 `purchase_return` 模板）、
     // 也不进结算，于是这张台账上的"未付"是**含退货的虚高值**，而且没有任何一处会提示。
     // ⇒ 披露出来，让人一眼看到"其中有多少是已退还没抵的"，再由人来决定怎么抵。
+    const prScope = purchaseScopeSql(req.orgScope, 'pr')
     const returnsBySupplier = db
       .prepare(
         `SELECT s.id AS supplier_id, s.code AS supplier_code, s.name AS supplier_name,
                 COUNT(pr.id) return_count,
                 COALESCE(SUM(pr.total_amount),0) return_amount
            FROM purchase_returns pr JOIN suppliers s ON s.id=pr.supplier_id
-          WHERE pr.status IN ('confirmed','completed')
+          WHERE pr.status IN ('confirmed','completed') AND ${prScope.wh}
           GROUP BY s.id ORDER BY return_amount DESC`
       )
-      .all()
+      .all(...prScope.params)
     const returnTotal = Math.round(returnsBySupplier.reduce((a, x) => a + Number(x.return_amount || 0), 0) * 100) / 100
     return ok(res, {
       list: rows,

@@ -554,9 +554,11 @@ export function getRequisition(db, id) {
   return { ...head, items }
 }
 
+/** 请购单列表；`q.orgScope` 走 `purchaseScopeSql`（ADR-0017），不传 ⇒ 全库（lib 内部 / 脚本口径）。 */
 export function listRequisitions(db, q = {}) {
-  const cond = []
-  const args = []
+  const scope = purchaseScopeSql(q.orgScope || null, 'r')
+  const cond = [scope.org]
+  const args = [...scope.params]
   if (q.status) { cond.push('r.status=?'); args.push(q.status) }
   if (q.applicant_type) { cond.push('r.applicant_type=?'); args.push(q.applicant_type) }
   if (q.applicant_id) { cond.push('r.applicant_id=?'); args.push(q.applicant_id) }
@@ -565,7 +567,7 @@ export function listRequisitions(db, q = {}) {
     const k = `%${q.keyword}%`
     args.push(k, k, k)
   }
-  const where = cond.length ? `WHERE ${cond.join(' AND ')}` : ''
+  const where = `WHERE ${cond.join(' AND ')}`
   return db
     .prepare(
       `SELECT r.*, (SELECT COUNT(*) FROM purchase_requisition_items i WHERE i.req_id=r.id) AS line_count
@@ -1849,15 +1851,21 @@ export function getPurchaseReturn(db, id) {
 // 八、看板
 // ---------------------------------------------------------------------------
 
-export function purchaseOverview(db) {
+/**
+ * 采购看板。`orgScope`（`resolveOrgScope` 的结果）不传或 `all` ⇒ 全库；受限范围下**每一块**
+ * （五张单的计数 / 金额、供应商榜、应付榜、趋势）都按 `purchaseScopeSql` 的同一个集合算 ——
+ * "列表按范围、合计按全库"是最隐蔽的泄漏形状（ADR-0017）。
+ */
+export function purchaseOverview(db, { orgScope = null } = {}) {
   const one = (sql, ...a) => db.prepare(sql).get(...a)
+  const plain = purchaseScopeSql(orgScope)
   const req = one(`
     SELECT COUNT(*) total,
            SUM(CASE WHEN status='draft' THEN 1 ELSE 0 END) draft,
            SUM(CASE WHEN status='submitted' THEN 1 ELSE 0 END) submitted,
            SUM(CASE WHEN status='approved' THEN 1 ELSE 0 END) approved,
            SUM(CASE WHEN status='converted' THEN 1 ELSE 0 END) converted
-      FROM purchase_requisitions`)
+      FROM purchase_requisitions WHERE ${plain.org}`, ...plain.params)
   const po = one(`
     SELECT COUNT(*) total,
            COALESCE(SUM(total_amount),0) amount,
@@ -1865,14 +1873,14 @@ export function purchaseOverview(db) {
            SUM(CASE WHEN status IN ('approved') AND close_arrival=0 THEN 1 ELSE 0 END) pending_arrival,
            SUM(CASE WHEN close_invoice=0 AND status NOT IN ('cancelled','draft') THEN 1 ELSE 0 END) pending_invoice,
            SUM(CASE WHEN close_payment=0 AND status NOT IN ('cancelled','draft') THEN 1 ELSE 0 END) pending_payment
-      FROM purchase_orders`)
+      FROM purchase_orders WHERE ${plain.wh}`, ...plain.params)
   const inv = one(`
     SELECT COUNT(*) total, COALESCE(SUM(total_amount),0) amount,
            SUM(CASE WHEN status='draft' THEN 1 ELSE 0 END) draft,
            SUM(CASE WHEN status='submitted' THEN 1 ELSE 0 END) submitted,
            SUM(CASE WHEN status='verified' THEN 1 ELSE 0 END) verified,
            SUM(CASE WHEN status='posted' THEN 1 ELSE 0 END) posted
-      FROM purchase_invoices WHERE status<>'voided'`)
+      FROM purchase_invoices WHERE status<>'voided' AND ${plain.org}`, ...plain.params)
   const st = one(`
     SELECT COUNT(*) total, COALESCE(SUM(settle_amount),0) amount,
            COALESCE(SUM(paid_amount),0) paid,
@@ -1881,21 +1889,23 @@ export function purchaseOverview(db) {
            SUM(CASE WHEN status='draft' THEN 1 ELSE 0 END) draft,
            SUM(CASE WHEN status='audited' THEN 1 ELSE 0 END) audited,
            SUM(CASE WHEN status='settled' THEN 1 ELSE 0 END) settled
-      FROM purchase_settlements WHERE status<>'voided'`)
+      FROM purchase_settlements WHERE status<>'voided' AND ${plain.org}`, ...plain.params)
   const pay = one(`
     SELECT COUNT(*) total, COALESCE(SUM(amount),0) amount,
            SUM(CASE WHEN status='draft' THEN 1 ELSE 0 END) draft,
            SUM(CASE WHEN status='approved' THEN 1 ELSE 0 END) approved,
            SUM(CASE WHEN status='paid' THEN 1 ELSE 0 END) paid
-      FROM purchase_payments WHERE status<>'voided'`)
+      FROM purchase_payments WHERE status<>'voided' AND ${plain.org}`, ...plain.params)
+  const o = purchaseScopeSql(orgScope, 'o')
   const topSuppliers = db
     .prepare(
       `SELECT s.id, s.code, s.name, COUNT(o.id) order_count, COALESCE(SUM(o.total_amount),0) amount
          FROM purchase_orders o JOIN suppliers s ON s.id=o.supplier_id
-        WHERE o.status NOT IN ('cancelled')
+        WHERE o.status NOT IN ('cancelled') AND ${o.wh}
         GROUP BY s.id ORDER BY amount DESC LIMIT 8`
     )
-    .all()
+    .all(...o.params)
+  const stc = purchaseScopeSql(orgScope, 'st')
   const payable = db
     .prepare(
       `SELECT s.id, s.code, s.name,
@@ -1903,18 +1913,18 @@ export function purchaseOverview(db) {
               COALESCE(SUM(st.paid_amount),0) paid_amount,
               COALESCE(SUM(st.settle_amount-st.paid_amount),0) open_amount
          FROM purchase_settlements st JOIN suppliers s ON s.id=st.supplier_id
-        WHERE st.status<>'voided'
+        WHERE st.status<>'voided' AND ${stc.org}
         GROUP BY s.id HAVING open_amount > 0.01 ORDER BY open_amount DESC LIMIT 10`
     )
-    .all()
+    .all(...stc.params)
   const days = db
     .prepare(
       `SELECT substr(settle_date,1,10) d, COALESCE(SUM(settle_amount),0) amount
-         FROM purchase_settlements WHERE status<>'voided'
+         FROM purchase_settlements WHERE status<>'voided' AND ${plain.org}
           AND settle_date >= date('now','localtime','-30 day')
         GROUP BY d ORDER BY d`
     )
-    .all()
+    .all(...plain.params)
   return {
     requisition: req,
     order: po,
@@ -1928,18 +1938,32 @@ export function purchaseOverview(db) {
 }
 
 /**
- * 把组织范围翻成待办查询的 SQL 片段（判据与 `middleware/auth.js` 的 `orgScopeFilter` 同源：
- * 空范围 ⇒ 不查；这里返回 null 让调用方直接给空列表，而不是拼一个 `AND 1=0` 再跑七条查询）。
+ * 把组织范围翻成采购单据查询的 SQL 谓词 —— 采购链**所有**读接口的唯一范围判据
+ * （待办 / 看板 / 四张单列表 / 应付台账，ADR-0015 + ADR-0017）。
+ *
+ * 判据与 `middleware/auth.js` 的 `orgScopeFilter` 同源：
+ *   · 不传或 `all` ⇒ `1=1`（全库）；
+ *   · `dealer` / `none` / 空集合 ⇒ `1=0` 并置 `empty: true`（空范围不许变成全库；调用方可据此直接给空结果）；
+ *   · 其余 ⇒ 请购 / 发票 / 结算 / 付款用自身 `org_id`（`org`），采购订单 / 退货没有组织列、
+ *     经 `warehouses.org_id` 取仓的归属组织（`wh`）。两段谓词共用同一份 `params`。
+ *   · 归属列为 NULL 的单据对受限范围不可见（`IN` 对 NULL 为假 —— 宁可看不到，也不放行）。
+ *
+ * 返回的是**完整谓词**（不带前导 AND），调用方写 `WHERE … AND ${scope.org}` 或 `cond.push(scope.org)`；
+ * `alias` 给带表别名的查询用（`'i'` ⇒ `i.org_id`）。
  */
-function orgScopeSql(orgScope) {
-  if (!orgScope || orgScope.scope === 'all') return { org: '', wh: '', params: [] }
+export function purchaseScopeSql(orgScope, alias = '') {
+  const col = (c) => (alias ? `${alias}.${c}` : c)
+  if (!orgScope || orgScope.scope === 'all') return { org: '1=1', wh: '1=1', params: [], empty: false }
   const ids = Array.isArray(orgScope.orgIds) ? orgScope.orgIds.map(Number).filter(Number.isFinite) : []
-  if (orgScope.scope === 'dealer' || orgScope.scope === 'none' || !ids.length) return null
+  if (orgScope.scope === 'dealer' || orgScope.scope === 'none' || !ids.length) {
+    return { org: '1=0', wh: '1=0', params: [], empty: true }
+  }
   const ph = ids.map(() => '?').join(',')
   return {
-    org: `AND org_id IN (${ph})`,
-    wh: `AND warehouse_id IN (SELECT id FROM warehouses WHERE org_id IN (${ph}))`,
-    params: ids
+    org: `${col('org_id')} IN (${ph})`,
+    wh: `${col('warehouse_id')} IN (SELECT id FROM warehouses WHERE org_id IN (${ph}))`,
+    params: ids,
+    empty: false
   }
 }
 
@@ -1965,43 +1989,43 @@ export const PO_READ_PERMS = ['purchase.order.view', 'purchase.inbound', 'purcha
  */
 export function purchaseTodos(db, { orgScope = null, permCtx = null } = {}) {
   const todos = []
-  const scope = orgScopeSql(orgScope)
-  if (!scope) return todos
+  const scope = purchaseScopeSql(orgScope)
+  if (scope.empty) return todos
   for (const r of db
-    .prepare(`SELECT doc_no,id,total_amount FROM purchase_requisitions WHERE status='submitted' ${scope.org} ORDER BY id DESC LIMIT 20`)
+    .prepare(`SELECT doc_no,id,total_amount FROM purchase_requisitions WHERE status='submitted' AND ${scope.org} ORDER BY id DESC LIMIT 20`)
     .all(...scope.params)) {
     todos.push({ kind: 'req_approve', doc_type: 'PRQ', doc_id: r.id, doc_no: r.doc_no, label: '请购单待审批', amount: r.total_amount, perm: 'purchase.req.approve' })
   }
   for (const r of db
-    .prepare(`SELECT doc_no,id,total_amount FROM purchase_requisitions WHERE status='approved' ${scope.org} ORDER BY id DESC LIMIT 20`)
+    .prepare(`SELECT doc_no,id,total_amount FROM purchase_requisitions WHERE status='approved' AND ${scope.org} ORDER BY id DESC LIMIT 20`)
     .all(...scope.params)) {
     todos.push({ kind: 'req_convert', doc_type: 'PRQ', doc_id: r.id, doc_no: r.doc_no, label: '请购单待转采购订单', amount: r.total_amount, perm: 'purchase.order.edit' })
   }
   for (const r of db
-    .prepare(`SELECT doc_no,id,total_amount FROM purchase_orders WHERE status='submitted' ${scope.wh} ORDER BY id DESC LIMIT 20`)
+    .prepare(`SELECT doc_no,id,total_amount FROM purchase_orders WHERE status='submitted' AND ${scope.wh} ORDER BY id DESC LIMIT 20`)
     .all(...scope.params)) {
     todos.push({ kind: 'po_approve', doc_type: 'PO', doc_id: r.id, doc_no: r.doc_no, label: '采购订单待审批', amount: r.total_amount, perm: 'purchase.order.approve' })
   }
   for (const r of db
     .prepare(
       `SELECT doc_no,id,total_amount FROM purchase_orders
-        WHERE status IN ('approved') AND close_arrival=0 ${scope.wh} ORDER BY id DESC LIMIT 20`
+        WHERE status IN ('approved') AND close_arrival=0 AND ${scope.wh} ORDER BY id DESC LIMIT 20`
     )
     .all(...scope.params)) {
     todos.push({ kind: 'po_receive', doc_type: 'PO', doc_id: r.id, doc_no: r.doc_no, label: '采购订单待到货', amount: r.total_amount, perm: 'purchase.inbound' })
   }
   for (const r of db
-    .prepare(`SELECT doc_no,id,total_amount FROM purchase_invoices WHERE status='submitted' ${scope.org} ORDER BY id DESC LIMIT 20`)
+    .prepare(`SELECT doc_no,id,total_amount FROM purchase_invoices WHERE status='submitted' AND ${scope.org} ORDER BY id DESC LIMIT 20`)
     .all(...scope.params)) {
     todos.push({ kind: 'invoice_verify', doc_type: 'PI', doc_id: r.id, doc_no: r.doc_no, label: '采购发票待校验', amount: r.total_amount, perm: 'purchase.invoice.verify' })
   }
   for (const r of db
-    .prepare(`SELECT doc_no,id,settle_amount AS total_amount FROM purchase_settlements WHERE status='submitted' ${scope.org} ORDER BY id DESC LIMIT 20`)
+    .prepare(`SELECT doc_no,id,settle_amount AS total_amount FROM purchase_settlements WHERE status='submitted' AND ${scope.org} ORDER BY id DESC LIMIT 20`)
     .all(...scope.params)) {
     todos.push({ kind: 'settle_audit', doc_type: 'PST', doc_id: r.id, doc_no: r.doc_no, label: '采购结算待审核', amount: r.total_amount, perm: 'purchase.settle.audit' })
   }
   for (const r of db
-    .prepare(`SELECT doc_no,id,amount AS total_amount FROM purchase_payments WHERE status='approved' ${scope.org} ORDER BY id DESC LIMIT 20`)
+    .prepare(`SELECT doc_no,id,amount AS total_amount FROM purchase_payments WHERE status='approved' AND ${scope.org} ORDER BY id DESC LIMIT 20`)
     .all(...scope.params)) {
     todos.push({ kind: 'payment_pay', doc_type: 'PAY', doc_id: r.id, doc_no: r.doc_no, label: '付款单待执行', amount: r.total_amount, perm: 'purchase.payment.approve' })
   }
