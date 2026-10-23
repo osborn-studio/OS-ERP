@@ -84,6 +84,20 @@ export function buildOpenApi() {
     '/api/meta/settings/audit/check': {
       get: { tags: ['系统参数'], summary: '配置变更链自证（重放日志==现状 / 键集合一致 / 危险项变更都写了理由 / 值域合法）', responses: { 200: jsonResp(null, '{ ok, problems, keys_checked, entries_checked, registered_keys }') } }
     },
+    '/api/meta/audit-logs': {
+      get: {
+        tags: ['系统'], summary: '审计日志查询（权限 system:audit:view；分页 + 模块/动作/用户/对象/日期/关键字过滤；detail 读取时再脱敏；附保留策略提示）',
+        parameters: [q('module', '模块（精确）'), q('action', '动作（精确）'), q('user', '操作人：纯数字按 user_id 或用户名精确，否则按用户名包含'), q('entity', '对象类型（精确）'), q('entity_id', '对象 ID（精确）'), q('from', '起始日期 YYYY-MM-DD（含）'), q('to', '截止日期 YYYY-MM-DD（含）'), q('keyword', '关键字（动作/模块/对象/操作人/明细包含）'), q('page', '页码'), q('pageSize', '每页条数，上限 200')],
+        responses: { 200: jsonResp(null, '{ list, total, page, pageSize, totalPages, retention, export_max_rows }'), 400: { description: '日期格式或区间不合法' }, 403: { description: '缺 system:audit:view' } }
+      }
+    },
+    '/api/meta/audit-logs/export.csv': {
+      get: {
+        tags: ['系统'], summary: '审计日志 CSV 导出（同一过滤；分批流式；行数封顶；公式注入安全；导出动作写严格审计 AUDIT_LOG_EXPORT）',
+        parameters: [q('module', '模块（精确）'), q('action', '动作（精确）'), q('user', '操作人'), q('entity', '对象类型'), q('entity_id', '对象 ID'), q('from', '起始日期'), q('to', '截止日期'), q('keyword', '关键字')],
+        responses: { 200: { description: 'text/csv（UTF-8 BOM；响应头 X-Export-Truncated 表示是否被行数上限截断）' }, 403: { description: '缺 system:audit:view' } }
+      }
+    },
     '/api/auth/login': {
       post: {
         tags: ['认证'], summary: '登录获取 Token', security: [],
