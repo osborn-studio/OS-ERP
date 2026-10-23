@@ -287,21 +287,21 @@ export function buildOpenApi() {
     '/api/purchase/inspections/{id}/cancel': { post: { tags: ['质检'], summary: '作废质检单（作废后可对同票重开）', parameters: [idParam], responses: { 200: jsonResp(null) } } },
 
     '/api/sales/orders': {
-      get: { tags: ['销售'], summary: '销售订单列表（支持渠道/状态/日期/关键字）', parameters: [q('channel', '渠道 dealer/store/online/platform/live'), q('status', '状态'), q('startDate', '开始日期'), q('endDate', '结束日期'), q('keyword', '关键字')], responses: { 200: jsonResp(null) } },
-      post: { tags: ['销售'], summary: '新建销售订单（自动按渠道与经销商折扣取价）', requestBody: body('SalesOrderCreate'), responses: { 200: jsonResp(null) } }
+      get: { tags: ['销售'], summary: '销售订单列表（支持渠道/状态/日期/关键字；内部账号按组织数据范围过滤，ADR-0026）', parameters: [q('channel', '渠道 dealer/store/online/platform/live'), q('status', '状态'), q('startDate', '开始日期'), q('endDate', '结束日期'), q('keyword', '关键字')], responses: { 200: jsonResp(null) } },
+      post: { tags: ['销售'], summary: '新建销售订单（自动按渠道与经销商折扣取价；出货仓与门店须在调用者组织范围内，否则 403）', requestBody: body('SalesOrderCreate'), responses: { 200: jsonResp(null), 403: jsonResp(null) } }
     },
-    '/api/sales/orders/{id}': { get: { tags: ['销售'], summary: '销售订单详情', parameters: [idParam], responses: { 200: jsonResp(null) } }, put: { tags: ['销售'], summary: '修改草稿订单', parameters: [idParam], responses: { 200: jsonResp(null) } } },
-    '/api/sales/orders/{id}/confirm': { post: { tags: ['销售'], summary: '确认订单并占用库存（库存不足会拒绝）', parameters: [idParam], responses: { 200: jsonResp(null) } } },
-    '/api/sales/orders/{id}/deliver': { post: { tags: ['销售'], summary: '发货出库（批次先进先出）', parameters: [idParam], responses: { 200: jsonResp(null) } } },
-    '/api/sales/orders/{id}/payment': { post: { tags: ['销售'], summary: '登记回款', parameters: [idParam], responses: { 200: jsonResp(null) } } },
-    '/api/sales/orders/{id}/cancel': { post: { tags: ['销售'], summary: '取消订单并释放占用', parameters: [idParam], responses: { 200: jsonResp(null) } } },
-    '/api/sales/orders/{id}/complete': { post: { tags: ['销售'], summary: '完成订单（签收结案）', parameters: [idParam], responses: { 200: jsonResp(null) } } },
-    '/api/sales/deliveries': { get: { tags: ['销售'], summary: '发货单列表', responses: { 200: jsonResp(null) } } },
-    '/api/sales/deliveries/{id}': { get: { tags: ['销售'], summary: '发货单详情', parameters: [idParam], responses: { 200: jsonResp(null) } } },
-    '/api/sales/deliveries/{id}/receive': { post: { tags: ['销售'], summary: '发货单签收（已发货 → 已签收；状态不对返回 409）', parameters: [idParam], responses: { 200: jsonResp(null), 409: jsonResp(null) } } },
-    '/api/sales/returns': { get: { tags: ['销售'], summary: '销售退货列表', responses: { 200: jsonResp(null) } }, post: { tags: ['销售'], summary: '新建销售退货（入库）', responses: { 200: jsonResp(null) } } },
-    '/api/sales/returns/{id}/complete': { post: { tags: ['销售'], summary: '退货完成（已确认 → 已完成；状态不对返回 409）', parameters: [idParam], responses: { 200: jsonResp(null), 409: jsonResp(null) } } },
-    '/api/sales/stats': { get: { tags: ['销售'], summary: '销售分析（渠道/趋势/商品/经销商/门店排行）', parameters: [q('days', '统计天数，默认 30')], responses: { 200: jsonResp(null) } } },
+    '/api/sales/orders/{id}': { get: { tags: ['销售'], summary: '销售订单详情（组织范围外 404，与不存在同形）', parameters: [idParam], responses: { 200: jsonResp(null), 403: jsonResp(null), 404: jsonResp(null) } }, put: { tags: ['销售'], summary: '修改草稿订单（组织范围外 404；改仓目标不在范围内 403）', parameters: [idParam], responses: { 200: jsonResp(null), 403: jsonResp(null), 404: jsonResp(null) } } },
+    '/api/sales/orders/{id}/confirm': { post: { tags: ['销售'], summary: '确认订单并占用库存（库存不足会拒绝；组织范围外 404）', parameters: [idParam], responses: { 200: jsonResp(null), 404: jsonResp(null) } } },
+    '/api/sales/orders/{id}/deliver': { post: { tags: ['销售'], summary: '发货出库（批次先进先出；组织范围外 404，发货仓不在范围内 403）', parameters: [idParam], responses: { 200: jsonResp(null), 403: jsonResp(null), 404: jsonResp(null) } } },
+    '/api/sales/orders/{id}/payment': { post: { tags: ['销售'], summary: '登记回款（组织范围外 404）', parameters: [idParam], responses: { 200: jsonResp(null), 404: jsonResp(null) } } },
+    '/api/sales/orders/{id}/cancel': { post: { tags: ['销售'], summary: '取消订单并释放占用（组织范围外 404）', parameters: [idParam], responses: { 200: jsonResp(null), 404: jsonResp(null) } } },
+    '/api/sales/orders/{id}/complete': { post: { tags: ['销售'], summary: '完成订单（签收结案；组织范围外 404）', parameters: [idParam], responses: { 200: jsonResp(null), 404: jsonResp(null) } } },
+    '/api/sales/deliveries': { get: { tags: ['销售'], summary: '发货单列表（内部账号按所属订单的组织范围过滤）', responses: { 200: jsonResp(null) } } },
+    '/api/sales/deliveries/{id}': { get: { tags: ['销售'], summary: '发货单详情（组织范围外 404）', parameters: [idParam], responses: { 200: jsonResp(null), 403: jsonResp(null), 404: jsonResp(null) } } },
+    '/api/sales/deliveries/{id}/receive': { post: { tags: ['销售'], summary: '发货单签收（已发货 → 已签收；状态不对返回 409；组织范围外 404）', parameters: [idParam], responses: { 200: jsonResp(null), 404: jsonResp(null), 409: jsonResp(null) } } },
+    '/api/sales/returns': { get: { tags: ['销售'], summary: '销售退货列表（内部账号按来源订单 / 自身仓与门店的组织范围过滤）', responses: { 200: jsonResp(null) } }, post: { tags: ['销售'], summary: '新建销售退货（入库；来源订单范围外 404，入库仓 / 门店不在范围内 403）', responses: { 200: jsonResp(null), 403: jsonResp(null), 404: jsonResp(null) } } },
+    '/api/sales/returns/{id}/complete': { post: { tags: ['销售'], summary: '退货完成（已确认 → 已完成；状态不对返回 409；组织范围外 404）', parameters: [idParam], responses: { 200: jsonResp(null), 404: jsonResp(null), 409: jsonResp(null) } } },
+    '/api/sales/stats': { get: { tags: ['销售'], summary: '销售分析（渠道/趋势/商品/经销商/门店排行；内部账号只含组织范围内订单）', parameters: [q('days', '统计天数，默认 30')], responses: { 200: jsonResp(null) } } },
 
     '/api/inventory/stocks': { get: { tags: ['存货'], summary: '库存明细（仓库/批次/效期/可用量）', parameters: [q('warehouse_id', '仓库'), q('sku_id', 'SKU'), q('batch_no', '批次'), q('keyword', '关键字'), q('expiring', 'N 天内临期')], responses: { 200: jsonResp(null) } } },
     '/api/inventory/stocks/by-sku': { get: { tags: ['存货'], summary: '按 SKU 汇总库存（跨仓库）', responses: { 200: jsonResp(null) } } },
@@ -1169,7 +1169,7 @@ export function buildOpenApi() {
     openapi: '3.0.3',
     info: {
       title: 'GML 供应链协同系统 API',
-      version: '1.34.0',
+      version: '1.35.0',
       description:
         '化妆品 / 服装 双行业轻量级供应链协同系统接口文档。覆盖主数据、采购、销售、存货、经销商、门店要货、委外管理、计划与生产、生产制造（BOM / 领料 / 完工入库）、质量检验、线上 OMS 与经营看板。\n\n' +
         '**多行业**：登录 `POST /api/auth/login` 时传 `industry`（`cosmetic` / `apparel`）选择行业版本；' +
