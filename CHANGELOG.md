@@ -8,6 +8,16 @@
 
 <!-- generated -->
 
+## 第八批（进行中）：见 roadmap-v4
+
+- [ADR-0031：采购链动作路由与 MCP 采购工具的单据范围](docs/implementation/ADR-0031-purchase-action-scope.md) — 动作路由统一的门 `actionGate` = `requireAuth` → `requireInternal('采购单据')` → `attachOrgScope`，用于四条 `/:id/:action`、`/requisitions/:id/convert`、`/payments/:id/review`。外部主体（dealer / store）在动作权限之前就 403。 2. 单据范围判定紧跟动作权限、先于任何写：`assertActionPermitted` 在 `a…
+- [ADR-0032：单据流读接口按账号数据范围过滤](docs/implementation/ADR-0032-docflow-scope.md) — `doc_events` 行只有 `(doc_type, doc_id)`，没有统一的组织归属，所以"这条事件能不能给这个账号看"回到它指向的单据，用该单据领域已有的范围谓词判定。分发表按 `doc_types.code` 一行一项，冻结导出；Y12（审批实例范围）直接复用。
+- [ADR-0033：奇门网关平台凭据、签名契约与重新开放验收清单](docs/implementation/ADR-0033-qimen-credentials.md) — 每平台独立密钥。迁移 `060_qimen_secrets` 给 `platforms` 加 `app_secret_sealed`（`secret-box.js` 的 `enc:v1:` 封存值）和 `app_secret_rotated_at`，新增 `qimen_nonces`（防重放）和权限点 `oms.platform.manage`（首次迁移仅授予 admin，ADR-0007 口径：`verify()` 不检查角色授权集合）。已有平台的密钥为空 ⇒ 网关 401…
+- [ADR-0034：报价、MCP 销售工具与 OMS 入口按组织范围收口](docs/implementation/ADR-0034-quote-sales-mcp-scope.md) — 一处判据，仍在 `server/lib/sales-order.js`，不在新文件里再抄一份： - 订单类沿用 ADR-0026 的 `salesScopeSql` / `assertSalesDocInScope` / `assertSalesTargetInScope`，不改。 - 新增 `quoteScopeSql(orgScope, alias)`、`assertQuoteInScope(db, id, orgScope)`、`assertQuoteTargetInS…
+- [ADR-0035：写路径并发与 SQLITE_BUSY 治理](docs/implementation/ADR-0035-write-contention.md) — 默认 5000（沿用旧值）。必须是 0..300000 的十进制整数，否则启动抛 `SQLITE_BUSY_MS_INVALID`（拼错的配置宁可失败，也不静默回落）。
+- [ADR-0036 安全响应头与后台会话传输（Y11）](docs/implementation/ADR-0036-security-headers-and-session-transport.md) — `GML_CSP_MODE=report|enforce|off`：生产（缺省的运行模式）默认 enforce，demo/test 默认 report；非法值回落到该运行模式的默认值（不会因拼错而静默关闭）。
+- [ADR-0037：审批域按指向单据的组织范围收口](docs/implementation/ADR-0037-approval-scope.md) — 审批实例没有自己的归属，一律跟着它指向的单据（`doc_type` + `doc_id`）。唯一判据在 `server/lib/approval.js`
+
 ## 第七批：POS/销售/订货中心范围、运维健康与个人信息
 
 - [ADR-0025：门店 POS 路由按动作授权、跨店 404、交班核款二人分离](docs/implementation/ADR-0025-pos-authorization.md) — `requireStore()` 放行 `admin` 与绑定了门店（`store_id`）的账号，不再硬编码 `role==='store'`（独立审计 P2：否则只带日常权限的自定义角色用不了 POS）；真正的闸是紧随其后的 `requirePerm` 权限点（admin / 超管恒真）。未绑门店且非 admin 一律 403。权限点沿用 005 / 024 已登记的字典项，不另造同义词，只补两处缺口
