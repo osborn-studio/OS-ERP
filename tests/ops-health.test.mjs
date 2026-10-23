@@ -137,7 +137,7 @@ test('sendBackupAlert: disabled, silent on success, missing channel, sent, faile
   // 只有报告写入失败（没有失败的库行）也要告警
   const reportOnly = await sendBackupAlert({ ...base, channelCode: 'ops', results: [{ code: 'food', status: 'ok' }], failed: 1 })
   assert.equal(reportOnly.status, 'sent')
-  assert.match(JSON.stringify(calls.at(-1).digest), /BACKUP_REPORT_FAILED/)
+  assert.match(JSON.stringify(calls.filter((c) => typeof c === 'object').at(-1).digest), /BACKUP_REPORT_FAILED/)
   const boom = await sendBackupAlert({ ...base, channelCode: 'ops', sender: async () => { throw Object.assign(new Error('x'), { code: 'EBOOM' }) } })
   assert.deepEqual(boom, { status: 'error', detail: 'EBOOM' })
 })
