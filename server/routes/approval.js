@@ -30,14 +30,14 @@
 import { Router } from 'express'
 import { getDb } from '../db/index.js'
 import { ok, fail, wrap, pageParams, bizFail } from '../lib/http.js'
-import { requireAuth, requirePerm, requireInternal, currentUser, assertCanRead, isExternalUser, attachOrgScope, INTERNAL_MODULES } from '../middleware/auth.js'
+import { requireAuth, requirePerm, requireInternal, currentUser, assertCanRead, isExternalUser, attachOrgScope, requireGlobalData, INTERNAL_MODULES } from '../middleware/auth.js'
 import { audit } from '../middleware/audit.js'
 import {
   ApprovalError, approvalGate, matchTemplate, amountOf,
   submitApproval, getInstance, decideApproval, cancelApproval,
   listInstances, pendingForMe, listTemplates,
   approvalOverview, approvalTodosFor, describeApprover, stepsOfTemplate,
-  approvalDocScope, instanceVisibleTo
+  approvalDocScope, instanceVisibleTo, validateApproverScope
 } from '../lib/approval.js'
 
 const r = Router()
@@ -105,7 +105,9 @@ r.get('/templates', requireAuth, wrap((_req, res) => ok(res, { list: listTemplat
 r.post(
   '/templates',
   requireAuth,
-  requirePerm('system:approval:manage'),
+  requirePerm('system:approval:template'),
+  attachOrgScope,
+  requireGlobalData('审批模板维护'),
   guard((req, res) => {
     const db = getDb()
     const b = req.body || {}
@@ -113,6 +115,7 @@ r.post(
     if (!b.doc_type || !b.action) return fail(res, '单据类型与动作必填', 400)
     const steps = Array.isArray(b.steps) ? b.steps.filter((s) => s && s.approver_value) : []
     if (!steps.length) return fail(res, '至少需要一级审批人', 400)
+    validateApproverScope(db, steps.map((s) => ({ approver_type: s.approver_type || 'role', approver_value: s.approver_value })), req.orgScope)
 
     const tx = db.transaction(() => {
       db.prepare(
@@ -150,7 +153,9 @@ r.post(
 r.post(
   '/templates/:id/toggle',
   requireAuth,
-  requirePerm('system:approval:manage'),
+  requirePerm('system:approval:template'),
+  attachOrgScope,
+  requireGlobalData('审批模板维护'),
   guard((req, res) => {
     const db = getDb()
     const t = db.prepare('SELECT * FROM approval_templates WHERE id=?').get(Number(req.params.id))
