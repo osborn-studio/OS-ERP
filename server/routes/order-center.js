@@ -188,7 +188,7 @@ r.get(
     const sc = ocScope(db, req, 'c.id')
     conds.push(sc.sql)
     args.push(...sc.params)
-    const pScope = ocScope(db, req, 'p.id')
+    const pScope = sc.self ? { sql: '1=1', params: [] } : ocScope(db, req, 'p.id')
     const where = conds.length ? `WHERE ${conds.join(' AND ')}` : ''
     const total = db.prepare(`SELECT COUNT(*) c FROM oc_customers c ${where}`).get(...args).c
     const rows = db
@@ -250,7 +250,8 @@ r.get(
           .prepare('SELECT * FROM oc_credit_ledger WHERE customer_id=? ORDER BY id DESC LIMIT 50')
           .all(c.id),
         children: (() => {
-          const sc = ocScope(db, req, 'c.id')
+          // 外部主体自视图：自己的下级照旧全部可见（口径不变）；内部账号只见范围内的下级
+          const sc = selfCustomerId(db, req) ? { sql: '1=1', params: [] } : ocScope(db, req, 'c.id')
           return db.prepare(`SELECT c.id,c.code,c.name,c.level,c.channel,c.admit_status FROM oc_customers c WHERE c.parent_customer_id=? AND ${sc.sql}`).all(c.id, ...sc.params)
         })(),
         orders: db

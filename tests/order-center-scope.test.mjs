@@ -274,6 +274,10 @@ test('order center: internal org/subtree scope follows the customer owning org; 
       assert.ok(fixtureOrders(await allOrders(u.token)).includes(`OC-SC-${ownKey}`))
       assert.ok((await allStatements(u.token)).every((s) => s.customer_id === self.id))
       assert.equal((await api(`/api/order-center/customers/${self.id}`, { token: u.token })).status, 200)
+      // 自视图的下级照旧可见（下游客户 DS 的上级是 D）
+      const kids = okData(await api(`/api/order-center/customers/${self.id}`, { token: u.token })).children.map((c) => c.id).sort((a, b) => a - b)
+      assert.deepEqual(kids, ids('SELECT id FROM oc_customers WHERE parent_customer_id=?', self.id))
+      if (self === D) assert.ok(kids.includes(DS.id), 'dealer still sees its downstream child')
       for (const route of [
         `/api/order-center/customers/${other.id}`, `/api/order-center/credit/${other.id}`,
         `/api/order-center/customers/tree?root=${other.id}`, `/api/order-center/catalog?customer_id=${other.id}`,

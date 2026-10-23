@@ -32,7 +32,7 @@
 - 供货侧履约（受理 / 分仓 / 发货）的内部账号现在需要其数据范围覆盖客户的归属组织（或 `all`）；旧口径用的是货主列（多为 NULL ⇒ 人人可操作）。总部职能岗应使用 `subtree` 于总部节点或 `all`。
 - `GET /policies`（审批规则 / 可见性规则）与 `GET /flow` 是全局配置，不含客户数据，沿用原门，不按组织过滤。
 - 权限码门（如把订货中心读接口要求内部账号持 `order.*` 权限）不在本 ADR；写路由原有 `requirePerm` 不变。
-- docflow 通用列表若暴露 `OC` / `OCS` 单据，其范围另批。
+- **已知未收口（Codex 审计 P1，先于本 ADR 即存在）**：`/api/docflow/events|history|trace` 对 `doc_type=OC|OCS` 只过 `requireInternal`（按角色），内部 org/subtree 账号仍可读到他组织订货单 / 对账单的流转事件（单号、备注、payload）。`routes/docflow.js` 不属本工作流，另批；修法应是对 OC/OCS 的事件按 `ocScope(…,'<doc 的 customer_id>')` 过滤。
 - 归属 NULL 的客户在演示种子里只有下游客户（会继承上级）；真实数据应补齐门店 / 经销商 `org_id`，否则受限账号看不到它们。
 
 ## 验证入口
