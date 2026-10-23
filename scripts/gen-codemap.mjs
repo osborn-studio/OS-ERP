@@ -143,8 +143,8 @@ function parseFile(root, rel, files) {
     if ((m = DECL_FN.exec(ln))) { decls.set(m[3], { name: m[3], kind: 'fn', start: starts[idx] }); if (m[1]) exports.set(m[3], m[3]) }
     else if ((m = DECL_CLASS.exec(ln))) { decls.set(m[2], { name: m[2], kind: 'class', start: starts[idx] }); if (m[1]) exports.set(m[2], m[2]) }
     else if ((m = DECL_VAR.exec(ln))) {
-      const head = sql.slice(starts[idx], starts[idx] + 300)
-      const fn = /=\s*(?:async\s*)?(?:function\b|[A-Za-z_$][\w$]*\s*=>|\()/.test(head) && head.includes('=>') || /=\s*(?:async\s*)?function\b/.test(head)
+      const head = sql.slice(starts[idx] + m[0].length, starts[idx] + m[0].length + 300)
+      const fn = /^(?:async\s+)?function\b/.test(head) || /^(?:async\s*)?(?:\([^()]*(?:\([^()]*\)[^()]*)*\)|[A-Za-z_$][\w$]*)\s*=>/.test(head)
       decls.set(m[2], { name: m[2], kind: fn ? 'fn' : 'const', start: starts[idx] })
       if (m[1]) exports.set(m[2], m[2])
     }

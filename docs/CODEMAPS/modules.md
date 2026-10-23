@@ -75,8 +75,8 @@
 
 | 导出 | 类型 | 路由 | MCP 工具 | 被模块调用 |
 |---|---|---|---|---|
-| `AGREEMENT_PRICE_LABEL` | fn | — | — | — |
-| `AGREEMENT_TARGET_LABEL` | fn | — | — | — |
+| `AGREEMENT_PRICE_LABEL` | const | — | — | — |
+| `AGREEMENT_TARGET_LABEL` | const | — | — | — |
 | `AgreementError` | class | — | — | — |
 | `createAgreement` | fn | POST /api/dms/agreements | — | — |
 | `discountLabel` | fn | — | — | — |
@@ -195,8 +195,8 @@
 
 | 导出 | 类型 | 路由 | MCP 工具 | 被模块调用 |
 |---|---|---|---|---|
-| `AUDIT_OUTSIDE_TX` | fn | — | — | — |
-| `SECURITY_AUDIT_UNAVAILABLE` | fn | — | — | — |
+| `AUDIT_OUTSIDE_TX` | const | — | — | — |
+| `SECURITY_AUDIT_UNAVAILABLE` | const | — | — | — |
 | `auditStrictRow` | fn | — | — | lib/account-security.js, lib/funds-review.js |
 | `insertAuditRow` | fn | — | — | — |
 | `normalizeDetail` | fn | — | — | — |
@@ -243,10 +243,10 @@ BOM 服务层（模块 10B · 一个 BOM + 三类执行单）
 
 | 导出 | 类型 | 路由 | MCP 工具 | 被模块调用 |
 |---|---|---|---|---|
-| `BOM_STATUS_LABEL` | fn | GET /api/manufacture/meta | — | — |
+| `BOM_STATUS_LABEL` | const | — | — | — |
 | `BomError` | class | — | — | — |
-| `PRODUCE_WAY_LABEL` | fn | — | — | — |
-| `USAGE_LABEL` | fn | GET /api/manufacture/meta | — | — |
+| `PRODUCE_WAY_LABEL` | const | — | — | — |
+| `USAGE_LABEL` | const | — | — | — |
 | `auditBom` | fn | POST /api/manufacture/boms/:id/audit | — | — |
 | `bomOverview` | fn | GET /api/manufacture/overview | — | — |
 | `bomUsagesOf` | fn | GET /api/manufacture/boms/by-sku | — | — |
@@ -428,8 +428,8 @@ BOM 服务层（模块 10B · 一个 BOM + 三类执行单）
 
 | 导出 | 类型 | 路由 | MCP 工具 | 被模块调用 |
 |---|---|---|---|---|
-| `MIN_REASON` | fn | — | — | — |
-| `SETTLE_TOLERANCE` | fn | — | — | — |
+| `MIN_REASON` | const | — | — | — |
+| `SETTLE_TOLERANCE` | const | — | — | — |
 | `STATUS_ACTION` | const | — | — | — |
 | `StatementError` | class | — | — | — |
 | `closeStatement` | fn | POST /api/dealers/statements/:id/close | — | — |
@@ -670,9 +670,9 @@ HTTP 响应与错误归一：`ok` / `fail` / `wrap` 的**唯一实现**（统一
 | 导出 | 类型 | 路由 | MCP 工具 | 被模块调用 |
 |---|---|---|---|---|
 | `ISSUE_STATUS_LABEL` | const | — | — | — |
-| `ISSUE_TYPE_LABEL` | fn | GET /api/manufacture/meta | — | — |
+| `ISSUE_TYPE_LABEL` | const | — | — | — |
 | `MfgError` | class | — | — | — |
-| `ORDER_STATUS_LABEL` | fn | GET /api/manufacture/meta | — | — |
+| `ORDER_STATUS_LABEL` | const | — | — | — |
 | `auditMfg` | fn | GET /api/manufacture/audit | — | — |
 | `completeOrder` | fn | POST /api/manufacture/orders/:id/complete | — | — |
 | `createIssue` | fn | POST /api/manufacture/issues | — | — |
@@ -698,7 +698,7 @@ HTTP 响应与错误归一：`ok` / `fail` / `wrap` 的**唯一实现**（统一
 
 | 导出 | 类型 | 路由 | MCP 工具 | 被模块调用 |
 |---|---|---|---|---|
-| `KNOWN_KINDS` | fn | GET /api/notify/meta | — | — |
+| `KNOWN_KINDS` | const | — | — | — |
 | `NotifyError` | class | — | — | — |
 | `PROVIDERS` | const | — | — | — |
 | `buildDigest` | fn | GET /api/notify/preview | — | — |
@@ -902,13 +902,13 @@ HTTP 响应与错误归一：`ok` / `fail` / `wrap` 的**唯一实现**（统一
 | 导出 | 类型 | 路由 | MCP 工具 | 被模块调用 |
 |---|---|---|---|---|
 | `ALLOCATION` | const | — | — | — |
-| `ALLOCATION_LABEL` | fn | GET /api/promo/meta | — | — |
+| `ALLOCATION_LABEL` | const | — | — | — |
 | `PROMO_STATUS_LABEL` | const | — | — | — |
 | `PROMO_TYPE` | const | — | — | — |
-| `PROMO_TYPE_LABEL` | fn | GET /api/promo/meta | — | — |
+| `PROMO_TYPE_LABEL` | const | — | — | — |
 | `PromotionError` | class | — | — | — |
 | `TARGET` | const | — | — | — |
-| `TARGET_LABEL` | fn | GET /api/promo/meta | — | — |
+| `TARGET_LABEL` | const | — | — | — |
 | `computePromotionActions` | fn | — | — | lib/checkout.js |
 | `createCampaign` | fn | POST /api/promo/campaigns | — | — |
 | `createPromotion` | fn | POST /api/promo/promotions | — | — |
@@ -1290,7 +1290,7 @@ HTTP 响应与错误归一：`ok` / `fail` / `wrap` 的**唯一实现**（统一
 
 | 导出 | 类型 | 路由 | MCP 工具 | 被模块调用 |
 |---|---|---|---|---|
-| `SETTING_ACTIONS` | fn | — | — | — |
+| `SETTING_ACTIONS` | const | — | — | — |
 | `SETTING_GROUPS` | const | — | — | — |
 | `SETTING_KEYS` | const | — | — | — |
 | `SETTING_RULES` | const | — | — | lib/pos2.js |
@@ -1374,7 +1374,7 @@ HTTP 响应与错误归一：`ok` / `fail` / `wrap` 的**唯一实现**（统一
 |---|---|---|---|---|
 | `DOC_WAREHOUSE_SCOPE_KEY` | const | — | — | — |
 | `DOC_WAREHOUSE_SCOPE_UNRESTRICTED` | const | — | — | — |
-| `ISOLATION_WAREHOUSE_TYPES` | fn | GET /api/master/options | — | — |
+| `ISOLATION_WAREHOUSE_TYPES` | const | — | — | — |
 | `WAREHOUSE_STATUS` | const | — | — | — |
 | `WAREHOUSE_TYPES` | const | — | — | — |
 | `WAREHOUSE_TYPE_CODES` | const | — | — | lib/order-center.js |
@@ -1442,9 +1442,9 @@ Agent Token 管理（管理员）：签发 / 列表 / 吊销 / 调用审计
 
 | 导出 | 类型 | 路由 | MCP 工具 | 被模块调用 |
 |---|---|---|---|---|
-| `DOC_TYPE_UNMAPPED` | fn | — | — | — |
+| `DOC_TYPE_UNMAPPED` | const | — | — | — |
 | `DOC_VIEW_PERMS` | const | — | — | — |
-| `TOKEN_OWNER_BINDING_REQUIRED` | fn | — | — | — |
+| `TOKEN_OWNER_BINDING_REQUIRED` | const | — | — | — |
 | `TOKEN_OWNER_PERM_DENIED` | 再导出 | — | — | — |
 | `assertCanViewDocType` | fn | — | doc.get, doc.query | mcp/tools.js |
 | `bindingOf` | fn | — | — | — |

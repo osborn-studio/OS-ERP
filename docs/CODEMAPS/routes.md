@@ -346,7 +346,7 @@
 
 | 处理器 | 方法 | 路径 | 分类 | 中间件链 | 调用的 lib 函数 | 处理器内 SQL 表 | 经 lib 触达的表 |
 |---|---|---|---|---|---|---|---|
-| `manufacture.js:110` | GET | `/api/manufacture/meta` | AUTH_ONLY | requireAuth | lib/bom.js: BOM_STATUS_LABEL, USAGE_LABEL<br>lib/mfg.js: ISSUE_TYPE_LABEL, ORDER_STATUS_LABEL | — | users |
+| `manufacture.js:110` | GET | `/api/manufacture/meta` | AUTH_ONLY | requireAuth | — | — | users |
 | `manufacture.js:144` | GET | `/api/manufacture/overview` | GATED | requireAuth → requirePerm | lib/bom.js: bomOverview | — | bom_items, boms, production_orders, role_permissions, user_roles, users |
 | `manufacture.js:148` | GET | `/api/manufacture/audit` | GATED | requireAuth → requirePerm | lib/mfg.js: auditMfg | — | bom_items, boms, inventory_stocks, inventory_transactions, material_issue_items, material_issues, production_orders, role_permissions, user_roles, users, work_reports |
 | `manufacture.js:154` | GET | `/api/manufacture/boms` | GATED | requireAuth → requirePerm | lib/bom.js: listBoms | — | bom_items, boms, role_permissions, user_roles, users |
@@ -403,7 +403,7 @@
 | `master.js:402` | PUT | `/api/master/bundles/:id` | GATED | requireAuth → requireInternal → requireAuth → requireRole | — | bundle_components, bundles | audit_logs, users |
 | `master.js:434` | GET | `/api/master/locations` | GATED | requireAuth → requireInternal → requireAuth | — | inventory_stocks, warehouse_locations, warehouses | users |
 | `master.js:457` | POST | `/api/master/locations` | GATED | requireAuth → requireInternal → requireAuth → requireRole | — | warehouse_locations | audit_logs, users |
-| `master.js:477` | GET | `/api/master/options` | GATED | requireAuth → requireInternal → requireAuth | lib/warehouse.js: ISOLATION_WAREHOUSE_TYPES | brands, bundles, categories, dealers, platforms, product_skus, products, stores, suppliers, warehouses | users |
+| `master.js:477` | GET | `/api/master/options` | GATED | requireAuth → requireInternal → requireAuth | — | brands, bundles, categories, dealers, platforms, product_skus, products, stores, suppliers, warehouses | users |
 | `master.js:524` | GET | `/api/master/overview` | GATED | requireAuth → requireInternal → requireAuth | — | dealers, platforms, product_skus, products, stores, suppliers, warehouses | users |
 | `master.js:546` | USE | `/api/master/inv-txn-types` | GATED | requireAuth → requireInternal | — | — | — |
 
@@ -436,7 +436,7 @@
 
 | 处理器 | 方法 | 路径 | 分类 | 中间件链 | 调用的 lib 函数 | 处理器内 SQL 表 | 经 lib 触达的表 |
 |---|---|---|---|---|---|---|---|
-| `notify.js:73` | GET | `/api/notify/meta` | AUTH_ONLY | requireAuth | lib/notify.js: KNOWN_KINDS | — | users |
+| `notify.js:73` | GET | `/api/notify/meta` | AUTH_ONLY | requireAuth | — | — | users |
 | `notify.js:79` | GET | `/api/notify/overview` | GATED | requireAuth → requireInternal → requirePerm → requireGlobalData | lib/notify.js: notifyOverview | — | notify_channels, notify_logs |
 | `notify.js:89` | GET | `/api/notify/channels` | GATED | requireAuth → requirePerm | lib/notify.js: channelReady, listChannelsPublic | — | notify_channels, role_permissions, user_roles, users |
 | `notify.js:101` | POST | `/api/notify/channels` | GATED | requireAuth → requirePerm | lib/notify.js: channelReady, upsertChannel | — | audit_logs, notify_channels, role_permissions, user_roles, users |
@@ -572,7 +572,7 @@
 
 | 处理器 | 方法 | 路径 | 分类 | 中间件链 | 调用的 lib 函数 | 处理器内 SQL 表 | 经 lib 触达的表 |
 |---|---|---|---|---|---|---|---|
-| `promo.js:133` | GET | `/api/promo/meta` | GATED | requireAuth → requirePerm | lib/member.js: listLevels<br>lib/promotion.js: ALLOCATION_LABEL, PROMO_TYPE_LABEL, TARGET_LABEL | settings | member_levels, role_permissions, user_roles, users |
+| `promo.js:133` | GET | `/api/promo/meta` | GATED | requireAuth → requirePerm | lib/member.js: listLevels | settings | member_levels, role_permissions, user_roles, users |
 | `promo.js:160` | GET | `/api/promo/overview` | GATED | requireAuth → requirePerm | — | coupon_instances, coupons, member_accounts, member_levels, promotion_usages, promotions | role_permissions, user_roles, users |
 | `promo.js:206` | GET | `/api/promo/audit` | GATED | requireAuth → requirePerm | lib/member.js: auditMember | coupon_instances, coupons, mall_customers, member_accounts, promotion_adjustments, promotion_usages, promotions | member_balance_ledger, member_points_ledger, role_permissions, user_roles, users |
 | `promo.js:246` | GET | `/api/promo/levels` | GATED | requireAuth → requirePerm | lib/member.js: listLevels | — | member_levels, role_permissions, user_roles, users |
