@@ -92,14 +92,14 @@ export function buildOpenApi() {
     '/api/meta/audit-logs': {
       get: {
         tags: ['系统'], summary: '审计日志查询（权限 system:audit:view；分页 + 模块/动作/用户/对象/日期/关键字过滤；detail 读取时再脱敏；附保留策略提示）',
-        parameters: [q('module', '模块（精确）'), q('action', '动作（精确）'), q('user', '操作人：纯数字按 user_id 或用户名精确，否则按用户名包含'), q('entity', '对象类型（精确）'), q('entity_id', '对象 ID（精确）'), q('from', '起始日期 YYYY-MM-DD（含）'), q('to', '截止日期 YYYY-MM-DD（含）'), q('keyword', '关键字（动作/模块/对象/操作人/明细包含）'), q('page', '页码'), q('pageSize', '每页条数，上限 200')],
-        responses: { 200: jsonResp(null, '{ list, total, page, pageSize, totalPages, retention, export_max_rows }'), 400: { description: '日期格式或区间不合法' }, 403: { description: '缺 system:audit:view' } }
+        parameters: [q('module', '模块（精确）'), q('action', '动作（精确）'), q('user', '操作人：纯数字按 user_id（走索引），否则按用户名包含'), q('entity', '对象类型（精确）'), q('entity_id', '对象 ID（精确）'), q('from', '起始日期 YYYY-MM-DD（含）'), q('to', '截止日期 YYYY-MM-DD（含）'), q('keyword', '关键字：至少 2 个有效字符，只搜 action / entity / user_name（子串，不搜 detail）；不足返回 400'), q('page', '页码'), q('pageSize', '每页条数，上限 200')],
+        responses: { 200: jsonResp(null, '{ list, total（封顶估算，最多 10001）, has_more（total>10000）, total_cap, page, pageSize, totalPages, retention, export_max_rows }'), 400: { description: '日期格式或区间不合法 / 关键字太短 / 翻页超过 10000 条上限' }, 403: { description: '缺 system:audit:view' } }
       }
     },
     '/api/meta/audit-logs/export.csv': {
       get: {
         tags: ['系统'], summary: '审计日志 CSV 导出（同一过滤；分批流式；行数封顶；公式注入安全；导出动作写严格审计 AUDIT_LOG_EXPORT）',
-        parameters: [q('module', '模块（精确）'), q('action', '动作（精确）'), q('user', '操作人'), q('entity', '对象类型'), q('entity_id', '对象 ID'), q('from', '起始日期'), q('to', '截止日期'), q('keyword', '关键字')],
+        parameters: [q('module', '模块（精确）'), q('action', '动作（精确）'), q('user', '操作人'), q('entity', '对象类型'), q('entity_id', '对象 ID'), q('from', '起始日期'), q('to', '截止日期'), q('keyword', '关键字（至少 2 个有效字符，同列表）')],
         responses: { 200: { description: 'text/csv（UTF-8 BOM；响应头 X-Export-Truncated 表示是否被行数上限截断）' }, 403: { description: '缺 system:audit:view' } }
       }
     },

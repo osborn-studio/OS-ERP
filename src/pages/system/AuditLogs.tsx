@@ -19,11 +19,12 @@ import { Card, Pagination, SectionTitle, Table, fmtInt, toast, useList } from '.
 import { FilterBar, Inp } from '../../components/DataPage'
 import { Download } from 'lucide-react'
 
+const AUDIT_COUNT_CAP = 10000 // 与 server/lib/audit-view.js 的 AUDIT_COUNT_CAP 一致
 type Draft = { module: string; action: string; user: string; entity: string; entity_id: string; from: string; to: string; keyword: string }
 const EMPTY: Draft = { module: '', action: '', user: '', entity: '', entity_id: '', from: '', to: '', keyword: '' }
 
 export default function AuditLogs() {
-  const { list, total, page, pageSize, setPage, setFilters, filters, loading, errorStatus, errorCode, reload } =
+  const { list, total, page, pageSize, setPage, setFilters, filters, loading, error, errorStatus, errorCode, reload } =
     useList<any>('/meta/audit-logs', { pageSize: 50 })
   const [draft, setDraft] = useState<Draft>(EMPTY)
   const [exporting, setExporting] = useState(false)
@@ -43,6 +44,13 @@ export default function AuditLogs() {
     } finally {
       setExporting(false)
     }
+  }
+
+  // 关键字至少 2 个有效字符（与服务端 assertKeyword 同口径）：先在前端拦住，省一次必然 400 的请求
+  const applyFilters = () => {
+    const kw = draft.keyword.replace(/[\s\p{Cc}\p{Cf}]/gu, '')
+    if (draft.keyword && [...kw].length < 2) return toast('关键字至少需要 2 个字符', 'error')
+    setFilters(Object.fromEntries(Object.entries(draft).filter(([, v]) => v)))
   }
 
   if (isBlocked({ errorStatus, errorCode })) return <ScopeBlocked failure={{ errorStatus, errorCode }} onRetry={reload} />
@@ -80,15 +88,17 @@ export default function AuditLogs() {
         <Inp type="date" value={draft.from} onChange={set('from')} w={140} />
         <span className="text-slate-400">至</span>
         <Inp type="date" value={draft.to} onChange={set('to')} w={140} />
-        <Inp value={draft.keyword} onChange={set('keyword')} placeholder="关键字" w={150} />
-        <button className="btn-primary btn-sm" onClick={() => setFilters(Object.fromEntries(Object.entries(draft).filter(([, v]) => v)))}>
+        <Inp value={draft.keyword} onChange={set('keyword')} placeholder="关键字（≥2 字：动作/对象/操作人）" w={230} />
+        <button className="btn-primary btn-sm" onClick={applyFilters}>
           查询
         </button>
       </FilterBar>
+      {/* 400 等校验错误：useList 失败时保留上一次的结果，不显式处理会让旧行看起来像是本次过滤的结果 */}
+      {error && !loading && <div className="mb-3 rounded border border-red-200 bg-red-50 px-3 py-2 text-[13px] text-red-700">查询未执行：{error}。下方不显示旧结果。</div>}
       <Card pad={false}>
         <Table
           loading={loading}
-          data={list}
+          data={error ? [] : list}
           columns={[
             { key: 'created_at', title: '时间', width: 165 },
             { key: 'user_name', title: '操作人', width: 110 },
@@ -101,7 +111,11 @@ export default function AuditLogs() {
           ]}
         />
       </Card>
-      <Pagination page={page} pageSize={pageSize} total={total} onChange={setPage} />
+      {/* AA6：总数是服务端封顶估算（最多 10,001）；超过 10,000 时只能翻到前 10,000 条，更早的请加过滤条件或导出 */}
+      {total > AUDIT_COUNT_CAP && (
+        <div className="mt-2 text-[12px] text-slate-500">命中超过 {AUDIT_COUNT_CAP.toLocaleString()} 条，总数是估算；下方“共 {AUDIT_COUNT_CAP.toLocaleString()} 条”指可翻阅的范围（最新 {AUDIT_COUNT_CAP.toLocaleString()} 条），不是命中总数。请加过滤条件缩小范围，或导出 CSV。</div>
+      )}
+      <Pagination page={page} pageSize={pageSize} total={Math.min(total, AUDIT_COUNT_CAP)} onChange={setPage} />
     </div>
   )
 }

@@ -24,6 +24,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import Database from 'better-sqlite3'
+import { buildWhere, orderOf, countSql, exportSql, AUDIT_COUNT_CAP } from '../server/lib/audit-view.js'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 export const SCHEMA_VERSION = 1
@@ -31,6 +32,36 @@ export const DEFAULT_THRESHOLD = 200
 
 // 每条：id（唯一）、mirrors（镜像的 lib/路由）、bench（对应 bench-api 端点，可空）、sql、params
 // SQL 与镜像处逐字一致；动态拼接的 WHERE 用"无过滤"的最常见形态，带过滤的形态单独声明。
+/**
+ * AA6 审计日志查看器（server/routes/meta.js GET /audit-logs、/audit-logs/export.csv）：SQL 文本由 server/lib/audit-view.js 的
+ * buildWhere / orderOf / countSql / exportSql 生成——与路由是**同一份**，不是人工镜像，改过滤条件不会让这里漂移。
+ * 每种过滤形态 × {列表页, 封顶计数, 导出后续批}；这些语句在没有迁移 065 时对 audit_logs 裸 SCAN（audit_logs 在 GROWTH_TABLES 里，不看行数）。
+ */
+function auditStatementsFor() {
+  // 第三项 expectIndex：该形态**必须**走的索引（导出后续批在缺索引时会退化成 rowid 区间扫描 + 排序，EXPLAIN 里不是 SCAN，要显式断言）
+  const shapes = [
+    ['all', {}, null],
+    ['module', { module: 'sales', from: '2026-10-01', to: '2026-10-31' }, 'idx_audit_module_created'],
+    ['user', { user: '12', from: '2026-10-01' }, 'idx_audit_user_created'],
+    ['entity', { entity: 'sales_orders', entity_id: '101' }, 'idx_audit_entity'],
+    ['entity_only', { entity: 'sales_orders' }, null],
+    ['module_keyword', { module: 'sales', keyword: 'ab' }, 'idx_audit_module_created'],
+    ['keyword', { keyword: 'ab' }, null]
+  ]
+  const out = []
+  for (const [name, f, expectIndex] of shapes) {
+    const { where, args } = buildWhere(f)
+    const order = orderOf(f)
+    const mirrors = 'server/routes/meta.js GET /audit-logs (server/lib/audit-view.js)'
+    out.push({ id: `audit.list_${name}`, mirrors, bench: null, expectIndex, params: [...args, 50, 0], sql: `SELECT * FROM audit_logs ${where} ORDER BY ${order.sql} LIMIT ? OFFSET ?` })
+    out.push({ id: `audit.count_${name}`, mirrors, bench: null, expectIndex, params: [...args, AUDIT_COUNT_CAP + 1], sql: countSql(where) })
+    const ex = exportSql(where, order)
+    out.push({ id: `audit.export_${name}`, mirrors: 'server/routes/meta.js GET /audit-logs/export.csv (exportChunks)', bench: null, expectIndex,
+      params: [...args, 1000000, ...(order.byTime ? ['2026-10-02 00:00:00', 7] : [7]), 1000], sql: ex.next })
+  }
+  return out
+}
+
 export const STATEMENTS = [
   // ---- 看板 dashboard_summary（server/routes/dashboard.js） ----
   { id: 'dash.sales_today', mirrors: 'server/routes/dashboard.js summary', bench: 'dashboard_summary',
@@ -161,6 +192,8 @@ export const STATEMENTS = [
   { id: 'oc.overview_pending_approval', mirrors: 'server/routes/order-center.js GET /overview', bench: 'order_center_overview',
     sql: "SELECT o.id, o.doc_no, o.customer_name, o.total_amount, o.approval_reason, o.order_date FROM oc_orders o WHERE o.need_approval=1 AND o.status IN ('submitted','approving') ORDER BY o.id DESC LIMIT 20" },
 
+  ...auditStatementsFor(),
+
   // ---- 报表 report_operating（server/lib/report.js） ----
   { id: 'rpt.sales_value', mirrors: 'server/lib/report.js operating', bench: 'report_operating', params: ['2026-10'],
     sql: 'SELECT COALESCE(SUM(di.qty * di.price),0) v FROM sales_delivery_items di JOIN sales_deliveries d ON d.id = di.delivery_id WHERE substr(d.delivery_date,1,7) = ?' },
@@ -193,7 +226,8 @@ export const GROWTH_TABLES = new Set([
   'purchase_invoices', 'purchase_invoice_items', 'purchase_settlements', 'purchase_settlement_items',
   'purchase_payments', 'purchase_payment_items', 'payment_release_ledger', 'purchase_requisitions', 'purchase_requisition_items',
   'inventory_stocks', 'inventory_transactions', 'inventory_batches', 'stock_cost_ledger',
-  'ar_documents', 'receipts', 'receipt_allocations', 'doc_events', 'doc_actions'
+  'ar_documents', 'receipts', 'receipt_allocations', 'doc_events', 'doc_actions',
+  'audit_logs'
 ])
 
 const PAGE_REASON = '按主键倒序取最新一页（ORDER BY id DESC LIMIT n）：沿 rowid 反向扫描，取够 n 行即停，计划里没有排序临时表；不是全表读（无过滤条件，上界即 n 行）'
@@ -209,6 +243,10 @@ export const ALLOW = [
   { statement: 'sales.list_page', table: 'sales_orders', noSort: true, reason: PAGE_REASON },
   { statement: 'oc.orders_page', table: 'oc_orders', noSort: true, reason: PAGE_REASON },
   { statement: 'stock.txn_page', table: 'inventory_transactions', noSort: true, reason: PAGE_REASON },
+  { statement: 'audit.list_all', table: 'audit_logs', noSort: true, reason: PAGE_REASON },
+  { statement: 'audit.count_keyword', table: 'audit_logs', reason: '关键词是 LIKE \'%x%\' 子串匹配（action/entity/user_name），没有可用索引；LIMIT 10001 只在命中多时早停，命中稀少时仍读全表——已知残余，靠最少 2 字符与组合 module/user 过滤收敛' },
+  { statement: 'audit.list_entity_only', table: 'audit_logs', noSort: true, reason: '仅按 entity 类型（几十种、每种命中很多行）：用 `+entity` 屏蔽 idx_audit_entity，避免对全部命中行临时排序；沿 rowid 倒扫凑够一页即停。命中稀少的类型会读到整表——已知残余（见 capacity-baseline AA6）' },
+  { statement: 'audit.list_keyword', table: 'audit_logs', noSort: true, reason: '同 audit.count_keyword：子串匹配无法建索引；按 id 倒序取够一页即停，命中稀少时读量上界是整表' },
   { statement: 'dash.sales_unpaid', table: 'sales_orders', reason: AGG_REASON },
   { statement: 'dash.stock_total', table: 'inventory_stocks', reason: '整表聚合（SUM / COUNT DISTINCT 全库存），没有谓词；索引只能做覆盖扫描，不改变量级' },
   { statement: 'rpt.stock_value', table: 'inventory_stocks', reason: '整表聚合库存金额，没有谓词' },
@@ -284,6 +322,11 @@ export function auditStatements(db, statements, { threshold = DEFAULT_THRESHOLD,
       const entry = { detail, table, kind: 'automatic_index', rows: tables.has(table) ? rowsOf(table) : null }
       if (hit) { entry.status = 'allowed'; entry.reason = hit.reason; used.add(hit) } else { entry.status = 'violation'; violations.push({ statement: s.id, table, rows: entry.rows, detail, reason: 'SQLite 运行时自建自动索引：缺真实索引' }) }
       scans.push(entry)
+    }
+    // 语句声明了必须走的索引（expectIndex）：计划里没有它就是违规（缺索引时的退化形态不一定是裸 SCAN，如 rowid 区间扫描 + 临时排序）
+    if (s.expectIndex && !plan.some(d => d.includes(s.expectIndex))) {
+      const table = [...aliasMap(s.sql).values()][0] ?? '?'
+      violations.push({ statement: s.id, table, detail: plan.join(' | '), reason: `计划未使用声明的索引 ${s.expectIndex}` })
     }
     out.push({ id: s.id, mirrors: s.mirrors, bench: s.bench ?? null, plan, scans })
   }
