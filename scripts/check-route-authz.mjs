@@ -378,12 +378,6 @@ group('docflow.js', 'handler-scope', '/actions 在处理器内 assertCanRead；/
 group('docflow.js', 'gap', '/no-issue 非 dry 时真实消耗一个单据序号，任何登录账号（含外部角色）都能调；应要求管理员/单据配置权限', [['POST', '/no-issue']], 'unassigned')
 
 // —— 门店 / 经销商 / 订货主体：处理器内按绑定主体收口 ——
-group('pos.js', 'handler-scope', '门店 POS：storeCtx 要求账号绑定 store_id 并只读写本店；未设 role/perm 闸门，即任何绑定门店的账号都可操作（班次核款/驳回 approve|reject 靠 lib/pos2 内的角色判定）。是否应加 requireStore/requirePerm 待评估', [
-  ['GET', '/context'], ['GET', '/products'], ['GET', '/orders'], ['GET', '/orders/:id'], ['GET', '/stocks'],
-  ['GET', '/shifts'], ['GET', '/shifts/open'], ['GET', '/shifts/:id'], ['POST', '/shifts/:id/reject'], ['POST', '/shifts/:id/approve'], ['POST', '/shifts/:id/cancel'],
-  ['GET', '/cash-drops'], ['GET', '/cash-drops/pending-shifts'], ['POST', '/cash-drops/:id/receive'], ['POST', '/cash-drops/:id/cancel'],
-  ['GET', '/daily-closes'], ['GET', '/returns'], ['GET', '/stock-checks'], ['GET', '/stock-checks/:id']
-], 'unassigned')
 group('requisitions.js', 'handler-scope', '门店要货：storeCtx 要求绑定门店，只读写本店单据', [['GET', '/store/mine'], ['GET', '/store/shipments/mine'], ['GET', '/store/shipments/:id'], ['POST', '/store/shipments/:id/receive']])
 group('demand.js', 'handler-scope', '经销商"我的"要货/计划：dealerCtx 要求绑定经销商，只读本经销商', [['GET', '/dealer/requisitions/mine'], ['GET', '/dealer/plans/mine']])
 group('sales.js', 'handler-scope', '销售读接口：scopeFilter / assertCanRead 只按经销商/门店绑定收口（scopePairs），不按内部账号的组织数据范围过滤；data_scope=org 的内部账号可读他组织订单/发货/退货/统计', [

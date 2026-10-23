@@ -95,7 +95,10 @@ const DECLARED = [
   'tests/funds-maker-checker.test.mjs',
   // 付款释放台账（ADR-0024）
   'server/db/migrations/057_payment_release_ledger.cjs',
-  'tests/payment-reversal.test.mjs'
+  'tests/payment-reversal.test.mjs',
+  // 门店 POS 路由授权（ADR-0025）
+  'server/db/migrations/058_pos_permissions.cjs',
+  'tests/pos-authz.test.mjs'
 ]
 
 /** 参与覆盖率统计的源文件（**排除** node_modules / dist / data） */

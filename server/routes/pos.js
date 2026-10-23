@@ -17,7 +17,7 @@ import { Router } from 'express'
 import { localDate } from '../lib/dates.js'
 import { getDb } from '../db/index.js'
 import { ok, fail, wrap, failFromError } from '../lib/http.js'
-import { requireAuth, requireRole } from '../middleware/auth.js'
+import { requireAuth, requireRole, requirePerm } from '../middleware/auth.js'
 import { audit } from '../middleware/audit.js'
 import { advanceStatus } from '../lib/docflow.js'
 import {
@@ -88,6 +88,8 @@ function today() {
 r.get(
   '/context',
   requireAuth,
+  requireStore(),
+  requirePerm('pos.view'),
   wrap((req, res) => {
     const { db, store, wh, u } = storeCtx(req)
     const bizDate = today()
@@ -130,6 +132,8 @@ r.get(
 r.get(
   '/products',
   requireAuth,
+  requireStore(),
+  requirePerm('pos.view'),
   wrap((req, res) => {
     const { db, store, wh } = storeCtx(req)
     const kw = (req.query.kw || '').trim()
@@ -183,6 +187,7 @@ r.post(
   '/orders',
   requireAuth,
   requireStore(),
+  requirePerm('pos.cashier'),
   wrap((req, res) => {
     const { db, store, wh, u } = storeCtx(req)
     const shift = db
@@ -229,6 +234,7 @@ r.post(
   '/quote',
   requireAuth,
   requireStore(),
+  requirePerm('pos.cashier'),
   wrap((req, res) => {
     const { db } = storeCtx(req)
     const b = req.body || {}
@@ -269,6 +275,8 @@ r.post(
 r.get(
   '/orders',
   requireAuth,
+  requireStore(),
+  requirePerm('pos.view'),
   wrap((req, res) => {
     const { db, store } = storeCtx(req)
     const status = req.query.status
@@ -294,6 +302,8 @@ r.get(
 r.get(
   '/orders/:id',
   requireAuth,
+  requireStore(),
+  requirePerm('pos.view'),
   wrap((req, res) => {
     const { db, store } = storeCtx(req)
     const o = db.prepare('SELECT * FROM pos_orders WHERE id=? AND store_id=?').get(Number(req.params.id), store.id)
@@ -310,6 +320,7 @@ r.post(
   '/orders/:id/void',
   requireAuth,
   requireStore(),
+  requirePerm('pos.refund'),
   wrap((req, res) => {
     const { db, store, u } = storeCtx(req)
     const id = Number(req.params.id)
@@ -337,6 +348,8 @@ r.post(
 r.get(
   '/stocks',
   requireAuth,
+  requireStore(),
+  requirePerm('pos.store.stock'),
   wrap((req, res) => {
     const { db, wh } = storeCtx(req)
     if (!wh) return ok(res, [])
@@ -363,6 +376,8 @@ r.get(
 r.get(
   '/shifts',
   requireAuth,
+  requireStore(),
+  requirePerm('pos.view'),
   wrap((req, res) => {
     const { db, store } = storeCtx(req)
     return ok(
@@ -380,6 +395,8 @@ r.get(
 r.get(
   '/shifts/open',
   requireAuth,
+  requireStore(),
+  requirePerm('pos.view'),
   wrap((req, res) => {
     const { db, store, u } = storeCtx(req)
     const rows = db
@@ -397,13 +414,14 @@ r.get(
 r.get(
   '/shifts/:id',
   requireAuth,
+  requireStore(),
+  requirePerm('pos.view'),
   wrap((req, res) => {
     const { db, store } = storeCtx(req)
-    const detail = shiftDetail(db, Number(req.params.id))
-    if (Number(detail.shift.store_id) !== Number(store.id) && !HQ_ROLES.includes(req.user.role)) {
-      return fail(res, '无权查看其它门店的班次', 403, 403)
-    }
-    return ok(res, detail)
+    const id = Number(req.params.id)
+    // 总部管理员可跨店只读；门店账号看别家的班次一律按"不存在"处理（404），不泄露存在性
+    if (req.user.role !== 'admin') assertShiftOfStore(db, id, store.id)
+    return ok(res, shiftDetail(db, id))
   })
 )
 
@@ -411,6 +429,7 @@ r.post(
   '/shifts/open',
   requireAuth,
   requireStore(),
+  requirePerm('pos.shift'),
   wrap((req, res) => {
     const { db, store, u } = storeCtx(req)
     const shift = openShift(db, {
@@ -432,6 +451,7 @@ r.post(
   '/shifts/:id/declare',
   requireAuth,
   requireStore(),
+  requirePerm('pos.shift'),
   wrap((req, res) => {
     const { db, store } = storeCtx(req)
     const id = Number(req.params.id)
@@ -449,10 +469,13 @@ r.post(
 r.post(
   '/shifts/:id/reject',
   requireAuth,
+  requireStore(),
+  requirePerm('pos.shift.review'),
   wrap((req, res) => {
-    const { db } = storeCtx(req)
+    const { db, store } = storeCtx(req)
     const id = Number(req.params.id)
-    const detail = rejectShift(db, req, { shiftId: id, remark: req.body?.remark })
+    assertShiftOfStore(db, id, store.id)
+    const detail = rejectShift(db, req, { shiftId: id, remark: req.body?.remark, separateChecker: true })
     audit(req, { action: 'REJECT', module: 'pos', entity: 'pos_shifts', entityId: id, detail: detail.shift.doc_no })
     return ok(res, detail)
   })
@@ -461,11 +484,15 @@ r.post(
 r.post(
   '/shifts/:id/approve',
   requireAuth,
+  requireStore(),
+  requirePerm('pos.shift.review'),
   wrap((req, res) => {
-    const { db } = storeCtx(req)
+    const { db, store } = storeCtx(req)
     const id = Number(req.params.id)
+    assertShiftOfStore(db, id, store.id)
     const detail = approveShift(db, req, {
       shiftId: id,
+      separateChecker: true,
       countedCash: req.body?.counted_cash,
       varianceNote: req.body?.variance_note ?? null,
       varianceHandled: req.body?.variance_handled ?? null,
@@ -500,6 +527,8 @@ r.post(
 r.post(
   '/shifts/:id/cancel',
   requireAuth,
+  requireStore(),
+  requirePerm('pos.shift'),
   wrap((req, res) => {
     const { db, store } = storeCtx(req)
     const id = Number(req.params.id)
@@ -515,6 +544,7 @@ r.post(
   '/shifts/close',
   requireAuth,
   requireStore(),
+  requirePerm('pos.shift'),
   wrap((req, res) => {
     const { db, store, u } = storeCtx(req)
     const rows = db
@@ -537,12 +567,25 @@ function assertShiftOfStore(db, shiftId, storeId) {
     throw e
   }
   if (Number(s.store_id) !== Number(storeId)) {
-    const e = new Error('班次不属于本门店')
-    e.status = 403
-    e.code = 'SHIFT_STORE_MISMATCH'
+    // 别家门店的班次对本店账号等同于不存在（ADR-0025）：状态码与文案都不能区分"没有"和"不是你的"
+    const e = new Error(`班次 #${shiftId} 不存在`)
+    e.status = 404
+    e.code = 'SHIFT_NOT_FOUND'
     throw e
   }
   return s
+}
+
+/** 缴款单必须属于本店；别家门店的缴款单按不存在处理（404），不改任何状态 */
+function assertDropOfStore(db, dropId, storeId) {
+  const d = db.prepare('SELECT id, store_id FROM pos_cash_drops WHERE id=?').get(Number(dropId))
+  if (!d || Number(d.store_id) !== Number(storeId)) {
+    const e = new Error(`缴款单 #${dropId} 不存在`)
+    e.status = 404
+    e.code = 'DROP_NOT_FOUND'
+    throw e
+  }
+  return d
 }
 
 // ===========================================================================
@@ -556,6 +599,8 @@ const dropSelect = `SELECT d.*, s.name AS store_name,
 r.get(
   '/cash-drops',
   requireAuth,
+  requireStore(),
+  requirePerm('pos.view'),
   wrap((req, res) => {
     const { db, store } = storeCtx(req)
     const where = ['d.store_id=?']
@@ -576,6 +621,8 @@ r.get(
 r.get(
   '/cash-drops/pending-shifts',
   requireAuth,
+  requireStore(),
+  requirePerm('pos.view'),
   wrap((req, res) => {
     const { db, store } = storeCtx(req)
     const rows = db
@@ -596,6 +643,7 @@ r.post(
   '/cash-drops',
   requireAuth,
   requireStore(),
+  requirePerm('pos.cashdrop'),
   wrap((req, res) => {
     const { db, store, u } = storeCtx(req)
     const result = createCashDrop(db, req, {
@@ -615,8 +663,11 @@ r.post(
 r.post(
   '/cash-drops/:id/receive',
   requireAuth,
+  requireStore(),
+  requirePerm('pos.cashdrop.receive'),
   wrap((req, res) => {
-    const { db } = storeCtx(req)
+    const { db, store } = storeCtx(req)
+    assertDropOfStore(db, Number(req.params.id), store.id)
     const d = receiveCashDrop(db, req, {
       dropId: Number(req.params.id),
       referenceNo: req.body?.reference_no || null,
@@ -630,8 +681,11 @@ r.post(
 r.post(
   '/cash-drops/:id/cancel',
   requireAuth,
+  requireStore(),
+  requirePerm('pos.cashdrop'),
   wrap((req, res) => {
-    const { db } = storeCtx(req)
+    const { db, store } = storeCtx(req)
+    assertDropOfStore(db, Number(req.params.id), store.id)
     const d = cancelCashDrop(db, req, { dropId: Number(req.params.id), remark: req.body?.remark || null })
     audit(req, { action: 'CANCEL', module: 'pos', entity: 'pos_cash_drops', entityId: d.id, detail: d.doc_no })
     return ok(res, d)
@@ -648,6 +702,7 @@ r.post(
   '/daily-close',
   requireAuth,
   requireStore(),
+  requirePerm('pos.dailyclose'),
   wrap((req, res) => {
     const { db, store, wh, u } = storeCtx(req)
     if (!wh) return fail(res, '该门店未绑定门店仓库，无法日结上传', 400)
@@ -667,6 +722,8 @@ r.post(
 r.get(
   '/daily-closes',
   requireAuth,
+  requireStore(),
+  requirePerm('pos.view'),
   wrap((req, res) => {
     const { db, store } = storeCtx(req)
     const rows = db
@@ -690,6 +747,7 @@ r.post(
   '/returns',
   requireAuth,
   requireStore(),
+  requirePerm('pos.refund'),
   wrap((req, res) => {
     const { db, store, u } = storeCtx(req)
     const result = storeReturn(db, req, {
@@ -709,6 +767,8 @@ r.post(
 r.get(
   '/returns',
   requireAuth,
+  requireStore(),
+  requirePerm('pos.view'),
   wrap((req, res) => {
     const { db, store } = storeCtx(req)
     const rows = db
@@ -728,6 +788,8 @@ r.get(
 r.get(
   '/stock-checks',
   requireAuth,
+  requireStore(),
+  requirePerm('pos.view'),
   wrap((req, res) => {
     const { db, store } = storeCtx(req)
     const rows = db
@@ -746,6 +808,8 @@ r.get(
 r.get(
   '/stock-checks/:id',
   requireAuth,
+  requireStore(),
+  requirePerm('pos.view'),
   wrap((req, res) => {
     const { db, store } = storeCtx(req)
     const head = db.prepare("SELECT * FROM stock_checks WHERE id=? AND scope='store' AND store_id=?").get(Number(req.params.id), store.id)
@@ -767,6 +831,7 @@ r.post(
   '/stock-checks',
   requireAuth,
   requireStore(),
+  requirePerm('pos.store.check'),
   wrap((req, res) => {
     const { db, store } = storeCtx(req)
     const result = createStoreCheck(db, req, {
@@ -785,6 +850,7 @@ r.put(
   '/stock-checks/:id/items',
   requireAuth,
   requireStore(),
+  requirePerm('pos.store.check'),
   wrap((req, res) => {
     const { db, store } = storeCtx(req)
     const id = Number(req.params.id)
@@ -799,6 +865,7 @@ r.post(
   '/stock-checks/:id/adjust',
   requireAuth,
   requireStore(),
+  requirePerm('pos.store.check'),
   wrap((req, res) => {
     const { db, store } = storeCtx(req)
     const id = Number(req.params.id)
