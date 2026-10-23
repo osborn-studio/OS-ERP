@@ -14,7 +14,7 @@
 1. **动作路由统一的门 `actionGate`** = `requireAuth` → `requireInternal('采购单据')` → `attachOrgScope`，用于四条 `/:id/:action`、`/requisitions/:id/convert`、`/payments/:id/review`。外部主体（dealer / store）在动作权限之前就 403。
 2. **单据范围判定紧跟动作权限、先于任何写**：`assertActionPermitted` 在 `assertEdgePermitted` 通过后调用 `assertPurchaseDocInScope(db, docType, id, req.orgScope)`（ADR-0020 的同一判据，PRQ / PI / PST / PAY 按 `org_id`，PO 经仓归属；NULL 对受限范围不可见）。范围外与不存在同形 404（`DOC_NOT_FOUND`），不产生任何写。顺序取「权限 → 范围」是为了不改既有契约（无动作权限的内部账号仍得 403 `PERM_DENIED`，`scripts/test-mcp-purchase.mjs` 的权限闸断言依赖它）；唯一能产生写的人群是持有动作权限者，他们够不到范围外单据。残留：无动作权限的内部账号对范围外**存在**的单据得 403、对不存在的得 404，这一差别在修前就有（`assertActionPermitted` 先取行），本批不扩大。
 3. **`/requisitions/:id/convert`**：请购单必须在范围内；**生效入库仓**（body 的 `warehouse_id`，缺省为请购单自带的仓，与 lib 取舍一致）必须在范围内（与 `purchaseScopeSql().wh` 同一谓词），否则 404 且不生成采购订单。
-3a. **关联单据**（Codex 审计补）：动作会连带改写别的单据——发票流转重算其关联订单的统计 / 关闭标记，结算流转改写来源入库 / 发票 / 订单，付款流转按核销明细回写结算单已付。单据自身在范围内不等于它引用的单据在范围内（全局范围账号建的单可引用任意组织）。`assertLinkedDocsInScope` 对受限范围逐一校验：PI → 关联 PO（表头与明细行）与入库单；PST → 来源 receipt / order / invoice 与挂靠发票；PAY → 核销明细的结算单；任一在范围外 ⇒ 404 且无写。`review` 同样适用。全局范围不判。
+3a. **关联单据**（Codex 审计补）：动作会连带改写别的单据——发票流转重算其关联订单的统计 / 关闭标记，结算流转改写来源入库 / 发票 / 订单，付款流转按核销明细回写结算单已付。单据自身在范围内不等于它引用的单据在范围内（全局范围账号建的单可引用任意组织）。`assertLinkedDocsInScope` 对受限范围逐一校验：PI → 关联 PO（表头与明细行）与入库单；PST → 来源 receipt / order / invoice 与挂靠发票；PAY → 核销明细的结算单，并沿每张结算单再校验其来源链；任一在范围外 ⇒ 404 且无写。`review` 同样适用。全局范围不判。
 4. **`/payments/:id/review`**（ADR-0018 的 `finance.funds.review`）：在 `requirePerm` 之后、`reviewFunds` 之前判范围；范围外 404，且不写复核记录（`requirePerm` 在前，与上同序）。「复核人不得是发起人」等 ADR-0018 规则不变。
 5. **`/orders/:id/receive-check`**：改走 `readGate`（内部主体 + 采购读权限 + 范围），并对 PO 做范围判定。它虽不写库，但原来可对任意订单探测收货超量信息。
 6. **MCP**：`purchase.build_settlement`、`purchase.create_payment` 把 `ctx.scope`（令牌自身范围 ∩ 所有者当前范围，`delegation.js` 的 `effectiveScope`）作为 `orgScope` 传入 `buildSettlement` / `createPayment`。结果：结算只取范围内的入库 / 发票 / 退货；付款 FIFO 只在范围内结算单上挑；手工核销指向范围外结算单 ⇒ `DOC_NOT_FOUND`（与不存在同形，写入前拒绝）。全局范围（`all`）行为不变。`tools.js` 只动这两个工具（roadmap v4 冲突提示）。
@@ -27,7 +27,8 @@
 
 - 动作权限码仍在处理器内按状态边判定（`assertEdgePermitted`），不是路由级 `requirePerm`；守卫看到的强闸门是 `requireInternal`。
 - `POST /requisitions`、`/invoices`、`/settlements`、`/payments` 创建时的 `org_id` 取自 body 的校验不在本批（创建路径的归属由 ADR-0028 与 `assertPurchaseWriteScope` 分别覆盖 HTTP 结算 / 付款与 MCP）。
-- `routes/purchase.js` 的订单 / 收货 / 退货动作路由另批。
+- `routes/purchase.js` 的订单状态 / 收货 / 退货动作路由另批（Codex 复审列为 pre-existing 高危项 `purchase.js:214/236`：持有权限的受限账号可凭 id 改别组织订单状态 / 对其收货；不在 Y1 文件范围内，须单独 ADR 收口，登记为后续）。
+- 数据异常口径：入库单所在仓在范围内、但其 `order_id` 指向别组织订单（正常流程不会出现，收货须在订单仓）。MCP `purchase.build_settlement` 的来源选择在 `lib/purchase.js` 内部，按入库单仓归属过滤，不再二次校验该入库单的订单；`buildSettlement` 随后会刷新该订单统计。要彻底堵需改 lib（本工作流约定 `lib/purchase.js` 只读），登记为后续。HTTP 侧动作路由已对已成型的结算 / 付款链做了该校验。
 
 ## 验证入口
 

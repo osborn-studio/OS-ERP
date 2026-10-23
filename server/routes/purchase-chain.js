@@ -96,7 +96,10 @@ function assertLinkedDocsInScope(db, docType, id, orgScope) {
     need('PO', invoiceOrderIds(db, id))
     need('GR', db.prepare('SELECT receipt_id FROM purchase_invoice_items WHERE invoice_id=?').all(id).map((x) => x.receipt_id))
   } else if (docType === 'PAY') {
-    need('PST', db.prepare('SELECT settle_id FROM purchase_payment_items WHERE payment_id=?').all(id).map((x) => x.settle_id))
+    const settleIds = db.prepare('SELECT settle_id FROM purchase_payment_items WHERE payment_id=?').all(id).map((x) => x.settle_id)
+    need('PST', settleIds)
+    // 付款生效 / 作废会沿结算单回写其来源订单的金额快照与关闭标记：整条链都要在范围内
+    for (const sid of new Set(settleIds.filter((v) => v != null))) assertLinkedDocsInScope(db, 'PST', Number(sid), orgScope)
   } else if (docType === 'PST') {
     const items = db.prepare('SELECT source_type, source_id FROM purchase_settlement_items WHERE settle_id=?').all(id)
     const of = (...types) => items.filter((x) => types.includes(x.source_type)).map((x) => x.source_id)

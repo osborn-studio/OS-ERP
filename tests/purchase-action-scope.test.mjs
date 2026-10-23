@@ -208,6 +208,16 @@ test('purchase action routes and MCP purchase tools respect document org scope',
       notFound(await api(`/api/purchase/settlements/${pstX}/audit`, { token: a.token, body: {} }), 'settlement linked to B receipt')
       assert.equal(db.prepare('SELECT status FROM purchase_settlements WHERE id=?').get(pstX).status, 'draft')
     }
+    // 付款 A → 结算 A（在范围内）→ 来源入库单在 B 仓：付款动作沿结算单够到 B 的订单，同样拒绝
+    if (grB) {
+      const pstY = st('PST-ACT-YR', whA.org_id)
+      db.prepare("INSERT INTO purchase_settlement_items (settle_id, source_type, source_id, qty, price, amount) VALUES (?,?,?,1,1,1)").run(pstY, 'receipt', grB.id)
+      const payY = pay('PAY-ACT-Y', whA.org_id)
+      db.prepare("UPDATE purchase_payments SET status='approved', settled_amount=5 WHERE id=?").run(payY)
+      db.prepare("INSERT INTO purchase_payment_items (payment_id, settle_id, settle_doc_no, amount) VALUES (?,?,?,5)").run(payY, pstY, 'PST-ACT-YR')
+      notFound(await api(`/api/purchase/payments/${payY}/void`, { token: a.token, body: {} }), 'payment -> settlement -> B receipt')
+      assert.equal(db.prepare('SELECT status FROM purchase_payments WHERE id=?').get(payY).status, 'approved')
+    }
     // 全局范围账号不受关联判定限制
     okData(await api(`/api/purchase/invoices/${piX}/submit`, { token: f.admin, body: {} }))
   })
