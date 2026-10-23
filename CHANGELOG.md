@@ -8,6 +8,10 @@
 
 <!-- generated -->
 
+## 第九批（进行中）：见 roadmap-v5
+
+- [ADR-0038：库存域与采购订单状态/收货路由按组织范围收口](docs/implementation/ADR-0038-inventory-scope.md) — 一处判据：`server/lib/stock.js` 的 `stockScopeSql(orgScope, alias, column='warehouse_id')`，键为 `warehouses.org_id`。不传或 `all` ⇒ `1=1`；`dealer` / `none` / 空集合 ⇒ `1=0`；仓库 `org_id` 为 NULL 对受限范围不可见。同文件还有 `warehouseInScope` / `assertWarehouseInScope`（写目…
+
 ## 第八批（进行中）：见 roadmap-v4
 
 - [ADR-0031：采购链动作路由与 MCP 采购工具的单据范围](docs/implementation/ADR-0031-purchase-action-scope.md) — 动作路由统一的门 `actionGate` = `requireAuth` → `requireInternal('采购单据')` → `attachOrgScope`，用于四条 `/:id/:action`、`/requisitions/:id/convert`、`/payments/:id/review`。外部主体（dealer / store）在动作权限之前就 403。 2. 单据范围判定紧跟动作权限、先于任何写：`assertActionPermitted` 在 `a…
