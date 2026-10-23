@@ -55,6 +55,11 @@ jobs:
           node scripts/gen-third-party-notices.mjs
           git diff --exit-code -- THIRD_PARTY_NOTICES.md || { echo '::error::THIRD_PARTY_NOTICES.md is stale; run npm run notices and commit'; exit 1; }
           node scripts/gen-sbom.mjs
+      # CHANGELOG.md is generated from docs/implementation/ADR-*.md (Y9); drift fails. It restates ADR decisions, not acceptance.
+      - name: Changelog is current
+        run: |
+          set -euo pipefail
+          node scripts/gen-changelog.mjs --check
       - name: TypeScript
         run: npx tsc --noEmit
       - name: Vite build

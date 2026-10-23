@@ -22,6 +22,8 @@ const name = `BanyuanERP-Local-${stamp}-${Date.now().toString().slice(-6)}`
 const dest = path.join(output, name)
 const run = argv => execFileSync(process.execPath, argv, { cwd: ROOT, stdio: 'inherit' })
 
+// 变更记录必须与 ADR 同步（漂移即拒绝出包）；SBOM 由锁文件现场生成并随包交付。
+run(['scripts/gen-changelog.mjs', '--check'])
 if (!args.includes('--skip-docs')) run(['scripts/build-docs-wiki.mjs'])
 if (!args.includes('--skip-build')) run(['node_modules/vite/bin/vite.js', 'build'])
 if (!fs.existsSync(path.join(ROOT, 'dist/index.html'))) throw new Error('Build frontend first')
@@ -35,7 +37,9 @@ function copy(relative, to = relative) {
 }
 for (const dir of ['src', 'server', 'scripts', 'public', 'dist', 'reusable']) copy(dir)
 for (const file of ['package.json', 'package-lock.json', 'index.html', 'vite.config.ts', 'tsconfig.json',
-  'tailwind.config.js', 'postcss.config.js', 'Dockerfile', 'docker-compose.yml', '.dockerignore', '.gitignore', 'LICENSE', 'THIRD_PARTY_NOTICES.md']) copy(file)
+  'tailwind.config.js', 'postcss.config.js', 'Dockerfile', 'docker-compose.yml', '.dockerignore', '.gitignore', 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'CHANGELOG.md']) copy(file)
+fs.mkdirSync(path.join(dest, 'release'), { recursive: true })
+run(['scripts/gen-sbom.mjs', '--out', path.join(dest, 'release/sbom.cdx.json')])
 copy('docs/本地交付', 'docs/本地交付')
 copy('public/docs', '手册')
 const write = (file, content, mode = 0o644) => fs.writeFileSync(path.join(dest, file), content, { mode })
@@ -75,11 +79,11 @@ const guide = `# 伴圆AI原生ERP 本地安装交付包
 
 ## 完整性与来源
 
-node scripts/verify-release.mjs 校验源码与构建产物（MANIFEST.json 记录逐文件 SHA256，并含 baseCommit 与 THIRD_PARTY_NOTICES.md）。健康检查 /api/meta/health 返回的 build_sha 即 baseCommit。自身修改源码后，使用开发启动方式并重新构建；重新分发前重新打包生成清单。
+node scripts/verify-release.mjs 校验源码与构建产物（MANIFEST.json 记录逐文件 SHA256，并含 baseCommit、THIRD_PARTY_NOTICES.md、CHANGELOG.md 与 release/sbom.cdx.json，后者必须是可解析的 CycloneDX）。健康检查 /api/meta/health 返回的 build_sha 即 baseCommit。自身修改源码后，使用开发启动方式并重新构建；重新分发前重新打包生成清单。
 
 ## 权属
 
-许可证见 LICENSE，第三方声明见 THIRD_PARTY_NOTICES.md。
+许可证见 LICENSE，第三方声明见 THIRD_PARTY_NOTICES.md，运行时依赖清单（CycloneDX SBOM）见 release/sbom.cdx.json，变更记录见 CHANGELOG.md（由 ADR 生成，不代表验收结论）。
 `
 write('00_先读我.md', guide)
 write('README.md', guide)

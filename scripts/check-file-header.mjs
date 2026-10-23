@@ -47,6 +47,7 @@ const DECLARED = [
   'server/lib/backup-crypto.js',
   'scripts/check-mcp-coverage.mjs',
   'scripts/gen-sbom.mjs',
+  'scripts/gen-changelog.mjs',
   'scripts/lib/runtime-closure.mjs',
   'scripts/gen-third-party-notices.mjs',
   'scripts/check-file-header.mjs',

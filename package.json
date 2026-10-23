@@ -1,6 +1,6 @@
 {
   "name": "os-erp",
-  "version": "0.1.0-alpha.1",
+  "version": "0.2.0-alpha.1",
   "private": true,
   "type": "module",
   "description": "OS ERP 简易 ERP：商业部署能力建设中的 MIT 项目",
@@ -26,6 +26,7 @@
     "release": "node scripts/package-release.mjs",
     "sbom": "node scripts/gen-sbom.mjs",
     "notices": "node scripts/gen-third-party-notices.mjs",
+    "changelog": "node scripts/gen-changelog.mjs",
     "test:runtime": "node --test tests/runtime-isolation.test.mjs",
     "bootstrap:admin": "node scripts/bootstrap-admin.mjs",
     "test:bootstrap": "node --test tests/admin-bootstrap.test.mjs",

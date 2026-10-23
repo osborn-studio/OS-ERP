@@ -18,6 +18,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -40,7 +41,8 @@ function put(dir, rel, content) {
 function minimalSource(t, { commit = true } = {}) {
   const src = tempDir(t, 'os-erp-release-src-')
   for (const name of ['server', 'scripts']) cpSync(path.join(ROOT, name), path.join(src, name), { recursive: true })
-  for (const name of ['package.json', 'package-lock.json', 'THIRD_PARTY_NOTICES.md', 'LICENSE']) cpSync(path.join(ROOT, name), path.join(src, name))
+  for (const name of ['package.json', 'package-lock.json', 'THIRD_PARTY_NOTICES.md', 'LICENSE', 'CHANGELOG.md']) cpSync(path.join(ROOT, name), path.join(src, name))
+  cpSync(path.join(ROOT, 'docs/implementation'), path.join(src, 'docs/implementation'), { recursive: true }) // 变更记录漂移校验的输入
   put(src, 'src/App.tsx', '// stub\n')
   put(src, 'reusable/README.md', '# stub\n')
   put(src, 'docs/本地交付/README.md', '# stub\n')
@@ -87,6 +89,17 @@ test('minimal package carries baseCommit and notices, and passes production acce
   assert.ok(manifest.files['THIRD_PARTY_NOTICES.md'])
   assert.ok(existsSync(path.join(pkg, 'THIRD_PARTY_NOTICES.md')))
   assert.doesNotMatch(readFileSync(path.join(pkg, 'README.md'), 'utf8'), /12345/)
+  // Y9：版本、变更记录与 SBOM 随包交付并被清单覆盖
+  assert.equal(manifest.version, JSON.parse(readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version)
+  assert.match(manifest.version, /^0\.2\.0-alpha\.1$/)
+  for (const f of ['CHANGELOG.md', 'release/sbom.cdx.json']) {
+    assert.ok(manifest.files[f], `${f} listed in MANIFEST`)
+    assert.ok(existsSync(path.join(pkg, f)), `${f} present`)
+  }
+  assert.equal(readFileSync(path.join(pkg, 'CHANGELOG.md'), 'utf8'), readFileSync(path.join(ROOT, 'CHANGELOG.md'), 'utf8'))
+  const sbom = JSON.parse(readFileSync(path.join(pkg, 'release/sbom.cdx.json'), 'utf8'))
+  assert.equal(sbom.bomFormat, 'CycloneDX')
+  assert.ok(sbom.components.length > 0)
 
   const evidence = tempDir(t, 'os-erp-release-evidence-')
   const run = spawnSync(process.execPath, ['scripts/test-local-delivery.mjs', `--package=${pkg}`, `--evidence=${evidence}`, '--reuse-node-modules'], {
@@ -139,6 +152,58 @@ test('verify-release rejects a package without baseCommit, notices, or with data
   put(pkg, `${RUNTIME_DIR}/gml_cosmetic.db`, 'x')
   put(pkg, '.local/config.json', '{}')
   assert.equal(verify().status, 0, 'runtime directories are allowed')
+})
+
+test('verify-release requires CHANGELOG.md and a parseable CycloneDX SBOM that are listed and hash-checked', (t) => {
+  const src = minimalSource(t)
+  const out = tempDir(t, 'os-erp-release-out-')
+  assert.equal(release(src, out).status, 0)
+  const pkg = extract(t, out)
+  const verify = () => spawnSync(process.execPath, ['scripts/verify-release.mjs'], { cwd: pkg, env: { PATH }, encoding: 'utf8' })
+  assert.equal(verify().status, 0)
+  const manifestFile = path.join(pkg, 'MANIFEST.json')
+  const original = readFileSync(manifestFile, 'utf8')
+  const mutate = (fn) => { const m = JSON.parse(original); fn(m); writeFileSync(manifestFile, JSON.stringify(m)); return verify() }
+  let r = mutate(m => { delete m.files['CHANGELOG.md'] })
+  assert.notEqual(r.status, 0)
+  assert.match(r.stderr, /CHANGELOG\.md/)
+  r = mutate(m => { delete m.files['release/sbom.cdx.json'] })
+  assert.notEqual(r.status, 0)
+  assert.match(r.stderr, /sbom\.cdx\.json/)
+  writeFileSync(manifestFile, original)
+  // 内容被换成不是 CycloneDX 的 JSON（哪怕清单哈希同步改了）也要红
+  const sbomFile = path.join(pkg, 'release/sbom.cdx.json')
+  const sbomOriginal = readFileSync(sbomFile, 'utf8')
+  const rehash = (content) => {
+    writeFileSync(sbomFile, content)
+    const m = JSON.parse(original)
+    m.files['release/sbom.cdx.json'] = createHash('sha256').update(content).digest('hex')
+    writeFileSync(manifestFile, JSON.stringify(m))
+    return verify()
+  }
+  r = rehash('{"bomFormat":"SPDX","components":[{"name":"x"}]}')
+  assert.notEqual(r.status, 0)
+  assert.match(r.stderr, /CycloneDX/)
+  r = rehash('not json')
+  assert.notEqual(r.status, 0)
+  assert.match(r.stderr, /sbom/i)
+  r = rehash(JSON.stringify({ bomFormat: 'CycloneDX', specVersion: '1.5', components: [] }))
+  assert.notEqual(r.status, 0)
+  assert.match(r.stderr, /no components/)
+  // 清单哈希不同步（事后篡改）同样红
+  writeFileSync(manifestFile, original)
+  writeFileSync(sbomFile, sbomOriginal.replace('CycloneDX', 'CycloneDX '))
+  assert.notEqual(verify().status, 0)
+  writeFileSync(sbomFile, sbomOriginal)
+  assert.equal(verify().status, 0)
+})
+
+test('package-release refuses to package a stale CHANGELOG.md', (t) => {
+  const src = minimalSource(t)
+  writeFileSync(path.join(src, 'CHANGELOG.md'), readFileSync(path.join(src, 'CHANGELOG.md'), 'utf8') + '\nhand edit\n')
+  const r = release(src, tempDir(t, 'os-erp-release-out-'))
+  assert.notEqual(r.status, 0)
+  assert.match(r.stderr + r.stdout, /CHANGELOG\.md is stale/)
 })
 
 test('package-release leaves database-like files out of the archive', (t) => {

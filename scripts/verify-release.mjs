@@ -14,6 +14,19 @@ const fail = message => { console.error(message); failed++ }
 // 来源与第三方声明：baseCommit 必须是提交 SHA，通知文件必须在清单里（且下面逐文件校验哈希）。
 if (!/^[0-9a-f]{7,64}$/.test(String(manifest.baseCommit ?? ''))) fail('MANIFEST.baseCommit missing or not a git sha')
 if (!manifest.files?.['THIRD_PARTY_NOTICES.md']) fail('THIRD_PARTY_NOTICES.md is not listed in MANIFEST.json')
+for (const required of ['CHANGELOG.md', 'release/sbom.cdx.json']) {
+  if (!manifest.files?.[required]) fail(`${required} is not listed in MANIFEST.json`)
+}
+// SBOM 不只是“在清单里”：内容必须能解析为 CycloneDX 且含组件（哈希另在下面逐文件校验）。
+try {
+  const sbom = JSON.parse(fs.readFileSync(path.join(root, 'release/sbom.cdx.json'), 'utf8'))
+  if (sbom.bomFormat !== 'CycloneDX') fail('release/sbom.cdx.json: bomFormat is not CycloneDX')
+  else if (typeof sbom.specVersion !== 'string') fail('release/sbom.cdx.json: CycloneDX specVersion missing')
+  else if (!Array.isArray(sbom.components) || !sbom.components.length) fail('release/sbom.cdx.json: no components')
+} catch (error) { fail(`release/sbom.cdx.json: cannot read SBOM (${error.message})`) }
+try {
+  if (!fs.readFileSync(path.join(root, 'CHANGELOG.md'), 'utf8').includes('<!-- generated -->')) fail('CHANGELOG.md: generated marker missing')
+} catch (error) { fail(`CHANGELOG.md: ${error.message}`) }
 for (const file of Object.keys(manifest.files)) {
   if (/(^|\/)(\.local|backups|data)(\/|$)|\.(?:db|db3|sqlite3?)(?:-|\.|$)|(^|\/)\.env(\.|$)/i.test(file)) fail(`${file}: databases, instance state and secrets must not be part of a release`)
 }
