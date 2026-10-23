@@ -52,6 +52,7 @@ const DECLARED = [
   'scripts/gen-sbom.mjs',
   'scripts/release-candidate.mjs',
   'scripts/gen-changelog.mjs',
+  'scripts/gen-codemap.mjs',
   'scripts/lib/runtime-closure.mjs',
   'scripts/gen-third-party-notices.mjs',
   'scripts/check-file-header.mjs',
