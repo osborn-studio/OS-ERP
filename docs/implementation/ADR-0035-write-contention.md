@@ -23,7 +23,7 @@
 |---|---|
 | ① 只认并发冲突 | 仅当错误是 better-sqlite3 的 `SqliteError` 且 `code` 匹配 `SQLITE_BUSY*` / `SQLITE_LOCKED*` 才重试。业务错误（`PurchaseError`、`ArError`、`FundsError`…）、约束冲突、`TypeError`、以及"code 字符串碰巧是 SQLITE_BUSY 但不是 SqliteError"的对象，**一次都不重试**，原样抛出。 |
 | ② 原子 | 每次尝试都是 `db.transaction(fn).immediate()`：`BEGIN IMMEDIATE` 先拿写锁，`fn` 的读写都在锁内；任何异常（含 COMMIT 阶段）由 better-sqlite3 `ROLLBACK` 整个事务后再抛（库源码语义：`catch` 里 `if (db.inTransaction) ROLLBACK`）。所以**重试之前上一次的所有写入已撤销**；COMMIT 成功就立即返回，**不存在"提交之后再重试"的路径**。`fn` 内部的 `db.transaction` 变成 SAVEPOINT 嵌套，随外层回滚。 |
-| ③ fn 只含 DB 操作 | 会被整体重跑，不得做外部副作用（发请求、写文件、通知、进程内状态）；这些放在 `withWriteRetry` 返回之后（路由里的 `audit(req, …)` 就在其后）。`fn` 必须同步，返回 Promise 会被拒绝并回滚。 |
+| ③ fn 只含 DB 操作 | 会被整体重跑，不得做外部副作用（发请求、写文件、通知、进程内状态）；这些放在 `withWriteRetry` 返回之后（路由里的 `audit(req, …)` 就在其后）。`fn` 必须同步：`async` 函数在执行前即被拒绝，返回 Promise 的普通函数在返回后被拒绝并回滚（已在事务内的分支同样检查，是否回滚由外层事务决定）。 |
 | ④ 已在事务内 | `db.inTransaction` 为真时不重试、不嵌套：直接跑一次，原子性与重试由外层负责。 |
 | ⑤ 用尽 | 默认总共 4 次（`GML_WRITE_RETRY_MAX`，1..10，1 = 关闭）；用尽后抛**最后一次的原始错误**，调用方看到的 HTTP 行为与包装前一致（500），只是多等了几轮。 |
 | ⑥ 退避 | `min(maxDelayMs=400, baseDelayMs=25 · 2^(attempt-1))` × [0.5, 1] 抖动；同步阻塞等待（`Atomics.wait`），与 `busy_timeout` 自身的阻塞一致。 |
@@ -52,7 +52,7 @@ MCP 工具、其它写路径、CLI 脚本**本次未接入**（见"边界"）。
 
 - 单服务进程不会自己 BUSY，所以脚本默认再起一个 **worker 线程**（`scripts/lib/bench-contender.mjs`）用独立连接周期性 `BEGIN IMMEDIATE`（默认占 30 ms、间隔 20 ms，约 60% 占锁率，**偏重**）模拟外部写者；`--contender-hold-ms 0` 关闭。它不写任何业务行。
 - 并发创建采购单 / 确认收款（带 `evidence_ref`，隔离副本里复核关闭、证据开启）/ 库存调拨(autoShip)。收款单为"预收"（`allocations: []`），避免 N 张互相争同一张应收。
-- 每个请求带唯一键（`remark` / `serial_no`）。**脚本不重发失败请求**，键只用于结束后（服务已停）只读核对：成功数 = 库里的行数、无重复行、每张调拨恰好一条 `TR_OUT`、源仓库存恰好少成功数、已确认收款数 = 成功数。核对失败退出码 1。
+- 每个请求带唯一键（`remark` / `serial_no`）。**脚本不重发失败请求**，键只用于结束后（服务已停）只读核对：成功数 = 库里的行数（失败的请求也不得留下行）、无重复行、每张调拨恰好一条 `TR_OUT`、源仓库存恰好少成功数、已确认收款数 = 成功数。核对失败退出码 1。
 - 报告分列：HTTP 状态分布（含 500）、服务日志里 BUSY 行数、`write_retry` 行数、`write_retry_exhausted` 行数、外部写者的循环数。BUSY 行数按日志文本计，是**下限且含重复**（一次用尽会同时产生 `write_retry_exhausted` 与 500 错误日志）。
 
 ## 验证

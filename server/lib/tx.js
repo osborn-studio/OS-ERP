@@ -14,7 +14,8 @@
  *      的所有写入一定已经撤销**；而一旦 COMMIT 成功就立刻 return，**不存在"提交之后再重试"的路径**。
  *      重试因此不会重复施加写入。fn 内部再开的 `db.transaction` 会变成 SAVEPOINT 嵌套，随外层一起回滚。
  *   ③ fn 必须只含数据库操作（可被反复执行）。**不得**在 fn 里做外部副作用（发请求、写文件、发通知、审计之外的
- *      进程内状态），这些放到 withWriteRetry 返回之后。fn 必须同步；返回 Promise 会被拒绝并回滚。
+ *      进程内状态），这些放到 withWriteRetry 返回之后。fn 必须同步：async 函数在执行前即被拒绝；返回 Promise 的普通函数
+ *      会在返回后被拒绝并回滚（已在事务内的分支同样检查，但此时由外层事务决定是否回滚）。
  *   ④ 已经处在事务里（`db.inTransaction`）时不重试、不嵌套：直接执行 fn 一次，由外层调用方负责原子性与重试。
  *   ⑤ 次数用尽抛出**最后一次的原始错误**，调用方看到的错误与没有包装时一致（只是多等了几轮）。
  *   ⑥ 退避：`min(maxDelayMs, baseDelayMs·2^(attempt-1))`，再乘以 [0.5, 1] 的抖动；等待是同步阻塞
@@ -82,13 +83,16 @@ export function withWriteRetry(db, fn, opts = {}) {
   const label = opts.label ?? 'write'
   stats.calls++
 
-  if (db.inTransaction) return fn(db) // ④
-
-  const atomic = db.transaction(() => {
-    const out = fn(db)
+  // fn 必须同步：声明为 async 的在执行前就拒绝（否则 await 之后的续体会在事务外自动提交）。
+  // 返回 Promise 的普通函数无法事先识别，执行后在下面补一道检查并回滚（此时 await 之前同步部分的写入随事务撤销）。
+  if (typeof fn !== 'function' || fn.constructor?.name === 'AsyncFunction') throw new TypeError('withWriteRetry: fn 必须是同步函数（不能是 async）')
+  const sync = (out) => {
     if (out && typeof out.then === 'function') throw new TypeError('withWriteRetry: fn 必须是同步函数（返回了 Promise）')
     return out
-  })
+  }
+  if (db.inTransaction) return sync(fn(db)) // ④
+
+  const atomic = db.transaction(() => sync(fn(db)))
   for (let attempt = 1; ; attempt++) {
     try {
       return atomic.immediate()

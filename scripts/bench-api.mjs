@@ -169,16 +169,23 @@ export async function runBench(argv = process.argv.slice(2), env = process.env) 
   const child = spawn(process.execPath, ['server/index.js'], { cwd: ROOT, env: childEnv, stdio: ['ignore', 'pipe', 'pipe'] })
   let ready = false; let busy = 0; let tail = ''
   const logCounts = { retry: 0, exhausted: 0 }
-  const scan = (d) => {
-    const s = d.toString(); tail = (tail + s).slice(-4000)
-    for (const line of s.split('\n')) {
-      if (BUSY_RE.test(line)) busy++
-      if (RETRY_RE.test(line)) logCounts.retry++
-      if (EXHAUSTED_RE.test(line)) logCounts.exhausted++
-    }
+  // 按流缓冲到完整行再计数：一行被拆在两个 data 块里时不能漏记或误分类
+  const partial = { out: '', err: '' }
+  const countLine = (line) => {
+    if (BUSY_RE.test(line)) busy++
+    if (RETRY_RE.test(line)) logCounts.retry++
+    if (EXHAUSTED_RE.test(line)) logCounts.exhausted++
   }
-  child.stdout.on('data', d => { if (d.toString().includes('服务已启动')) ready = true; scan(d) })
-  child.stderr.on('data', scan)
+  const scanStream = (name) => (d) => {
+    const s = d.toString(); tail = (tail + s).slice(-4000)
+    const parts = (partial[name] + s).split('\n')
+    partial[name] = parts.pop()
+    for (const line of parts) countLine(line)
+  }
+  const flushPartial = () => { for (const k of Object.keys(partial)) { if (partial[k]) countLine(partial[k]); partial[k] = '' } }
+  const scanOut = scanStream('out')
+  child.stdout.on('data', d => { if (d.toString().includes('服务已启动')) ready = true; scanOut(d) })
+  child.stderr.on('data', scanStream('err'))
   const closed = once(child, 'close')
   const stop = async () => { if (child.exitCode === null) child.kill('SIGTERM'); await closed }
   try {
@@ -202,7 +209,7 @@ export async function runBench(argv = process.argv.slice(2), env = process.env) 
     try { token = JSON.parse(login.text).data.token } catch { /* handled below */ }
     if (login.status !== 200 || !token) refuse(`登录失败（HTTP ${login.status}）；种子库账号需与 GML_BENCH_USER/PASSWORD 一致`, 1)
     if (writePlan) {
-      const out = await runWriteProfile({ opts, call, token, writePlan, logCounts, getBusy: () => busy, stop, mode, creds, outFile })
+      const out = await runWriteProfile({ opts, call, token, writePlan, logCounts, getBusy: () => busy, stop: async () => { await stop(); flushPartial() }, mode, creds, outFile })
       return out
     }
     const list = await call('GET', '/api/purchase/orders', token)
@@ -397,7 +404,7 @@ async function verifyWrites({ W, okKeys, n }) {
         attempted: n, succeeded: okSet.size, rows: keys.length,
         duplicate_rows: [...counts.values()].filter(c => c > 1).length,
         succeeded_without_row: [...okSet].filter(k => !counts.has(k)).length,
-        // 库里有行但客户端没拿到成功：写入已提交而响应是错误/网络失败（"不确定结果"，不是重复）
+        // 库里有行但客户端没拿到成功：写入已提交而响应是错误/网络失败——违反"失败不留行"，计入完整性失败
         rows_without_success: [...counts.keys()].filter(k => !okSet.has(k)).length
       }
     }
@@ -412,8 +419,9 @@ async function verifyWrites({ W, okKeys, n }) {
     tr.stock_delta_matches_rows = tr.stock_delta === trIds.length
     const rcConfirmed = db.prepare(`SELECT COUNT(*) c FROM receipts WHERE serial_no LIKE ? AND status='confirmed'`).get(`${W.runId}-rc-%`).c
     const rc = { attempted: n, succeeded: new Set(okKeys.receipt_confirm).size, confirmed_rows: rcConfirmed, confirmed_matches_succeeded: rcConfirmed === new Set(okKeys.receipt_confirm).size }
-    const ok = po.duplicate_rows === 0 && po.succeeded_without_row === 0 &&
-      tr.duplicate_rows === 0 && tr.succeeded_without_row === 0 && tr.tr_out_per_transfer_exactly_one && tr.stock_delta_matches_rows &&
+    // rows_without_success 也必须为 0：失败的请求（500/超时）不得留下已提交的行，否则"成功数 = 行数"不成立
+    const ok = po.duplicate_rows === 0 && po.succeeded_without_row === 0 && po.rows_without_success === 0 &&
+      tr.duplicate_rows === 0 && tr.succeeded_without_row === 0 && tr.rows_without_success === 0 && tr.tr_out_per_transfer_exactly_one && tr.stock_delta_matches_rows &&
       rc.confirmed_matches_succeeded
     return { ok, run_id: W.runId, purchase_order_create: po, receipt_confirm: rc, stock_transfer: tr }
   } finally { db.close() }

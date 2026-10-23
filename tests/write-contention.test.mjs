@@ -204,9 +204,13 @@ test('already inside a transaction: runs once, never retries (caller owns atomic
   assert.equal(calls, 1)
 })
 
-test('async fn is rejected instead of being half-committed', (t) => {
+test('async fn is rejected before it runs; promise-returning fn is rolled back', (t) => {
   const { a } = openPair(t)
-  assert.throws(() => withWriteRetry(a, async () => { a.prepare("INSERT INTO w (k) VALUES ('a')").run() }), /Promise|promise|async/)
+  let ran = false
+  assert.throws(() => withWriteRetry(a, async () => { ran = true; a.prepare("INSERT INTO w (k) VALUES ('a')").run() }), /async|同步/)
+  assert.equal(ran, false, 'async fn must not start')
+  assert.throws(() => withWriteRetry(a, () => { a.prepare("INSERT INTO w (k) VALUES ('b')").run(); return Promise.resolve() }), /Promise/)
+  assert.throws(() => withWriteRetry(a, 'not a function'), /同步|function/)
   assert.equal(a.prepare('SELECT COUNT(*) c FROM w').get().c, 0)
   assert.equal(a.inTransaction, false)
 })
