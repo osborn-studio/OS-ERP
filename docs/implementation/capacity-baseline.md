@@ -54,3 +54,36 @@ node scripts/bench-api.mjs --concurrency 4 --iterations 30 --out "$GML_DATA_DIR/
 ## 仍需目标主机
 
 在 `dmserver` 上用生产规模数据副本、相同脚本复跑并留存 JSON，才能作为试点容量证据；届时同时记录 CPU/磁盘型号与是否经反向代理。
+
+## X10 索引审计：迁移 059 前后（**夹具规模，不是容量证据**）
+
+`scripts/explain-audit.mjs` 对 61 条声明语句（镜像 W11 的 10 条接口及采购/库存/应收/销售/报表主查询，表在脚本的 `STATEMENTS` 里，每条标明镜像的 lib/路由）跑 `EXPLAIN QUERY PLAN`。判据：裸 `SCAN <表>` 且该表行数 ≥ 200，或该表属于随业务增长的单据/流水表（`GROWTH_TABLES`，不看夹具行数），或 SQLite 运行时自建"自动索引"，都算违规；豁免只能按"语句 × 表"写，且必须有理由，过期豁免同样报红。
+
+| | 迁移 057（改前） | 迁移 059（改后） |
+|---|---|---|
+| 违规 | 29 处裸 SCAN / 自动索引 | 0 |
+| 豁免（带理由） | 15 | 15 |
+| 小字典表扫描 | 4 | 4 |
+
+改后仍保留的 15 处豁免：9 处是"按主键倒序取最新一页"（`ORDER BY id DESC LIMIT n`，计划里无排序临时表，脚本校验该前提）；5 处是整表聚合（否定式谓词或无谓词，索引无法缩小读取范围）；1 处是 `GET /inventory/stocks` 的 `qty_on_hand <> 0` 列表（几乎不过滤且跨表排序，需要分页游标/物化方案，**索引解决不了，记为残余项**）。
+
+### 前后 p95（`bench-api.mjs`，同一份种子库拷贝，交错 A/B 各 5 次取中位数）
+
+条件：Mac mini，`--iterations 100 --concurrency 4`，每次运行用同一份种子库的**新拷贝**（"前"=临时移走 059 的代码，"后"=含 059）。**测量时整机负载平均值约 80（其他任务并行），所以 HTTP 级 p95 噪声远大于索引的收益**：毫秒级端点的涨跌（如 `meta_health` 不碰任何新索引仍浮动 +11%）都在噪声里，**这张表不能证明"p95 不变差"，也不能证明变好**。
+
+| 接口 | p95 前 (ms) | p95 后 (ms) | 变化 |
+|---|---|---|---|
+| POST /api/auth/login | 2008.1 | 2059.6 | +3%（bcrypt 排队，与索引无关） |
+| GET /api/dashboard/summary | 98.4 | 82.9 | -16% |
+| GET /api/purchase/orders | 97.1 | 113.1 | +16% |
+| GET /api/purchase/orders/:id | 74.2 | 72.0 | -3% |
+| GET /api/inventory/stocks | 87.5 | 87.6 | 0% |
+| GET /api/ar/receipts | 35.9 | 66.5 | +85%（噪声：该接口计划未变，`SELECT * FROM receipts ORDER BY id DESC`） |
+| GET /api/reports/operating | 70.6 | 81.2 | +15% |
+| GET /api/meta/health | 27.1 | 30.0 | +11%（不碰数据库索引，纯噪声基准） |
+| GET /api/order-center/overview | 70.5 | 101.7 | +44%（噪声：本接口语句计划未变） |
+| GET /api/notify/meta | 44.1 | 28.1 | -36% |
+
+0 错误，`SQLITE_BUSY` 0。因为 HTTP 数字不可用，补一份**进程内逐语句计时**（同一进程里交替执行"前库/后库"各 300 次，排除网络与调度，但机器仍有负载，只看量级）：语句 p50 变化——`stock.txn_by_doc` 34→1 µs，`sales.items` 20→2 µs，`sales.list_page` 715→188 µs（p95 22.1→2.1 ms，子查询 `COUNT(*) FROM sales_order_items WHERE order_id=…` 不再逐行全表扫），`dash.sales_today` 52→3 µs，`stock.expiring` 30→8 µs，`rpt.sales_value` 18→6 µs，`rpt.purchase_value` 7→2 µs，`rpt.sales_cost` 76→43 µs，`po.refresh_invoice_amount` 4→1 µs；61 条里没有 p50 退化超过 15% 且绝对值超过 10 µs 的语句（唯一超 15% 的 `dash.sales_unpaid` 计划未变，是噪声）。
+
+**局限**：夹具库最大表约 1500 行，绝对数字小到不代表生产；要作为证据，需要在 `dmserver` 上用生产规模副本复跑 `explain-audit.mjs` 与 `bench-api.mjs`。新增索引的写放大（每个索引每次 INSERT/UPDATE 多维护一棵 B 树）未做写路径压测；`inventory_transactions` 新增 2 个（`doc_type, doc_id` 与 `doc_type, substr(biz_date,1,7)`），是写最频繁的表。
