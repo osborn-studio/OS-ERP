@@ -60,5 +60,49 @@ for (const [file, expected] of Object.entries(manifest.files)) {
     if (createHash('sha256').update(fs.readFileSync(target)).digest('hex') !== expected) throw new Error('hash mismatch')
   } catch (error) { fail(`${file}: ${error.message}`) }
 }
+// 证据包（Z5）：仅在给出 --evidence=<EVIDENCE.json> 时校验。证据必须与本包的 MANIFEST 一致，且不得自称未产生的结果。
+const evidenceArg = process.argv.find(a => a.startsWith('--evidence='))?.slice(11)
+if (evidenceArg) {
+  const bad = (field, why) => fail(`EVIDENCE.${field}: ${why}`)
+  try {
+    const ev = JSON.parse(fs.readFileSync(path.resolve(evidenceArg), 'utf8'))
+    const RESULT = new Set(['passed', 'failed', 'not run'])
+    const ORIGIN = new Set(['produced', 'operator-attested'])
+    for (const k of ['version', 'commit', 'built_at', 'node', 'artifact', 'focused_tests', 'guards', 'regression', 'ci_run_id', 'synthetic_drill', 'verify_release', 'acceptance', 'secret_scan']) {
+      if (!(k in ev)) bad(k, 'missing')
+    }
+    if (ev.not_a_release !== true) bad('not_a_release', 'must be true; a candidate is not a published release')
+    if (ev.version !== manifest.version) bad('version', `${ev.version} != MANIFEST.version ${manifest.version}`)
+    if (ev.commit !== manifest.baseCommit) bad('commit', `${ev.commit} != MANIFEST.baseCommit ${manifest.baseCommit}`)
+    if (typeof ev.built_at !== 'string' || Number.isNaN(Date.parse(ev.built_at))) bad('built_at', 'not an ISO timestamp')
+    if (typeof ev.node !== 'string' || !/^v\d+\./.test(ev.node)) bad('node', 'not a node version')
+    if (ev.ci_run_id !== null && !/^\d{1,20}$/.test(String(ev.ci_run_id))) bad('ci_run_id', 'must be null or a numeric run id')
+    const result = (field, v, { needSource }) => {
+      if (!v || typeof v !== 'object' || !RESULT.has(v.result)) return bad(field, 'result must be passed, failed or not run')
+      if (v.result === 'failed') return bad(field, 'a candidate cannot carry a failed result')
+      if (v.result === 'passed') {
+        if (!ORIGIN.has(v.origin)) bad(field, 'a passed result must say origin: produced or operator-attested')
+        if (needSource && !String(v.source ?? '').trim()) bad(field, 'a passed result must name its source')
+      }
+    }
+    result('focused_tests', ev.focused_tests, { needSource: true })
+    result('regression', ev.regression, { needSource: true })
+    if (!ev.guards || typeof ev.guards !== 'object' || !Object.keys(ev.guards).length) bad('guards', 'missing guard entries')
+    else for (const [name, g] of Object.entries(ev.guards)) result(`guards.${name}`, g, { needSource: false })
+    for (const f of ['verify_release', 'secret_scan']) { result(f, ev[f], { needSource: false }); if (ev[f]?.result !== 'passed') bad(f, 'must be passed') }
+    result('acceptance', ev.acceptance, { needSource: false })
+    if (ev.acceptance?.result !== 'passed' || ev.acceptance?.mode !== 'production') bad('acceptance', 'must be a passed production-mode run')
+    if (!ev.artifact || !/^[0-9a-f]{64}$/.test(String(ev.artifact.sha256 ?? '')) || !/^RC-.+\.zip$/.test(String(ev.artifact.name ?? ''))) bad('artifact', 'needs an RC-*.zip name and sha256')
+    const files = ev.synthetic_drill?.files
+    if (!Array.isArray(files) || !files.length) bad('synthetic_drill', 'must reference capacity evidence files')
+    else for (const f of files) {
+      const target = path.resolve(root, String(f?.path ?? ''))
+      try {
+        if (!target.startsWith(root + path.sep)) throw new Error('path escapes the package')
+        if (createHash('sha256').update(fs.readFileSync(target)).digest('hex') !== f.sha256) throw new Error('hash mismatch')
+      } catch (error) { bad('synthetic_drill', `${f?.path}: ${error.message}`) }
+    }
+  } catch (error) { fail(`EVIDENCE: cannot read ${evidenceArg} (${error.message})`) }
+}
 console.log(`[verify] ${Object.keys(manifest.files).length} files; ${failed} errors`)
 process.exitCode = failed ? 1 : 0
