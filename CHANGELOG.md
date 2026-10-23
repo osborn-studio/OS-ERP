@@ -10,9 +10,10 @@
 
 ## 第十批（进行中）：见 roadmap-v6
 
+- [ADR-0041：MCP `order.trace_document` 与 `doc.query` 按单据解析器表判归属](docs/implementation/ADR-0041-mcp-trace-query-scope.md) — 判据唯一化：两个工具的归属都走 `docflow.docScopeOf / docInScope`（即 `/api/docflow/history`、`doc.get` 用的同一份解析器表）。入参由新的 `docScopeCtx(db, ctx)` 组装：`orgScope = ctx.scope`（令牌范围 ∩ 所有者当前范围，ADR-0011 `effectiveScope`），`user` = 令牌所有者行（`store` 型解析器需要 `store_id`；无主令牌为…
 - [ADR-0045 Prometheus 指标导出与抓取令牌（AA10）](docs/implementation/ADR-0045-metrics-export.md) — `GET /api/meta/metrics?format=prometheus` 返回 `text/plain; version=0.0.4; charset=utf-8`（`Cache-Control: no-store`），每个指标族一行 `# HELP`、一行 `# TYPE`，名字统一前缀 `os_erp_`。无 `format` 或 `format=json` 与 ADR-0029 完全一致；其它 `format` 值 ⇒ 400（不静默回落）。
 
-## 第九批（进行中）：见 roadmap-v5
+## 第九批：见 roadmap-v5
 
 - [ADR-0038：库存域与采购订单状态/收货路由按组织范围收口](docs/implementation/ADR-0038-inventory-scope.md) — 一处判据：`server/lib/stock.js` 的 `stockScopeSql(orgScope, alias, column='warehouse_id')`，键为 `warehouses.org_id`。不传或 `all` ⇒ `1=1`；`dealer` / `none` / 空集合 ⇒ `1=0`；仓库 `org_id` 为 NULL 对受限范围不可见。同文件还有 `warehouseInScope` / `assertWarehouseInScope`（写目…
 - [ADR-0039：OMS 读接口与 MCP 单据历史工具按组织范围收口](docs/implementation/ADR-0039-oms-mcp-history-scope.md) — 判据：沿用 ADR-0034 的「平台绑定组织 = 平台履约仓 `platforms.warehouse_id` 所属组织 `warehouses.org_id`」。判据仍只在 `server/lib/sales-order.js` 一处： - `omsPlatformScopeSql(orgScope, alias)`：作用在 `platforms` 行； - `omsOrderScopeSql(orgScope, alias)`：作用在 `oms_orders` 行（经 …

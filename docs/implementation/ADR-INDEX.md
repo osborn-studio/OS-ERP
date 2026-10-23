@@ -3,7 +3,7 @@
 <!-- generated -->
 <!-- 由 `node scripts/gen-codemap.mjs` 生成，勿手改；CI 校验不漂移 -->
 
-共 41 个 ADR 文件。批次来自 `scripts/gen-changelog.mjs` 的 BATCHES（编号区间）；状态是 ADR 原文“状态：”一句的摘录（没有就如实标注），**不代表验收**；“守卫 / 测试”是 ADR 正文里提到的文件路径（静态正则提取，路径不存在时标注“（不存在）”），不证明该测试覆盖了 ADR 的全部决定。
+共 42 个 ADR 文件。批次来自 `scripts/gen-changelog.mjs` 的 BATCHES（编号区间）；状态是 ADR 原文“状态：”一句的摘录（没有就如实标注），**不代表验收**；“守卫 / 测试”是 ADR 正文里提到的文件路径（静态正则提取，路径不存在时标注“（不存在）”），不证明该测试覆盖了 ADR 的全部决定。
 
 | 编号 | 标题 | 批次 | 状态（原文摘录） | 守卫（scripts/） | 测试（tests/） |
 |---|---|---|---|---|---|
@@ -44,7 +44,8 @@
 | 0035 | [ADR-0035：写路径并发与 SQLITE_BUSY 治理](ADR-0035-write-contention.md) | 第八批（进行中） | （ADR 未写出状态） | `lib/bench-contender.mjs` | — |
 | 0036 | [ADR-0036 安全响应头与后台会话传输（Y11）](ADR-0036-security-headers-and-session-transport.md) | 第八批（进行中） | 已采纳 | — | — |
 | 0037 | [ADR-0037：审批域按指向单据的组织范围收口](ADR-0037-approval-scope.md) | 第八批（进行中） | 开发实现，尚非产品上线验收 | `test-setting-audit.mjs` | — |
-| 0038 | [ADR-0038：库存域与采购订单状态/收货路由按组织范围收口](ADR-0038-inventory-scope.md) | 第九批（进行中） | 开发实现，尚非产品上线验收 | `check-route-authz.mjs` | — |
-| 0039 | [ADR-0039：OMS 读接口与 MCP 单据历史工具按组织范围收口](ADR-0039-oms-mcp-history-scope.md) | 第九批（进行中） | 开发实现，尚非产品上线验收 | `check-route-authz.mjs` | — |
-| 0040 | [ADR-0040 受信代理配置（Z4）](ADR-0040-trust-proxy.md) | 第九批（进行中） | 已采纳 | — | — |
+| 0038 | [ADR-0038：库存域与采购订单状态/收货路由按组织范围收口](ADR-0038-inventory-scope.md) | 第九批 | 开发实现，尚非产品上线验收 | `check-route-authz.mjs` | — |
+| 0039 | [ADR-0039：OMS 读接口与 MCP 单据历史工具按组织范围收口](ADR-0039-oms-mcp-history-scope.md) | 第九批 | 开发实现，尚非产品上线验收 | `check-route-authz.mjs` | — |
+| 0040 | [ADR-0040 受信代理配置（Z4）](ADR-0040-trust-proxy.md) | 第九批 | 已采纳 | — | — |
+| 0041 | [ADR-0041：MCP `order.trace_document` 与 `doc.query` 按单据解析器表判归属](ADR-0041-mcp-trace-query-scope.md) | 第十批（进行中） | 开发实现，尚非产品上线验收 | `check-mcp-coverage.mjs` | — |
 | 0045 | [ADR-0045 Prometheus 指标导出与抓取令牌（AA10）](ADR-0045-metrics-export.md) | 第十批（进行中） | 开发实现，尚非产品上线验收 | — | — |
