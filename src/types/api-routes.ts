@@ -11,14 +11,14 @@
 // 【注意】本文件由脚本写出：**文件标识块也必须由脚本输出**，否则下次 gen:api 会把它冲掉 ——
 //   "登记了不等于守住了"。改格式请改 scripts/gen-api-types.mjs。
 // ============================================================================
-// 路径 516 条 ｜ 标签 34 个
+// 路径 518 条 ｜ 标签 34 个
 //
 // 用法：
 //   import { typedGet, typedPost } from '../api/typed'
 //   typedGet('/api/purchase/chain/overview')   // 路径写错编译期就报
 
 export const OPENAPI_VERSION = '1.33.0'
-export const API_ROUTE_COUNT = 516
+export const API_ROUTE_COUNT = 518
 
 /** 全部已登记的接口路径 */
 export type ApiRoute =
@@ -73,6 +73,7 @@ export type ApiRoute =
   | '/api/ar/receipts'
   | '/api/ar/receipts/{id}'
   | '/api/ar/receipts/{id}/confirm'
+  | '/api/ar/receipts/{id}/review'
   | '/api/ar/receipts/{id}/void'
   | '/api/ar/statement'
   | '/api/auth/change-password'
@@ -418,6 +419,7 @@ export type ApiRoute =
   | '/api/purchase/payment-plan'
   | '/api/purchase/payments'
   | '/api/purchase/payments/{id}'
+  | '/api/purchase/payments/{id}/review'
   | '/api/purchase/payments/{id}/{action}'
   | '/api/purchase/price'
   | '/api/purchase/price-preview'
@@ -592,6 +594,7 @@ export type ApiRouteMap = {
   '/api/ar/receipts': { get: true; post: true }
   '/api/ar/receipts/{id}': { get: true }
   '/api/ar/receipts/{id}/confirm': { post: true }
+  '/api/ar/receipts/{id}/review': { post: true }
   '/api/ar/receipts/{id}/void': { post: true }
   '/api/ar/statement': { get: true }
   '/api/auth/change-password': { post: true }
@@ -937,6 +940,7 @@ export type ApiRouteMap = {
   '/api/purchase/payment-plan': { get: true }
   '/api/purchase/payments': { get: true; post: true }
   '/api/purchase/payments/{id}': { get: true }
+  '/api/purchase/payments/{id}/review': { post: true }
   '/api/purchase/payments/{id}/{action}': { post: true }
   '/api/purchase/price': { get: true }
   '/api/purchase/price-preview': { post: true }
@@ -1120,6 +1124,7 @@ export const API_ROUTES: readonly ApiRoute[] = [
   '/api/ar/receipts',
   '/api/ar/receipts/{id}',
   '/api/ar/receipts/{id}/confirm',
+  '/api/ar/receipts/{id}/review',
   '/api/ar/receipts/{id}/void',
   '/api/ar/statement',
   '/api/auth/change-password',
@@ -1465,6 +1470,7 @@ export const API_ROUTES: readonly ApiRoute[] = [
   '/api/purchase/payment-plan',
   '/api/purchase/payments',
   '/api/purchase/payments/{id}',
+  '/api/purchase/payments/{id}/review',
   '/api/purchase/payments/{id}/{action}',
   '/api/purchase/price',
   '/api/purchase/price-preview',
@@ -1640,6 +1646,7 @@ export const ROUTE_METHODS: Record<ApiRoute, string[]> = {
   '/api/ar/receipts': ['get', 'post'],
   '/api/ar/receipts/{id}': ['get'],
   '/api/ar/receipts/{id}/confirm': ['post'],
+  '/api/ar/receipts/{id}/review': ['post'],
   '/api/ar/receipts/{id}/void': ['post'],
   '/api/ar/statement': ['get'],
   '/api/auth/change-password': ['post'],
@@ -1985,6 +1992,7 @@ export const ROUTE_METHODS: Record<ApiRoute, string[]> = {
   '/api/purchase/payment-plan': ['get'],
   '/api/purchase/payments': ['get', 'post'],
   '/api/purchase/payments/{id}': ['get'],
+  '/api/purchase/payments/{id}/review': ['post'],
   '/api/purchase/payments/{id}/{action}': ['post'],
   '/api/purchase/price': ['get'],
   '/api/purchase/price-preview': ['post'],

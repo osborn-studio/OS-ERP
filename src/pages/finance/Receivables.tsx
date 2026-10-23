@@ -28,10 +28,11 @@ import { useOpts } from '../../hooks/opts'
 import {
   AR_OVERVIEW, AR_AGING, AR_AUDIT, AR_STATEMENT,
   AR_LIST, AR_GET, AR_CREATE, AR_GENERATE,
-  RC_LIST, RC_GET, RC_CREATE, RC_CONFIRM, RC_VOID, AR_RECALC,
+  RC_LIST, RC_GET, RC_CREATE, RC_CONFIRM, RC_REVIEW, RC_VOID, AR_RECALC,
   AR_AGING_DETAIL, AR_PREPAY, AR_PREPAY_DETAIL, AR_PREPAY_APPLY,
   AR_OC_PENDING, AR_OC_SYNC,
   AR_STATUS_CLS, AR_STATUS_LABEL, RC_STATUS_CLS, RC_STATUS_LABEL, overdueCls,
+  FUNDS_REVIEW_LABEL, FUNDS_REVIEW_CLS, FUNDS_REVIEW_PERM,
   type ArDocument, type Receipt, type Statement, type AgingSubjectRow, type AgingDetail
 } from '../../api/ar'
 import { Wallet, Banknote, AlertTriangle, FileText, Plus, RefreshCw, CheckCircle2, Ban, Coins, Inbox, ShieldCheck } from 'lucide-react'
@@ -620,11 +621,19 @@ function ReceiptsTab({ tick, reload }: { tick: number; reload: () => void }) {
   const [busy, setBusy] = useState(false)
   /** 最近一次确认 / 作废带回的授信效果（ADR-0013），钉在详情弹窗顶部直到关闭或换单 */
   const [effect, setEffect] = useState<{ docNo: string; view: CreditEffectView } | null>(null)
+  // ADR-0018：确认必须带凭证号；达到阈值只挂待复核，由持 finance.funds.review 的另一人批准 / 驳回
+  const [evidence, setEvidence] = useState({ evidence_ref: '', evidence_note: '' })
+  const { data: me } = useFetch<any>('/auth/me', undefined, [])
+  const canReview = !!me?.permissions?.includes(FUNDS_REVIEW_PERM)
+  const isPending = detail?.review_status === 'pending_review'
+  const isMaker = !!detail?.review?.maker?.id && detail?.review?.maker?.id === me?.id
 
   const openDetail = async (id: number) => {
     try {
       setEffect(null)
-      setDetail(await RC_GET(id))
+      const rc = await RC_GET(id)
+      setDetail(rc)
+      setEvidence({ evidence_ref: rc.evidence_ref || '', evidence_note: rc.evidence_note || '' })
     } catch (e: any) {
       toast(e.message || '打开失败', 'error')
     }
@@ -633,14 +642,17 @@ function ReceiptsTab({ tick, reload }: { tick: number; reload: () => void }) {
     setDetail(null)
     setEffect(null)
   }
-  const act = async (fn: () => Promise<Receipt>, msg: string, kind: CreditEffectKind) => {
+  /** kind 给出时把响应里的授信效果（ADR-0013）钉到详情顶部；待复核的提交没有资金效果，不显示面板 */
+  const act = async (fn: () => Promise<any>, msg: string | ((r: any) => string), kind?: CreditEffectKind) => {
     setBusy(true)
     try {
       const r = await fn()
-      const raw: CreditEffect | undefined = kind === 'released' ? r?.credit_released : r?.credit_reversal
-      toast(`${msg}；${creditEffectSummary(raw, kind)}`, 'success')
+      const pending = r?.review?.status === 'pending_review'
+      const raw: CreditEffect | undefined = kind && !pending ? (kind === 'released' ? r?.credit_released : r?.credit_reversal) : undefined
+      const text = typeof msg === 'function' ? msg(r) : msg
+      toast(kind && !pending ? `${text}；${creditEffectSummary(raw, kind)}` : text, 'success')
       if (detail && r?.id === detail.id) {
-        setEffect({ docNo: r.doc_no || detail.doc_no, view: formatCreditEffect(raw, kind) })
+        if (kind && !pending) setEffect({ docNo: r.doc_no || detail.doc_no, view: formatCreditEffect(raw, kind) })
         setDetail(await RC_GET(detail.id))
       }
       reload()
@@ -704,7 +716,11 @@ function ReceiptsTab({ tick, reload }: { tick: number; reload: () => void }) {
               title: '状态',
               width: 110,
               align: 'center',
-              render: (r) => <span className={`px-1.5 py-0.5 rounded border text-[11px] ${RC_STATUS_CLS[r.status] || ''}`}>{RC_STATUS_LABEL[r.status] || r.status}</span>
+              render: (r) => (
+                <span className={`px-1.5 py-0.5 rounded border text-[11px] ${r.review_status === 'pending_review' ? FUNDS_REVIEW_CLS.pending_review : RC_STATUS_CLS[r.status] || ''}`}>
+                  {r.review_status === 'pending_review' ? FUNDS_REVIEW_LABEL.pending_review : RC_STATUS_LABEL[r.status] || r.status}
+                </span>
+              )
             }
           ]}
         />
@@ -722,14 +738,46 @@ function ReceiptsTab({ tick, reload }: { tick: number; reload: () => void }) {
           detail && (
             <>
               <button className="btn-ghost" onClick={closeDetail}>关闭</button>
-              {detail.status === 'draft' && (
+              {detail.status === 'draft' && !isPending && (
                 <button
                   className="btn-primary"
                   disabled={busy}
-                  onClick={() => act(() => RC_CONFIRM(detail.id), '已确认收款：核销生效', 'released')}
+                  onClick={() => act(
+                    () => RC_CONFIRM(detail.id, { evidence_ref: evidence.evidence_ref.trim(), evidence_note: evidence.evidence_note.trim() }),
+                    (r) => (r?.review?.status === 'pending_review' ? '已提交复核：等待另一人批准后才核销、释放授信' : '已确认收款：核销生效、授信占用释放'),
+                    'released'
+                  )}
                 >
                   <CheckCircle2 size={14} /> 确认收款
                 </button>
+              )}
+              {isPending && canReview && !isMaker && (
+                <>
+                  <button
+                    className="btn-danger"
+                    disabled={busy}
+                    onClick={() => {
+                      const comment = window.prompt('驳回原因（必填，将写入严格审计）：')
+                      if (!comment) return
+                      act(() => RC_REVIEW(detail.id, 'reject', comment), '已驳回：收款单退回草稿，资金与授信未动')
+                    }}
+                  >
+                    <Ban size={14} /> 驳回
+                  </button>
+                  <button
+                    className="btn-primary"
+                    disabled={busy}
+                    onClick={() => {
+                      const comment = window.prompt('复核意见（可空）：') ?? ''
+                      act(() => RC_REVIEW(detail.id, 'approve', comment), '复核通过：核销生效、授信占用释放', 'released')
+                    }}
+                  >
+                    <CheckCircle2 size={14} /> 复核通过
+                  </button>
+                </>
+              )}
+              {isPending && (!canReview || isMaker) && (
+                <span className="text-[12px] text-amber-700">{isMaker ? '你是发起人，需由另一人复核' : '等待持复核权限的同事批准'}</span>
               )}
               {detail.status === 'confirmed' && (
                 <button
@@ -753,7 +801,11 @@ function ReceiptsTab({ tick, reload }: { tick: number; reload: () => void }) {
             {effect && effect.docNo === detail.doc_no && (
               <CreditEffectPanel view={effect.view} docNo={effect.docNo} onClose={() => setEffect(null)} />
             )}
-            <ReceiptDetail rc={detail} />
+            <ReceiptDetail
+              rc={detail}
+              evidence={detail.status === 'draft' && !isPending ? evidence : null}
+              onEvidence={setEvidence}
+            />
           </div>
         )}
       </Modal>
@@ -763,9 +815,35 @@ function ReceiptsTab({ tick, reload }: { tick: number; reload: () => void }) {
   )
 }
 
-function ReceiptDetail({ rc }: { rc: Receipt }) {
+function ReceiptDetail({
+  rc, evidence = null, onEvidence
+}: {
+  rc: Receipt
+  /** 非空 = 允许在本页填写证据（草稿且未在复核中） */
+  evidence?: { evidence_ref: string; evidence_note: string } | null
+  onEvidence?: (v: { evidence_ref: string; evidence_note: string }) => void
+}) {
+  const review = rc.review
   return (
     <div className="space-y-3 text-[13px]">
+      {evidence && onEvidence && (
+        <div className="grid grid-cols-2 gap-3 rounded border border-amber-200 bg-amber-50/40 p-3">
+          <Field label="银行流水号 / 凭证号" required hint="确认收款的证据；缺失时服务端拒绝确认">
+            <input className="input" value={evidence.evidence_ref} onChange={(e) => onEvidence({ ...evidence, evidence_ref: e.target.value })} placeholder="如 2026102300123456" />
+          </Field>
+          <Field label="证据说明" hint="可选：对账单行号、票据备注等">
+            <input className="input" value={evidence.evidence_note} onChange={(e) => onEvidence({ ...evidence, evidence_note: e.target.value })} />
+          </Field>
+        </div>
+      )}
+      {review?.status && (
+        <div className={`rounded border px-3 py-2 ${FUNDS_REVIEW_CLS[review.status] || ''}`}>
+          <b>{FUNDS_REVIEW_LABEL[review.status] || review.status}</b>
+          <span className="ml-2">发起：{review.maker?.name || '-'}{review.maker?.at ? `（${review.maker.at}）` : ''}</span>
+          {review.checker && <span className="ml-2">复核：{review.checker.name || '-'}{review.decided_at ? `（${review.decided_at}）` : ''}</span>}
+          {review.comment && <span className="ml-2">意见：{review.comment}</span>}
+        </div>
+      )}
       <div className="grid grid-cols-3 gap-3">
         <Field label="往来对象"><div className="input-disabled">{rc.subject_name || '-'}</div></Field>
         <Field label="收款日期"><div className="input-disabled">{rc.receipt_date}</div></Field>
@@ -780,9 +858,10 @@ function ReceiptDetail({ rc }: { rc: Receipt }) {
         <Field label="状态">
           <div className="input-disabled">
             {RC_STATUS_LABEL[rc.status] || rc.status}
-            {rc.status === 'draft' && <span className="ml-1 text-amber-600">（未生效）</span>}
+            {rc.status === 'draft' && <span className="ml-1 text-amber-600">{rc.review_status === 'pending_review' ? '（待复核，未生效）' : '（未生效）'}</span>}
           </div>
         </Field>
+        {!evidence && <Field label="凭证号"><div className="input-disabled">{rc.evidence_ref || '-'}</div></Field>}
       </div>
       <SectionTitle title="核销明细" desc="这张收款单抵了哪几笔应收" />
       <Table

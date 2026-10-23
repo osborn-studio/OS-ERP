@@ -39,6 +39,8 @@ import {
   purchaseOverview, purchaseTodos, purchaseActions, PO_READ_PERMS, purchaseScopeSql
 } from '../lib/purchase.js'
 import { explainLifecycle, assertEdgePermitted, getDocType } from '../lib/docflow.js'
+// 付款执行的证据闸 + 二人复核（ADR-0018）。`pay` 是采购域唯一真正动钱的动作，与收款确认走同一份判据。
+import { FundsError, confirmFunds, reviewFunds, assertNotPending, reviewOf, FUNDS_REVIEW_PERM } from '../lib/funds-review.js'
 
 const r = Router()
 
@@ -56,7 +58,7 @@ function guard(fn) {
     try {
       return fn(req, res, next)
     } catch (e) {
-      if (e instanceof PurchaseError || e instanceof DocFlowError) {
+      if (e instanceof PurchaseError || e instanceof DocFlowError || e instanceof FundsError) {
         // `failFromError` 返回 false = "这不是一个能翻译的业务错误"（它只认 `code && status`）。
         // 这里必须显式 `throw e` 交给全局中间件：**漏了这一步就一个响应都不发、请求挂住** ——
         // 挂住的报障表现是"接口转圈"，跟真实原因（这个错缺 code）完全对不上号。
@@ -71,7 +73,7 @@ function guard(fn) {
 
 const actorOf = (req) => {
   const u = currentUser(req)
-  return { id: u.id || u.uid || null, name: u.name || u.username || null }
+  return { id: u.id || u.uid || null, name: u.name || u.username || null, ip: req.ip || null }
 }
 
 /**
@@ -699,6 +701,7 @@ r.get(
     const row = getPayment(db, Number(req.params.id))
     if (!row) return fail(res, '付款单不存在', 404)
     row.actions = purchaseActions(db, 'PAY', row.id)
+    row.review = reviewOf(row)
     return ok(res, row)
   })
 )
@@ -756,6 +759,27 @@ r.post(
   })
 )
 
+// 复核（第二人，ADR-0018）：必须排在 `/:action` 之前，`review` 不是内核动作。
+// approve = 在同一事务里执行 `pay`（核销 + 已付）+ 严格审计；reject = 退回已审批并记原因。
+r.post(
+  '/payments/:id/review',
+  requireAuth,
+  requirePerm(FUNDS_REVIEW_PERM),
+  guard((req, res) => {
+    const db = getDb()
+    const id = Number(req.params.id)
+    const actor = actorOf(req)
+    const b = req.body || {}
+    const out = reviewFunds(db, {
+      kind: 'payment', id, actor, decision: b.decision, comment: b.comment ?? null,
+      apply: () => transitionPayment(db, { id, action: 'pay', actor, remark: b.remark || null })
+    })
+    if (out.applied) audit(req, { action: 'pay', module: 'purchase', entity: 'purchase_payments', entityId: id })
+    const row = getPayment(db, id)
+    return ok(res, { ...row, review: out.review })
+  })
+)
+
 r.post(
   '/payments/:id/:action',
   requireAuth,
@@ -764,10 +788,19 @@ r.post(
     const id = Number(req.params.id)
     const action = String(req.params.action)
     assertActionPermitted(req, db, 'PAY', id)
+    // 待复核期间任何动作（再次 pay / void）一律拒绝：先由复核人批准或驳回
+    assertNotPending(db, 'payment', id)
     if (action === 'pay') {
-      const row = transitionPayment(db, { id, action, actor: actorOf(req), remark: req.body?.remark || null })
-      audit(req, { action: 'pay', module: 'purchase', entity: 'purchase_payments', entityId: id })
-      return ok(res, row)
+      const actor = actorOf(req)
+      const b = req.body || {}
+      const out = confirmFunds(db, {
+        kind: 'payment', id, actor,
+        evidence: { ref: b.evidence_ref, note: b.evidence_note },
+        apply: () => transitionPayment(db, { id, action, actor, remark: b.remark || null })
+      })
+      if (out.applied) audit(req, { action: 'pay', module: 'purchase', entity: 'purchase_payments', entityId: id })
+      const row = getPayment(db, id)
+      return ok(res, { ...row, review: out.review })
     }
     const row = transitionPayment(db, { id, action, actor: actorOf(req), remark: req.body?.remark || null })
     audit(req, { action, module: 'purchase', entity: 'purchase_payments', entityId: id })

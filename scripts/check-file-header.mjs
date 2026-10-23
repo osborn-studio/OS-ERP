@@ -76,7 +76,11 @@ const DECLARED = [
   'scripts/db-inventory.mjs',
   'scripts/local-manage.mjs',
   'tests/data-path-guard.test.mjs',
-  'tests/local-instance.test.mjs'
+  'tests/local-instance.test.mjs',
+  // 收付款证据与二人复核（ADR-0018）
+  'server/lib/funds-review.js',
+  'server/db/migrations/056_funds_maker_checker.cjs',
+  'tests/funds-maker-checker.test.mjs'
 ]
 
 /** 参与覆盖率统计的源文件（**排除** node_modules / dist / data） */
