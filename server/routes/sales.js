@@ -428,6 +428,8 @@ r.post(
     const oos = denyOutOfOrgScope(req, res, db, 'order', id)
     if (oos) return
     if (order.status !== 'draft') return fail(res, `当前状态「${order.status}」不能确认`)
+    // 确认会在订单仓占用库存：门店组织可读的跨组织出货单，仓不在范围内就不能动那个仓的库存（ADR-0026）
+    if (denyTargetOutOfScope(req, res, db, { warehouseId: order.warehouse_id ?? 0 })) return
     const items = db.prepare('SELECT * FROM sales_order_items WHERE order_id=?').all(id)
 
     // 信用闸门：确认订单是授信真正被占用的时点，所以必须在此之前拦一次。
@@ -505,6 +507,9 @@ r.post(
     // 范围判定在任何写入之前（ADR-0026）；`cancelOrder` 是 HTTP / MCP 共用的实现，不在里面掺调用者范围
     const oos = denyOutOfOrgScope(req, res, db, 'order', id)
     if (oos) return
+    // 已确认的订单作废会释放订单仓里的占用：仓不在范围内就不能动（草稿没有占用，不受此限）
+    const toCancel = db.prepare('SELECT status, warehouse_id FROM sales_orders WHERE id=?').get(id)
+    if (toCancel?.status === 'confirmed' && denyTargetOutOfScope(req, res, db, { warehouseId: toCancel.warehouse_id ?? 0 })) return
     // D5：作废订单的**唯一实现**在 lib/sales-order.js —— MCP 的 sales.cancel_order 调同一个函数。
     // 原来两处各写一份，MCP 那份只有一行 UPDATE：库存占用没释放、授信没还，
     // 而单子看起来"已作废"。入口可以有两个，实现只能有一份。
@@ -920,9 +925,17 @@ r.post(
     }
     const retWh = b.warehouse_id || srcOrder?.warehouse_id || null
     const retStore = b.store_id || null
+    const org = internalOrgScope(req)
+    if (org && org.scope !== 'all') {
+      // 受限账号必须显式落在自己范围内的仓：不沿用 createSalesReturn 的「全库默认总仓」回落
+      if (retWh == null) return fail(res, '请指定退货入库仓库（受限账号不使用默认总仓）', 400)
+      // 幂等重放会直接返回已有退货单：重放的单据也必须在调用者范围内，否则等于读到别家的退货单
+      const key = b.idempotency_key || req.headers['x-idempotency-key'] || null
+      const hit = key ? db.prepare('SELECT id FROM sales_returns WHERE idempotency_key=?').get(String(key)) : null
+      if (hit && denyOutOfOrgScope(req, res, db, 'return', hit.id)) return
+    }
     if (retWh != null || retStore != null) {
-      const oosT = denyTargetOutOfScope(req, res, db, { warehouseId: retWh, storeId: retStore })
-      if (oosT) return
+      if (denyTargetOutOfScope(req, res, db, { warehouseId: retWh, storeId: retStore })) return
     }
     try {
       const out = createSalesReturn(db, req, {
