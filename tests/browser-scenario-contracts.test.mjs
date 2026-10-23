@@ -22,7 +22,7 @@ import net from 'node:net'
 import { fileURLToPath } from 'node:url'
 import { setTimeout as delay } from 'node:timers/promises'
 import {
-  AUDIT_CSV_HEADER, assertExactlyOnce, csvRecords, exportAuditRows, expectAdminScope, expectOrgScoped,
+  AUDIT_CSV_HEADER, assertExactlyOnce, auditIds, csvRecords, exportAuditRows, fetchAuditCsv, expectAdminScope, expectOrgScoped,
   parseCsv, pickLeafOrg, prepareAuditModule, seedStockRows, walkStocks
 } from './browser/scenario-data.mjs'
 
@@ -78,7 +78,7 @@ async function server(t) {
     assert.equal(r.status, 200)
     return { username, token: await login(username, password) }
   }
-  return { api, admin, account }
+  return { api, base, admin, account }
 }
 
 test('AA8 scenario data contracts hold against a test-mode server', { timeout: 600000 }, async (t) => {
@@ -123,10 +123,17 @@ test('AA8 scenario data contracts hold against a test-mode server', { timeout: 6
     assert.equal(detail.rows, records.length)
     assert.equal(detail.truncated, false)
 
+    const expected = await auditIds(api, admin, { module: prep.module })
+    assert.deepEqual(records.map((r) => Number(r.id)).sort((a, b) => a - b), [...expected.ids].sort((a, b) => a - b))
+    const second = await fetchAuditCsv(f.base, admin, 'module=audit&action=AUDIT_LOG_EXPORT')
+    assert.equal(second.status, 200)
+    assert.equal(second.records.length, after.total, 'a second export holds the first export row but not its own')
+    assert.ok(second.records.some((r) => r.id === String(row.id)))
+
     const plain = await f.account('aa8_audit_plain', 'purchase', {})
     assert.equal((await api('/api/meta/audit-logs?page=1&pageSize=50', { token: plain.token })).status, 403)
     assert.equal((await api(`/api/meta/audit-logs/export.csv?${q}`, { token: plain.token })).status, 403)
-    assert.equal((await exportAuditRows(api, admin)).total, after.total, 'a refused export must not leave an export audit row')
+    assert.equal((await exportAuditRows(api, admin)).total, after.total + 1, 'a refused export must not leave an export audit row')
   })
 
   await t.test('inventory paging: 65 seeded rows, cursor walk returns each row exactly once', async () => {

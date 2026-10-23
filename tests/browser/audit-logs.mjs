@@ -18,7 +18,7 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { apiLogin, createAccount, launchBrowser, loopbackBase, makeApi, okData, screenshotPages, uiLogin } from './lib.mjs'
-import { AUDIT_CSV_HEADER, csvRecords, exportAuditRows, prepareAuditModule } from './scenario-data.mjs'
+import { AUDIT_CSV_HEADER, auditIds, csvRecords, exportAuditRows, fetchAuditCsv, prepareAuditModule } from './scenario-data.mjs'
 
 const base = loopbackBase()
 const api = makeApi(base)
@@ -85,6 +85,7 @@ try {
     await filtered
 
     const before = (await exportAuditRows(api, adminToken)).total
+    const expectedIds = await auditIds(api, adminToken, { module: prep.module })
     const exportResponse = page.waitForResponse(isExport)
     const downloadEvent = page.waitForEvent('download')
     await page.getByRole('button', { name: '导出 CSV' }).click()
@@ -103,6 +104,9 @@ try {
     const { header, records } = csvRecords(readFileSync(file, 'utf8'))
     assert.deepEqual(header, AUDIT_CSV_HEADER)
     assert.ok(records.length >= 1)
+    const exportedIds = records.map((r) => Number(r.id))
+    assert.equal(new Set(exportedIds).size, exportedIds.length, 'no audit row may be exported twice')
+    assert.deepEqual([...exportedIds].sort((a, b) => a - b), [...expectedIds.ids].sort((a, b) => a - b), 'the file holds exactly the filtered audit rows')
     assert.ok(records.every((r) => r.module === prep.module), 'every exported row must match the module filter')
     assert.ok(!records.some((r) => r.action === 'AUDIT_LOG_EXPORT'))
 
@@ -113,6 +117,12 @@ try {
     assert.equal(detail.filters.module, prep.module)
     assert.equal(detail.rows, records.length)
     assert.equal(detail.truncated, false)
+    // 快照排除：对"包含导出审计行"的过滤再导出一次，文件里有上一次导出的行、但没有这一次自己的行
+    const audited = await exportAuditRows(api, adminToken)
+    const second = await fetchAuditCsv(base, adminToken, 'module=audit&action=AUDIT_LOG_EXPORT')
+    assert.equal(second.status, 200)
+    assert.equal(second.records.length, audited.total, 'an export must not contain its own audit row')
+    assert.ok(second.records.some((r) => r.id === String(after.list[0].id)), 'the previous export row is present')
     assert.deepEqual(errors, [])
   })
 

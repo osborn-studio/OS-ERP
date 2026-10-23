@@ -164,3 +164,21 @@ export function assertExactlyOnce(walk, expectedCount) {
   assert.equal(walk.baselineTotal, expectedCount)
   assert.ok(walk.pages.slice(1).every((p) => p.total === undefined))
 }
+
+/** 某模块下全部审计行 id（逐页取，pageSize 上限 200）。 */
+export async function auditIds(api, token, params) {
+  const ids = []
+  for (let page = 1; page < 100; page++) {
+    const d = await listAudit(api, token, { ...params, page: String(page) })
+    ids.push(...d.list.map((r) => r.id))
+    if (ids.length >= d.total || !d.list.length) return { ids, total: d.total }
+  }
+  throw new Error('audit listing did not terminate')
+}
+
+/** 直接取导出 CSV（不经浏览器）；返回状态、响应头与解析后的记录。 */
+export async function fetchAuditCsv(base, token, query) {
+  const res = await fetch(new URL(`/api/meta/audit-logs/export.csv?${query}`, base), { headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(30000) })
+  const text = await res.text()
+  return { status: res.status, headers: res.headers, ...(res.status === 200 ? csvRecords(text) : { header: null, records: [] }) }
+}
