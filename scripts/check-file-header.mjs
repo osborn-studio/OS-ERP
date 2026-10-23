@@ -114,7 +114,11 @@ const DECLARED = [
   'tests/payment-reversal.test.mjs',
   // 门店 POS 路由授权（ADR-0025）
   'server/db/migrations/058_pos_permissions.cjs',
-  'tests/pos-authz.test.mjs'
+  'tests/pos-authz.test.mjs',
+  // POS 前端按权限显示（Y5）
+  'src/utils/pos-actions.ts',
+  'src/pages/pos/usePosPermissions.ts',
+  'tests/pos-actions.test.mjs'
 ]
 
 /** 参与覆盖率统计的源文件（**排除** node_modules / dist / data） */
