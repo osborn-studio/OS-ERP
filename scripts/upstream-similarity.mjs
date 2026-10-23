@@ -8,7 +8,7 @@
  * 【度量（务必如实理解）】
  *   1. 预处理：去掉 // 与 /* *\/ 注释以及以 # 开头的整行注释；按 [A-Za-z_$][\w$]* 与数字切出标识符/数字，
  *      再把驼峰与下划线拆成小写子词（"appliedPromotionsMap" 与 "applied_promotions_map" 同为 applied,promotions,map）。
- *      不解析语法，不看字符串内容与空白，不区分关键字。
+ *      不解析语法，不区分关键字；字符串字面量里的词也会被切成 token，注释剥离只是正则，字符串里的 `//`（如 URL）会让该行余下内容被丢弃。
  *   2. unigramJaccard：两侧「不同子词集合」的 Jaccard = |A∩B| / |A∪B|。受文件长度差影响大，
  *      长文件对短文件会拉低该值；关键字/常见词会抬高该值。
  *   3. shingle5：连续 5 个子词为一片（shingle）。localInUpstream = 本地片中也出现在上游的比例；
