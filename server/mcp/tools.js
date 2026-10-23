@@ -937,25 +937,19 @@ export const TOOLS = [
         .all(no)
         .filter((t) => !e || e.orgIds.includes(Number(t.owner_org_id)))
       const hits = []
-      let existing = 0 // 库里确有此单号的单据行数（不论是否可见）
-      const probe = (code, label) => {
+      let existing = 0 // 库里确有此单号的单据行数（不论是否可见；探测**全部**在用单据类型，不只是下面列出的几类）
+      const LABELS = { PO: '采购订单', SO: '销售订单', TF: '调拨单', MO: '生产/组装单', WW: '委外单' }
+      for (const type of db.prepare("SELECT * FROM doc_types WHERE status='active' ORDER BY code").all()) {
         try {
-          const type = db.prepare("SELECT * FROM doc_types WHERE code=? AND status='active'").get(code)
-          if (!type) return
           const row = db.prepare(`SELECT * FROM ${safeTable(type.table_name)} WHERE ${type.doc_no_field || 'doc_no'}=?`).get(no)
-          if (!row) return
+          if (!row) continue
           existing++
           // 越界单据**不报"无权查看"**，直接当作不存在 —— 报 403 等于确认"这张单存在但不是你的"
-          if (!canViewDocType(db, ctx, type)) return
-          if (!docInScope(scopeCtx, type.code, row.id) || !rowInBinding(db, ctx, type, row)) return
-          hits.push({ table: type.table_name, label, row })
-        } catch { /* 表不存在则跳过 */ }
+          if (!canViewDocType(db, ctx, type)) continue
+          if (!docInScope(scopeCtx, type.code, row.id) || !rowInBinding(db, ctx, type, row)) continue
+          hits.push({ table: type.table_name, label: LABELS[type.code] || type.name, row })
+        } catch { /* 表 / 列不存在则跳过 */ }
       }
-      probe('PO', '采购订单')
-      probe('SO', '销售订单')
-      probe('TF', '调拨单')
-      probe('MO', '生产/组装单')
-      probe('WW', '委外单')
       // 单据存在却没有一张可见：连同它的库存流水一起当作不存在（不让流水泄露越界单据的存在与内容）
       if (!hits.length && (existing > 0 || !txns.length)) {
         const err = new Error(`未找到单据 ${no}`); err.code = 'NOT_FOUND'; err.status = 404; throw err

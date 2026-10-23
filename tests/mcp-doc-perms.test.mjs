@@ -484,6 +484,17 @@ test('AA1 doc.query and order.trace_document use the resolver table with owner s
     setPerms(['sales.order.view', 'purchase.order.view', 'inventory.stock.view'])
   })
 
+  await t.test('order.trace_document does not leak a doc of an unlisted type (store shipment SH) through its ledger lines (Codex AA1 P1)', async () => {
+    const storeB = db.prepare('SELECT id FROM stores WHERE org_id IS NOT NULL AND org_id<>? ORDER BY id LIMIT 1').get(whA.org_id)
+    assert.ok(storeB, 'fixture: a store in the other org')
+    db.prepare(`INSERT INTO store_shipments (doc_no, store_id, from_warehouse_id, to_warehouse_id, ship_date, status)
+      VALUES ('AA1-SH-OTHER', ?, ?, ?, date('now','localtime'), 'shipped')`).run(storeB.id, whB.id, whB.id)
+    insTxn.run('AA1-SH-OTHER', whB.id, whA.org_id) // 流水货主在所有者组织
+    const res = await call('order.trace_document', { doc_no: 'AA1-SH-OTHER' })
+    assert.ok(notFound(res), JSON.stringify(res.body).slice(0, 300))
+    assert.ok(okTool(await call('order.trace_document', { doc_no: 'AA1-SH-OTHER' }, free)), 'unowned all-scope token still resolves it')
+  })
+
   await t.test('unowned all-scope token still sees everything (unchanged)', async () => {
     assert.ok(okTool(await call('order.trace_document', { doc_no: 'AA1-SO-OTHER' }, free)))
     const q = await call('doc.query', { doc_type: 'SO', keyword: 'AA1-SO-OTHER' }, free)

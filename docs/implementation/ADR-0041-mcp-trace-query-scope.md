@@ -13,7 +13,7 @@ ADR-0039 把 `doc.get` 改成 `docInScope`（`DOC_SCOPE_RESOLVERS`，ADR-0032）
 
 - **判据唯一化**：两个工具的归属都走 `docflow.docScopeOf / docInScope`（即 `/api/docflow/history`、`doc.get` 用的同一份解析器表）。入参由新的 `docScopeCtx(db, ctx)` 组装：`orgScope = ctx.scope`（令牌范围 ∩ 所有者当前范围，ADR-0011 `effectiveScope`），`user` = 令牌所有者行（`store` 型解析器需要 `store_id`；无主令牌为 null）。
 - **`doc.query`**：解析器给出的谓词（写在别名 `t` 上）直接 AND 进 SQL，`ORDER BY t.id DESC LIMIT ?` 里的 `?` 就是 `limit`，不再多取再滤。全局范围不加谓词；类型对该范围完全不可见（全局类 AR / RCP / VOUCHER / RFD / CA / OM、未登记类型、空 / `dealer` / `none` 范围）⇒ `1=0`，返回空列表。Y6 的门店 / 经销商 / 订货主体绑定（`bindingWhere`）与类型级查看权限（`assertCanViewDocType`）原样叠加。响应的 `total_scanned` 现等于返回行数（不再有被丢弃的越界行）。
-- **`order.trace_document`**：五种单据按类型码查 `doc_types`，逐张叠加三道判据——类型级查看权限（`canViewDocType`，含外部主体拦截与绑定）、`docInScope`、`rowInBinding`——任一不过即不计入命中。**单据存在但无一张可见时，连同其库存流水一并返回 `NOT_FOUND`**（与不存在同形；否则货主在所有者组织的流水会泄露越界单据的存在）。仅有库存流水、没有任何同号单据（盘点 / 手工调整类流水）的行为不变，流水仍按货主组织过滤。
+- **`order.trace_document`**：按单号探测**全部**在用单据类型（`doc_types`；Codex 审计 P1：只探测 PO / SO / TF / MO / WW 时，其他类型如门店发货单 SH 的越界单据会经货主在所有者组织的库存流水泄露），逐张叠加三道判据——类型级查看权限（`canViewDocType`，含外部主体拦截与绑定）、`docInScope`、`rowInBinding`——任一不过即不计入命中。**单据存在但无一张可见时，连同其库存流水一并返回 `NOT_FOUND`**（与不存在同形；否则货主在所有者组织的流水会泄露越界单据的存在）。仅有库存流水、没有任何同号单据（盘点 / 手工调整类流水）的行为不变，流水仍按货主组织过滤。
 - 工具本身的 `perms`（三选一）不变；改变的是：持有 `purchase.order.view` 但没有 `sales.order.view` 的所有者，trace 不再能看到销售订单（当作不存在）。
 
 ## 契约变化
@@ -25,7 +25,7 @@ MCP 行为收紧，无 HTTP / OpenAPI 变化：
 
 ## 守卫与矩阵
 
-- `tests/mcp-doc-perms.test.mjs` 新增 AA1 用例：dealer 推断的越界 SO、9 条更新的越界噪声单据下 `limit=2` 仍返回 2 条范围内单据；全局类型 VOUCHER 对受限范围为空、对无主全局令牌不空；`order.trace_document` 越界单据（即使有所有者组织货主的流水）与不存在响应同形；缺 `sales.order.view` 时 trace 当作不存在。新用例在旧实现下 4 项红（已用旧 `tools.js` 复核）。
+- `tests/mcp-doc-perms.test.mjs` 新增 AA1 用例：dealer 推断的越界 SO、9 条更新的越界噪声单据下 `limit=2` 仍返回 2 条范围内单据；全局类型 VOUCHER 对受限范围为空、对无主全局令牌不空；`order.trace_document` 越界单据（即使有所有者组织货主的流水）与不存在响应同形；缺 `sales.order.view` 时 trace 当作不存在。新用例在旧实现下 4 项红；另加门店发货单 SH 经库存流水泄露的回归用例（审计 P1，上一版实现下为红）（已用旧 `tools.js` 复核）。
 - `tests/mcp-tool-matrix.test.mjs` 新增「状态 6（AA1）」：两工具 × {范围外 SO、范围内 SO、缺类型级查看权限、全局类型}，写入 `trace_query_scope_state`，断言无 `LEAK` 且零写；原三态、Y6 绑定态、Z2 历史态不变（两工具仍在原三态矩阵里逐一覆盖）。该态在旧实现下为红。
 - `scripts/check-mcp-coverage.mjs` 的「归属列推断一致」断言仍成立（`doc.get` 以外的工具仍有使用推断的路径，见边界）。
 
