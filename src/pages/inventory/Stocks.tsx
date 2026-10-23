@@ -43,12 +43,28 @@ export default function Stocks() {
     const t = setTimeout(() => setDebounced(keyword.trim()), 300)
     return () => clearTimeout(t)
   }, [keyword])
+  // 条件变了就丢弃旧栈（否则切回旧条件会复活旧页）
+  useEffect(() => {
+    if (stackState.key !== filterKey) setStackState({ key: filterKey, stack: [null] })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterKey])
   const after = cursors[cursors.length - 1]
-  const { data, loading, reload } = useFetch<any>(
-    '/inventory/stocks',
-    { pageSize: PAGE, keyword: debounced || undefined, warehouse_id: warehouseId || undefined, after_id: after ?? undefined },
-    [cursors.length, filterKey]
-  )
+  // 自己取数而不用 useFetch：需要丢弃过期响应（慢的旧请求晚到，会把旧条件的行和游标塞给新条件）
+  const [data, setData] = useState<any>(null)
+  const [loading, setLoading] = useState(false)
+  const [tick, setTick] = useState(0)
+  const reload = () => setTick((n) => n + 1)
+  useEffect(() => {
+    let live = true
+    setLoading(true)
+    api
+      .get('/inventory/stocks', { pageSize: PAGE, keyword: debounced || undefined, warehouse_id: warehouseId || undefined, after_id: after ?? undefined })
+      .then((res: any) => { if (live) setData(res.data) })
+      .catch((e: any) => { if (live) toast(e.message, 'error') })
+      .finally(() => { if (live) setLoading(false) })
+    return () => { live = false }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cursors.length, filterKey, after, tick])
   useEffect(() => {
     if (data && data.total !== undefined) setFirstPage({ total: data.total, summary: data.summary })
   }, [data])
