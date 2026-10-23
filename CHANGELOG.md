@@ -11,6 +11,7 @@
 ## 第九批（进行中）：见 roadmap-v5
 
 - [ADR-0039：OMS 读接口与 MCP 单据历史工具按组织范围收口](docs/implementation/ADR-0039-oms-mcp-history-scope.md) — 判据：沿用 ADR-0034 的「平台绑定组织 = 平台履约仓 `platforms.warehouse_id` 所属组织 `warehouses.org_id`」。判据仍只在 `server/lib/sales-order.js` 一处： - `omsPlatformScopeSql(orgScope, alias)`：作用在 `platforms` 行； - `omsOrderScopeSql(orgScope, alias)`：作用在 `oms_orders` 行（经 …
+- [ADR-0040 受信代理配置（Z4）](docs/implementation/ADR-0040-trust-proxy.md) — 其它值启动即失败：`server/index.js` 在装配 Express 前调用 `assertTrustProxyConfig()`，抛 `TRUST_PROXY_INVALID`（`code` 字段；消息含 `GML_TRUST_PROXY`）。拒绝：`true` / `1` / `2`（跳数）/ `*`、`loopback` 与 CIDR 混写、空项、前缀越界或非数字、前缀 0（0.0.0.0/0、::/0 即全网）、含 `%zone` 的地址、前缀 <96 的 I…
 
 ## 第八批（进行中）：见 roadmap-v4
 
