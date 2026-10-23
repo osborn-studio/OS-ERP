@@ -298,11 +298,11 @@ node scripts/synth-pipeline.mjs --dir /tmp/synth-large --skus 20000 --txns 25000
 | 计数（无过滤）| `SCAN audit_logs` | `SCAN … USING COVERING INDEX`（索引扫描，`LIMIT 10001` 到数即停）|
 | 导出后续批 | 旧：`id < ?` 游标；有过滤时缺索引会退化为 rowid 区间扫描 | 新：`(created_at,id) < (?,?)` 游标走同一索引，无排序临时表 |
 
-`explain-audit`：新增 18 条 `audit.list_* / count_* / export_*` 语句（SQL 文本由 `server/lib/audit-view.js` 生成，与路由同一份），其中 12 条声明 `expectIndex`；**没有迁移 065 时这 12 条全部报红，有 065 时 0 违规**（`tests/audit-logs-view.test.mjs` 断言两侧）。`audit_logs` 已加入 `GROWTH_TABLES`（不看行数）。
+`explain-audit`：新增 21 条 `audit.list_* / count_* / export_*` 语句（SQL 文本由 `server/lib/audit-view.js` 生成，与路由同一份），其中 12 条声明 `expectIndex`；**没有迁移 065 时这 12 条全部报红，有 065 时 0 违规**（`tests/audit-logs-view.test.mjs` 断言两侧）。`audit_logs` 已加入 `GROWTH_TABLES`（不看行数）。
 
 ### 已知残余（未解决，不要读成已解决）
 - **关键词是子串匹配**（`LIKE '%x%'` 于 action / entity / user_name），任何索引都帮不上：命中多时靠 `LIMIT` 早停，**命中稀少时仍读全表**。已把范围收窄（不再搜 module / entity_id / detail）并要求至少 2 个有效字符；`explain-audit` 为 `audit.list_keyword` / `audit.count_keyword` 登记了带理由的豁免。组合 module / user 过滤（走索引）才会快。
 - **仅按日期区间或仅按 action 过滤**没有可用索引（`created_at` 单列、`action` 不在三棵索引里）：沿 rowid 倒扫，区间越旧读得越多。需要时再评估 `(created_at)` 索引，代价是再多一棵写放大。
-- **仅按 entity（不带 entity_id）**：`idx_audit_entity` 能命中但需要对命中行做临时排序，entity 很大（如全部 `sales_orders` 留痕）时仍可能慢。
+- **仅按 entity（不带 entity_id）**：Codex 复核实测，让它走 `idx_audit_entity` 要对全部命中行临时排序（10 万行内存库 0.15 ms → 48 ms），比不建索引还差，所以此形态用 `+entity = ?` 屏蔽该索引，仍沿 rowid 倒扫（与迁移前相同：命中多的类型凑够一页即停，命中稀少的类型读到整表）。带 entity_id 才走索引。
 - 非字符串/含 `%` 的 `user` 子串过滤（按姓名）仍是整表扫描；纯数字现在只匹配 `user_id`（旧版也匹配 `user_name` 恰为该数字的行——行为收窄，已在代码注释中说明）。
 - 只在 Mac mini 上、合成数据、机器带负载；`dmserver` 上的数字、真实长明细的库体积、HTTP 端到端导出时间均**未测**。

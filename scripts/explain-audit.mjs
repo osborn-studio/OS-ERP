@@ -44,6 +44,7 @@ function auditStatementsFor() {
     ['module', { module: 'sales', from: '2026-10-01', to: '2026-10-31' }, 'idx_audit_module_created'],
     ['user', { user: '12', from: '2026-10-01' }, 'idx_audit_user_created'],
     ['entity', { entity: 'sales_orders', entity_id: '101' }, 'idx_audit_entity'],
+    ['entity_only', { entity: 'sales_orders' }, null],
     ['module_keyword', { module: 'sales', keyword: 'ab' }, 'idx_audit_module_created'],
     ['keyword', { keyword: 'ab' }, null]
   ]
@@ -244,6 +245,7 @@ export const ALLOW = [
   { statement: 'stock.txn_page', table: 'inventory_transactions', noSort: true, reason: PAGE_REASON },
   { statement: 'audit.list_all', table: 'audit_logs', noSort: true, reason: PAGE_REASON },
   { statement: 'audit.count_keyword', table: 'audit_logs', reason: '关键词是 LIKE \'%x%\' 子串匹配（action/entity/user_name），没有可用索引；LIMIT 10001 只在命中多时早停，命中稀少时仍读全表——已知残余，靠最少 2 字符与组合 module/user 过滤收敛' },
+  { statement: 'audit.list_entity_only', table: 'audit_logs', noSort: true, reason: '仅按 entity 类型（几十种、每种命中很多行）：用 `+entity` 屏蔽 idx_audit_entity，避免对全部命中行临时排序；沿 rowid 倒扫凑够一页即停。命中稀少的类型会读到整表——已知残余（见 capacity-baseline AA6）' },
   { statement: 'audit.list_keyword', table: 'audit_logs', noSort: true, reason: '同 audit.count_keyword：子串匹配无法建索引；按 id 倒序取够一页即停，命中稀少时读量上界是整表' },
   { statement: 'dash.sales_unpaid', table: 'sales_orders', reason: AGG_REASON },
   { statement: 'dash.stock_total', table: 'inventory_stocks', reason: '整表聚合（SUM / COUNT DISTINCT 全库存），没有谓词；索引只能做覆盖扫描，不改变量级' },

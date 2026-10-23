@@ -207,6 +207,10 @@ test('Z7 CSV export is row-capped and marks truncation', { timeout: 120000 }, as
 // AA6：关键词限制、封顶计数、翻页深度、排序/导出游标、迁移 065 与 explain-audit
 // ---------------------------------------------------------------------------------------------------------------------------
 test('AA6 unit: keyword needs 2 effective chars and buildWhere enforces it on its own', () => {
+  for (const k of ['\u0000ab', 'a\u0000b', 'ab\u0000', 'a\tb', 'a\nb']) {
+    assert.throws(() => parseFilters({ keyword: k }), AuditViewError, `control chars refused: ${JSON.stringify(k)}`)
+    assert.throws(() => buildWhere({ keyword: k }), AuditViewError, `buildWhere: ${JSON.stringify(k)}`)
+  }
   for (const k of ['a', ' a ', 'a\u200b', '\u200b\u200b', '%', ' \t ']) {
     if (k.trim() === '') { assert.deepEqual(parseFilters({ keyword: k }), {}, 'blank keyword is just no keyword'); continue }
     assert.throws(() => parseFilters({ keyword: k }), AuditViewError, JSON.stringify(k))
@@ -217,6 +221,9 @@ test('AA6 unit: keyword needs 2 effective chars and buildWhere enforces it on it
   assert.match(where, /action LIKE/); assert.match(where, /entity LIKE/); assert.match(where, /user_name LIKE/)
   assert.doesNotMatch(where, /detail|module LIKE|entity_id LIKE/, 'keyword searches action/entity/user_name only')
   assert.equal(args.length, 3)
+  assert.match(buildWhere({ entity: 'e' }).where, /\+entity = \?/, 'entity alone must not use idx_audit_entity (forces a temp sort)')
+  assert.match(buildWhere({ entity: 'e', entity_id: '1' }).where, /entity = \?/)
+  assert.doesNotMatch(buildWhere({ entity: 'e', entity_id: '1' }).where, /\+entity/)
   assert.equal(orderOf({}).sql, 'id DESC')
   assert.equal(orderOf({ module: 'x' }).sql, 'created_at DESC, id DESC')
   assert.equal(orderOf({ user: '12' }).sql, 'created_at DESC, id DESC')
@@ -236,7 +243,7 @@ test('AA6 keyword scope over HTTP: module / entity_id / detail are not searched;
   assert.equal((await get('?keyword=ali')).body.data.total, 1, 'user_name')
   assert.equal((await get('?keyword=CREA')).body.data.total, 1, 'action')
   assert.equal((await get('?keyword=ord')).body.data.total, 1, 'entity')
-  for (const bad of ['a', '%25', '%E2%80%8Ba', '%20a%20']) {
+  for (const bad of ['a', '%25', '%E2%80%8Ba', '%20a%20', '%00ab', 'a%00b']) {
     assert.equal((await get(`?keyword=${bad}`)).status, 400, `list ${bad}`)
     assert.equal((await f.raw(`/api/meta/audit-logs/export.csv?keyword=${bad}`, admin)).status, 400, `export ${bad}`)
   }
@@ -344,6 +351,7 @@ test('AA6 explain-audit: the filtered audit list / count / export statements are
   assert.match(plan('audit.export_user'), /idx_audit_user_created/)
   assert.match(plan('audit.list_entity'), /idx_audit_entity \(entity=\? AND entity_id=\?\)/)
   assert.match(plan('audit.count_module'), /COVERING INDEX idx_audit_module_created/)
+  assert.doesNotMatch(plan('audit.list_entity_only'), /idx_audit_entity|TEMP B-TREE/, 'entity alone: rowid walk, no index + temp sort')
 
   const dir = mkd(path.join(tmpdir(), 'os-aa6-mig-'))
   t.after(() => rm(dir, { recursive: true, force: true }))

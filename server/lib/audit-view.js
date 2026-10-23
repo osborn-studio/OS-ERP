@@ -43,6 +43,8 @@ const effectiveLen = (s) => [...s.replace(/[\s\p{Cc}\p{Cf}]/gu, '')].length
 
 /** 关键词至少 KEYWORD_MIN_CHARS 个有效字符（太短的 LIKE '%x%' 命中面过大，且是整表扫描） */
 export function assertKeyword(keyword) {
+  // 控制符（尤其 NUL）直接拒绝：SQLite 的 LIKE 模式遇到 NUL 会被截断，'%\0ab%' 退化成 '%' = 匹配全部（Codex 复核）
+  if (/\p{Cc}/u.test(String(keyword))) throw new AuditViewError('keyword 不能包含控制字符')
   if (effectiveLen(String(keyword)) < KEYWORD_MIN_CHARS) throw new AuditViewError(`keyword 至少需要 ${KEYWORD_MIN_CHARS} 个字符`)
 }
 
@@ -70,7 +72,9 @@ export function buildWhere(f) {
   const a = []
   if (f.module) { c.push('module = ?'); a.push(f.module) }
   if (f.action) { c.push('action = ?'); a.push(f.action) }
-  if (f.entity) { c.push('entity = ?'); a.push(f.entity) }
+  // 仅按 entity（无 entity_id）时用 `+entity` 屏蔽 idx_audit_entity：entity 类型只有几十种、每种命中很多行，
+  // 走索引要对全部命中行临时排序（Codex 复核实测 100k 行 0.15 ms → 48 ms）；不走索引则沿 rowid 倒扫，凑够一页即停。带 entity_id 时选择性高，走索引。
+  if (f.entity) { c.push(f.entity_id ? 'entity = ?' : '+entity = ?'); a.push(f.entity) }
   if (f.entity_id) { c.push('entity_id = ?'); a.push(f.entity_id) }
   if (f.user) {
     // 纯数字 = 用户 ID（走 idx_audit_user_created）；不再 OR user_name（OR 会让该索引失效、退化为整表扫描）
