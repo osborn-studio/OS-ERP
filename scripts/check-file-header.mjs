@@ -88,6 +88,7 @@ const DECLARED = [
   // 大库规模演练（Y10）
   'scripts/synth-data.mjs',
   'scripts/synth-pipeline.mjs',
+  'scripts/lib/safe-path.mjs',
   'tests/synth-data.test.mjs',
   'tests/authz-followups.test.mjs',
   // 采购链读接口范围收口（ADR-0017）

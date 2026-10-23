@@ -30,14 +30,16 @@ import os from 'node:os'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { spawnSync } from 'node:child_process'
+import { createRequire } from 'node:module'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { performance } from 'node:perf_hooks'
 import Database from 'better-sqlite3'
+import { isWithin, writeExclusive } from './lib/safe-path.mjs'
+import { verifyInvariants } from './synth-data.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const usage = (m) => Object.assign(new Error(m), { exitCode: 2 })
-const phys = (p) => { try { return fs.realpathSync(p) } catch { return path.resolve(p) } }
-const withinRepoData = (p) => { const rel = path.relative(phys(path.resolve(ROOT, 'data')), phys(p)); return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel)) }
+const withinRepoData = (p) => isWithin(path.resolve(ROOT, 'data'), p)
 
 export function parseArgs(argv) {
   const o = { dir: null, out: null, keep: false, scale: {}, iterations: 100, concurrency: 4 }
@@ -58,6 +60,14 @@ export function parseArgs(argv) {
   if (!o.dir || !path.isAbsolute(o.dir)) throw usage('必须给绝对路径 --dir（全新目录）')
   if (withinRepoData(o.dir)) throw usage('--dir 不得位于仓库 data/ 内')
   if (fs.existsSync(o.dir) && fs.readdirSync(o.dir).length) throw usage('--dir 非空')
+  // 报告路径在跑任何步骤之前就校验（跑完才发现不能写，等于白跑一小时）
+  const reportFile = path.resolve(o.out || path.join(o.dir, 'pipeline-report.json'))
+  if (withinRepoData(path.dirname(reportFile)) || withinRepoData(reportFile)) throw usage('报告路径不得位于仓库 data/ 内')
+  let exists = true
+  try { fs.lstatSync(reportFile) } catch { exists = false }
+  if (exists) throw usage('--out 必须是尚不存在的新文件（不覆盖、不跟随符号链接）')
+  if (o.out) { try { if (!fs.statSync(path.dirname(reportFile)).isDirectory()) throw new Error('x') } catch { throw usage('--out 的父目录必须已存在') } }
+  if (isWithin(o.dir, path.dirname(reportFile)) && o.out) throw usage('--out 不得位于 --dir 之内（--dir 默认会被清理）')
   for (const k of ['iterations', 'concurrency']) if (!Number.isInteger(o[k]) || o[k] < 1) throw usage(`${k} 必须是正整数`)
   return o
 }
@@ -71,6 +81,26 @@ function step(name, args, { env, input = undefined, timeout = 3600000 } = {}) {
   process.stderr.write(`[pipeline] ${name}: exit ${r.status} in ${(wall_ms / 1000).toFixed(1)}s\n`)
   return { name, status: r.status, wall_ms, stdout: r.stdout || '', stderr: r.stderr || '' }
 }
+/** 证据的来源身份：提交、工作区是否脏（含指纹）、SQLite / Node 版本——没有这些，别人无法复现同一份数字 */
+function sourceIdentity() {
+  const git = (...a) => spawnSync('git', a, { cwd: ROOT, encoding: 'utf8' })
+  const head = git('rev-parse', 'HEAD')
+  const status = git('status', '--porcelain', '--untracked-files=all')
+  const diff = git('diff', 'HEAD')
+  const dirty = status.stdout.trim().length > 0
+  const mem = new Database(':memory:')
+  const sqlite = mem.prepare('SELECT sqlite_version() v').get().v
+  mem.close()
+  const req = createRequire(import.meta.url)
+  return {
+    git_head: head.status === 0 ? head.stdout.trim() : null,
+    git_dirty: dirty,
+    git_dirty_fingerprint: dirty ? crypto.createHash('sha256').update(status.stdout).update(diff.stdout || '').digest('hex') : null,
+    sqlite_version: sqlite,
+    better_sqlite3: req('better-sqlite3/package.json').version,
+    node: process.version
+  }
+}
 const newest = (dir, re) => fs.readdirSync(dir).filter((f) => re.test(f)).sort().at(-1)
 
 export async function runPipeline(o) {
@@ -81,7 +111,8 @@ export async function runPipeline(o) {
   const prod = { GML_RUNTIME_MODE: 'production', GML_DATA_DIR: dataDir, GML_DB: '' }
   const report = {
     schema_version: 1,
-    scope_notice: 'Mac mini / synthetic data / single wall-clock run under whatever load the machine had. NOT a target-host (dmserver) result and NOT a capacity commitment.',
+    scope_notice: 'Local development host / synthetic data / single wall-clock run under whatever load the machine had (see host.loadavg_*). NOT a target-host (dmserver) result and NOT a capacity commitment.',
+    source: sourceIdentity(),
     generated_at: new Date().toISOString(),
     host: { platform: process.platform, arch: process.arch, cpus: os.cpus().length, cpu_model: os.cpus()[0]?.model ?? null, total_mem_mb: Math.round(os.totalmem() / 1048576), node: process.version, loadavg_start: os.loadavg().map((n) => Math.round(n * 100) / 100) },
     steps: {}, ok: true
@@ -152,7 +183,18 @@ export async function runPipeline(o) {
   const pre = step('bench_prewarm', ['--input-type=module', '-e', "const { bootAll } = await import('./server/db/boot.js'); bootAll()"],
     { env: { GML_RUNTIME_MODE: 'test', GML_DATA_DIR: benchDir, GML_DB: '' } })
   if (pre.status !== 0) { fail('bench_prewarm', pre); return report }
-  report.steps.bench_prewarm = { ok: true, wall_ms: pre.wall_ms, bench_db_bytes: fs.statSync(path.join(benchDir, 'gml_cosmetic.db')).size }
+  // 压测库的真实组成与自洽性单独记录（它 ≠ 上面的合成库：多了演示种子叠加）
+  const bdbRead = new Database(path.join(benchDir, 'gml_cosmetic.db'), { readonly: true })
+  let benchDataset
+  try {
+    const tc = {}
+    for (const t of ['products', 'product_skus', 'inventory_stocks', 'inventory_transactions', 'purchase_orders', 'sales_orders', 'sales_deliveries', 'dealers', 'credit_ledger', 'doc_events']) tc[t] = bdbRead.prepare(`SELECT COUNT(*) c FROM ${t}`).get().c
+    const v = await verifyInvariants(bdbRead)
+    benchDataset = { table_counts: tc, db_bytes: fs.statSync(path.join(benchDir, 'gml_cosmetic.db')).size, invariants_ok: v.ok, failed_checks: v.checks.filter((c) => !c.ok).map((c) => `${c.name}: ${c.detail}`),
+      note: 'bench copy = synthetic data + demo-seed overlay applied by the test-mode server boot; classification flipped to test on the copy only' }
+  } finally { bdbRead.close() }
+  report.steps.bench_prewarm = { ok: true, wall_ms: pre.wall_ms }
+  report.bench_dataset = benchDataset
   const benchOut = path.join(o.dir, 'bench.json')
   const b = step('bench_api', ['scripts/bench-api.mjs', '--concurrency', String(o.concurrency), '--iterations', String(o.iterations), '--out', benchOut],
     { env: { GML_RUNTIME_MODE: 'test', GML_DATA_DIR: benchDir, GML_BENCH_USER: 'synthadmin', GML_BENCH_PASSWORD: adminPassword } })
@@ -169,9 +211,8 @@ export async function runPipeline(o) {
 export async function main(argv = process.argv.slice(2)) {
   const o = parseArgs(argv)
   const report = await runPipeline(o)
-  const file = o.out ? path.resolve(o.out) : path.join(o.dir, 'pipeline-report.json')
-  if (withinRepoData(path.dirname(file))) throw usage('--out 不得位于仓库 data/ 内')
-  fs.writeFileSync(file, JSON.stringify(report, null, 2) + '\n')
+  const file = path.resolve(o.out || path.join(o.dir, 'pipeline-report.json'))
+  writeExclusive(file, JSON.stringify(report, null, 2) + '\n')
   console.log(`synth-pipeline: ${report.ok ? 'OK' : 'FAILED'} -> ${file}`)
   if (!o.keep && o.out) fs.rmSync(o.dir, { recursive: true, force: true })
   return report

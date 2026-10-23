@@ -12,7 +12,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, rmSync, readdirSync, existsSync, readFileSync, statSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, readdirSync, existsSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -127,6 +127,33 @@ test('refuses unsafe environments with exit 2 and writes nothing', (t) => {
   assert.equal(statSync(fresh).isDirectory(), true)
 })
 
+test('symlinks cannot smuggle generation or output into repository data or over another file', (t) => {
+  const base = tmp(t, 'os-synth-link-')
+  // 指向仓库 data/ 的（可能悬空的）符号链接，下面再套一个尚不存在的子目录
+  const alias = path.join(base, 'alias')
+  symlinkSync(path.resolve(ROOT, 'data'), alias)
+  assert.equal(run(SMALL, prodEnv(path.join(alias, 'new-run'))).status, 2)
+  assert.equal(run(SMALL, prodEnv(alias)).status, 2)
+  assert.equal(existsSync(path.resolve(ROOT, 'data', 'new-run')), false)
+  assert.equal(pipe(['--dir', path.join(alias, 'new-run')]).status, 2)
+  // 输出文件是指向别的文件的符号链接 / 已存在文件：拒绝且目标原样
+  const victim = path.join(base, 'victim.db')
+  writeFileSync(victim, 'precious')
+  const link = path.join(base, 'out.json')
+  symlinkSync(victim, link)
+  assert.equal(run([...SMALL, '--out', link], prodEnv(path.join(base, 'g1'))).status, 2)
+  assert.equal(run([...SMALL, '--out', victim], prodEnv(path.join(base, 'g2'))).status, 2)
+  assert.equal(pipe(['--dir', path.join(base, 'p1'), '--out', link]).status, 2)
+  assert.equal(pipe(['--dir', path.join(base, 'p2'), '--out', victim]).status, 2)
+  assert.equal(readFileSync(victim, 'utf8'), 'precious')
+  assert.equal(existsSync(path.join(base, 'g1')) || existsSync(path.join(base, 'p1')), false)
+  // GML_DATA_DIR 自身是链接（即使指向空目录）也拒绝
+  const real = path.join(base, 'real'); mkdirSync(real)
+  const selfLink = path.join(base, 'self')
+  symlinkSync(real, selfLink)
+  assert.equal(run(SMALL, prodEnv(selfLink)).status, 2)
+})
+
 function writeFileLike(dir) {
   const db = new Database(path.join(dir, 'live.db'))
   db.exec('CREATE TABLE marker(x)')
@@ -165,6 +192,11 @@ test('pipeline runs generate, plain+encrypted backup, both restore drills, expla
   assert.equal(rep.steps.bench_api.totals.errors, 0)
   assert.equal(rep.steps.bench_api.endpoints.length, 10)
   assert.equal(rep.steps.explain_audit.violations, 0)
+  assert.match(rep.source.git_head, /^[0-9a-f]{40}$/)
+  assert.equal(typeof rep.source.git_dirty, 'boolean')
+  assert.match(rep.source.sqlite_version, /^3\./)
+  assert.ok(rep.bench_dataset.table_counts.inventory_transactions >= rep.dataset.table_counts.inventory_transactions, 'bench copy composition is recorded separately')
+  assert.match(rep.bench_dataset.note, /demo-seed overlay/)
   // 秘密不进报告
   assert.doesNotMatch(readFileSync(out, 'utf8'), /Synthetic-Pass|GML_BACKUP_KEY/)
   assert.equal(existsSync(path.join(work, 'w')), false, 'working dir removed when --out given without --keep')

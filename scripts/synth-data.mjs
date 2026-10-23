@@ -40,6 +40,7 @@ import os from 'node:os'
 import crypto from 'node:crypto'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { performance } from 'node:perf_hooks'
+import { isWithin, writeExclusive } from './lib/safe-path.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 export const SCHEMA_VERSION = 1
@@ -91,11 +92,7 @@ export function makeRng(seed) {
 const ymdAdd = (anchor, days) => new Date(Date.parse(anchor) + days * 86400000).toISOString().slice(0, 10)
 const round2 = (n) => Math.round(n * 100) / 100
 
-const phys = (p) => { try { return fs.realpathSync(p) } catch { return path.resolve(p) } }
-const withinRepoData = (p) => {
-  const rel = path.relative(phys(path.resolve(ROOT, 'data')), phys(p))
-  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel))
-}
+const withinRepoData = (p) => isWithin(path.resolve(ROOT, 'data'), p)
 
 /** 环境与目录闸门。返回 dataDir；违反即抛 exitCode=2。必须在 import 任何 server 模块之前调用（DATA_DIR 在 import 时固化）。 */
 export function guardEnvironment(env = process.env) {
@@ -104,6 +101,7 @@ export function guardEnvironment(env = process.env) {
   const dir = env.GML_DATA_DIR
   if (!dir || !path.isAbsolute(dir)) throw usage('必须显式设置绝对路径 GML_DATA_DIR（全新的隔离目录）')
   if (withinRepoData(dir)) throw usage('GML_DATA_DIR 位于仓库 data/ 之内；请使用 /tmp 下的全新目录')
+  try { if (fs.lstatSync(dir).isSymbolicLink()) throw usage('GML_DATA_DIR 本身不能是符号链接') } catch (e) { if (e.exitCode) throw e }
   if (fs.existsSync(dir)) {
     if (!fs.statSync(dir).isDirectory()) throw usage('GML_DATA_DIR 不是目录')
     if (fs.readdirSync(dir).length) throw usage(`GML_DATA_DIR 非空（${dir}）：只在全新/空目录生成，避免碰到在用实例`)
@@ -111,10 +109,12 @@ export function guardEnvironment(env = process.env) {
   return dir
 }
 
+/** 摘要输出：父目录与目标都不得在仓库 data/ 内；目标必须尚不存在（写入时再用 O_EXCL 兜底，不跟随符号链接） */
 function unsafeOutput(file) {
   const abs = path.resolve(file)
   if (withinRepoData(path.dirname(abs)) || withinRepoData(abs)) return true
-  try { return fs.lstatSync(abs).isSymbolicLink() } catch { return false }
+  try { if (!fs.statSync(path.dirname(abs)).isDirectory()) return true } catch { return true } // 父目录必须已存在
+  try { fs.lstatSync(abs); return true } catch { return false } // 已存在（含符号链接）即拒绝
 }
 
 /** 进度输出：到 stderr，按时间节流（≥2 s）+ 阶段结束必打 */
@@ -181,6 +181,15 @@ export async function verifyInvariants(db) {
   const phdr = rows(`SELECT o.id FROM purchase_orders o WHERE ABS(o.total_amount - (SELECT COALESCE(SUM(amount),0) FROM purchase_order_items i WHERE i.order_id=o.id)) > 0.01 LIMIT 3`)
   add('purchase_order_header_amount_equals_lines', phdr.length === 0, phdr.length ? `订单 #${phdr[0].id}` : '')
 
+  // 单据一生：每张单据至少有一条 doc_events；事件不指向不存在的单据（DL 的 create 留痕是路由里"写在改动旁边"的铁律）
+  // 采购订单草稿没有留痕是路由的真实行为（createPurchaseOrder 不写 create 事件，只有流转才写），所以 PO 只核对非草稿
+  for (const [type, table, where] of [['QT', 'sales_quotes', '1=1'], ['SO', 'sales_orders', '1=1'], ['DL', 'sales_deliveries', '1=1'], ['PO', 'purchase_orders', "d.status<>'draft'"], ['GR', 'purchase_receipts', '1=1']]) {
+    const lacking = one(`SELECT COUNT(*) c FROM ${table} d WHERE ${where} AND NOT EXISTS (SELECT 1 FROM doc_events e WHERE e.doc_type='${type}' AND e.doc_id=d.id)`).c
+    add(`every_${type}_has_doc_events`, lacking === 0, lacking ? `${lacking} 张 ${table} 无留痕` : '')
+    const orphan = one(`SELECT COUNT(*) c FROM doc_events e WHERE e.doc_type='${type}' AND NOT EXISTS (SELECT 1 FROM ${table} d WHERE d.id=e.doc_id)`).c
+    add(`no_orphan_${type}_events`, orphan === 0, orphan ? `${orphan} 条事件指向不存在的 ${table}` : '')
+  }
+
   // 授信投影与台账
   const holds = reconcileOrderHolds(db)
   add('credit_hold_reconciles(reconcileOrderHolds)', holds.length === 0, holds.length ? JSON.stringify(holds[0]) : '')
@@ -199,6 +208,7 @@ export function businessDigest(db) {
   feed('SELECT doc_no,total_qty FROM sales_deliveries ORDER BY id')
   feed('SELECT warehouse_id,sku_id,batch_no,qty_on_hand,qty_reserved,ROUND(cost_price,4) FROM inventory_stocks ORDER BY warehouse_id,sku_id,batch_no')
   feed('SELECT doc_type,doc_no,warehouse_id,sku_id,batch_no,direction,qty FROM inventory_transactions ORDER BY id')
+  feed('SELECT doc_type,doc_id,action,from_state,to_state FROM doc_events ORDER BY id')
   return h.digest('hex')
 }
 
@@ -220,7 +230,7 @@ export async function generate(opts, dataDir, env = process.env) {
   const quote = await S('lib/quote.js')
   const credit = await S('lib/credit.js')
   const stock = await S('lib/stock.js')
-  const { applyTransition } = await S('lib/docflow.js')
+  const { applyTransition, logEvent } = await S('lib/docflow.js')
   const { cancelOrder } = await S('lib/sales-order.js')
   const { nextDocNo } = await S('lib/docno.js')
 
@@ -423,6 +433,9 @@ export async function generate(opts, dataDir, env = process.env) {
       }
       if (qtyAll <= 0) throw new Error(`合成订单无货可发：${order.doc_no}`)
       db.prepare('UPDATE sales_deliveries SET total_qty=?, total_amount=? WHERE id=?').run(qtyAll, round2(amtAll), did)
+      // 与路由一致：发货单"建出来就是 shipped"，没有 DL.ship 流转可记，必须在同一事务里补一条 create 留痕
+      logEvent({ db, docType: 'DL', id: did, docNo, action: 'create', actionName: '建单', to: 'shipped', actor, source: 'synth', remark: '发货单建单（发货出库，合成）',
+        payload: { order_id: id, order_no: order.doc_no, warehouse_id: order.warehouse_id, qty: qtyAll, amount: round2(amtAll), inventory_doc_type: 'SAL_OUT', inventory_doc_no: docNo } })
       const pend = db.prepare('SELECT COALESCE(SUM(qty - shipped_qty),0) p FROM sales_order_items WHERE order_id=?').get(id).p
       applyTransition({ db, docType: 'SO', id, action: pend <= 0.0001 ? 'ship' : 'pick', actor, set: { updated_at: new Date().toISOString().slice(0, 19).replace('T', ' ') }, remark: `发货单 ${docNo}`, source: 'synth' })
     })()
@@ -480,11 +493,11 @@ export async function generate(opts, dataDir, env = process.env) {
 export async function main(argv = process.argv.slice(2), env = process.env) {
   const opts = parseArgs(argv)
   const dataDir = guardEnvironment(env)
-  if (opts.out && unsafeOutput(opts.out)) throw usage('--out 不得位于仓库 data/ 内，也不得是符号链接')
+  if (opts.out && unsafeOutput(opts.out)) throw usage('--out 不得位于仓库 data/ 内，父目录必须已存在，且必须是尚不存在的新文件（不覆盖、不跟随符号链接）')
   const t0 = performance.now()
   const summary = await generate(opts, dataDir, env)
   summary.total_ms = Math.round(performance.now() - t0)
-  if (opts.out) fs.writeFileSync(path.resolve(opts.out), JSON.stringify(summary, null, 2) + '\n')
+  if (opts.out) writeExclusive(path.resolve(opts.out), JSON.stringify(summary, null, 2) + '\n')
   console.log(JSON.stringify({ ok: summary.invariants ? summary.invariants.ok : null, total_ms: summary.total_ms, db_bytes: summary.db_bytes, counts: summary.counts, table_counts: summary.table_counts, digest: summary.digest, failed: (summary.invariants?.checks || []).filter((c) => !c.ok) }))
   return summary
 }
