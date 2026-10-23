@@ -84,7 +84,8 @@ if (evidenceArg) {
       if (!cl || typeof cl !== 'object' || !['auto', 'operator-supplied', 'none'].includes(cl.mode)) bad('ci_lookup', 'mode must be auto, operator-supplied or none')
       else if (cl.mode === 'auto') {
         if (ev.ci_run_id === null && !String(cl.reason ?? '').trim()) bad('ci_lookup', 'an auto lookup that found no run must state the reason')
-        if (ev.ci_run_id !== null && (cl.conclusion !== 'success' || cl.source !== 'gh run list')) bad('ci_lookup', 'an auto-resolved run id must come from gh run list with conclusion success')
+        if (ev.ci_run_id !== null && (cl.conclusion !== 'success' || cl.source !== 'gh run list' || cl.head_sha !== ev.commit)) bad('ci_lookup', 'an auto-resolved run id must come from gh run list with conclusion success for exactly this commit (head_sha)')
+        if (cl.gh_override) console.warn('[verify] WARNING: ci_lookup used the OS_ERP_GH override binary; this is not a genuine GitHub lookup')
       } else if (cl.mode === 'none' && ev.ci_run_id !== null) bad('ci_lookup', 'mode none cannot carry a run id')
     }
     const result = (field, v, { needSource }) => {
@@ -107,6 +108,7 @@ if (evidenceArg) {
       else {
         if (c.tests < 1 || c.pass < 1) bad('focused_tests', 'a produced passed result must have run at least one passing test')
         if (c.fail !== 0 || c.cancelled !== 0) bad('focused_tests', 'a passed result cannot have failed or cancelled tests')
+        if (c.tests !== c.pass + c.fail + c.cancelled + c.skipped + c.todo) bad('focused_tests', 'summary_counts are inconsistent: tests must equal pass + fail + cancelled + skipped + todo')
       }
       if (typeof ft.duration_ms !== 'number' || !(ft.duration_ms >= 0)) bad('focused_tests', 'a produced result needs duration_ms')
       if (!/^[0-9a-f]{64}$/.test(String(ft.tests_tree_sha256 ?? ''))) bad('focused_tests', 'a produced result needs tests_tree_sha256')

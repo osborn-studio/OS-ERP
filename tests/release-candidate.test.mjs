@@ -278,6 +278,10 @@ test('parseTestSummary needs every count exactly once; resolveCiRun is honest ab
   assert.equal(ok.id, '102')
   assert.equal(ok.lookup.conclusion, 'success')
   assert.equal(ok.lookup.source, 'gh run list')
+  assert.equal(ok.lookup.head_sha, HEAD40)
+  assert.equal(ok.lookup.gh_override, undefined) // 单测直接传 gh 参数，不经环境变量
+  // 缺 headSha 的记录不被信任
+  assert.equal(resolveCiRun(HEAD40, { gh: fakeGh(t, { stdout: JSON.stringify([{ databaseId: 5, conclusion: 'success' }]) }).file }).id, null)
   const args = readFileSync(path.join(gh.dir, 'args.txt'), 'utf8')
   assert.match(args, new RegExp(`run list --commit ${HEAD40} --workflow ci\\.yml --json databaseId,conclusion`))
 })
@@ -325,6 +329,8 @@ test('--run-tests --ci-run auto records produced results bound to the package te
   assert.equal(ev.ci_run_id, '424242')
   assert.equal(ev.ci_lookup.mode, 'auto')
   assert.equal(ev.ci_lookup.source, 'gh run list')
+  assert.equal(ev.ci_lookup.head_sha, head)
+  assert.equal(ev.ci_lookup.gh_override, true) // 测试替身必须在证据里留痕
   assert.match(readFileSync(path.join(gh.dir, 'args.txt'), 'utf8'), new RegExp(`--commit ${head}`))
 
   const pkg = tempDir(t, 'os-erp-rc-pkg-')
@@ -344,6 +350,8 @@ test('--run-tests --ci-run auto records produced results bound to the package te
     ['tests hash missing', e => { delete e.focused_tests.tests_tree_sha256 }, /tests_tree_sha256/],
     ['tests hash wrong', e => { e.focused_tests.tests_tree_sha256 = '0'.repeat(64) }, /tests tree binding failed/],
     ['auto ci id without gh source', e => { e.ci_lookup.source = 'operator' }, /ci_lookup/],
+    ['inconsistent counts', e => { e.focused_tests.summary_counts.pass += 5 }, /inconsistent/],
+    ['auto ci for another commit', e => { e.ci_lookup.head_sha = 'f'.repeat(40) }, /ci_lookup/],
     ['auto ci null without reason', e => { e.ci_run_id = null; delete e.ci_lookup.reason }, /ci_lookup/],
     ['none mode with id', e => { e.ci_lookup = { mode: 'none' } }, /ci_lookup/]
   ]) {

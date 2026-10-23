@@ -186,10 +186,10 @@ export function resolveCiRun(commit, { gh = process.env.OS_ERP_GH || 'gh', cwd =
   try { runs = JSON.parse(r.stdout) } catch { return none('gh run list returned unparseable output') }
   if (!Array.isArray(runs)) return none('gh run list returned unexpected output')
   if (!runs.length) return none(`no ci.yml run recorded for commit ${commit.slice(0, 7)}`)
-  const ok = runs.filter(x => x && x.conclusion === 'success' && Number.isInteger(x.databaseId) && (x.headSha === undefined || x.headSha === commit))
+  const ok = runs.filter(x => x && x.conclusion === 'success' && Number.isInteger(x.databaseId) && x.headSha === commit)
     .sort((a, b) => String(b.createdAt ?? '').localeCompare(String(a.createdAt ?? '')) || b.databaseId - a.databaseId)
   if (!ok.length) return none(`${runs.length} ci.yml run(s) for ${commit.slice(0, 7)}, none with conclusion success (${[...new Set(runs.map(x => x?.conclusion || x?.status || 'unknown'))].join(', ')})`)
-  return { id: String(ok[0].databaseId), lookup: { mode: 'auto', source: 'gh run list', conclusion: 'success', run_created_at: ok[0].createdAt ?? null } }
+  return { id: String(ok[0].databaseId), lookup: { mode: 'auto', source: 'gh run list', conclusion: 'success', head_sha: commit, run_created_at: ok[0].createdAt ?? null, ...(process.env.OS_ERP_GH ? { gh_override: true } : {}) } }
 }
 
 function drillReference() {
@@ -250,6 +250,7 @@ function main() {
       const after = hashTestsTree(ROOT)
       if (after !== before) throw new Error('tests/ changed while the suite was running')
       assertClean('after running the focused suite')
+      if (git('rev-parse', 'HEAD') !== commit) throw new Error('HEAD moved while the focused suite was running')
       focused.tests_tree_sha256 = before
       focused.tests_files = listing.files.length
     }
