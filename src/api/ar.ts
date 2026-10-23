@@ -11,6 +11,7 @@
  */
 
 import api from './client'
+import type { CreditEffect } from '../utils/credit-effect'
 
 /** 统一拆信封：接口返回 { code, success, data }，页面只关心 data（与 useFetch 一致） */
 const data = <T>(p: Promise<any>): Promise<T> => p.then((r) => r.data as T)
@@ -88,6 +89,10 @@ export interface Receipt {
   status: 'draft' | 'confirmed' | 'voided'
   remark?: string | null
   allocations?: ReceiptAllocation[]
+  /** 仅 POST /confirm 响应（ADR-0013）：本次释放的授信台账行与合计 */
+  credit_released?: CreditEffect
+  /** 仅 POST /void 响应（ADR-0013）：本次恢复的占用；legacy=true 为迁移前收款单的旧口径 */
+  credit_reversal?: CreditEffect
 }
 
 export interface ArOverview {
@@ -228,9 +233,14 @@ export const AR_PREPAY_DETAIL = (subjectType: string, subjectId: number) =>
 
 /** 预收转应收：指定应收单（ar_id）或传 auto 按到期日 FIFO 自动抵扣 */
 export const AR_PREPAY_APPLY = (body: { receipt_id: number; ar_id?: number; amount?: number; auto?: boolean }) =>
-  data<{ receipt: Receipt; plan: { ar_id: number; amount: number }[]; applied: number; remaining: number }>(
-    api.post('/ar/prepay/apply', body)
-  )
+  data<{
+    receipt: Receipt
+    plan: { ar_id: number; amount: number }[]
+    applied: number
+    remaining: number
+    /** ADR-0013：本次抵扣按来源释放的授信（形状同确认收款） */
+    credit_released?: CreditEffect
+  }>(api.post('/ar/prepay/apply', body))
 
 // ---------- 订货中心并入 ----------
 /** 已收货但还没生成应收的订货单（历史遗留与开关关闭期） */
