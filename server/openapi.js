@@ -373,14 +373,14 @@ export function buildOpenApi() {
     '/api/oms/orders/{id}': { get: { tags: ['线上 OMS'], summary: '线上订单详情；范围外与不存在同形 404（ADR-0039）', parameters: [idParam], responses: { 200: jsonResp(null), 404: jsonResp(null) } } },
     '/api/oms/orders/{id}/convert': { post: { tags: ['线上 OMS'], summary: '线上订单转销售订单（占库）；销售订单归平台绑定组织的履约仓，平台未绑定 422，平台范围外 404', parameters: [idParam], responses: { 200: jsonResp(null), 404: jsonResp(null), 422: jsonResp(null) } } },
     '/api/oms/orders/convert-batch': { post: { tags: ['线上 OMS'], summary: '批量转单（逐单同上：范围外按「订单不存在」、未绑定平台按原因计入 failed）', responses: { 200: jsonResp(null) } } },
-    '/api/oms/orders/{id}/ship': { post: { tags: ['线上 OMS'], summary: '发货并回传平台（同时出库）', parameters: [idParam], responses: { 200: jsonResp(null) } } },
-    '/api/oms/orders/{id}/refund': { post: { tags: ['线上 OMS'], summary: '退款处理（释放占用）', parameters: [idParam], responses: { 200: jsonResp(null) } } },
+    '/api/oms/orders/{id}/ship': { post: { tags: ['线上 OMS'], summary: '发货并回传平台（同时出库）；订单须在平台绑定组织范围内（范围外 404），关联销售订单的出货仓须在范围内（403，ADR-0042）', parameters: [idParam], responses: { 200: jsonResp(null), 403: jsonResp(null), 404: jsonResp(null) } } },
+    '/api/oms/orders/{id}/refund': { post: { tags: ['线上 OMS'], summary: '退款处理（释放占用）；范围口径同发货（范围外 404、出货仓越界 403，ADR-0042）', parameters: [idParam], responses: { 200: jsonResp(null), 403: jsonResp(null), 404: jsonResp(null) } } },
     // 线上订单完成（OM shipped → completed）。平台侧早就完成了，系统里一直显示「已发货」
     // （三库停在 shipped 的 88/64/93 张）⇒ 看不出哪些真的结了。
     // ⚠️ `OM` 内核里**没有 `closed` 状态**（`STATES.OM` = pending/shipped/completed/refunded/cancelled），
     //    别照 `meta.js` 里那条历史遗留的 `closed` 文案去写这个动作。
-    '/api/oms/orders/{id}/complete': { post: { tags: ['线上 OMS'], summary: '完成线上订单（OM shipped → completed；纯状态，不动库存）', parameters: [idParam], responses: { 200: jsonResp(null), 404: jsonResp(null), 409: jsonResp(null) } } },
-    '/api/oms/stock-push': { post: { tags: ['线上 OMS'], summary: '推送可售库存至平台', responses: { 200: jsonResp(null) } } },
+    '/api/oms/orders/{id}/complete': { post: { tags: ['线上 OMS'], summary: '完成线上订单（OM shipped → completed；纯状态，不动库存）；订单须在平台绑定组织范围内，范围外 404（ADR-0042）', parameters: [idParam], responses: { 200: jsonResp(null), 404: jsonResp(null), 409: jsonResp(null) } } },
+    '/api/oms/stock-push': { post: { tags: ['线上 OMS'], summary: '推送可售库存至平台；只推范围内平台、库存合计只含范围内仓，指定平台在范围外 404（ADR-0042）', responses: { 200: jsonResp(null), 404: jsonResp(null) } } },
     '/api/oms/sync-logs': { get: { tags: ['线上 OMS'], summary: '同步日志；只含范围内平台（ADR-0039）', parameters: [q('platform_id', '平台'), q('sync_type', '类型 order/stock/shipment/refund/price')], responses: { 200: jsonResp(null) } } },
     '/api/oms/stats': { get: { tags: ['线上 OMS'], summary: '线上经营分析（平台 GMV/趋势/热销）；只统计范围内平台（ADR-0039）', parameters: [q('days', '统计天数')], responses: { 200: jsonResp(null) } } },
 
