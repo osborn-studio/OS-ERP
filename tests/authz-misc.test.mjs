@@ -6,7 +6,7 @@
  *     · `POST /api/docflow/no-issue`：非干跑要求该单据类型的创建权限；映射表缺项 ⇒ 403 DOC_TYPE_PERM_UNMAPPED；
  *       干跑豁免；映射表覆盖全部 doc_types，且每个权限码真实存在；
  *     · `GET /api/auth/orgs`：admin 全量，其余账号按 resolveOrgScope 裁剪；
- *     · `POST /api/qimen`：缺 app_key / 未知 app_key / 缺签名 / 错签名一律 401，正确签名才放行；
+ *     · `POST /api/qimen`：缺 app_key / 未知 app_key / 缺签名 / 错签名一律 401，正确签名（ADR-0033 平台密钥 HMAC）才放行；
  *     · `POST /api/purchase/payments`、`/settlements`：自动核销与结算来源选择按调用者组织范围，
  *       手工核销指向范围外结算单 ⇒ 404（与不存在同形）。
  *
@@ -17,7 +17,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { createHash, randomBytes } from 'node:crypto'
+import { createHash, createHmac, randomBytes } from 'node:crypto'
 import { once } from 'node:events'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -202,12 +202,19 @@ test('auth orgs list is trimmed by org scope for non-admin accounts', { timeout:
 test('qimen gateway never passes through unauthenticated or badly signed calls', { timeout: 300000 }, async (t) => {
   const f = await server(t)
   const { api, db } = f
-  let pf = db.prepare("SELECT id, app_key FROM platforms WHERE app_key IS NOT NULL AND app_key<>'' AND status='active' LIMIT 1").get()
-  if (!pf) {
-    db.prepare("INSERT INTO platforms (code,name,app_key,status) VALUES ('QX1','Qimen test','qx-app-key','active')").run()
-    pf = { app_key: 'qx-app-key' }
-  }
+  const pf = db.prepare("SELECT id, app_key FROM platforms WHERE app_key IS NOT NULL AND app_key<>'' AND status='active' LIMIT 1").get()
+  const issued = await api(`/api/qimen/platforms/${pf.id}/secret`, { token: f.admin, body: {} })
+  assert.equal(issued.status, 200, JSON.stringify(issued.body))
+  const platformSecret = issued.body.data.secret
   const method = 'taobao.qimen.itemmapping.query'
+  // ADR-0033：HMAC-SHA256(平台密钥, app_key\nmethod\ntimestamp\nnonce\nsha256(排序 JSON(request)))
+  const signed = (m, request = {}, over = {}) => {
+    const timestamp = String(Date.now())
+    const nonce = randomBytes(12).toString('hex')
+    const digest = createHash('sha256').update(JSON.stringify(request), 'utf8').digest('hex')
+    const sign = createHmac('sha256', platformSecret).update([pf.app_key, m, timestamp, nonce, digest].join('\n')).digest('hex').toUpperCase()
+    return { method: m, request, app_key: pf.app_key, timestamp, nonce, sign, ...over }
+  }
   const unauthorized = async (body, why) => {
     const r = await api('/api/qimen', { body })
     assert.equal(r.status, 401, `${why}: ${JSON.stringify(r.body)}`)
@@ -219,25 +226,25 @@ test('qimen gateway never passes through unauthenticated or badly signed calls',
   await unauthorized({ method, request: {} }, 'missing app_key')
   await unauthorized({ method, request: {}, app_key: '' }, 'empty app_key')
   await unauthorized({ method, request: {}, app_key: 'no-such-key' }, 'unknown app_key')
-  await unauthorized({ method, request: {}, app_key: pf.app_key }, 'missing sign')
-  await unauthorized({ method, request: {}, app_key: pf.app_key, sign: 'DEADBEEF' }, 'bad sign')
-  await unauthorized({ method, request: {}, app_key: pf.app_key, sign: md5(`${pf.app_key}other.method`) }, 'sign for another method')
+  await unauthorized({ ...signed(method), sign: undefined }, 'missing sign')
+  await unauthorized({ ...signed(method), sign: 'DEADBEEF' }, 'bad sign')
+  await unauthorized({ ...signed('other.method'), method }, 'sign for another method')
   await unauthorized({ method, request: {}, app_key: { toString: 'x' }, sign: 'x' }, 'non-string app_key')
   await unauthorized({ method: 'bogus.method', request: {} }, 'unknown method without credentials')
+  await unauthorized({ method, request: {}, app_key: pf.app_key, sign: md5(`${pf.app_key}${method}GML-DEMO-SECRET`) }, 'legacy demo-constant signature')
 
-  const good = await api('/api/qimen', { body: { method, request: {}, app_key: pf.app_key, sign: md5(`${pf.app_key}${method}GML-DEMO-SECRET`) } })
+  const good = await api('/api/qimen', { body: signed(method) })
   assert.equal(good.status, 200, JSON.stringify(good.body))
   assert.equal(good.body.success, true)
   // 已鉴权但方法未知：仍是协议内的 200 错误码
-  const unknown = await api('/api/qimen', { body: { method: 'bogus.method', request: {}, app_key: pf.app_key, sign: md5(`${pf.app_key}bogus.methodGML-DEMO-SECRET`) } })
+  const unknown = await api('/api/qimen', { body: signed('bogus.method') })
   assert.equal(unknown.status, 200)
   assert.equal(unknown.body.code, '1002')
   // 平台绑定发货仓：只能查自己的仓；他仓 / 未知仓编码 / 缺省都不能退化成全仓汇总
   const whRows = db.prepare('SELECT id, code FROM warehouses ORDER BY id LIMIT 2').all()
   db.prepare('UPDATE platforms SET warehouse_id=? WHERE app_key=?').run(whRows[0].id, pf.app_key)
   const invMethod = 'taobao.qimen.inventory.query'
-  const invSign = md5(`${pf.app_key}${invMethod}GML-DEMO-SECRET`)
-  const inv = async (request) => (await api('/api/qimen', { body: { method: invMethod, request, app_key: pf.app_key, sign: invSign } })).body
+  const inv = async (request) => (await api('/api/qimen', { body: signed(invMethod, request) })).body
   assert.deepEqual((await inv({ warehouseCode: whRows[1].code })).items, [])
   assert.deepEqual((await inv({ warehouseCode: 'NO-SUCH-WH' })).items, [])
   const own = await inv({})
@@ -248,7 +255,7 @@ test('qimen gateway never passes through unauthenticated or badly signed calls',
   assert.equal((await inv({ warehouseCode: whRows[0].code })).warehouseCode, whRows[0].code)
   // 停用平台不再通过
   db.prepare("UPDATE platforms SET status='disabled' WHERE app_key=?").run(pf.app_key)
-  await unauthorized({ method, request: {}, app_key: pf.app_key, sign: md5(`${pf.app_key}${method}GML-DEMO-SECRET`) }, 'disabled platform')
+  await unauthorized(signed(method), 'disabled platform')
 })
 
 test('payment auto-allocation and settlement source selection follow the caller org scope', { timeout: 300000 }, async (t) => {

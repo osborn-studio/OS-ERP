@@ -347,6 +347,7 @@ export function buildOpenApi() {
     '/api/dealers/statements/{id}/void': { post: { tags: ['经销商'], summary: '作废对账单（只作废本凭证，不动底层应收台账；须写理由）', parameters: [idParam], responses: { 200: jsonResp(null) } } },
 
     '/api/oms/platforms': { get: { tags: ['线上 OMS'], summary: '平台店铺列表（含订单数/GMV/最近同步）', responses: { 200: jsonResp(null) } } },
+    '/api/qimen/platforms/{id}/secret': { post: { tags: ['线上 OMS'], summary: '签发/轮换奇门平台密钥（oms.platform.manage；明文仅此一次返回；已有密钥需 rotate:true，ADR-0033）', parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'integer' } }], responses: { 200: jsonResp(null), 403: jsonResp(null), 404: jsonResp(null), 409: jsonResp(null) } } },
     '/api/oms/sync/{platformId}': { post: { tags: ['线上 OMS'], summary: '从平台拉取订单（演示为模拟数据源；生产 503）。订单归平台绑定组织（履约仓所属组织）：平台未绑定 422 PLATFORM_ORG_UNBOUND，履约仓不在调用者组织范围内 403', parameters: [{ name: 'platformId', in: 'path', required: true, schema: { type: 'integer' } }], responses: { 200: jsonResp(null), 403: jsonResp(null), 404: jsonResp(null), 422: jsonResp(null) } } },
     '/api/oms/orders': { get: { tags: ['线上 OMS'], summary: '线上订单列表', parameters: [q('platform_id', '平台'), q('status', '状态'), q('pending', '=1 只看待发货'), q('startDate', '开始日期'), q('endDate', '结束日期'), q('keyword', '关键字')], responses: { 200: jsonResp(null) } } },
     '/api/oms/orders/{id}': { get: { tags: ['线上 OMS'], summary: '线上订单详情', parameters: [idParam], responses: { 200: jsonResp(null) } } },

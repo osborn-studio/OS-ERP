@@ -23,6 +23,7 @@ import invTxnTypesRoutes from './inv-txn-types.js'
 import warehouseRoutes from './warehouses.js'
 // 「哪些仓库类型是隔离仓」的唯一出处（下拉候选要排除它们；见 /options 的注释）
 import { ISOLATION_WAREHOUSE_TYPES } from '../lib/warehouse.js'
+import { PLATFORM_PUBLIC_SELECT, PLATFORM_PROTECTED_FIELDS } from '../lib/qimen-auth.js'
 
 const r = Router()
 r.use(requireAuth, requireInternal('总部主数据；门店与经销商请使用各自业务目录'))
@@ -267,7 +268,8 @@ r.use('/warehouses', warehouseRoutes)
 r.use('/stores', crudRouter({ table: 'stores', module: 'master', searchFields: ['code', 'name', 'city'], writeRoles: ['admin', 'sales'], orderBy: 'id ASC' }))
 r.use('/suppliers', crudRouter({ table: 'suppliers', module: 'master', searchFields: ['code', 'name', 'contact'], writeRoles: ['admin', 'purchase'], orderBy: 'id ASC' }))
 r.use('/dealers', crudRouter({ table: 'dealers', module: 'master', searchFields: ['code', 'name', 'city', 'contact'], writeRoles: ['admin', 'sales'], orderBy: 'id ASC' }))
-r.use('/platforms', crudRouter({ table: 'platforms', module: 'master', searchFields: ['code', 'name', 'shop_name'], writeRoles: ['admin', 'sales'], orderBy: 'id ASC' }))
+// 平台的封存密钥列不经通用接口读写（ADR-0033）：读取走显式列清单，写入列入 protectedFields；签发/轮换见 /api/qimen/platforms/:id/secret
+r.use('/platforms', crudRouter({ table: 'platforms', module: 'master', searchFields: ['code', 'name', 'shop_name'], writeRoles: ['admin', 'sales'], orderBy: 'id ASC', selectSql: PLATFORM_PUBLIC_SELECT, protectedFields: PLATFORM_PROTECTED_FIELDS }))
 
 // ---------- 扫码识别（条码 / 序列号 / SKU 编码 三合一）----------
 r.get(

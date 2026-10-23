@@ -11,14 +11,14 @@
 // 【注意】本文件由脚本写出：**文件标识块也必须由脚本输出**，否则下次 gen:api 会把它冲掉 ——
 //   "登记了不等于守住了"。改格式请改 scripts/gen-api-types.mjs。
 // ============================================================================
-// 路径 519 条 ｜ 标签 34 个
+// 路径 520 条 ｜ 标签 34 个
 //
 // 用法：
 //   import { typedGet, typedPost } from '../api/typed'
 //   typedGet('/api/purchase/chain/overview')   // 路径写错编译期就报
 
 export const OPENAPI_VERSION = '1.36.0'
-export const API_ROUTE_COUNT = 519
+export const API_ROUTE_COUNT = 520
 
 /** 全部已登记的接口路径 */
 export type ApiRoute =
@@ -460,6 +460,7 @@ export type ApiRoute =
   | '/api/qc/requests/{id}/close'
   | '/api/qc/requests/{id}/submit'
   | '/api/qc/sample-plan'
+  | '/api/qimen/platforms/{id}/secret'
   | '/api/refunds'
   | '/api/refunds/audit'
   | '/api/refunds/meta'
@@ -982,6 +983,7 @@ export type ApiRouteMap = {
   '/api/qc/requests/{id}/close': { post: true }
   '/api/qc/requests/{id}/submit': { post: true }
   '/api/qc/sample-plan': { get: true }
+  '/api/qimen/platforms/{id}/secret': { post: true }
   '/api/refunds': { get: true; post: true }
   '/api/refunds/audit': { get: true }
   '/api/refunds/meta': { get: true }
@@ -1513,6 +1515,7 @@ export const API_ROUTES: readonly ApiRoute[] = [
   '/api/qc/requests/{id}/close',
   '/api/qc/requests/{id}/submit',
   '/api/qc/sample-plan',
+  '/api/qimen/platforms/{id}/secret',
   '/api/refunds',
   '/api/refunds/audit',
   '/api/refunds/meta',
@@ -2036,6 +2039,7 @@ export const ROUTE_METHODS: Record<ApiRoute, string[]> = {
   '/api/qc/requests/{id}/close': ['post'],
   '/api/qc/requests/{id}/submit': ['post'],
   '/api/qc/sample-plan': ['get'],
+  '/api/qimen/platforms/{id}/secret': ['post'],
   '/api/refunds': ['get', 'post'],
   '/api/refunds/audit': ['get'],
   '/api/refunds/meta': ['get'],

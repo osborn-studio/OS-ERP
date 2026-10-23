@@ -18,25 +18,19 @@
 // 本模块让 GML 扮演「承接方」，用标准报文演示与主流电商平台的对接能力。
 // 报文格式：{ method, app_key, sign, ...request }，响应统一 { success, code, message, ...data }
 import { Router } from 'express'
-import crypto from 'node:crypto'
 import { getDb } from '../db/index.js'
 import { ok, fail, wrap } from '../lib/http.js'
-import { requireAuth } from '../middleware/auth.js'
+import { requireAuth, requirePerm, requireInternal } from '../middleware/auth.js'
+import { auditStrict } from '../middleware/audit.js'
+import { redactValue } from '../lib/redact.js'
+import { verifyQimenRequest, issuePlatformSecret } from '../lib/qimen-auth.js'
 
 const r = Router()
+const MANAGE_PERM = 'oms.platform.manage'
 
-const md5 = (s) => crypto.createHash('md5').update(s, 'utf8').digest('hex').toUpperCase()
-
-// 奇门签名规则（演示版）：sign = MD5(app_key + method + secret)
-// 真实环境为 系统参数按 key 排序拼接 + secret 前后缀，此处做等价简化。
+// 签名契约（ADR-0033）：sign = HMAC-SHA256(平台独立密钥, app_key\nmethod\ntimestamp\nnonce\nsha256(canonicalJson(request)))，
+// 大写十六进制；timestamp 5 分钟窗口，nonce 窗口内一次性。实现与细节见 lib/qimen-auth.js。
 // ADR-0028：签名**必填**——缺签名与错签名同样拒绝（原来缺签名直接放行是"未鉴权调用"后门）。
-function verifySign(platform, method, sign) {
-  if (typeof sign !== 'string' || !sign) return { pass: false, note: '缺少签名' }
-  const expected = Buffer.from(md5(`${platform.app_key}${method}GML-DEMO-SECRET`))
-  const given = Buffer.from(sign.toUpperCase())
-  const pass = given.length === expected.length && crypto.timingSafeEqual(given, expected)
-  return { pass, note: 'sign = MD5(app_key + method + secret)' }
-}
 
 // 协议错误码走 HTTP 200（外部协议约定，见 check-bizcode-shape 的已声明落点）；鉴权失败（缺/错 app_key、缺/错签名）是 401。
 function qimenError(res, code, message, extra = {}, status = 200) {
@@ -49,7 +43,7 @@ function logGateway(db, platformId, method, payload, status, message, costMs) {
      VALUES (?,?,?,?,?,?,?,?,?,?)`
   ).run(
     platformId || null, `qimen:${method}`, 'in', status, 1, status === 'success' ? 1 : 0, status === 'success' ? 0 : 1,
-    message, JSON.stringify(payload).slice(0, 4000), costMs
+    message, JSON.stringify(redactValue({ ...payload, sign: undefined })).slice(0, 4000), costMs
   )
 }
 
@@ -138,11 +132,15 @@ const PLATFORM_CODES = [
 r.get(
   '/capabilities',
   requireAuth,
+  requireInternal('奇门接入清单'),
+  requirePerm(MANAGE_PERM),
   wrap((_req, res) => {
     const db = getDb()
+    // 只列公开标识（app_key）与"是否已签发"；密钥永不出现在任何读接口（ADR-0033）
     const platforms = db
       .prepare(
         `SELECT pf.id, pf.code, pf.platform_code, pf.name, pf.shop_name, pf.adapter, pf.app_key, pf.qimen_url, pf.qimen_wh, pf.shop_code, pf.status,
+                (pf.app_secret_sealed IS NOT NULL AND pf.app_secret_sealed<>'') AS has_secret, pf.app_secret_rotated_at AS secret_rotated_at,
                 w.name AS warehouse_name
          FROM platforms pf LEFT JOIN warehouses w ON w.id=pf.warehouse_id ORDER BY pf.id`
       )
@@ -150,11 +148,36 @@ r.get(
     return ok(res, {
       protocol: '奇门标准化协议 V3.9.5（演示实现）',
       gateway: '/api/qimen',
-      signRule: 'sign = MD5(app_key + method + secret)，演示环境 secret = GML-DEMO-SECRET；app_key 与签名均为必填，缺失或错误一律 401',
+      signRule:
+        'sign = 大写十六进制 HMAC-SHA256(平台密钥, app_key\\nmethod\\ntimestamp\\nnonce\\nSHA256(request 的键名排序紧凑 JSON))；timestamp 为 13 位毫秒时间戳（±5 分钟），nonce 16-64 位且窗口内只能用一次；app_key / timestamp / nonce / sign 均必填，缺失或错误一律 401',
       methods: METHODS,
       platformCodes: PLATFORM_CODES,
       platforms
     })
+  })
+)
+
+// ---------- 平台密钥签发 / 轮换（管理员，ADR-0033）----------
+// 明文只在本响应里出现一次，库里只存封存值；已有密钥必须显式 { rotate: true }（旧密钥立即失效）。
+r.post(
+  '/platforms/:id/secret',
+  requireAuth,
+  requireInternal('奇门密钥管理'),
+  requirePerm(MANAGE_PERM),
+  wrap((req, res) => {
+    const db = getDb()
+    const id = Number(req.params.id)
+    if (!Number.isInteger(id) || id <= 0) return fail(res, '平台 id 非法', 400)
+    // QimenCredentialError 带 status+code，由 wrap 统一转成项目信封（404 / 409 + 稳定码）
+    // 审计写入与凭据变更在同一事务里：审计写不进去就整体回滚（"密钥换了但审计上不存在"不可接受）
+    const issued = db.transaction(() => {
+      const out = issuePlatformSecret(db, id, { rotate: req.body?.rotate === true })
+      // 留痕只记"谁对哪个平台做了签发/轮换"，不带密钥也不带末 4 位
+      auditStrict(req, { action: out.rotated ? 'QIMEN_SECRET_ROTATE' : 'QIMEN_SECRET_ISSUE', module: 'oms', entity: 'platforms', entityId: id, detail: out.app_key })
+      return out
+    })()
+    res.set('Cache-Control', 'no-store')
+    return ok(res, issued)
   })
 )
 
@@ -172,10 +195,10 @@ r.post(
     if (!appKey) return qimenError(res, '1003', '缺少 app_key', {}, 401)
     const platform = db.prepare("SELECT * FROM platforms WHERE app_key=? AND status='active'").get(appKey)
     if (!platform) return qimenError(res, '1003', 'app_key 不存在或未授权', {}, 401)
-    const signCheck = verifySign(platform, typeof method === 'string' ? method : '', body.sign)
-    if (!signCheck.pass) {
-      logGateway(db, platform.id, String(method || '').slice(0, 100), { app_key: appKey }, 'fail', '签名校验失败', Date.now() - started)
-      return qimenError(res, '1004', '签名校验失败', {}, 401)
+    const authResult = verifyQimenRequest(db, platform, body)
+    if (!authResult.ok) {
+      logGateway(db, platform.id, String(method || '').slice(0, 100), { app_key: appKey }, 'fail', authResult.message, Date.now() - started)
+      return qimenError(res, authResult.code, authResult.message, {}, 401)
     }
     if (!method) return qimenError(res, '1001', '缺少 method 参数')
     if (!METHODS.some((m) => m.method === method)) {
@@ -185,7 +208,7 @@ r.post(
     const request = body.request || {}
     const respond = (data) => {
       logGateway(db, platform.id, method, body, 'success', `${method} 处理成功`, Date.now() - started)
-      return res.json({ success: true, code: 0, message: signCheck.note || 'success', ...data })
+      return res.json({ success: true, code: 0, message: 'success', ...data })
     }
 
     // ---- 各 method 的承接逻辑 ----

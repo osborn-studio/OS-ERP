@@ -22,6 +22,8 @@ import { useState } from 'react'
 import { RefreshCw, Plug, Play, Globe2 } from 'lucide-react'
 import { getIndustry } from '../../api/client'
 import { Card, Table, useFetch, toast } from '../../components/ui'
+import { ScopeBlocked, isBlocked } from '../../components/ScopeNotice'
+import { signQimen, newNonce } from '../../utils/qimen-sign'
 
 const METHODS_SAMPLE: Record<string, any> = {
   'taobao.qimen.itemmapping.query': { itemCode: 'SP10001-01' },
@@ -53,7 +55,8 @@ export default function Qimen() {
   const cap = useFetch<any>('/qimen/capabilities')
   const [method, setMethod] = useState('taobao.qimen.itemmapping.query')
   const [appKey, setAppKey] = useState('')
-  const [sign, setSign] = useState('')
+  // 平台密钥只在内存里参与签名计算：不入 localStorage、不发给后台接口（发给网关的只有签名结果）
+  const [secret, setSecret] = useState('')
   const [reqBody, setReqBody] = useState(JSON.stringify(METHODS_SAMPLE['taobao.qimen.itemmapping.query'], null, 2))
   const [sending, setSending] = useState(false)
   const [resp, setResp] = useState<any>(null)
@@ -73,11 +76,18 @@ export default function Qimen() {
       } catch {
         return toast('请求体不是合法 JSON', 'error')
       }
-      // 网关自鉴权（app_key + sign，缺一即 401）。这里**不带**后台登录令牌：
+      // 网关自鉴权（ADR-0033：app_key + timestamp + nonce + HMAC 签名，缺一即 401）。这里**不带**后台登录令牌：
       // 网关的 401 是协议鉴权失败，不是后台会话失效，走 api 客户端会把当前登录误判为过期并登出。
-      const body: any = { method, request }
-      if (appKey) body.app_key = appKey
-      if (sign) body.sign = sign
+      if (!appKey || !secret) return toast('请填写 app_key 与平台密钥（密钥签发后只显示一次）', 'error')
+      const timestamp = String(Date.now())
+      const nonce = newNonce()
+      let sign: string
+      try {
+        sign = await signQimen(secret, { appKey, method, timestamp, nonce, request })
+      } catch (e: any) {
+        return toast(e.message, 'error')
+      }
+      const body: any = { method, request, app_key: appKey, timestamp, nonce, sign }
       const industry = getIndustry()
       const res = await fetch('/api/qimen', {
         method: 'POST',
@@ -97,6 +107,9 @@ export default function Qimen() {
   }
 
   const methods = cap.data?.methods || []
+
+  // 清单需要 oms.platform.manage：无权限账号只看到提示，不展示空表
+  if (isBlocked(cap)) return <ScopeBlocked failure={cap} onRetry={cap.reload} />
 
   return (
     <div>
@@ -118,7 +131,7 @@ export default function Qimen() {
           <div>
             <b className="text-ink-900">签名规则</b>：{cap.data?.signRule}
             <br />
-            <b className="text-ink-900">报文格式</b>：<code className="font-mono">{'{ method, app_key, sign, request }'}</code>，响应统一 <code className="font-mono">{'{ success, code, message, ...data }'}</code>
+            <b className="text-ink-900">报文格式</b>：<code className="font-mono">{'{ method, app_key, timestamp, nonce, sign, request }'}</code>，响应统一 <code className="font-mono">{'{ success, code, message, ...data }'}</code>
           </div>
         </div>
       </Card>
@@ -139,6 +152,7 @@ export default function Qimen() {
                 </span>
               ) },
               { key: 'app_key', title: 'AppKey', width: 140, render: (r: any) => <span className="font-mono text-[11px]">{r.app_key || '—'}</span> },
+              { key: 'has_secret', title: '密钥', width: 70, render: (r: any) => (r.has_secret ? '已签发' : '未签发') },
               { key: 'qimen_wh', title: '奇门仓编', width: 90, render: (r: any) => <span className="font-mono text-[11px]">{r.qimen_wh || '—'}</span> },
               { key: 'warehouse_name', title: '发货仓', render: (r: any) => r.warehouse_name || '—' }
             ]}
@@ -202,8 +216,8 @@ export default function Qimen() {
               <input className="input font-mono text-[12px]" value={appKey} placeholder="ak_xxx" onChange={(e) => setAppKey(e.target.value)} />
             </div>
             <div>
-              <div className="text-[11px] text-slate-400 mb-1">sign（必填：MD5(app_key + method + 演示 secret)，大写十六进制）</div>
-              <input className="input font-mono text-[12px]" value={sign} placeholder="32 位大写 MD5" onChange={(e) => setSign(e.target.value.trim())} />
+              <div className="text-[11px] text-slate-400 mb-1">平台密钥（在「平台店铺」页签发，只显示一次；仅在本页内存里用于计算签名，不保存、不上传）</div>
+              <input className="input font-mono text-[12px]" type="password" autoComplete="off" value={secret} placeholder="qsk_…" onChange={(e) => setSecret(e.target.value.trim())} />
             </div>
             <div>
               <div className="text-[11px] text-slate-400 mb-1">request 报文（JSON）</div>

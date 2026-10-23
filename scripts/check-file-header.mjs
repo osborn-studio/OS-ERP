@@ -80,6 +80,11 @@ const DECLARED = [
   'src/utils/scope-notice.ts',
   'src/components/ScopeNotice.tsx',
   'tests/scope-notice.test.mjs',
+  // 奇门网关凭据（ADR-0033）
+  'server/lib/qimen-auth.js',
+  'server/db/migrations/060_qimen_secrets.cjs',
+  'src/utils/qimen-sign.ts',
+  'tests/qimen-auth.test.mjs',
   // 授信投影（ADR-0014）：credit_hold 的唯一写入者与对账守卫
   'tests/credit-hold-projection.test.mjs',
   // 待办范围与 Agent Token 有效状态（ADR-0015）
