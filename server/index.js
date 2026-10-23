@@ -25,6 +25,7 @@ import { fileURLToPath } from 'node:url'
 import { ROOT_DIR, INDUSTRIES, DEFAULT_INDUSTRY, runWithIndustry, normalizeIndustry, dbPathFor } from './db/index.js'
 import { errorHandler } from './middleware/audit.js'
 import { requestLogger } from './lib/logger.js'
+import { assertTrustProxyConfig, trustProxyFn } from './lib/trust-proxy.js'
 import { requireAuth, JWT_SECRET, assertJwtSecretPosture, isTokenInvalid } from './middleware/auth.js'
 import jwt from 'jsonwebtoken'
 import { securityHeaders } from './middleware/security-headers.js'
@@ -93,9 +94,13 @@ const HOST = process.env.HOST || '0.0.0.0'
 // 生产环境没显式给 GML_JWT_SECRET 就直接抛错退出，绝不拿内置演示密钥对外签发令牌；
 // 非生产回退时这里会打一条刺耳的警告（有落点，不静默）。
 assertJwtSecretPosture()
+// ADR-0040：GML_TRUST_PROXY 非法 ⇒ 启动即抛 TRUST_PROXY_INVALID（默认 off）
+assertTrustProxyConfig()
 
 const app = express()
 app.disable('x-powered-by')
+// 受信代理的唯一出口（ADR-0040）：req.ip / req.secure / 请求号 / HSTS / Cookie Secure 都从这一个函数派生
+app.set('trust proxy', trustProxyFn)
 // 请求号 + 访问日志：必须最先，之后所有日志行（含 errorHandler）才带 req_id（ADR-0023）
 app.use(requestLogger)
 // 安全响应头（ADR-0036）：紧随请求号；静态根 = 前端构建产物（含 public/ 拷贝），用于给带内联脚本的 html 算 CSP 哈希

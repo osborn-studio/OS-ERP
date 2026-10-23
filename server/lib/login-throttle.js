@@ -202,7 +202,7 @@ export function createLoginThrottle({ dataDir = requireDataDirectory(), mode = r
 }
 
 let current
-/** Production route API. req.ip comes from the socket unless an operator explicitly trusts a proxy. */
+/** Production route API. req.ip is derived by Express from the single GML_TRUST_PROXY policy (lib/trust-proxy.js, ADR-0040): the socket peer unless that peer is a configured trusted proxy. */
 export function consumeLoginAttempt(input) {
   try {
     const options = { dataDir: requireDataDirectory(), mode: runtimeMode(), policy: policyFromEnv(process.env) }

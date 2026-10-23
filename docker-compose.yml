@@ -36,6 +36,13 @@ services:
       # 报出来的那句话本身就是修复命令。任何写进仓库的默认密钥都是公开已知值，等于没有认证。
       # 第二道闸门在程序侧：变量给了但等于公开已知值 ⇒ production 下拒绝启动
       # （见 server/middleware/auth.js 的 PUBLIC_DEFAULT_SECRETS）。
+      # 受信反向代理（ADR-0040）：默认 off —— X-Forwarded-For / -Proto / X-Request-Id 一律忽略。
+      # 在容器前加 HTTPS 反向代理时才设置，值 = 代理在容器内看到的**连接来源地址**（不是公网地址），例如
+      #   GML_TRUST_PROXY: 172.18.0.0/16     # compose 默认网桥网段，用 `docker network inspect` 核对
+      # 取值：off | loopback | 逗号分隔的 IPv4/IPv6 CIDR；非法值启动即失败（TRUST_PROXY_INVALID）。
+      # 注意：本文件把端口只发布到宿主机 127.0.0.1，容器内看到的对端是网桥网关而不是 127.0.0.1，`loopback` 在此无效。
+      # 代理必须**覆盖**（而非透传）X-Forwarded-For / -Proto / X-Request-Id，见安装手册 6.1。
+      GML_TRUST_PROXY: ${GML_TRUST_PROXY:-off}
       GML_JWT_SECRET: ${GML_JWT_SECRET:?GML_JWT_SECRET 必须显式提供 —— 生成并启动：GML_JWT_SECRET=$(openssl rand -hex 32) docker compose up}
     # 根文件系统只读：程序只写 GML_DATA_DIR（/data，命名卷）；/tmp 给 tmpfs 以防库或运行时需要临时文件
     read_only: true

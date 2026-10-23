@@ -16,6 +16,7 @@
  * ============================================================================
  */
 import crypto from 'node:crypto'
+import { isSecureRequest } from '../lib/trust-proxy.js'
 
 export const SESSION_COOKIE = 'gml_session'
 export const CSRF_COOKIE = 'gml_csrf'
@@ -62,7 +63,7 @@ export function csrfValid(req, jwt, secret) {
   return same(header, cookie) && same(header, csrfFor(jwt, secret))
 }
 
-const secureFlag = (req, env) => env.GML_COOKIE_SECURE === 'always' || req.secure === true
+const secureFlag = (req, env) => env.GML_COOKIE_SECURE === 'always' || isSecureRequest(req)
 
 /** 登录成功后下发 Cookie；返回是否已下发（bearer 模式 ⇒ false，什么也不做） */
 export function issueSessionCookies(req, res, jwt, secret, env = process.env) {
