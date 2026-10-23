@@ -39,7 +39,7 @@
 
 - `purchase_orders`、`approval_instances` 无组织列是 F05 选 403 的根因；要做到"受限账号收到自己范围的摘要"需先补齐单据组织归属，另行决定。
 - `/api/purchase/chain/todos`、`/api/approval/todos` 仍只 `requireAuth`，与本 ADR 同属"全局待办对受限账号可见"问题，不在本批范围，需单独处理。
-- 出站策略在应用层；不替代网络出口策略（egress 防火墙）。IPv6 地址检查覆盖常见嵌入形式，Teredo（2001::/32）未特殊处理。
+- 出站策略在应用层；不替代网络出口策略（egress 防火墙）。IPv6 地址检查覆盖常见嵌入形式，Teredo（2001::/32）已在 W4 阻断（见「TLS 联调」）。
 - demo/test 允许回环与 http 是测试与本地演示的放宽，不是商用口径；生产模式判据不受任何环境开关影响。
 - 密钥封存的强度取决于 `GML_SECRET_KEY` 或 JWT 密钥的保密性；生产 JWT 密钥缺失/公开值时服务不会启动（ADR-0004 / A20），demo/test 下回退到公开演示密钥派生，仅为形式保护。
 
@@ -53,3 +53,10 @@
 - 正向路径（test 模式服务）：通用/钉钉/飞书渠道向 127.0.0.1 监听器发送成功，签名与密钥逐一校验；重定向渠道失败；日志与库中无明文密钥。
 
 本批在 Mac mini 上以 Node 22 本地开发验证，不等于 Linux 目标服务器或 CI 验收。
+
+## TLS 联调（W4）
+
+- `tests/notify-tls.test.mjs` 在 test 模式下启动本地 HTTPS 监听（仅测试用自签证书与私钥，`tests/fixtures/notify-tls-test-*.pem`，主机名 `hook.example.test`），经注入的 `lookup` 走完整 `outboundRequest`，验证：解析后固定 IP 连接且 SNI 为主机名；证书主机名校验（换名即 `OUTBOUND_NETWORK` 拒绝）；不带测试 CA 时自签被拒；3xx 拒绝；响应体上限；总超时覆盖慢响应体。
+- 自签仅能经显式选项 `testTrustedCa` 接受，且仅当 `GML_RUNTIME_MODE=test`；production/demo/缺省模式在解析与连接之前抛 `OUTBOUND_TEST_CA_FORBIDDEN`。该选项不读环境开关，也不关闭主机名校验；生产调用方（通知服务）不传它。
+- Teredo（2001::/32）加入 IPv6 阻断分类，邻近公网段（如 2001:4860::）不受影响。
+- 在 Mac mini / Node 22 本地验证，不等于 Linux 目标机或 CI 验收。

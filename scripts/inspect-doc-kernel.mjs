@@ -15,13 +15,23 @@
 
 // 单据内核实地勘察：列出所有「带 status 列」的表的真实取值分布与关键字段
 // 用途：模块 04 单据内核的状态机定义必须来自实测，而不是照抄代码里的分支
+// 用法：node scripts/inspect-doc-kernel.mjs <库文件路径>            （旧用法，显式文件路径照旧有效）
+//       GML_DATA_DIR=/absolute/dir node scripts/inspect-doc-kernel.mjs   （不给路径 ⇒ 数据目录里的 cosmetic 库）
+// 不再兜底到仓库 data/（ADR-0019）：缺路径又缺显式数据目录 ⇒ 退出码 2。
 import D from 'better-sqlite3'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { requireExplicitDataDir, dbPathFor } from '../server/db/index.js'
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const ROOT = path.resolve(__dirname, '..')
-const DB = process.argv[2] || path.join(ROOT, 'data', 'gml_cosmetic.db')
+let DB = process.argv[2]
+if (!DB) {
+  try {
+    requireExplicitDataDir()
+    DB = dbPathFor('cosmetic')
+  } catch (e) {
+    console.error(`${e.code}: ${e.message}`)
+    process.exit(2)
+  }
+}
 
 const db = new D(DB, { readonly: true })
 const tabs = db

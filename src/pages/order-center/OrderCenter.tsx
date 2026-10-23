@@ -28,6 +28,8 @@ import {
   AlertTriangle, ArrowRight, CheckCircle2, ClipboardCheck, CreditCard, FileText,
   Layers, RefreshCw, Send, ShoppingBag, Truck, Users2, Warehouse, XCircle
 } from 'lucide-react'
+import { useAuth } from '../../store/auth'
+import { CREDIT_AUDIT } from '../../api/quotes'
 
 /**
  * 订货中心（模块 12A）：门店要货与经销商订货的统一入口。
@@ -381,7 +383,7 @@ function Orders() {
               <Info label="金额 / 数量" value={`¥${fmtMoney(detail.total_amount, 2)} / ${fmtNum(detail.total_qty, 0)}`} />
               <Info label="发货仓" value={detail.ship_warehouse || '待分仓'} />
               <Info label="渠道 / 结算" value={`${CHANNEL_LABEL[detail.channel] || detail.channel} · ${SETTLE_LABEL[detail.settle_type] || detail.customer_type}`} />
-              <Info label="授信占用" value={detail.credit_hold > 0 ? `¥${fmtMoney(detail.credit_hold, 2)}` : '未占用'} />
+              <CreditHoldInfo hold={detail.credit_hold} />
               <Info label="分仓说明" value={detail.allocate_note || '—'} />
               <Info label="来源" value={detail.source} />
             </div>
@@ -475,6 +477,62 @@ function Orders() {
       </Modal>
 
       <CreateOrderModal open={creating} onClose={() => setCreating(false)} onDone={() => { setCreating(false); reload() }} />
+    </div>
+  )
+}
+
+/**
+ * 授信占用是**台账投影**（ADR-0013/0014）：这个数由授信台账随每笔占用 / 释放 / 恢复同步得出，
+ * 不是单据上手填的字段，也不能在这里改。管理员可点「校验」调 `/credit/audit`
+ * （唯一对账判据 reconcileOrderHolds）看单据投影与台账是否仍然一致；接口只读，不做修复。
+ */
+function CreditHoldInfo({ hold }: { hold: number }) {
+  const auth = useAuth()
+  const [state, setState] = useState<{ status: 'idle' | 'busy' | 'done' | 'error'; audit?: any; error?: string }>({ status: 'idle' })
+  const check = async () => {
+    setState({ status: 'busy' })
+    try {
+      setState({ status: 'done', audit: await CREDIT_AUDIT() })
+    } catch (e: any) {
+      setState({ status: 'error', error: e?.message || '校验失败' })
+    }
+  }
+  const diffs: any[] = state.audit?.order_hold_diff || []
+  const drift: any[] = state.audit?.ledger_balance_drift || []
+  return (
+    <div>
+      <div className="text-[11.5px] text-slate-400 flex items-center gap-1.5">
+        授信占用
+        <span className="px-1 rounded border border-slate-200 text-slate-400 text-[10.5px]" title="由授信台账投影得出，随占用 / 释放 / 恢复同步；不可手改">
+          台账投影
+        </span>
+        {auth.is('admin') && (
+          <button
+            className="text-brand-700 hover:underline disabled:text-slate-300"
+            disabled={state.status === 'busy'}
+            onClick={check}
+            data-testid="credit-hold-audit"
+          >
+            {state.status === 'busy' ? '校验中…' : '校验'}
+          </button>
+        )}
+      </div>
+      <div className="text-[13px] text-slate-700 mt-0.5">{hold > 0 ? `¥${fmtMoney(hold, 2)}` : '未占用'}</div>
+      {state.status === 'error' && <div className="mt-1 text-[11.5px] text-red-600">{state.error}</div>}
+      {state.status === 'done' && state.audit?.balanced && (
+        <div className="mt-1 text-[11.5px] text-emerald-600">校验通过：单据投影与台账一致，台账余额无漂移</div>
+      )}
+      {state.status === 'done' && !state.audit?.balanced && (
+        <div className="mt-1 text-[11.5px] text-red-600 space-y-0.5" role="status">
+          <div>校验未通过：销售订单投影与台账差异 {diffs.length} 条、台账余额漂移 {drift.length} 笔</div>
+          {diffs.slice(0, 5).map((d) => (
+            <div key={d.order_id} className="tabular-nums">
+              {d.doc_no}：单据 {fmtMoney(d.hold, 2)} / 台账 {fmtMoney(d.ledger, 2)}（差 {fmtMoney(d.diff, 2)}）
+            </div>
+          ))}
+          {diffs.length > 5 && <div>…其余 {diffs.length - 5} 条到「信用管理」查看</div>}
+        </div>
+      )}
     </div>
   )
 }

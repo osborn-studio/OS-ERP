@@ -29,6 +29,7 @@
 //      同订货中心的授信口径：**单头上的汇总数永远是可以被明细推翻的缓存**。
 
 import { nextDocNoByRule, nextDocNoAuto, nextBatchNo } from './docno.js'
+import { assertNotPending as assertFundsNotPending } from './funds-review.js'
 import { applyTransition, allowedActions, logEvent, DocFlowError, claimTransitionEffect, assertEdgePermitted } from './docflow.js'
 import { applyStockIn, applyStockOut } from './stock.js'
 import { localDate, localNow } from './dates.js'
@@ -554,9 +555,11 @@ export function getRequisition(db, id) {
   return { ...head, items }
 }
 
+/** 请购单列表；`q.orgScope` 走 `purchaseScopeSql`（ADR-0017），不传 ⇒ 全库（lib 内部 / 脚本口径）。 */
 export function listRequisitions(db, q = {}) {
-  const cond = []
-  const args = []
+  const scope = purchaseScopeSql(q.orgScope || null, 'r')
+  const cond = [scope.org]
+  const args = [...scope.params]
   if (q.status) { cond.push('r.status=?'); args.push(q.status) }
   if (q.applicant_type) { cond.push('r.applicant_type=?'); args.push(q.applicant_type) }
   if (q.applicant_id) { cond.push('r.applicant_id=?'); args.push(q.applicant_id) }
@@ -565,7 +568,7 @@ export function listRequisitions(db, q = {}) {
     const k = `%${q.keyword}%`
     args.push(k, k, k)
   }
-  const where = cond.length ? `WHERE ${cond.join(' AND ')}` : ''
+  const where = `WHERE ${cond.join(' AND ')}`
   return db
     .prepare(
       `SELECT r.*, (SELECT COUNT(*) FROM purchase_requisition_items i WHERE i.req_id=r.id) AS line_count
@@ -1563,6 +1566,102 @@ export function writeOffPayment(db, { paymentId, actor = {}, remark = null, sour
   return getPayment(db, paymentId)
 }
 
+// ---------------------------------------------------------------------------
+// 付款释放台账（迁移 057，ADR-0024）：付款生效时逐笔记应付冲减，作废时只按这些行逆向
+// ---------------------------------------------------------------------------
+
+/**
+ * 付款单生效（submit）后，把每条核销明细对结算单的冲减记进 `payment_release_ledger`。
+ * 幂等：该付款单已有行则不再写（pay 执行时也会走到这里）。必须在 `syncSettlePaid` 之后调用，
+ * 这样 paid_after 是重算后的真值，paid_before = paid_after - 本单该结算单的合计。
+ */
+function recordPaymentRelease(db, pay) {
+  if (db.prepare('SELECT 1 FROM payment_release_ledger WHERE payment_id=? LIMIT 1').get(pay.id)) return 0
+  const items = db
+    .prepare('SELECT id, settle_id, amount FROM purchase_payment_items WHERE payment_id=? AND settle_id IS NOT NULL ORDER BY id')
+    .all(pay.id)
+  const running = new Map()
+  const totals = new Map()
+  for (const it of items) totals.set(it.settle_id, round2((totals.get(it.settle_id) || 0) + Number(it.amount)))
+  const ins = db.prepare(
+    `INSERT INTO payment_release_ledger
+       (payment_id,item_id,supplier_id,settle_id,amount,paid_before,paid_after,created_at)
+     VALUES (?,?,?,?,?,?,?,?)`
+  )
+  let n = 0
+  for (const it of items) {
+    const st = db.prepare('SELECT paid_amount FROM purchase_settlements WHERE id=?').get(it.settle_id)
+    if (!st) continue
+    const base = round2(Number(st.paid_amount || 0) - totals.get(it.settle_id))
+    const before = running.has(it.settle_id) ? running.get(it.settle_id) : base
+    const after = round2(before + Number(it.amount))
+    ins.run(pay.id, it.id, pay.supplier_id, it.settle_id, round2(it.amount), before, after, nowStr())
+    running.set(it.settle_id, after)
+    n += 1
+  }
+  return n
+}
+
+/**
+ * 作废付款单时按台账行逐笔逆向（必须在事务里调用）。
+ * 先校验后写：行的供应商 = 付款单供应商 = 结算单供应商；重复逆向拒绝；恢复额不得超过结算单当前已付额。
+ * 逆向后由调用方在状态置 voided 后重算，并用 `verifyReversal` 与台账口径互验，不一致即整体回滚。
+ * @returns {{legacy: boolean, expected: Map<number, number>}} legacy=迁移前生效、没有行
+ */
+function reversePaymentRelease(db, pay) {
+  const rows = db.prepare('SELECT * FROM payment_release_ledger WHERE payment_id=? ORDER BY id').all(pay.id)
+  const expected = new Map()
+  if (!rows.length) return { legacy: pay.status === 'approved' || pay.status === 'paid', expected, rows: 0 }
+  if (rows.some((r) => r.reversed_at)) {
+    throw new PurchaseError(`付款单 ${pay.doc_no} 的付款释放已逆向过，不能重复恢复`, {
+      code: 'PAY_RELEASE_ALREADY_REVERSED', httpStatus: 409, detail: { payment_id: pay.id }
+    })
+  }
+  const per = new Map()
+  for (const r of rows) {
+    if (Number(r.supplier_id) !== Number(pay.supplier_id)) {
+      throw new PurchaseError(`付款释放行 #${r.id} 的供应商 #${r.supplier_id} 与付款单供应商 #${pay.supplier_id} 不一致`, {
+        code: 'PAY_REVERSAL_SUBJECT_MISMATCH', httpStatus: 409, detail: { row: r.id, row_supplier: r.supplier_id, payment_supplier: pay.supplier_id }
+      })
+    }
+    const st = db.prepare('SELECT * FROM purchase_settlements WHERE id=?').get(r.settle_id)
+    if (!st || Number(st.supplier_id) !== Number(pay.supplier_id)) {
+      throw new PurchaseError(`付款释放行 #${r.id} 指向的结算单不属于付款单供应商 #${pay.supplier_id}`, {
+        code: 'PAY_REVERSAL_SUBJECT_MISMATCH', httpStatus: 409, detail: { row: r.id, settle_id: r.settle_id }
+      })
+    }
+    per.set(r.settle_id, round2((per.get(r.settle_id) || 0) + Number(r.amount)))
+  }
+  // 台账与付款明细必须逐结算单一致：否则重算会动到台账之外的结算单（恢复多于释放）
+  const itemTotals = new Map()
+  for (const it of db.prepare('SELECT settle_id, amount FROM purchase_payment_items WHERE payment_id=? AND settle_id IS NOT NULL').all(pay.id)) {
+    itemTotals.set(it.settle_id, round2((itemTotals.get(it.settle_id) || 0) + Number(it.amount)))
+  }
+  const keys = new Set([...per.keys(), ...itemTotals.keys()])
+  for (const sid of keys) {
+    if (Math.abs((per.get(sid) || 0) - (itemTotals.get(sid) || 0)) > 1e-6) {
+      throw new PurchaseError(`付款单 ${pay.doc_no} 对结算单 #${sid} 的释放台账（${per.get(sid) || 0}）与核销明细（${itemTotals.get(sid) || 0}）不一致`, {
+        code: 'PAY_REVERSAL_DRIFT', httpStatus: 409, detail: { settle_id: sid, ledger: per.get(sid) || 0, items: itemTotals.get(sid) || 0 }
+      })
+    }
+  }
+  const upd = db.prepare('UPDATE purchase_settlements SET paid_amount=?, updated_at=? WHERE id=?')
+  for (const [sid, amt] of per) {
+    const st = db.prepare('SELECT paid_amount, status FROM purchase_settlements WHERE id=?').get(sid)
+    const cur = round2(Number(st.paid_amount || 0))
+    if (amt - cur > 1e-6) {
+      throw new PurchaseError(`作废恢复额 ${amt} 超过结算单 #${sid} 当前已付额 ${cur}（释放台账与账面不符）`, {
+        code: 'PAY_REVERSAL_EXCEEDS_RELEASED', httpStatus: 409, detail: { settle_id: sid, restore: amt, paid: cur }
+      })
+    }
+    expected.set(sid, round2(cur - amt))
+    if (st.status !== 'voided') upd.run(round2(cur - amt), nowStr(), sid)
+  }
+  const mark = db.prepare('UPDATE payment_release_ledger SET reversed_at=?, reversal_ref=? WHERE id=?')
+  for (const r of rows) mark.run(nowStr(), `void:PAY#${pay.id}`, r.id)
+  return { legacy: false, expected, rows: rows.length }
+}
+
 export function transitionPayment(db, { id, action, actor = {}, set = {}, remark = null, source = 'api' }) {
   const pay = db.prepare('SELECT * FROM purchase_payments WHERE id=?').get(id)
   if (!pay) throw new PurchaseError('付款单不存在', { code: 'PAY_NOT_FOUND', httpStatus: 404 })
@@ -1620,23 +1719,48 @@ export function transitionPayment(db, { id, action, actor = {}, set = {}, remark
     extra.approved_by_name = actor.name || null
     extra.approved_at = nowStr()
   }
-  const out = applyTransition({
-    db, docType: 'PAY', id, action, actor: { id: actor.id, name: actor.name },
-    set: extra, remark, source
-  })
-
-  // 状态一变，核销是否生效就跟着变（draft ↔ approved 正好横跨生效线）→ 重算涉及的结算单
+  // 状态流转 + 应付冲减 / 逆向 + 台账 + 重算在**同一个事务**里：
+  // 任何一步失败整体回滚，不会出现「付款单已作废，结算单已付额还没掉」。
   const touched = new Set()
-  for (const it of db.prepare('SELECT settle_id FROM purchase_payment_items WHERE payment_id=?').all(id)) {
-    if (!it.settle_id) continue
-    syncSettlePaid(db, it.settle_id, { actor, source })
-    for (const oid of ordersOfSettlement(db, it.settle_id)) touched.add(oid)
-  }
-  for (const oid of touched) {
-    refreshOrderStats(db, oid)
-    refreshCloseFlags(db, oid)
-  }
-  return out
+  const tx = db.transaction(() => {
+    let reversal = null
+    if (action === 'void') {
+      // 待复核期间不能作废（ADR-0018）；库函数层也拦，不只靠路由
+      assertFundsNotPending(db, 'payment', id)
+      reversal = reversePaymentRelease(db, pay)
+    }
+    const res = applyTransition({
+      db, docType: 'PAY', id, action, actor: { id: actor.id, name: actor.name },
+      set: extra,
+      remark: reversal?.legacy ? `${remark || ''} [legacy: 无付款释放台账行，按重算口径恢复]`.trim() : remark,
+      source
+    })
+    // 状态一变，核销是否生效就跟着变（draft ↔ approved 正好横跨生效线）→ 重算涉及的结算单
+    for (const it of db.prepare('SELECT settle_id FROM purchase_payment_items WHERE payment_id=?').all(id)) {
+      if (!it.settle_id) continue
+      syncSettlePaid(db, it.settle_id, { actor, source })
+      for (const oid of ordersOfSettlement(db, it.settle_id)) touched.add(oid)
+    }
+    if (reversal && reversal.expected.size) {
+      // 台账口径与重算口径互验：不一致说明台账或账面漂移，拒绝而不是悄悄以重算为准
+      for (const [sid, want] of reversal.expected) {
+        const st = db.prepare('SELECT paid_amount, status FROM purchase_settlements WHERE id=?').get(sid)
+        if (st && st.status !== 'voided' && Math.abs(Number(st.paid_amount) - want) > 1e-6) {
+          throw new PurchaseError(`结算单 #${sid} 逆向后已付额 ${st.paid_amount} 与释放台账期望 ${want} 不一致`, {
+            code: 'PAY_REVERSAL_DRIFT', httpStatus: 409, detail: { settle_id: sid, recomputed: st.paid_amount, expected: want }
+          })
+        }
+      }
+    }
+    if (action === 'submit') recordPaymentRelease(db, pay)
+    // 订单统计 / 关闭标志也在事务内：否则这里失败会留下「单据已作废、订单已付额未回」
+    for (const oid of touched) {
+      refreshOrderStats(db, oid)
+      refreshCloseFlags(db, oid)
+    }
+    return res
+  })
+  return tx()
 }
 
 // ---------------------------------------------------------------------------
@@ -1849,15 +1973,21 @@ export function getPurchaseReturn(db, id) {
 // 八、看板
 // ---------------------------------------------------------------------------
 
-export function purchaseOverview(db) {
+/**
+ * 采购看板。`orgScope`（`resolveOrgScope` 的结果）不传或 `all` ⇒ 全库；受限范围下**每一块**
+ * （五张单的计数 / 金额、供应商榜、应付榜、趋势）都按 `purchaseScopeSql` 的同一个集合算 ——
+ * "列表按范围、合计按全库"是最隐蔽的泄漏形状（ADR-0017）。
+ */
+export function purchaseOverview(db, { orgScope = null } = {}) {
   const one = (sql, ...a) => db.prepare(sql).get(...a)
+  const plain = purchaseScopeSql(orgScope)
   const req = one(`
     SELECT COUNT(*) total,
            SUM(CASE WHEN status='draft' THEN 1 ELSE 0 END) draft,
            SUM(CASE WHEN status='submitted' THEN 1 ELSE 0 END) submitted,
            SUM(CASE WHEN status='approved' THEN 1 ELSE 0 END) approved,
            SUM(CASE WHEN status='converted' THEN 1 ELSE 0 END) converted
-      FROM purchase_requisitions`)
+      FROM purchase_requisitions WHERE ${plain.org}`, ...plain.params)
   const po = one(`
     SELECT COUNT(*) total,
            COALESCE(SUM(total_amount),0) amount,
@@ -1865,14 +1995,14 @@ export function purchaseOverview(db) {
            SUM(CASE WHEN status IN ('approved') AND close_arrival=0 THEN 1 ELSE 0 END) pending_arrival,
            SUM(CASE WHEN close_invoice=0 AND status NOT IN ('cancelled','draft') THEN 1 ELSE 0 END) pending_invoice,
            SUM(CASE WHEN close_payment=0 AND status NOT IN ('cancelled','draft') THEN 1 ELSE 0 END) pending_payment
-      FROM purchase_orders`)
+      FROM purchase_orders WHERE ${plain.wh}`, ...plain.params)
   const inv = one(`
     SELECT COUNT(*) total, COALESCE(SUM(total_amount),0) amount,
            SUM(CASE WHEN status='draft' THEN 1 ELSE 0 END) draft,
            SUM(CASE WHEN status='submitted' THEN 1 ELSE 0 END) submitted,
            SUM(CASE WHEN status='verified' THEN 1 ELSE 0 END) verified,
            SUM(CASE WHEN status='posted' THEN 1 ELSE 0 END) posted
-      FROM purchase_invoices WHERE status<>'voided'`)
+      FROM purchase_invoices WHERE status<>'voided' AND ${plain.org}`, ...plain.params)
   const st = one(`
     SELECT COUNT(*) total, COALESCE(SUM(settle_amount),0) amount,
            COALESCE(SUM(paid_amount),0) paid,
@@ -1881,21 +2011,23 @@ export function purchaseOverview(db) {
            SUM(CASE WHEN status='draft' THEN 1 ELSE 0 END) draft,
            SUM(CASE WHEN status='audited' THEN 1 ELSE 0 END) audited,
            SUM(CASE WHEN status='settled' THEN 1 ELSE 0 END) settled
-      FROM purchase_settlements WHERE status<>'voided'`)
+      FROM purchase_settlements WHERE status<>'voided' AND ${plain.org}`, ...plain.params)
   const pay = one(`
     SELECT COUNT(*) total, COALESCE(SUM(amount),0) amount,
            SUM(CASE WHEN status='draft' THEN 1 ELSE 0 END) draft,
            SUM(CASE WHEN status='approved' THEN 1 ELSE 0 END) approved,
            SUM(CASE WHEN status='paid' THEN 1 ELSE 0 END) paid
-      FROM purchase_payments WHERE status<>'voided'`)
+      FROM purchase_payments WHERE status<>'voided' AND ${plain.org}`, ...plain.params)
+  const o = purchaseScopeSql(orgScope, 'o')
   const topSuppliers = db
     .prepare(
       `SELECT s.id, s.code, s.name, COUNT(o.id) order_count, COALESCE(SUM(o.total_amount),0) amount
          FROM purchase_orders o JOIN suppliers s ON s.id=o.supplier_id
-        WHERE o.status NOT IN ('cancelled')
+        WHERE o.status NOT IN ('cancelled') AND ${o.wh}
         GROUP BY s.id ORDER BY amount DESC LIMIT 8`
     )
-    .all()
+    .all(...o.params)
+  const stc = purchaseScopeSql(orgScope, 'st')
   const payable = db
     .prepare(
       `SELECT s.id, s.code, s.name,
@@ -1903,18 +2035,18 @@ export function purchaseOverview(db) {
               COALESCE(SUM(st.paid_amount),0) paid_amount,
               COALESCE(SUM(st.settle_amount-st.paid_amount),0) open_amount
          FROM purchase_settlements st JOIN suppliers s ON s.id=st.supplier_id
-        WHERE st.status<>'voided'
+        WHERE st.status<>'voided' AND ${stc.org}
         GROUP BY s.id HAVING open_amount > 0.01 ORDER BY open_amount DESC LIMIT 10`
     )
-    .all()
+    .all(...stc.params)
   const days = db
     .prepare(
       `SELECT substr(settle_date,1,10) d, COALESCE(SUM(settle_amount),0) amount
-         FROM purchase_settlements WHERE status<>'voided'
+         FROM purchase_settlements WHERE status<>'voided' AND ${plain.org}
           AND settle_date >= date('now','localtime','-30 day')
         GROUP BY d ORDER BY d`
     )
-    .all()
+    .all(...plain.params)
   return {
     requisition: req,
     order: po,
@@ -1928,19 +2060,55 @@ export function purchaseOverview(db) {
 }
 
 /**
- * 把组织范围翻成待办查询的 SQL 片段（判据与 `middleware/auth.js` 的 `orgScopeFilter` 同源：
- * 空范围 ⇒ 不查；这里返回 null 让调用方直接给空列表，而不是拼一个 `AND 1=0` 再跑七条查询）。
+ * 把组织范围翻成采购单据查询的 SQL 谓词 —— 采购链**所有**读接口的唯一范围判据
+ * （待办 / 看板 / 四张单列表 / 应付台账，ADR-0015 + ADR-0017）。
+ *
+ * 判据与 `middleware/auth.js` 的 `orgScopeFilter` 同源：
+ *   · 不传或 `all` ⇒ `1=1`（全库）；
+ *   · `dealer` / `none` / 空集合 ⇒ `1=0` 并置 `empty: true`（空范围不许变成全库；调用方可据此直接给空结果）；
+ *   · 其余 ⇒ 请购 / 发票 / 结算 / 付款用自身 `org_id`（`org`），采购订单 / 退货没有组织列、
+ *     经 `warehouses.org_id` 取仓的归属组织（`wh`）。两段谓词共用同一份 `params`。
+ *   · 归属列为 NULL 的单据对受限范围不可见（`IN` 对 NULL 为假 —— 宁可看不到，也不放行）。
+ *
+ * 返回的是**完整谓词**（不带前导 AND），调用方写 `WHERE … AND ${scope.org}` 或 `cond.push(scope.org)`；
+ * `alias` 给带表别名的查询用（`'i'` ⇒ `i.org_id`）。
  */
-function orgScopeSql(orgScope) {
-  if (!orgScope || orgScope.scope === 'all') return { org: '', wh: '', params: [] }
+export function purchaseScopeSql(orgScope, alias = '') {
+  const col = (c) => (alias ? `${alias}.${c}` : c)
+  if (!orgScope || orgScope.scope === 'all') return { org: '1=1', wh: '1=1', params: [], empty: false }
   const ids = Array.isArray(orgScope.orgIds) ? orgScope.orgIds.map(Number).filter(Number.isFinite) : []
-  if (orgScope.scope === 'dealer' || orgScope.scope === 'none' || !ids.length) return null
+  if (orgScope.scope === 'dealer' || orgScope.scope === 'none' || !ids.length) {
+    return { org: '1=0', wh: '1=0', params: [], empty: true }
+  }
   const ph = ids.map(() => '?').join(',')
   return {
-    org: `AND org_id IN (${ph})`,
-    wh: `AND warehouse_id IN (SELECT id FROM warehouses WHERE org_id IN (${ph}))`,
-    params: ids
+    org: `${col('org_id')} IN (${ph})`,
+    wh: `${col('warehouse_id')} IN (SELECT id FROM warehouses WHERE org_id IN (${ph}))`,
+    params: ids,
+    empty: false
   }
+}
+
+/**
+ * 单据是否在调用者组织范围内（ADR-0020）：详情 / 动作 / 预览类读接口取单前的同一道判据。
+ * 与 `purchaseScopeSql` 同一口径 —— 请购 / 发票 / 结算 / 付款按自身 `org_id`，订单 / 收货经 `warehouses.org_id`；
+ * 归属 NULL 对受限范围不可见、对全局范围可见。不在范围内与不存在**同形**（404 + 同一句话），不泄漏存在性。
+ * 返回该行（调用方需要时可复用）；单据类型不支持 ⇒ 400。
+ */
+const SCOPED_DOC_TABLES = {
+  PRQ: ['purchase_requisitions', 'org'], PI: ['purchase_invoices', 'org'],
+  PST: ['purchase_settlements', 'org'], PAY: ['purchase_payments', 'org'],
+  PO: ['purchase_orders', 'wh'], GR: ['purchase_receipts', 'wh']
+}
+export function assertPurchaseDocInScope(db, docType, id, orgScope) {
+  const def = SCOPED_DOC_TABLES[docType]
+  if (!def) throw new PurchaseError(`不支持的单据类型 ${docType}`, { code: 'BAD_DOC_TYPE' })
+  const scope = purchaseScopeSql(orgScope, 't')
+  const row = Number.isFinite(Number(id))
+    ? db.prepare(`SELECT t.* FROM ${def[0]} t WHERE t.id=? AND ${scope[def[1]]}`).get(Number(id), ...scope.params)
+    : null
+  if (!row) throw new PurchaseError('单据不存在', { code: 'DOC_NOT_FOUND', httpStatus: 404 })
+  return row
 }
 
 /**
@@ -1965,43 +2133,43 @@ export const PO_READ_PERMS = ['purchase.order.view', 'purchase.inbound', 'purcha
  */
 export function purchaseTodos(db, { orgScope = null, permCtx = null } = {}) {
   const todos = []
-  const scope = orgScopeSql(orgScope)
-  if (!scope) return todos
+  const scope = purchaseScopeSql(orgScope)
+  if (scope.empty) return todos
   for (const r of db
-    .prepare(`SELECT doc_no,id,total_amount FROM purchase_requisitions WHERE status='submitted' ${scope.org} ORDER BY id DESC LIMIT 20`)
+    .prepare(`SELECT doc_no,id,total_amount FROM purchase_requisitions WHERE status='submitted' AND ${scope.org} ORDER BY id DESC LIMIT 20`)
     .all(...scope.params)) {
     todos.push({ kind: 'req_approve', doc_type: 'PRQ', doc_id: r.id, doc_no: r.doc_no, label: '请购单待审批', amount: r.total_amount, perm: 'purchase.req.approve' })
   }
   for (const r of db
-    .prepare(`SELECT doc_no,id,total_amount FROM purchase_requisitions WHERE status='approved' ${scope.org} ORDER BY id DESC LIMIT 20`)
+    .prepare(`SELECT doc_no,id,total_amount FROM purchase_requisitions WHERE status='approved' AND ${scope.org} ORDER BY id DESC LIMIT 20`)
     .all(...scope.params)) {
     todos.push({ kind: 'req_convert', doc_type: 'PRQ', doc_id: r.id, doc_no: r.doc_no, label: '请购单待转采购订单', amount: r.total_amount, perm: 'purchase.order.edit' })
   }
   for (const r of db
-    .prepare(`SELECT doc_no,id,total_amount FROM purchase_orders WHERE status='submitted' ${scope.wh} ORDER BY id DESC LIMIT 20`)
+    .prepare(`SELECT doc_no,id,total_amount FROM purchase_orders WHERE status='submitted' AND ${scope.wh} ORDER BY id DESC LIMIT 20`)
     .all(...scope.params)) {
     todos.push({ kind: 'po_approve', doc_type: 'PO', doc_id: r.id, doc_no: r.doc_no, label: '采购订单待审批', amount: r.total_amount, perm: 'purchase.order.approve' })
   }
   for (const r of db
     .prepare(
       `SELECT doc_no,id,total_amount FROM purchase_orders
-        WHERE status IN ('approved') AND close_arrival=0 ${scope.wh} ORDER BY id DESC LIMIT 20`
+        WHERE status IN ('approved') AND close_arrival=0 AND ${scope.wh} ORDER BY id DESC LIMIT 20`
     )
     .all(...scope.params)) {
     todos.push({ kind: 'po_receive', doc_type: 'PO', doc_id: r.id, doc_no: r.doc_no, label: '采购订单待到货', amount: r.total_amount, perm: 'purchase.inbound' })
   }
   for (const r of db
-    .prepare(`SELECT doc_no,id,total_amount FROM purchase_invoices WHERE status='submitted' ${scope.org} ORDER BY id DESC LIMIT 20`)
+    .prepare(`SELECT doc_no,id,total_amount FROM purchase_invoices WHERE status='submitted' AND ${scope.org} ORDER BY id DESC LIMIT 20`)
     .all(...scope.params)) {
     todos.push({ kind: 'invoice_verify', doc_type: 'PI', doc_id: r.id, doc_no: r.doc_no, label: '采购发票待校验', amount: r.total_amount, perm: 'purchase.invoice.verify' })
   }
   for (const r of db
-    .prepare(`SELECT doc_no,id,settle_amount AS total_amount FROM purchase_settlements WHERE status='submitted' ${scope.org} ORDER BY id DESC LIMIT 20`)
+    .prepare(`SELECT doc_no,id,settle_amount AS total_amount FROM purchase_settlements WHERE status='submitted' AND ${scope.org} ORDER BY id DESC LIMIT 20`)
     .all(...scope.params)) {
     todos.push({ kind: 'settle_audit', doc_type: 'PST', doc_id: r.id, doc_no: r.doc_no, label: '采购结算待审核', amount: r.total_amount, perm: 'purchase.settle.audit' })
   }
   for (const r of db
-    .prepare(`SELECT doc_no,id,amount AS total_amount FROM purchase_payments WHERE status='approved' ${scope.org} ORDER BY id DESC LIMIT 20`)
+    .prepare(`SELECT doc_no,id,amount AS total_amount FROM purchase_payments WHERE status='approved' AND ${scope.org} ORDER BY id DESC LIMIT 20`)
     .all(...scope.params)) {
     todos.push({ kind: 'payment_pay', doc_type: 'PAY', doc_id: r.id, doc_no: r.doc_no, label: '付款单待执行', amount: r.total_amount, perm: 'purchase.payment.approve' })
   }

@@ -162,6 +162,7 @@ export function isBlockedAddress(ip) {
   if ((w0 & 0xfe00) === 0xfc00) return true // ULA fc00::/7
   if ((w0 & 0xff00) === 0xff00) return true // multicast
   if (w0 === 0x2001 && w1 === 0x0db8) return true // documentation
+  if (w0 === 0x2001 && w1 === 0) return true // Teredo 2001::/32（内嵌的服务器/客户端 IPv4 可被攻击者控制）
   if (w0 === 0x0100 && w1 === 0 && w2 === 0 && w3 === 0) return true // 100::/64 discard
   return false
 }
@@ -262,8 +263,14 @@ export async function resolveOutboundTarget(input, { env = process.env, lookup =
  */
 export async function outboundRequest(input, {
   env = process.env, method = 'POST', headers = {}, body = null,
-  timeoutMs = DEFAULT_TIMEOUT_MS, maxBodyBytes = DEFAULT_MAX_BODY_BYTES, lookup = defaultLookup
+  timeoutMs = DEFAULT_TIMEOUT_MS, maxBodyBytes = DEFAULT_MAX_BODY_BYTES, lookup = defaultLookup,
+  testTrustedCa = null
 } = {}) {
+  // 仅测试：把一张自签证书当作唯一可信 CA，使本地 HTTPS 联调可行。只有 GML_RUNTIME_MODE=test 且显式传入才生效；
+  // 其余模式（含缺省=production、demo）在任何解析/连接之前直接拒绝；不读任何环境开关，主机名校验保持默认开启。
+  if (testTrustedCa != null && outboundPolicy(env).mode !== 'test') {
+    throw new OutboundUrlError('OUTBOUND_TEST_CA_FORBIDDEN', 'testTrustedCa 只允许在 GML_RUNTIME_MODE=test 下使用')
+  }
   const startedAt = Date.now()
   const timeoutError = () => new OutboundUrlError('OUTBOUND_TIMEOUT', `请求超时（${timeoutMs}ms，含解析与读取响应体）`)
 
@@ -308,6 +315,7 @@ export async function outboundRequest(input, {
       headers,
       lookup: pinnedLookup,
       ...(target.protocol === 'https:' && !net.isIP(target.hostname) ? { servername: target.hostname } : {}),
+      ...(target.protocol === 'https:' && testTrustedCa != null ? { ca: testTrustedCa } : {}),
       agent: false // 每次新建连接：不复用别的目标的 keep-alive socket
     })
     guard = setTimeout(() => { fail('OUTBOUND_TIMEOUT', timeoutError().message); req.destroy() }, remaining)

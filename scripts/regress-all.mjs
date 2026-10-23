@@ -129,6 +129,14 @@ checks.push({ name: 'check:route-order', cmd: ['scripts/check-route-order.mjs'],
 // 形状漂移不会让任何测试报错（两个读法各自都能跑通），只会让排查变慢 ——
 // 所以它是一条常驻守卫，而不是一次性检查。
 checks.push({ name: 'check:bizcode', cmd: ['scripts/check-bizcode-shape.mjs'], industries: ['-'] })
+// 库文件路径守卫（ADR-0019）：`data/gml_*.db` / `path.join(ROOT, 'data', …)` 这类直拼路径只许出现在
+// `server/db/index.js`（或带理由登记的例外）。它守的是 ADR-0001 的**旁路**：判据写在 db/index.js 里，
+// 一个脚本自己拼路径就整个绕开了，而且不报错 —— `check-mcp-coverage` 曾经文件头说一套、代码读另一套。
+// 纯静态、零副作用。
+checks.push({ name: 'check:data-paths', cmd: ['scripts/check-data-paths.mjs'], industries: ['-'] })
+// 路由授权清单（ADR-0021）：只有 requireAuth（或连登录都没有）的路由必须在例外表里带理由登记，
+// 双向校验（登记了却已加闸门/已删除也红）。纯静态；`pending` 条目是真实缺口的待办清单。
+checks.push({ name: 'check:route-authz', cmd: ['scripts/check-route-authz.mjs'], industries: ['-'] })
 // 断言助手形参形状：各 test-*.mjs 里的 ok()/eq() 参数顺序**不统一**（4 种 ok、6 种 eq 并存），
 // 于是"从别的文件抄一行 ok(...)"就会把实参对错槽位 —— 条件位收到一个非空字符串就恒真，
 // **断言从此永远绿**。本项目已撞过两次（test-im-sync、test-export-excel），两次的产物都是假绿。

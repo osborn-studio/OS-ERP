@@ -15,11 +15,11 @@
 | F07 MCP 委托授权 | P1 | partial（第三批已实现） | 有主 Token 视为所有者委托：每次调用重读所有者存在/启用/当前权限与数据范围并取交集；签发时记录所有者 `auth_version`，任何 ADR-0004 版本提升令旧 Token 永久失效；停用账号在同一事务吊销其全部 Token；仅接受 Bearer 头；写/危险工具的审计写入与业务同事务。迁移 053。见 [ADR-0011](ADR-0011-mcp-delegated-token-scope.md)。生产仍关闭 MCP；重新开放前需产品级验收。 |
 | F08 Webhook 出站限制 | P1 | partial（第三批已实现） | `server/lib/outbound-url.js`：生产仅 https、拒绝回环/私网/链路本地/保留段（含 IPv4-mapped/NAT64/6to4）、逐 DNS 应答检查并固定已检查地址、不跟随重定向、总超时覆盖响应体、256KB 体积上限、可选 `GML_WEBHOOK_ALLOWED_HOSTS` 只能收窄。保存与发送两处执行。待真实 https 目标联调。 |
 | F09 Token 日志/秘密存储 | P1 | partial（第三批已实现） | 启动日志不输出 Token（已核实）；通知渠道秘密以 AES-256-GCM（`enc:v1:` 前缀，密钥来自 `GML_SECRET_KEY` 或 JWT 密钥 HKDF 派生）落库，接口只返回 `has_secret`/`secret_last4`，旧明文读取兼容并在下次写入时升级；`GML_SECRET_KEY_PREVIOUS` 支持轮换。历史已进入日志的凭据处置仍需运维执行。 |
-| F10 资金闭环 | P1 | open，拟限制暴露面 | 首版排除公共商城在线资金能力，生产已关闭相关入口。后台手工往来仍需凭证/复核/对账验收。 |
-| F11 客户租户隔离 | P1 | open，范围限定 | 目标限定一企业一实例；行业库不是 SaaS 租户。独立密钥、目录、备份和实例部署还需实际安装验收。 |
+| F10 资金闭环 | P1 | partial（第五批） | 公共商城在线资金能力仍关闭。后台手工收款/付款现在要求凭证号，并按阈值进入二人复核（ADR-0018）：发起人不能自审，批准才落账并释放授信，驳回无资金效果，严格审计同事务。真实网关、对账仍 open。 |
+| F11 客户租户隔离 | P1 | partial（第五批） | 一企业一实例：`local-manage.mjs --instance=` 支持独立实例目录（数据、0600 密钥、备份），双实例并行验收测试覆盖隔离与互不可登录（ADR-0019）。目标主机实机安装仍 open。 |
 | F12 备份升级恢复 | P1 | partial（第三批已实现） | `db-backup.mjs` 默认校验（integrity/foreign_key/表数/迁移数/烟雾查询）通过后才轮转，失败文件隔离为 `.db.failed` 并以非零退出；输出 JSON 报告；备份目录相对 `GML_DATA_DIR`。迁移运行器记录每个迁移的 sha256，生产模式校验不一致即拒绝启动（`MIGRATION_CHECKSUM_MISMATCH`），旧行可 `--adopt-checksums`。见 [ADR-0009](ADR-0009-backup-verification-and-migration-checksums.md)。第四批新增 `scripts/db-restore-drill.mjs`、`scripts/upgrade-rollback-drill.mjs` 与恢复手册（ADR-0016）；夹具规模 RTO 约 2 秒，生产规模与目标主机实测仍 open。 |
 | F13 审计/错误泄露 | P1 | partial（第三批已实现） | 后台 JWT 不再接受 query 参数；`server/lib/redact.js` 统一脱敏（审计 detail、日志 URL）；生产 5xx 仅返回通用信息 + `incident_id`，完整错误按事件号记服务端日志；`auditStrict` 在事务内写审计，失败则业务回滚（设置、经销商授信/返利、账号安全变更已接入）。见 [ADR-0010](ADR-0010-audit-and-error-hygiene.md)。 |
-| F14 供应链/容器 | P1 | partial（第三批已实现） | 多阶段 Dockerfile：运行镜像仅生产依赖、非 root（uid 10001）、基础镜像按摘要固定、HEALTHCHECK、只读根文件系统；compose 仅发布 127.0.0.1、具名数据卷、密钥只经环境变量。本机 Docker 实际构建并启动验证通过（arm64）。静态策略测试守住上述约束。braces 公告仍无修复，运行镜像不含该开发链。见 [ADR-0012](ADR-0012-container-and-version-contract.md)。第四批起托管 CI 构建 linux/amd64 镜像并跑 `docker-smoke.mjs`；目标主机未验。 |
+| F14 供应链/容器 | P1 | partial（第三、六批） | 多阶段 Dockerfile：运行镜像仅生产依赖、非 root（uid 10001）、基础镜像按摘要固定、HEALTHCHECK、只读根文件系统；compose 仅发布 127.0.0.1、具名数据卷、密钥只经环境变量。本机 Docker 实际构建并启动验证通过（arm64）。静态策略测试守住上述约束。第六批加运行时 SBOM（`npm run sbom`）与生成式第三方声明 + CI 漂移校验（W9）。braces 公告仍无修复，运行镜像不含该开发链。见 [ADR-0012](ADR-0012-container-and-version-contract.md)。第四批起托管 CI 构建 linux/amd64 镜像并跑 `docker-smoke.mjs`；目标主机未验。 |
 | F15 可重复验收 | P1 | partial | dmserver 固定候选 9c 三轮源码回归各 113/113、合计 339 项通过；手动 Actions 配置已提交但未注册 runner/未触发。源码哈希证据与发行包验收分开，后者和实际 Actions 仍未完成。 |
 | F16 API/版本契约 | P2 | partial（第三批已实现） | `server/version.js` 单一版本来源（package.json + `GML_BUILD_SHA`/发行 MANIFEST）供 `/api`、健康、AI manifest、MCP serverInfo 使用；商城取消返回持久化状态 `cancelled`；Vite 代理补 `/mcp`。 |
 
@@ -52,3 +52,16 @@
 这两项未通过生产业务闭环验收，不得因正向 A06 守卫已绿而关闭财务/授信风险。
 
 第三批（2026-10-22）已按逐笔来源台账实现逆向：新增 `credit_release_ledger`（迁移 052）记录每次收款确认/预收抵扣释放的来源单据、客户与金额；作废收款按台账逐笔恢复统一授信与 OC 占用，重复作废、跨客户、超额恢复均拒绝，中途失败整体回滚。见 [ADR-0013](ADR-0013-credit-release-ledger.md)。迁移前已确认的收款无台账行，作废时只按旧路径恢复 OC 并标记 `legacy:true`。第四批已修：`credit.js` 写台账时同事务投影 `sales_orders.credit_hold`，`reconcileOrderHolds` 接入 test-quote-credit 与 verify-seed（ADR-0014）；`test-quote-credit` 两库全绿。
+
+## 第六批新增确认的授权缺口（W2 路由守卫揭出，均 open）
+
+| 位置 | 缺口 | 建议 |
+|---|---|---|
+| `server/routes/pos.js` 19 条 | 只要求门店绑定（storeCtx），任何门店账号可做交班批准/驳回等 | 补 `requireStore` + 按动作权限码；交班审批需第二人 |
+| `server/routes/sales.js` 订单/发货/退货/统计读 | `scopeFilter` 只按经销商/门店绑定限制，内部 `data_scope=org` 账号可读其他组织 | 复用 ADR-0017 组织范围谓词 |
+| `server/routes/order-center.js` 16 条 | 同上，总览/客户树返回全局数据 | 同上 |
+| `server/routes/docflow.js` `POST /no-issue` | 任意登录账号可消耗真实单号 | 要求对应单据类型的创建权限 |
+| `server/routes/auth.js` `GET /orgs` | 返回整张组织表 | 限管理员或按范围裁剪 |
+| `server/routes/qimen.js` `POST /` | 缺 `app_key` 视为未认证放行（生产已 503 关闭） | 重新开放前强制认证 |
+| `server/routes/purchase-chain.js` 写路径 | `POST /payments`、`/settlements` 自动分配/来源选择不按组织范围 | 与 ADR-0020 对称收口 |
+| MCP `doc.query`/`doc.get` | 无按单据类型的查看权限点 | 产品决策后补权限点 |

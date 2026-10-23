@@ -37,6 +37,7 @@ import { resolveDelegation, effectiveScope, ownerToolDenied } from './delegation
 import { requireAuth, requirePerm } from '../middleware/auth.js'
 import * as engine from '../lib/stock.js'
 import { versionInfo } from '../version.js'
+import { logger } from '../lib/logger.js'
 
 const r = Router()
 
@@ -200,7 +201,7 @@ function logCall(db, entry) {
   try {
     insertCallLog(db, entry)
   } catch (e) {
-    console.error(`[mcp] 调用审计写入失败（${entry?.tool?.name ?? '-'} / ${entry?.errorCode ?? (entry?.ok ? 'ok' : 'fail')}）：${e.message}`)
+    logger.error('mcp call audit write failed', { component: 'mcp', tool: entry?.tool?.name ?? '-', outcome: entry?.errorCode ?? (entry?.ok ? 'ok' : 'fail'), err_message: e.message })
   }
 }
 

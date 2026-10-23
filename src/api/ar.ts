@@ -11,6 +11,7 @@
  */
 
 import api from './client'
+import type { CreditEffect } from '../utils/credit-effect'
 
 /** 统一拆信封：接口返回 { code, success, data }，页面只关心 data（与 useFetch 一致） */
 const data = <T>(p: Promise<any>): Promise<T> => p.then((r) => r.data as T)
@@ -88,6 +89,26 @@ export interface Receipt {
   status: 'draft' | 'confirmed' | 'voided'
   remark?: string | null
   allocations?: ReceiptAllocation[]
+  /** 仅 POST /confirm 响应（ADR-0013）：本次释放的授信台账行与合计 */
+  credit_released?: CreditEffect
+  /** 仅 POST /void 响应（ADR-0013）：本次恢复的占用；legacy=true 为迁移前收款单的旧口径 */
+  credit_reversal?: CreditEffect
+  // ADR-0018：证据与二人复核（内核 status 在待复核期间仍是 draft）
+  evidence_ref?: string | null
+  evidence_note?: string | null
+  review_status?: FundsReviewStatus | null
+  review?: FundsReview | null
+}
+
+export type FundsReviewStatus = 'pending_review' | 'approved' | 'rejected'
+export interface FundsReview {
+  status: FundsReviewStatus | null
+  maker: { id: number | null; name: string | null; at: string | null } | null
+  checker: { id: number | null; name: string | null } | null
+  decided_at: string | null
+  comment: string | null
+  evidence_ref: string | null
+  evidence_note: string | null
 }
 
 export interface ArOverview {
@@ -228,9 +249,14 @@ export const AR_PREPAY_DETAIL = (subjectType: string, subjectId: number) =>
 
 /** 预收转应收：指定应收单（ar_id）或传 auto 按到期日 FIFO 自动抵扣 */
 export const AR_PREPAY_APPLY = (body: { receipt_id: number; ar_id?: number; amount?: number; auto?: boolean }) =>
-  data<{ receipt: Receipt; plan: { ar_id: number; amount: number }[]; applied: number; remaining: number }>(
-    api.post('/ar/prepay/apply', body)
-  )
+  data<{
+    receipt: Receipt
+    plan: { ar_id: number; amount: number }[]
+    applied: number
+    remaining: number
+    /** ADR-0013：本次抵扣按来源释放的授信（形状同确认收款） */
+    credit_released?: CreditEffect
+  }>(api.post('/ar/prepay/apply', body))
 
 // ---------- 订货中心并入 ----------
 /** 已收货但还没生成应收的订货单（历史遗留与开关关闭期） */
@@ -265,8 +291,13 @@ export const RC_GET = (id: number) => data<Receipt>(api.get(`/ar/receipts/${id}`
 export const RC_CREATE = (body: any) => data<Receipt>(api.post('/ar/receipts', body))
 
 /** 确认收款：核销在此刻生效，并释放授信占用 */
-export const RC_CONFIRM = (id: number, releaseCredit = true) =>
-  data<Receipt>(api.post(`/ar/receipts/${id}/confirm`, { release_credit: releaseCredit }))
+/** 确认收款（ADR-0018）：必须带凭证号；达到复核阈值时响应 `review.status='pending_review'`，status 仍是 draft */
+export const RC_CONFIRM = (id: number, evidence: { evidence_ref?: string; evidence_note?: string } = {}, releaseCredit = true) =>
+  data<Receipt>(api.post(`/ar/receipts/${id}/confirm`, { release_credit: releaseCredit, ...evidence }))
+
+/** 第二人复核（需 finance.funds.review）：approve 真正核销；reject 退回草稿（comment 必填） */
+export const RC_REVIEW = (id: number, decision: 'approve' | 'reject', comment?: string) =>
+  data<Receipt>(api.post(`/ar/receipts/${id}/review`, { decision, comment }))
 
 /** 作废收款：核销回退；不会自动回收已释放的授信，需显式补占用 */
 export const RC_VOID = (id: number, reason: string) => data<Receipt>(api.post(`/ar/receipts/${id}/void`, { reason }))
@@ -305,6 +336,19 @@ export const RC_STATUS_LABEL: Record<string, string> = {
   voided: '已作废'
 }
 
+/** 复核状态文案与着色（与 server/lib/funds-review.js 的 FUNDS_REVIEW_LABEL 同源） */
+export const FUNDS_REVIEW_LABEL: Record<string, string> = {
+  pending_review: '待复核',
+  approved: '复核通过',
+  rejected: '复核驳回'
+}
+export const FUNDS_REVIEW_CLS: Record<string, string> = {
+  pending_review: 'text-amber-700 bg-amber-50 border-amber-200',
+  approved: 'text-emerald-600 bg-emerald-50 border-emerald-200',
+  rejected: 'text-red-600 bg-red-50 border-red-200'
+}
+export const FUNDS_REVIEW_PERM = 'finance.funds.review'
+
 /** 逾期天数着色：越久越红（财务看板的第一眼信号） */
 export function overdueCls(days: number): string {
   if (days <= 0) return 'text-slate-600'
@@ -334,6 +378,7 @@ export default {
   RC_GET,
   RC_CREATE,
   RC_CONFIRM,
+  RC_REVIEW,
   RC_VOID,
   AR_RECALC
 }

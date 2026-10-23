@@ -36,9 +36,11 @@ import {
   buildSettlement, getSettlement, transitionSettlement,
   createPayment, getPayment, transitionPayment, planAllocation,
   refreshOrderStats, refreshCloseFlags,
-  purchaseOverview, purchaseTodos, purchaseActions, PO_READ_PERMS
+  purchaseOverview, purchaseTodos, purchaseActions, PO_READ_PERMS, purchaseScopeSql, assertPurchaseDocInScope
 } from '../lib/purchase.js'
 import { explainLifecycle, assertEdgePermitted, getDocType } from '../lib/docflow.js'
+// 付款执行的证据闸 + 二人复核（ADR-0018）。`pay` 是采购域唯一真正动钱的动作，与收款确认走同一份判据。
+import { FundsError, confirmFunds, reviewFunds, assertNotPending, reviewOf, FUNDS_REVIEW_PERM } from '../lib/funds-review.js'
 
 const r = Router()
 
@@ -56,7 +58,7 @@ function guard(fn) {
     try {
       return fn(req, res, next)
     } catch (e) {
-      if (e instanceof PurchaseError || e instanceof DocFlowError) {
+      if (e instanceof PurchaseError || e instanceof DocFlowError || e instanceof FundsError) {
         // `failFromError` 返回 false = "这不是一个能翻译的业务错误"（它只认 `code && status`）。
         // 这里必须显式 `throw e` 交给全局中间件：**漏了这一步就一个响应都不发、请求挂住** ——
         // 挂住的报障表现是"接口转圈"，跟真实原因（这个错缺 code）完全对不上号。
@@ -71,7 +73,7 @@ function guard(fn) {
 
 const actorOf = (req) => {
   const u = currentUser(req)
-  return { id: u.id || u.uid || null, name: u.name || u.username || null }
+  return { id: u.id || u.uid || null, name: u.name || u.username || null, ip: req.ip || null }
 }
 
 /**
@@ -103,33 +105,38 @@ function assertActionPermitted(req, db, docType, id) {
 // 一、看板与业务流
 // ===========================================================================
 
+/**
+ * 采购链读接口的**同一道门**（ADR-0015 立于待办，ADR-0017 推到看板 / 业务流 / 四张单列表 / 应付台账）：
+ * 内部主体（dealer / store 403）→ `PO_READ_PERMS` 任一（与采购订单读接口同一份清单）→ 挂上组织范围。
+ * 范围本身由 `purchaseScopeSql` 在查询里落地：范围为空的受限账号拿到的是**空列表 / 零总览**（200），
+ * 不是 403 —— 页面对"没有数据"与"没资格进门"要分得开。
+ * 原来这些接口只有 `requireAuth`：经销商 / 门店账号一个 GET 就能把全库单号与金额拉走。
+ */
+const readGate = [requireAuth, requireInternal('采购单据'), requirePerm(...PO_READ_PERMS), attachOrgScope]
+
+/** 主数据读（供货目录 / 取价）：同一门，但不挂组织范围 —— 主数据不分组织（ADR-0020）。 */
+const masterReadGate = [requireAuth, requireInternal('采购单据'), requirePerm(...PO_READ_PERMS)]
+
 r.get(
   '/chain/overview',
-  requireAuth,
-  guard((req, res) => ok(res, purchaseOverview(getDb())))
+  readGate,
+  guard((req, res) => ok(res, purchaseOverview(getDb(), { orgScope: req.orgScope })))
 )
 
-/**
- * 采购待办（ADR-0015）：与采购订单读接口**同一道门**（内部主体 + `PO_READ_PERMS` 任一），
- * 再按调用者的组织范围与动作权限收窄 —— 原来只有 `requireAuth`，经销商 / 门店账号一个 GET
- * 就能把全库待审单号与金额拉走。范围为空的受限账号拿到的是**空列表**（200），
- * 不是 403：工作台页面对"没有待办"与"没资格进门"要分得开。
- */
+/** 采购待办（ADR-0015）：进门后再按组织范围与每条待办的动作权限收窄。 */
 r.get(
   '/chain/todos',
-  requireAuth,
-  requireInternal('采购待办'),
-  requirePerm(...PO_READ_PERMS),
-  attachOrgScope,
+  readGate,
   guard((req, res) => {
     const db = getDb()
     return ok(res, { list: purchaseTodos(db, { orgScope: req.orgScope, permCtx: permContext(db, req.user) }) })
   })
 )
 
+/** 业务流定义不含单据数据，但与工作台其余两块同一道门（外部主体不该看到内部流程与权限点清单）。 */
 r.get(
   '/chain/flow',
-  requireAuth,
+  readGate,
   guard((req, res) => {
     const db = getDb()
     const flow = db.prepare("SELECT * FROM biz_flows WHERE code='FLOW_PURCHASE'").get()
@@ -151,11 +158,13 @@ r.get(
 /** 采购授权链路：把「谁在什么权限下能把单子推到哪」直接列出来，供前端做按钮可用性 */
 r.get(
   '/chain/actions',
-  requireAuth,
+  readGate,
   guard((req, res) => {
     const { doc_type: docType, id } = req.query
     if (!docType || !id) return fail(res, '需要 doc_type 与 id', 400)
-    return ok(res, { list: purchaseActions(getDb(), String(docType), Number(id)) })
+    const db = getDb()
+    assertPurchaseDocInScope(db, String(docType), Number(id), req.orgScope)
+    return ok(res, { list: purchaseActions(db, String(docType), Number(id)) })
   })
 )
 
@@ -165,7 +174,7 @@ r.get(
 
 r.get(
   '/catalog',
-  requireAuth,
+  masterReadGate,
   guard((req, res) => {
     const db = getDb()
     const cond = ['1=1']
@@ -212,7 +221,7 @@ r.post(
 /** 单行取价试算：必须带来源（界面上回答「为什么是这个价」） */
 r.get(
   '/price',
-  requireAuth,
+  masterReadGate,
   guard((req, res) => {
     const db = getDb()
     const skuId = Number(req.query.sku_id)
@@ -231,7 +240,7 @@ r.get(
 /** 批量取价：新建请购/订单时整单试算，避免前端逐行请求 */
 r.post(
   '/price-preview',
-  requireAuth,
+  readGate,
   guard((req, res) => {
     const db = getDb()
     const { supplier_id: supplierId = null, lines = [], manual = null, at = null } = req.body || {}
@@ -239,6 +248,7 @@ r.post(
     const priced = resolvePurchasePrices(db, { lines, supplierId, at, manual })
     const issues = checkSupplyCatalog(db, { supplierId, lines })
     const orderId = req.body.order_id ? Number(req.body.order_id) : null
+    if (orderId) assertPurchaseDocInScope(db, 'PO', orderId, req.orgScope)
     const over = orderId ? checkOverReceive(db, { orderId, lines }) : []
     const total = priced.reduce((s, x) => s + Number(x.amount || 0), 0)
     const qty = priced.reduce((s, x) => s + Number(x.qty || 0), 0)
@@ -265,9 +275,10 @@ r.post(
 
 r.get(
   '/requisitions',
-  requireAuth,
+  readGate,
   guard((req, res) => {
     const rows = listRequisitions(getDb(), {
+      orgScope: req.orgScope,
       status: req.query.status || null,
       applicant_type: req.query.applicant_type || null,
       applicant_id: req.query.applicant_id ? Number(req.query.applicant_id) : null,
@@ -280,9 +291,10 @@ r.get(
 
 r.get(
   '/requisitions/:id',
-  requireAuth,
+  readGate,
   guard((req, res) => {
     const db = getDb()
+    assertPurchaseDocInScope(db, 'PRQ', Number(req.params.id), req.orgScope)
     const row = getRequisition(db, Number(req.params.id))
     if (!row) return fail(res, '请购单不存在', 404)
     row.actions = purchaseActions(db, 'PRQ', row.id)
@@ -395,11 +407,12 @@ r.post(
 
 r.get(
   '/invoices',
-  requireAuth,
+  readGate,
   guard((req, res) => {
     const db = getDb()
-    const cond = ["i.status<>'voided'"]
-    const args = []
+    const scope = purchaseScopeSql(req.orgScope, 'i')
+    const cond = ["i.status<>'voided'", scope.org]
+    const args = [...scope.params]
     if (req.query.status) { cond.push('i.status=?'); args.push(req.query.status) }
     if (req.query.supplier_id) { cond.push('i.supplier_id=?'); args.push(Number(req.query.supplier_id)) }
     if (req.query.invoice_type) { cond.push('i.invoice_type=?'); args.push(req.query.invoice_type) }
@@ -428,9 +441,10 @@ r.get(
 
 r.get(
   '/invoices/:id',
-  requireAuth,
+  readGate,
   guard((req, res) => {
     const db = getDb()
+    assertPurchaseDocInScope(db, 'PI', Number(req.params.id), req.orgScope)
     const row = getInvoice(db, Number(req.params.id))
     if (!row) return fail(res, '采购发票不存在', 404)
     row.actions = purchaseActions(db, 'PI', row.id)
@@ -489,11 +503,13 @@ r.post(
 /** 发票来源建议：本供应商已入库但未开票的行，供财务一键带出 */
 r.get(
   '/invoices-available-lines',
-  requireAuth,
+  readGate,
   guard((req, res) => {
     const db = getDb()
     const supplierId = Number(req.query.supplier_id)
     if (!supplierId) return fail(res, '需要 supplier_id', 400)
+    // 入库按仓的组织收口（ADR-0020）；已开票量保持全量 —— 它是"这张订单行还剩多少可开"的事实，不能随调用者范围缩水。
+    const scope = purchaseScopeSql(req.orgScope, 'rc')
     // ⚠️ 必须**按订单行**归集（GROUP BY rc.order_id, ri.sku_id），不能按 sku_id 汇总。
     //
     // 按 sku 汇总时 `recv_qty` 是"该供应商该商品在**所有订单**上的入库合计"，
@@ -519,11 +535,11 @@ r.get(
            FROM purchase_receipt_items ri
            JOIN purchase_receipts rc ON rc.id=ri.receipt_id
            LEFT JOIN product_skus s ON s.id=ri.sku_id
-          WHERE rc.supplier_id=?
+          WHERE rc.supplier_id=? AND ${scope.wh}
           GROUP BY rc.order_id, ri.sku_id
           ORDER BY s.sku_code, rc.order_id`
       )
-      .all(supplierId)
+      .all(supplierId, ...scope.params)
     const list = rows
       .map((x) => ({
         ...x,
@@ -541,11 +557,12 @@ r.get(
 
 r.get(
   '/settlements',
-  requireAuth,
+  readGate,
   guard((req, res) => {
     const db = getDb()
-    const cond = ["st.status<>'voided'"]
-    const args = []
+    const scope = purchaseScopeSql(req.orgScope, 'st')
+    const cond = ["st.status<>'voided'", scope.org]
+    const args = [...scope.params]
     if (req.query.status) { cond.push('st.status=?'); args.push(req.query.status) }
     if (req.query.supplier_id) { cond.push('st.supplier_id=?'); args.push(Number(req.query.supplier_id)) }
     const rows = db
@@ -569,9 +586,10 @@ r.get(
 
 r.get(
   '/settlements/:id',
-  requireAuth,
+  readGate,
   guard((req, res) => {
     const db = getDb()
+    assertPurchaseDocInScope(db, 'PST', Number(req.params.id), req.orgScope)
     const row = getSettlement(db, Number(req.params.id))
     if (!row) return fail(res, '采购结算单不存在', 404)
     row.actions = purchaseActions(db, 'PST', row.id)
@@ -582,29 +600,32 @@ r.get(
 /** 结算试算：先看会结出什么，再决定要不要落单（避免建了又作废） */
 r.get(
   '/settlement-preview',
-  requireAuth,
+  readGate,
   guard((req, res) => {
     const db = getDb()
     const supplierId = Number(req.query.supplier_id)
     if (!supplierId) return fail(res, '需要 supplier_id', 400)
     const ps = req.query.period_start || null
     const pe = req.query.period_end || null
+    // 试算只汇总调用者范围内的入库（经仓的组织）与发票（自身 org_id）（ADR-0020）
+    const rcScope = purchaseScopeSql(req.orgScope, 'purchase_receipts')
+    const invScope = purchaseScopeSql(req.orgScope, 'purchase_invoices')
     const rc = db
       .prepare(
         `SELECT COUNT(*) c, COALESCE(SUM(total_amount),0) amt FROM purchase_receipts
-          WHERE supplier_id=? AND status IN ('received','inspected','closed')
+          WHERE supplier_id=? AND status IN ('received','inspected','closed') AND ${rcScope.wh}
             ${ps ? 'AND receipt_date>=?' : ''} ${pe ? 'AND receipt_date<=?' : ''}`
       )
-      .get(...[supplierId, ...(ps ? [ps] : []), ...(pe ? [pe] : [])])
+      .get(...[supplierId, ...rcScope.params, ...(ps ? [ps] : []), ...(pe ? [pe] : [])])
     const inv = db
       .prepare(
         `SELECT COUNT(*) c, COALESCE(SUM(amount),0) amt,
                 COALESCE(SUM(CASE WHEN invoice_type='fee' THEN amount ELSE 0 END),0) fee
            FROM purchase_invoices
-          WHERE supplier_id=? AND status IN ('verified','posted')
+          WHERE supplier_id=? AND status IN ('verified','posted') AND ${invScope.org}
             ${ps ? 'AND invoice_date>=?' : ''} ${pe ? 'AND invoice_date<=?' : ''}`
       )
-      .get(...[supplierId, ...(ps ? [ps] : []), ...(pe ? [pe] : [])])
+      .get(...[supplierId, ...invScope.params, ...(ps ? [ps] : []), ...(pe ? [pe] : [])])
     return ok(res, {
       supplier_id: supplierId,
       receipt_count: rc.c,
@@ -660,11 +681,12 @@ r.post(
 
 r.get(
   '/payments',
-  requireAuth,
+  readGate,
   guard((req, res) => {
     const db = getDb()
-    const cond = ["p.status<>'voided'"]
-    const args = []
+    const scope = purchaseScopeSql(req.orgScope, 'p')
+    const cond = ["p.status<>'voided'", scope.org]
+    const args = [...scope.params]
     if (req.query.status) { cond.push('p.status=?'); args.push(req.query.status) }
     if (req.query.supplier_id) { cond.push('p.supplier_id=?'); args.push(Number(req.query.supplier_id)) }
     const rows = db
@@ -687,12 +709,14 @@ r.get(
 
 r.get(
   '/payments/:id',
-  requireAuth,
+  readGate,
   guard((req, res) => {
     const db = getDb()
+    assertPurchaseDocInScope(db, 'PAY', Number(req.params.id), req.orgScope)
     const row = getPayment(db, Number(req.params.id))
     if (!row) return fail(res, '付款单不存在', 404)
     row.actions = purchaseActions(db, 'PAY', row.id)
+    row.review = reviewOf(row)
     return ok(res, row)
   })
 )
@@ -700,23 +724,36 @@ r.get(
 /** 付款前置：这张供应商还欠多少、FIFO 会核销到哪几张单 */
 r.get(
   '/payment-plan',
-  requireAuth,
+  readGate,
   guard((req, res) => {
     const db = getDb()
     const supplierId = Number(req.query.supplier_id)
     const amount = Number(req.query.amount || 0)
     if (!supplierId) return fail(res, '需要 supplier_id', 400)
-    const open = db
+    // 只列 / 只核销调用者范围内的结算单（ADR-0020）；全局范围沿用 `planAllocation`，受限范围对已按范围过滤的清单做同口径 FIFO
+    const scope = purchaseScopeSql(req.orgScope, 'st')
+    const openAll = db
       .prepare(
         `SELECT st.id, st.doc_no, st.settle_date, st.settle_amount, st.paid_amount,
                 (st.settle_amount - st.paid_amount) open_amount
            FROM purchase_settlements st
-          WHERE st.supplier_id=? AND st.status IN ('audited','settled')
-            AND st.settle_amount - st.paid_amount > 0.01
+          WHERE st.supplier_id=? AND st.status IN ('audited','settled') AND ${scope.org}
+            AND st.settle_amount - st.paid_amount > 0.000001
           ORDER BY st.settle_date, st.id`
       )
-      .all(supplierId)
-    const plan = amount > 0 ? planAllocation(db, supplierId, amount) : []
+      .all(supplierId, ...scope.params)
+    const open = openAll.filter((x) => Number(x.open_amount) > 0.01)
+    let plan = []
+    if (amount > 0 && (!req.orgScope || req.orgScope.scope === 'all')) plan = planAllocation(db, supplierId, amount)
+    else if (amount > 0) {
+      let left = amount
+      for (const x of openAll) {
+        if (left <= 1e-6) break
+        const take = Math.min(left, Number(x.open_amount))
+        plan.push({ settle_id: x.id, amount: Math.round(take * 100) / 100, remark: 'FIFO 自动核销' })
+        left -= take
+      }
+    }
     return ok(res, {
       open_total: Math.round(open.reduce((s, x) => s + Number(x.open_amount || 0), 0) * 100) / 100,
       list: open,
@@ -750,6 +787,27 @@ r.post(
   })
 )
 
+// 复核（第二人，ADR-0018）：必须排在 `/:action` 之前，`review` 不是内核动作。
+// approve = 在同一事务里执行 `pay`（核销 + 已付）+ 严格审计；reject = 退回已审批并记原因。
+r.post(
+  '/payments/:id/review',
+  requireAuth,
+  requirePerm(FUNDS_REVIEW_PERM),
+  guard((req, res) => {
+    const db = getDb()
+    const id = Number(req.params.id)
+    const actor = actorOf(req)
+    const b = req.body || {}
+    const out = reviewFunds(db, {
+      kind: 'payment', id, actor, decision: b.decision, comment: b.comment ?? null,
+      apply: () => transitionPayment(db, { id, action: 'pay', actor, remark: b.remark || null })
+    })
+    if (out.applied) audit(req, { action: 'pay', module: 'purchase', entity: 'purchase_payments', entityId: id })
+    const row = getPayment(db, id)
+    return ok(res, { ...row, review: out.review })
+  })
+)
+
 r.post(
   '/payments/:id/:action',
   requireAuth,
@@ -758,10 +816,19 @@ r.post(
     const id = Number(req.params.id)
     const action = String(req.params.action)
     assertActionPermitted(req, db, 'PAY', id)
+    // 待复核期间任何动作（再次 pay / void）一律拒绝：先由复核人批准或驳回
+    assertNotPending(db, 'payment', id)
     if (action === 'pay') {
-      const row = transitionPayment(db, { id, action, actor: actorOf(req), remark: req.body?.remark || null })
-      audit(req, { action: 'pay', module: 'purchase', entity: 'purchase_payments', entityId: id })
-      return ok(res, row)
+      const actor = actorOf(req)
+      const b = req.body || {}
+      const out = confirmFunds(db, {
+        kind: 'payment', id, actor,
+        evidence: { ref: b.evidence_ref, note: b.evidence_note },
+        apply: () => transitionPayment(db, { id, action, actor, remark: b.remark || null })
+      })
+      if (out.applied) audit(req, { action: 'pay', module: 'purchase', entity: 'purchase_payments', entityId: id })
+      const row = getPayment(db, id)
+      return ok(res, { ...row, review: out.review })
     }
     const row = transitionPayment(db, { id, action, actor: actorOf(req), remark: req.body?.remark || null })
     audit(req, { action, module: 'purchase', entity: 'purchase_payments', entityId: id })
@@ -776,9 +843,11 @@ r.post(
 /** 应付账款台账：按供应商看已结算 / 已付 / 未付与暂估差异 */
 r.get(
   '/payables',
-  requireAuth,
+  readGate,
   guard((req, res) => {
     const db = getDb()
+    // 结算按自身 org_id、退货经仓的组织 —— 与看板 / 待办同一份 `purchaseScopeSql`（ADR-0017）
+    const scope = purchaseScopeSql(req.orgScope, 'st')
     const rows = db
       .prepare(
         `SELECT s.id AS supplier_id, s.code AS supplier_code, s.name AS supplier_name, s.settle_type,
@@ -788,10 +857,10 @@ r.get(
                 COALESCE(SUM(st.settle_amount-st.paid_amount),0) open_amount,
                 COALESCE(SUM(st.diff_amount),0) diff_amount
            FROM purchase_settlements st JOIN suppliers s ON s.id=st.supplier_id
-          WHERE st.status<>'voided'
+          WHERE st.status<>'voided' AND ${scope.org}
           GROUP BY s.id ORDER BY open_amount DESC`
       )
-      .all()
+      .all(...scope.params)
     const total = rows.reduce(
       (a, x) => ({
         settle_amount: a.settle_amount + Number(x.settle_amount || 0),
@@ -812,16 +881,17 @@ r.get(
     // 但**必须让它看得见**：本批之前，退货既不生成凭证（现已补 `purchase_return` 模板）、
     // 也不进结算，于是这张台账上的"未付"是**含退货的虚高值**，而且没有任何一处会提示。
     // ⇒ 披露出来，让人一眼看到"其中有多少是已退还没抵的"，再由人来决定怎么抵。
+    const prScope = purchaseScopeSql(req.orgScope, 'pr')
     const returnsBySupplier = db
       .prepare(
         `SELECT s.id AS supplier_id, s.code AS supplier_code, s.name AS supplier_name,
                 COUNT(pr.id) return_count,
                 COALESCE(SUM(pr.total_amount),0) return_amount
            FROM purchase_returns pr JOIN suppliers s ON s.id=pr.supplier_id
-          WHERE pr.status IN ('confirmed','completed')
+          WHERE pr.status IN ('confirmed','completed') AND ${prScope.wh}
           GROUP BY s.id ORDER BY return_amount DESC`
       )
-      .all()
+      .all(...prScope.params)
     const returnTotal = Math.round(returnsBySupplier.reduce((a, x) => a + Number(x.return_amount || 0), 0) * 100) / 100
     return ok(res, {
       list: rows,
@@ -838,10 +908,11 @@ r.get(
 /** 采购订单的四段关闭状态 + 后段金额 */
 r.get(
   '/orders/:id/closes',
-  requireAuth,
+  readGate,
   guard((req, res) => {
     const db = getDb()
     const id = Number(req.params.id)
+    assertPurchaseDocInScope(db, 'PO', id, req.orgScope)
     const order = db.prepare('SELECT * FROM purchase_orders WHERE id=?').get(id)
     if (!order) return fail(res, '采购订单不存在', 404)
     const flags = refreshCloseFlags(db, id)

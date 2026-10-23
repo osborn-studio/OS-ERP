@@ -23,7 +23,7 @@ function tempDir(t, prefix) {
 }
 
 /** A production data dir with one bootstrapped admin and a few AR rows, backed up by the real db-backup.mjs. */
-function productionFixture(t, { withAdmin = true } = {}) {
+function productionFixture(t, { withAdmin = true, backupKey = null } = {}) {
   const dir = tempDir(t, 'os-egp-drill-src-')
   const password = secret()
   if (withAdmin) {
@@ -46,10 +46,10 @@ function productionFixture(t, { withAdmin = true } = {}) {
       ('RC-DRILL-2', 'dealer', 1, '2026-10-06', 10, 'draft');
   `)
   db.close()
-  const backup = spawnSync(process.execPath, ['scripts/db-backup.mjs', 'cosmetic'], { cwd: ROOT, env: envFor(dir), encoding: 'utf8', timeout: 60000 })
+  const backup = spawnSync(process.execPath, ['scripts/db-backup.mjs', 'cosmetic'], { cwd: ROOT, env: envFor(dir, backupKey ? { GML_BACKUP_KEY: backupKey } : {}), encoding: 'utf8', timeout: 60000 })
   assert.equal(backup.status, 0, backup.stderr + backup.stdout)
   const backupDir = path.join(dir, 'backups')
-  const files = readdirSync(backupDir).filter((f) => f.endsWith('.db'))
+  const files = readdirSync(backupDir).filter((f) => f.endsWith('.db') || f.endsWith('.db.enc'))
   assert.equal(files.length, 1)
   return { dir, backupDir, backupFile: path.join(backupDir, files[0]), password }
 }
@@ -198,4 +198,40 @@ test('a backup whose accounts exist but no drill account is supplied is refused 
   const result = drill(t, fx, { args: ['--industry=cosmetic'] })
   assert.equal(result.status, 2)
   assert.match(result.stderr, /DRILL_ACCOUNT_REQUIRED/)
+})
+
+// ---- W6 / ADR-0022: encrypted backups ----
+const BKEY = 'drill-backup-key-'.padEnd(48, 'x')
+
+test('restore drill transparently decrypts an encrypted backup, restores, logs in and matches probes', { timeout: 180000 }, (t) => {
+  const fx = productionFixture(t, { backupKey: BKEY })
+  assert.ok(fx.backupFile.endsWith('.db.enc'))
+  const shaBefore = sha256(fx.backupFile)
+  const result = drill(t, fx, { args: ['--drill-username=owner', '--industry=cosmetic'], stdin: fx.password + '\n', env: { GML_BACKUP_KEY: BKEY } })
+  assert.equal(result.status, 0, result.stderr + result.stdout)
+  const report = readReport(result.target)
+  assert.equal(report.passed, true)
+  assert.equal(report.restored[0].sha256_verified, true)
+  assert.equal(report.restored[0].encrypted, true)
+  for (const p of report.probes) assert.equal(p.match, true, JSON.stringify(p))
+  assert.doesNotMatch(JSON.stringify(report), new RegExp(BKEY))
+  assert.equal(sha256(fx.backupFile), shaBefore)
+  const restored = new Database(path.join(result.target, 'gml_cosmetic.db'), { readonly: true })
+  assert.equal(restored.pragma('integrity_check', { simple: true }), 'ok')
+  restored.close()
+})
+
+test('encrypted backup with the wrong key or no key fails cleanly and leaves no database or partial file in the target', { timeout: 120000 }, (t) => {
+  const fx = productionFixture(t, { backupKey: BKEY })
+  for (const [label, env, code] of [
+    ['wrong key', { GML_BACKUP_KEY: 'w'.repeat(48) }, /DRILL_BACKUP_DECRYPT_FAILED/],
+    ['no key', {}, /DRILL_BACKUP_KEY_REQUIRED/]
+  ]) {
+    const result = drill(t, fx, { args: ['--drill-username=owner', '--industry=cosmetic'], stdin: fx.password + '\n', env })
+    assert.equal(result.status, 1, `${label}: ${result.stdout}${result.stderr}`)
+    assert.match(result.stdout + result.stderr, code)
+    const left = readdirSync(result.target).filter((f) => !/^restore-drill-.*\.json$/.test(f))
+    assert.deepEqual(left, [], `${label}: target holds only the report`)
+    assert.equal(readReport(result.target).passed, false)
+  }
 })

@@ -160,6 +160,23 @@ export function dbPathFor(industry) {
   return path.join(DATA_DIR, INDUSTRIES[code].db)
 }
 
+/**
+ * 脚本用的**显式数据目录判据**（ADR-0019）—— 与 `scripts/regress-all.mjs` 的闸门同一口径：
+ *   · 缺 `GML_DATA_DIR` / 非绝对路径 ⇒ `DATA_DIRECTORY_REQUIRED`（复用 ADR-0001 的判据）；
+ *   · 指向仓库 `data/`（按物理路径比较，symlink 也认）⇒ `DATA_DIRECTORY_IS_REPOSITORY`。
+ * 为什么放在这里而不是各脚本自己写：`DATA_DIR` 的兜底 `<repo>/data` 是模块加载期算好的，
+ * 任何脚本只要"自己拼 `data/gml_*.db`"就绕开了 ADR-0001 —— `check-mcp-coverage` 曾经就是这样。
+ * 调用方通过后再用 `dbPathFor()` 取库文件，**不要**自己拼文件名。
+ */
+export function requireExplicitDataDir(env = process.env) {
+  const dir = requireDataDirectory(env)
+  const physical = (p) => { try { return fs.realpathSync(p) } catch { return path.resolve(p) } }
+  if (physical(dir) === physical(path.join(ROOT_DIR, 'data'))) {
+    throw Object.assign(new Error(`GML_DATA_DIR 指向仓库 data/（${dir}）；请复制到隔离目录后再跑`), { code: 'DATA_DIRECTORY_IS_REPOSITORY' })
+  }
+  return dir
+}
+
 export function getDbFor(industry) {
   const mode = runtimeMode()
   if (path.resolve(requireDataDirectory()) !== path.resolve(DATA_DIR)) {
@@ -228,6 +245,6 @@ export function industryList() {
 export default {
   getDb, getDbFor, initSchema, initSchemaFor, DB_PATH, DATA_DIR,
   INDUSTRIES, DEFAULT_INDUSTRY, isSeeded, tableCount,
-  runWithIndustry, getCurrentIndustry, dbPathFor, industryList,
+  runWithIndustry, getCurrentIndustry, dbPathFor, industryList, requireExplicitDataDir,
   assertIndustry, normalizeIndustry, industryError, INDUSTRY_CODE_INVALID, showValue
 }

@@ -33,6 +33,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const DECLARED = [
   'server/index.js',
   'server/lib/audit-trail.js',
+  'server/lib/logger.js',
   'server/lib/redact.js',
   'server/middleware/audit.js',
   'server/version.js',
@@ -42,7 +43,11 @@ const DECLARED = [
   'server/db/migrations/053_agent_token_owner_version.cjs',
   'server/lib/outbound-url.js',
   'server/lib/secret-box.js',
+  'server/lib/backup-crypto.js',
   'scripts/check-mcp-coverage.mjs',
+  'scripts/gen-sbom.mjs',
+  'scripts/lib/runtime-closure.mjs',
+  'scripts/gen-third-party-notices.mjs',
   'scripts/check-file-header.mjs',
   'scripts/db-backup.mjs',
   'server/db/migrations/runner.js',
@@ -62,11 +67,35 @@ const DECLARED = [
   'server/lib/credit-release.js',
   'server/db/migrations/052_credit_release_ledger.cjs',
   'tests/credit-reversal.test.mjs',
+  'tests/credit-effect-format.test.mjs',
+  'src/utils/credit-effect.ts',
+  // 前端 403 / 空范围 / 功能关闭提示（W3）
+  'src/utils/scope-notice.ts',
+  'src/components/ScopeNotice.tsx',
+  'tests/scope-notice.test.mjs',
   // 授信投影（ADR-0014）：credit_hold 的唯一写入者与对账守卫
   'tests/credit-hold-projection.test.mjs',
   // 待办范围与 Agent Token 有效状态（ADR-0015）
   'server/db/migrations/055_agent_token_revoke_reason.cjs',
-  'tests/authz-followups.test.mjs'
+  'tests/authz-followups.test.mjs',
+  // 采购链读接口范围收口（ADR-0017）
+  'tests/purchase-chain-scope.test.mjs',
+  'tests/purchase-chain-detail-scope.test.mjs',
+  // 脚本数据目录卫生与单实例安装验收（ADR-0019）
+  'scripts/check-data-paths.mjs',
+  'scripts/check-route-authz.mjs',
+  'tests/route-authz-guard.test.mjs',
+  'scripts/db-inventory.mjs',
+  'scripts/local-manage.mjs',
+  'tests/data-path-guard.test.mjs',
+  'tests/local-instance.test.mjs',
+  // 收付款证据与二人复核（ADR-0018）
+  'server/lib/funds-review.js',
+  'server/db/migrations/056_funds_maker_checker.cjs',
+  'tests/funds-maker-checker.test.mjs',
+  // 付款释放台账（ADR-0024）
+  'server/db/migrations/057_payment_release_ledger.cjs',
+  'tests/payment-reversal.test.mjs'
 ]
 
 /** 参与覆盖率统计的源文件（**排除** node_modules / dist / data） */

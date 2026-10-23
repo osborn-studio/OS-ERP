@@ -14,9 +14,20 @@
  */
 
 // 组织与权限结构速查（只读）
+// 用法：GML_DATA_DIR=/absolute/dir node scripts/inspect-org.mjs [cosmetic|food|apparel]（默认 cosmetic）
+// 库文件由 server/db/index.js 的 dbPathFor() 解析；数据目录必须显式且不是仓库 data/（ADR-0019）。
 import Database from 'better-sqlite3'
+import { requireExplicitDataDir, dbPathFor, assertIndustry } from '../server/db/index.js'
 
-const db = new Database('data/gml_cosmetic.db', { readonly: true })
+let DB_PATH
+try {
+  requireExplicitDataDir()
+  DB_PATH = dbPathFor(assertIndustry(process.argv[2]) || 'cosmetic')
+} catch (e) {
+  console.error(`${e.code || 'USAGE'}: ${e.message}`)
+  process.exit(2)
+}
+const db = new Database(DB_PATH, { readonly: true })
 
 console.log('===== 组织树（美妆版）=====')
 for (const o of db.prepare("SELECT id,code,name,type,level,path,is_legal,owner_org_id FROM orgs WHERE type IN ('group','region','store','kitchen') ORDER BY path").all()) {

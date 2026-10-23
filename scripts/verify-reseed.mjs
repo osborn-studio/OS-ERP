@@ -33,16 +33,25 @@
  *   灌数时钟由 `resetSeedClock()` 冻结，但它冻的是"逻辑起点"，
  *   而真实执行耗时会让不同轮次的墙上时间不同 —— 比对它们只会得到假红。
  *
- * 用法：node scripts/verify-reseed.mjs [cosmetic|food|apparel]
+ * 用法：GML_DATA_DIR=/absolute/dir node scripts/verify-reseed.mjs [cosmetic|food|apparel]
  *
- * ⚠️ 会**抹掉手工点出来的单据**（它跑的就是 `--force` 重建）。
+ * ⚠️ 会**抹掉手工点出来的单据**（它跑的就是 `--force` 重建）—— 所以数据目录**必须显式**且不许是
+ *   仓库 data/（ADR-0019）：原来 `GML_DATA_DIR || <repo>/data` 的兜底意味着漏设 env 就把开发库重建两遍。
+ *   库文件路径由 `dbPathFor()` 解析，与 reseed-all 子进程（继承同一 env）同源。
  */
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import Database from 'better-sqlite3'
-import { INDUSTRIES } from '../server/db/index.js'
+import { INDUSTRIES, requireExplicitDataDir, dbPathFor } from '../server/db/index.js'
+
+try {
+  requireExplicitDataDir()
+} catch (e) {
+  console.error(`${e.code}: ${e.message}`)
+  process.exit(2)
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.resolve(__dirname, '..')
@@ -54,7 +63,7 @@ const sha1 = (s) => createHash('sha1').update(s).digest('hex').slice(0, 12)
 
 /** 业务值指纹：行数 + 所有对外标识列的有序序列（按 key 组织，便于定位差异） */
 function fingerprint(industry) {
-  const db = new Database(path.join(process.env.GML_DATA_DIR || path.join(ROOT, 'data'), `gml_${industry}.db`), { readonly: true })
+  const db = new Database(dbPathFor(industry), { readonly: true })
   const m = new Map()
   const tables = db
     .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")

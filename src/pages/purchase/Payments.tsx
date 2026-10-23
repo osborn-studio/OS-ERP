@@ -20,6 +20,7 @@
 
 import { useState } from 'react'
 import api from '../../api/client'
+import ScopeNotice, { ScopeBlocked, firstFailure, isBlocked } from '../../components/ScopeNotice'
 import { Card, Field, Modal, StatCard, Status, Table, Tabs, fmtInt, fmtMoney, toast, useFetch, useList } from '../../components/ui'
 import { FilterBar, Inp, Sel } from '../../components/DataPage'
 import { handleApprovalPending } from '../../api/approval'
@@ -46,6 +47,9 @@ import { RefreshCw, Plus, Eye, ListOrdered, AlertTriangle } from 'lucide-react'
  * 通用映射服务于返利/发券等场景，付款场景必须显式改字。
  */
 const PAY_STATUS_TEXT: Record<string, string> = { draft: '草稿', approved: '已审批（核销已生效）', paid: '已付款', voided: '已作废' }
+/** ADR-0018：执行付款必须带凭证号；达到阈值只挂「待复核」，由持 finance.funds.review 的另一人批准 / 驳回 */
+const FUNDS_REVIEW_PERM = 'finance.funds.review'
+const REVIEW_TEXT: Record<string, string> = { pending_review: '待复核', approved: '复核通过', rejected: '复核驳回' }
 
 const PAY_TYPES: { value: string; label: string }[] = [
   { value: 'transfer', label: '银行转账' },
@@ -55,19 +59,23 @@ const PAY_TYPES: { value: string; label: string }[] = [
 ]
 
 /** 动作 → 一次调用（理由见 Invoices.tsx 的 INVOICE_ACTIONS：路径先进变量会让契约检查看不见） */
-const PAYMENT_ACTIONS: Record<string, (id: any) => Promise<any>> = {
+const PAYMENT_ACTIONS: Record<string, (id: any, body?: any) => Promise<any>> = {
   submit: (id) => api.post(`/purchase/payments/${id}/submit`),
-  pay: (id) => api.post(`/purchase/payments/${id}/pay`),
-  void: (id) => api.post(`/purchase/payments/${id}/void`)
+  pay: (id, body) => api.post(`/purchase/payments/${id}/pay`, body),
+  void: (id) => api.post(`/purchase/payments/${id}/void`),
+  review: (id, body) => api.post(`/purchase/payments/${id}/review`, body)
 }
 
 export default function Payments() {
   const o = useOpts()
   const [tab, setTab] = useState('')
   const [supplierId, setSupplierId] = useState('')
-  const { list, summary, loading, reload } = useList('/purchase/payments', {})
+  const { list, summary, loading, reload, errorStatus, errorCode } = useList('/purchase/payments', {})
+  const failure = { errorStatus, errorCode }
   const [createOpen, setCreateOpen] = useState(false)
   const [detailId, setDetailId] = useState<number | null>(null)
+  const { data: me } = useFetch<any>('/auth/me', undefined, [])
+  const canReview = !!me?.permissions?.includes(FUNDS_REVIEW_PERM)
 
   const filtered = list.filter((r: any) => {
     if (tab && r.status !== tab) return false
@@ -76,17 +84,30 @@ export default function Payments() {
   })
 
   const act = async (row: any, action: string) => {
-    const label: Record<string, string> = { submit: '提交审批', pay: '执行付款（核销生效）', void: '作废' }
-    const warn =
-      action === 'pay'
-        ? `${row.doc_no} 执行付款后将核销结算单并不可回退，确认？`
-        : `确认对 ${row.doc_no} 执行「${label[action] || action}」？`
-    if (!confirm(warn)) return false
+    const label: Record<string, string> = { submit: '提交审批', pay: '执行付款（核销生效）', void: '作废', approve: '复核通过', reject: '复核驳回' }
+    let body: any
+    if (action === 'pay') {
+      // ADR-0018：证据先于确认。缺凭证号服务端会拒绝（FUNDS_EVIDENCE_REQUIRED），这里不替它放水
+      const ref = window.prompt(`${row.doc_no} 执行付款：请填写银行流水号 / 凭证号（证据，必填）`)
+      if (ref === null) return false
+      const note = window.prompt('证据说明（可空）：') ?? ''
+      body = { evidence_ref: ref.trim(), evidence_note: note.trim() }
+      if (!confirm(`${row.doc_no} 执行付款后将核销结算单并不可回退（达到复核阈值时先进入待复核），确认？`)) return false
+    } else if (action === 'approve' || action === 'reject') {
+      const comment = window.prompt(action === 'reject' ? '驳回原因（必填，写入严格审计）：' : '复核意见（可空）：')
+      if (comment === null || (action === 'reject' && !comment.trim())) return false
+      body = { decision: action, comment: comment.trim() }
+    } else if (!confirm(`确认对 ${row.doc_no} 执行「${label[action] || action}」？`)) return false
     try {
-      const call = PAYMENT_ACTIONS[action]
+      const call = PAYMENT_ACTIONS[action === 'approve' || action === 'reject' ? 'review' : action]
       if (!call) return toast(`未知动作 ${action}`, 'error')
-      await call(row.id)
-      toast(action === 'pay' ? '付款已执行，核销已生效' : '操作成功')
+      const res = await call(row.id, body)
+      const review = res?.data?.review?.status
+      toast(
+        action === 'pay'
+          ? (review === 'pending_review' ? '已提交复核：等待另一人批准后才标记已付' : '付款已执行，核销已生效')
+          : action === 'approve' ? '复核通过：付款已执行' : action === 'reject' ? '已驳回：付款单退回已审批' : '操作成功'
+      )
       reload()
       return true
     } catch (e: any) {
@@ -98,6 +119,8 @@ export default function Payments() {
       return false
     }
   }
+
+  if (isBlocked(failure)) return <ScopeBlocked failure={failure} onRetry={reload} />
 
   return (
     <div>
@@ -117,6 +140,8 @@ export default function Payments() {
           </button>
         </div>
       </div>
+
+      <ScopeNotice failure={failure} rows={loading ? null : list} loading={loading} />
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-3">
         <StatCard label="付款单张数" value={fmtInt(filtered.length)} sub="不含已作废" />
@@ -155,7 +180,12 @@ export default function Payments() {
             { key: 'amount', title: '付款金额', width: 120, align: 'right', render: (r) => `¥${fmtMoney(r.amount)}` },
             { key: 'settled_amount', title: '已核销', width: 120, align: 'right', render: (r) => `¥${fmtMoney(r.settled_amount)}` },
             { key: 'unallocated', title: '未分配', width: 110, align: 'right', render: (r) => (Number(r.unallocated) > 0.01 ? `¥${fmtMoney(r.unallocated)}` : '—') },
-            { key: 'status', title: '状态', width: 110, render: (r) => <Status value={r.status} text={PAY_STATUS_TEXT[r.status]} /> },
+            {
+              key: 'status', title: '状态', width: 130,
+              render: (r) => (r.review_status === 'pending_review'
+                ? <Status value="pending" text={REVIEW_TEXT.pending_review} />
+                : <Status value={r.status} text={PAY_STATUS_TEXT[r.status]} />)
+            },
             {
               key: '__act',
               title: '操作',
@@ -166,8 +196,14 @@ export default function Payments() {
                     <Eye size={12} /> 详情
                   </button>
                   {r.status === 'draft' && <button className="link" onClick={() => act(r, 'submit')}>提交审批</button>}
-                  {r.status === 'approved' && <button className="link" onClick={() => act(r, 'pay')}>执行付款</button>}
-                  {['draft', 'approved'].includes(r.status) && (
+                  {r.status === 'approved' && r.review_status !== 'pending_review' && <button className="link" onClick={() => act(r, 'pay')}>执行付款</button>}
+                  {r.review_status === 'pending_review' && canReview && me?.id !== r.review_maker_id && (
+                    <>
+                      <button className="link" onClick={() => act(r, 'approve')}>复核通过</button>
+                      <button className="text-red-500 hover:text-red-600" onClick={() => act(r, 'reject')}>驳回</button>
+                    </>
+                  )}
+                  {['draft', 'approved'].includes(r.status) && r.review_status !== 'pending_review' && (
                     <button className="text-red-500 hover:text-red-600" onClick={() => act(r, 'void')}>作废</button>
                   )}
                 </div>
@@ -182,7 +218,7 @@ export default function Payments() {
       </Card>
 
       <CreateModal open={createOpen} onClose={() => setCreateOpen(false)} onSaved={reload} suppliers={o.suppliers} />
-      <DetailModal id={detailId} onClose={() => setDetailId(null)} onAct={act} />
+      <DetailModal id={detailId} onClose={() => setDetailId(null)} onAct={act} canReview={canReview} meId={me?.id} />
     </div>
   )
 }
@@ -343,7 +379,7 @@ function CreateModal({ open, onClose, onSaved, suppliers }: any) {
   )
 }
 
-function DetailModal({ id, onClose, onAct }: any) {
+function DetailModal({ id, onClose, onAct, canReview = false, meId = null }: any) {
   const { data, loading, reload } = useFetch<any>(id ? `/purchase/payments/${id}` : null, undefined, [id])
   const doAct = async (action: string) => {
     const okFlag = await onAct(data, action)
@@ -351,6 +387,9 @@ function DetailModal({ id, onClose, onAct }: any) {
   }
   const items: any[] = data?.items || []
   const live = data?.status === 'approved' || data?.status === 'paid'
+  const review = data?.review
+  const pending = review?.status === 'pending_review'
+  const isMaker = !!review?.maker?.id && review.maker.id === meId
 
   return (
     <Modal open={!!id} title={`付款单详情 · ${data?.doc_no || ''}`} width={940} onClose={onClose}>
@@ -366,7 +405,17 @@ function DetailModal({ id, onClose, onAct }: any) {
             <div><span className="text-ink-500">已核销 </span>¥{fmtMoney(data.settled_amount)}</div>
             <div><span className="text-ink-500">未分配 </span>¥{fmtMoney(Number(data.amount) - Number(data.settled_amount))}</div>
             <div><span className="text-ink-500">银行账户 </span>{data.bank_account || '-'}</div>
+            <div><span className="text-ink-500">凭证号 </span>{data.evidence_ref || '-'}</div>
+            {data.evidence_note && <div className="col-span-3"><span className="text-ink-500">证据说明 </span>{data.evidence_note}</div>}
           </div>
+          {review?.status && (
+            <div className={`rounded-md border px-3 py-2 mb-3 text-[12px] ${pending ? 'border-amber-300 bg-amber-50/50 text-amber-700' : review.status === 'approved' ? 'border-teal-300 bg-teal-50/50 text-teal-700' : 'border-red-300 bg-red-50/50 text-red-700'}`}>
+              <b>{REVIEW_TEXT[review.status] || review.status}</b>
+              <span className="ml-2">发起：{review.maker?.name || '-'}{review.maker?.at ? `（${review.maker.at}）` : ''}</span>
+              {review.checker && <span className="ml-2">复核：{review.checker.name || '-'}{review.decided_at ? `（${review.decided_at}）` : ''}</span>}
+              {review.comment && <span className="ml-2">意见：{review.comment}</span>}
+            </div>
+          )}
 
           <div className={`rounded-md border px-3 py-2 mb-3 text-[12px] ${live ? 'border-teal-300 bg-teal-50/50 text-teal-700' : 'border-amber-300 bg-amber-50/50 text-amber-700'}`}>
             {live ? (
@@ -417,11 +466,20 @@ function DetailModal({ id, onClose, onAct }: any) {
                 <button className="btn-ghost btn-sm" onClick={() => doAct('void')}>作废</button>
               </>
             )}
-            {data.status === 'approved' && (
+            {data.status === 'approved' && !pending && (
               <>
                 <button className="btn-primary btn-sm" onClick={() => doAct('pay')}>执行付款</button>
                 <button className="btn-ghost btn-sm" onClick={() => doAct('void')}>作废</button>
               </>
+            )}
+            {pending && canReview && !isMaker && (
+              <>
+                <button className="btn-primary btn-sm" onClick={() => doAct('approve')}>复核通过（执行付款）</button>
+                <button className="btn-ghost btn-sm" onClick={() => doAct('reject')}>驳回</button>
+              </>
+            )}
+            {pending && (!canReview || isMaker) && (
+              <span className="text-[12px] text-amber-700">{isMaker ? '你是发起人，需由另一人复核' : '等待持复核权限的同事批准'}</span>
             )}
             {data.status === 'paid' && <span className="text-[12px] text-ink-500">已付款，流程结束</span>}
           </div>
