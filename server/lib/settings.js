@@ -351,6 +351,12 @@ export const SETTING_RULES = {
     group: 'ops', label: 'MCP 调用日志保留天数', type: 'int', default: '90', is_danger: true, wired: true,
     min: 7, max: 3650,
     impact: '`scripts/retention.mjs --execute` 清理早于该天数的 mcp_call_logs（danger 级别调用永不清理）。缩短会更早永久删除 AI 调用记录。'
+  },
+
+  // ---- 审批（ADR-0037 补充，Z9） ----
+  approval_manager_global: {
+    group: 'approval', label: '审批管理员全局可见', type: 'bool', default: '1', is_danger: true, wired: true,
+    impact: '开（默认，ADR-0015 现状）：持 `system:approval:manage` 的审批管理员在「待我审批」/ 待办 / 列表 / 总览里看到全库 pending 实例。关：受限数据范围的审批管理员只看到指向其组织范围内单据的实例，外加当前级审批人是本人的队列；全局范围账号不受影响。关掉会让跨组织的待审单从管理员视野里消失。'
   }
 }
 
@@ -364,7 +370,8 @@ export const SETTING_GROUPS = [
   { key: 'quote', label: '销售报价', note: '报价的审批与有效期' },
   { key: 'credit', label: '信用控制', note: '逾期拦截' },
   { key: 'funds', label: '资金收付', note: '收款确认 / 付款执行的证据与二人复核（ADR-0018）—— 关掉等于允许一人凭空确认收付款，修改必须写理由' },
-  { key: 'ops', label: '运维', note: '备份等本地工具参数' }
+  { key: 'ops', label: '运维', note: '备份等本地工具参数' },
+  { key: 'approval', label: '审批', note: '审批管理员的可见范围（ADR-0037）—— 修改必须写理由' }
 ]
 
 /** 全部登记键（顺序 = 定义表顺序） */

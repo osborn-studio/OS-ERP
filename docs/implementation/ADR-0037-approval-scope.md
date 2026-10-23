@@ -51,3 +51,18 @@ Y2 在 `server/lib/docflow.js` 建 `DOC_SCOPE_RESOLVERS`；本工作流不得改
 ## 验证入口
 
 `node --test tests/approval-scope.test.mjs`：创建 / 列表 / 详情 / 总览 / 待办 / 闸门 / 撤回 / 决定 的范围内外断言、外部与无组织账号、无解析器类型失败关闭、销售与订货中心解析。Mac mini Node 22 本地验证，不等于目标平台验收。
+
+## 补充（Z9，批次九）：审批管理员范围开关 `approval_manager_global`
+
+上文"取舍与已知边界"的第一条把审批管理员（`system:approval:manage`）的 pending 全见当作 ADR-0015 既有契约保留。该权限点是模板维护级别，但现实里常被授予有组织归属的账号，使其越过组织边界看到他组织的待审单与金额。本补充把这个口径变成**显式、可审计的设置**，默认不改行为：
+
+- 设置 `approval_manager_global`（bool，默认 `1`，`is_danger`，分组 `approval`；`lib/settings.js` 的 `SETTING_RULES` 登记，改动须写理由并进配置变更日志）。
+- **1（默认）**：与上文完全一致——管理员 pending 全见。
+- **0**：数据范围受限（`org` / `subtree` / 无组织）的审批管理员，可见集合 = 指向其组织范围内单据的实例 ∪ 提交人本人 ∪ 当前级审批人是本人的 pending 队列（`canApproveStep`，不变）。判据仍是同一份：`instanceVisibleTo` 的管理员分支与 `pendingInstancesFor` 都经 `managerSeesAll(db, actor, scopeCtx)` 取开关；`pendingInstancesFor` 在开关关闭时对受限管理员保留 `canApproveStep ∪ approvalDocScope`。
+- **不受开关影响**：全局范围（`data_scope=all`，含 admin / 超管）账号；不传 `scopeCtx` 的 lib 内部 / 脚本 / 通知摘要（`approvalTodos`，仍由 ADR-0008 全局门把守）；决定（`decide`）与撤回本来就要求单据在范围内，与开关无关。
+- **入口**：`GET /pending`、`GET /todos`（两者新增 `attachOrgScope` 并把 `scopeCtx` 传入 `pendingForMe` / `approvalTodosFor`）、`GET /instances`、`GET /instances/:id`、`GET /overview` 均走上述判据。
+- **仍是已知边界**：角色型 / 权限型审批人"看得到、批不了"的口径不变（那是审批人队列，不是管理员全见）；MCP `approval.approve` 仍沿用其签字人范围；开关是全库单一值，不分角色。
+
+验证：`tests/approval-scope.test.mjs`（组织 A/B/无组织管理员 × 开关 1/0，覆盖 pending / todos / instances / 详情 404 / overview / decide 404，审批人队列与全局账号不变）、`tests/authz-followups.test.mjs`（todos 口径，两种设置各断言）、`scripts/test-setting-audit.mjs`（危险键集合 17 → 18）。
+
+**Codex 审计（Z9）与已知边界**：审计提出 P1——受限范围的审批管理员可经 `POST /api/approval/templates`（同样要求 `system:approval:manage`）把自己设为现有模板的审批人，使他组织的 pending 实例变成"自己的队列"而重新可见。这是任务给定的"审批人自己的队列不受组织限制"口径与"模板维护归审批管理员"两条既有契约叠加的结果，不是新增路由漏洞：**决定与撤回仍由单据范围拦截（404、零写）**，且模板修改有审计。开关为 0 并不能把 `system:approval:manage` 变成"无法自授权可见性"的角色；要达到该强度，需另行限制模板写入（例如仅全局范围账号可改模板、或审批人队列也按单据范围），留作后续项，未在本工作流实现。
