@@ -16,10 +16,14 @@ claim of production or commercial readiness. Acceptance status lives in `docs/im
    with `verify-release --evidence=...`.
 
 ```
-node scripts/release-candidate.mjs [--run-guards] [--ci-run=<run id>] \
+node scripts/release-candidate.mjs [--run-tests] [--run-guards] [--ci-run=<run id>|auto] \
   [--focused-result=passed --focused-source="<where it ran>"] \
   [--regression-result=passed --regression-source="<where it ran>"] [--reuse-node-modules]
 ```
+
+`--run-tests` makes the script itself run the focused suite (`node --test --test-concurrency=1 tests/*.test.mjs`) and the
+five guards, before the acceptance step. `--ci-run=auto` looks up the CI run (see below). Both are optional; without them
+the corresponding fields stay `not run` / `null`. `--run-tests` cannot be combined with `--focused-result`.
 
 `--reuse-node-modules` makes acceptance use this checkout's `node_modules` instead of installing from the network; the
 evidence records it (`acceptance.reuse_node_modules`).
@@ -30,17 +34,22 @@ evidence records it (`acceptance.reuse_node_modules`).
 | --- | --- |
 | `version`, `commit`, `built_at`, `node` | From `package.json`, `git rev-parse HEAD`, the build time, and the Node that ran the script. `commit` must equal the package's `baseCommit`. |
 | `artifact` | Zip name, sha256, size, file count. |
-| `focused_tests`, `regression` | `{source, result, origin}`. `not run` unless the operator passes `--*-result` and `--*-source`; then `origin` is `operator-attested`. The script does not run or verify these. A `failed` result aborts the build. |
-| `guards` | tsc and the four `check-*` guards. `not run` unless `--run-guards`, in which case the script runs them (`origin: produced`). |
-| `ci_run_id` | The `--ci-run` value or `null`. It is a reference supplied by the operator and is not looked up on GitHub. |
+| `focused_tests` | With `--run-tests`: `{result: 'passed', origin: 'produced', command, files, duration_ms, summary_counts: {tests, pass, fail, cancelled, skipped, todo}, tests_tree_sha256, tests_files}`. The counts are parsed from the runner's own summary; if they cannot be parsed, or the suite is not a clean pass, the build aborts rather than recording a result. `tests_tree_sha256` is the sha256 over every file under `tests/` (sorted `path\0sha256` lines), computed before and after the run and required to equal the listing shipped in the package. Without `--run-tests`: operator-attested via `--focused-result`/`--focused-source`, else `not run`. |
+| `regression` | `{source, result, origin}`. `not run` unless the operator passes `--regression-result` and `--regression-source`; then `origin` is `operator-attested`. The script does not run or verify it. A `failed` result aborts the build. |
+| `guards` | tsc and the four `check-*` guards. `not run` unless `--run-guards` or `--run-tests`, in which case the script runs them (`origin: produced`, with `duration_ms`). |
+| `ci_run_id`, `ci_lookup` | `--ci-run=<id>`: the operator's reference, not looked up (`ci_lookup.mode: operator-supplied`). `--ci-run=auto`: `gh run list --commit <HEAD> --workflow ci.yml --json databaseId,conclusion,...`; the newest run with `conclusion: success` for exactly this commit. If `gh` is missing or not logged in, no run exists for the commit, or none succeeded, `ci_run_id` is `null` and `ci_lookup.reason` says why; nothing is guessed. No flag: `null`, `ci_lookup.mode: none`. |
 | `synthetic_drill` | Names and sha256 of the committed capacity-evidence files (shipped in the package). These are synthetic rehearsals on a development host, not target-host results. |
 | `verify_release`, `acceptance`, `secret_scan` | Produced by the script on the fresh extraction. |
 | `not_a_release` | Always `true`. |
 
 `verify-release --evidence` rejects a missing field, a version/commit that disagrees with `MANIFEST.json`, a `passed`
 result without origin (or without source for operator-supplied ones), any `failed` result, a malformed `ci_run_id`, and
-drill hashes that do not match the files in the package. It checks consistency, not truth: operator-attested results are
-only as good as the operator.
+drill hashes that do not match the files in the package. For a `produced` focused result it also rejects missing or
+inconsistent `summary_counts`, a missing `duration_ms`, and a `tests_tree_sha256` that differs from the hash recomputed
+from `release/tests-tree.json` in the package (`tests/` itself is not shipped because it holds TLS key fixtures; the listing
+is covered by MANIFEST hashes). An auto-resolved `ci_run_id` must carry `ci_lookup` from `gh run list` with conclusion
+`success`, and a `null` one must state its reason. It checks consistency, not truth: someone who can edit the evidence file
+and the package together can still forge it, and operator-attested results are only as good as the operator.
 
 ## RELEASE-NOTES.md
 

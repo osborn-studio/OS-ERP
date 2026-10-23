@@ -11,12 +11,13 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { unzipSync } from 'fflate'
+import { hashTestsTree } from '../scripts/lib/tests-tree.mjs'
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url))
 const PATH = process.env.PATH
@@ -51,7 +52,7 @@ function minimalSource(t) {
   assert.equal(git(src, 'commit', '-q', '-m', 'stub').status, 0)
   return src
 }
-const candidate = (src, out, extra = []) => spawnSync(process.execPath, ['scripts/release-candidate.mjs', `--output=${out}`, '--skip-build', '--skip-docs', '--reuse-node-modules', ...extra], { cwd: src, env: { PATH }, encoding: 'utf8', timeout: 280000 })
+const candidate = (src, out, extra = [], env = {}) => spawnSync(process.execPath, ['scripts/release-candidate.mjs', `--output=${out}`, '--skip-build', '--skip-docs', '--reuse-node-modules', ...extra], { cwd: src, env: { PATH, ...env }, encoding: 'utf8', timeout: 280000 })
 const sha = bytes => createHash('sha256').update(bytes).digest('hex')
 
 test('candidate refuses a dirty working tree (modified, staged or untracked) before building anything', (t) => {
@@ -170,7 +171,7 @@ test('candidate builds RC-<version>-<sha>.zip with sha256, EVIDENCE.json and not
   const notes = readFileSync(path.join(dir, 'RELEASE-NOTES.md'), 'utf8')
   assert.match(notes, new RegExp(version.replace(/\./g, '\\.')))
   assert.match(notes, /not a published release/i)
-  assert.match(notes, /第八批/)
+  assert.match(notes, /第[八九十]+批/)
 
   // 默认（无 --ci-run / 人工声明）时同样的证据字段是 null / not run
   // verify-release --evidence 接受真证据，拒绝篡改
@@ -208,4 +209,164 @@ test('candidate builds RC-<version>-<sha>.zip with sha256, EVIDENCE.json and not
     assert.notEqual(x.status, 0, label)
     assert.match(x.stderr, re, label)
   }
+})
+
+// ---- AA7：--run-tests、--ci-run=auto、测试树哈希绑定 ----
+/** 写一个假的 gh 可执行文件：打印给定 stdout 并以给定状态退出（外部服务的测试替身，不在被测脚本内）。 */
+function fakeGh(t, { stdout = '[]', status = 0, stderr = '' }) {
+  const dir = tempDir(t, 'os-erp-rc-gh-')
+  const file = path.join(dir, 'gh')
+  writeFileSync(file, `#!/bin/sh\necho "$@" > "${dir}/args.txt"\ncat <<'EOF_JSON'\n${stdout}\nEOF_JSON\necho '${stderr}' >&2\nexit ${status}\n`)
+  chmodSync(file, 0o755)
+  return { file, dir }
+}
+const HEAD40 = 'b'.repeat(40)
+/** 五个守卫检查真实仓库形状，所以守卫用例的桩树要带上全部受版本控制的源码（tests/ 与 dist/ 除外），再放自己的桩测试。 */
+function guardedSource(t, stubTests) {
+  const src = minimalSource(t)
+  const tracked = spawnSync('git', ['ls-files', '-z'], { cwd: ROOT, encoding: 'utf8' }).stdout.split('\0').filter(f => f && !/^(tests|dist)\//.test(f) && f !== '.gitignore' && existsSync(path.join(ROOT, f)))
+  for (const f of tracked) { mkdirSync(path.dirname(path.join(src, f)), { recursive: true }); cpSync(path.join(ROOT, f), path.join(src, f)) }
+  // 文件标识守卫登记了若干测试文件：用只含标识块的桩满足它，不重复运行真实用例（也避免递归运行本文件）。
+  const header = f => `/**\n * ============================================================================\n * 文件标识：${f} ｜ 桩（只满足文件标识守卫）\n * ============================================================================\n */\n`
+  for (const f of readFileSync(path.join(ROOT, 'scripts/check-file-header.mjs'), 'utf8').match(/'tests\/[^']+'/g).map(x => x.slice(1, -1))) {
+    put(src, f, `${header(f)}import test from 'node:test'\ntest('header stub ${f}', () => {})\n`)
+  }
+  // 库文件路径守卫的例外表登记了若干测试文件（要求它们仍有命中）：桩里放一行命中形态，注释行不算命中所以用代码行。
+  const allowed = readFileSync(path.join(ROOT, 'scripts/check-data-paths.mjs'), 'utf8').match(/^\s*'tests\/[^']+':/gm).map(x => x.trim().slice(1, x.trim().indexOf("'", 1)))
+  const DATA = `'da${'ta'}'` // 拼接，避免本文件自身命中路径守卫
+  for (const f of allowed) put(src, f, `${header(f)}import test from 'node:test'\nimport path from 'node:path'\nconst root = '.'\nexport const probe = path.join(root, ${DATA})\ntest('allow-list stub ${f}', () => {})\n`)
+  for (const f of Object.keys(stubTests)) put(src, `tests/${f}`, `${header(`tests/${f}`)}${stubTests[f]}`)
+  put(src, '.gitignore', 'node_modules\n/release/\ndist/\n') // 真实目录 docs/release/ 不能被 release/ 规则忽略
+  git(src, 'add', '-A'); assert.equal(git(src, 'commit', '-q', '-m', 'guarded stub').status, 0)
+  return src
+}
+
+test('parseTestSummary needs every count exactly once; resolveCiRun is honest about gh and missing runs', async (t) => {
+  const { parseTestSummary, resolveCiRun } = await import(pathToFileURL(path.join(ROOT, 'scripts/release-candidate.mjs')).href)
+  assert.deepEqual(parseTestSummary('ℹ tests 5\nℹ suites 1\nℹ pass 4\nℹ fail 0\nℹ cancelled 0\nℹ skipped 1\nℹ todo 0\nℹ duration_ms 12\n'), { tests: 5, pass: 4, fail: 0, cancelled: 0, skipped: 1, todo: 0 })
+  assert.equal(parseTestSummary('ℹ tests 5\nℹ pass 5\n'), null, 'missing counts')
+  assert.equal(parseTestSummary('ℹ tests 5\nℹ tests 6\nℹ pass 5\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\n'), null, 'ambiguous counts')
+  assert.equal(parseTestSummary(''), null)
+
+  // gh 不可用
+  const none = resolveCiRun(HEAD40, { gh: '/nonexistent/gh' })
+  assert.equal(none.id, null)
+  assert.match(none.lookup.reason, /gh unavailable/)
+  // gh 失败（未登录等）
+  const failed = fakeGh(t, { status: 1, stderr: 'not logged in' })
+  const f = resolveCiRun(HEAD40, { gh: failed.file })
+  assert.equal(f.id, null)
+  assert.match(f.lookup.reason, /exit 1.*not logged in/s)
+  // 没有任何 run
+  const empty = resolveCiRun(HEAD40, { gh: fakeGh(t, { stdout: '[]' }).file })
+  assert.equal(empty.id, null)
+  assert.match(empty.lookup.reason, /no ci\.yml run recorded/)
+  // 只有失败/进行中
+  const bad = resolveCiRun(HEAD40, { gh: fakeGh(t, { stdout: JSON.stringify([{ databaseId: 9, conclusion: 'failure', status: 'completed', headSha: HEAD40, createdAt: '2026-01-02T00:00:00Z' }, { databaseId: 8, conclusion: '', status: 'in_progress', headSha: HEAD40, createdAt: '2026-01-03T00:00:00Z' }]) }).file })
+  assert.equal(bad.id, null)
+  assert.match(bad.lookup.reason, /none with conclusion success/)
+  // 乱码输出
+  assert.match(resolveCiRun(HEAD40, { gh: fakeGh(t, { stdout: 'oops' }).file }).lookup.reason, /unparseable/)
+  // 选最新成功，忽略其他提交与失败；并验证传给 gh 的参数
+  const gh = fakeGh(t, { stdout: JSON.stringify([
+    { databaseId: 100, conclusion: 'failure', status: 'completed', headSha: HEAD40, createdAt: '2026-01-05T00:00:00Z' },
+    { databaseId: 101, conclusion: 'success', status: 'completed', headSha: HEAD40, createdAt: '2026-01-02T00:00:00Z' },
+    { databaseId: 102, conclusion: 'success', status: 'completed', headSha: HEAD40, createdAt: '2026-01-04T00:00:00Z' },
+    { databaseId: 103, conclusion: 'success', status: 'completed', headSha: 'c'.repeat(40), createdAt: '2026-01-09T00:00:00Z' }
+  ]) })
+  const ok = resolveCiRun(HEAD40, { gh: gh.file })
+  assert.equal(ok.id, '102')
+  assert.equal(ok.lookup.conclusion, 'success')
+  assert.equal(ok.lookup.source, 'gh run list')
+  const args = readFileSync(path.join(gh.dir, 'args.txt'), 'utf8')
+  assert.match(args, new RegExp(`run list --commit ${HEAD40} --workflow ci\\.yml --json databaseId,conclusion`))
+})
+
+test('--run-tests cannot be combined with an operator-attested focused result', (t) => {
+  const src = minimalSource(t)
+  const r = candidate(src, tempDir(t, 'os-erp-rc-out-'), ['--run-tests', '--focused-result=passed', '--focused-source=x'])
+  assert.notEqual(r.status, 0)
+  assert.match(r.stderr, /do not combine/)
+})
+
+test('--run-tests with a failing test aborts and writes no candidate', { timeout: 290000 }, (t) => {
+  const src = minimalSource(t)
+  put(src, 'tests/zz-fails.test.mjs', "import test from 'node:test'\nimport assert from 'node:assert/strict'\ntest('stub failure', () => assert.equal(1, 2))\n")
+  git(src, 'add', '-A'); git(src, 'commit', '-q', '-m', 'failing test')
+  const out = path.join(tempDir(t, 'os-erp-rc-out-'), 'release')
+  const r = candidate(src, out, ['--run-tests'])
+  assert.notEqual(r.status, 0)
+  assert.match(r.stderr, /Focused suite failed/)
+  assert.match(r.stderr, /stub failure/)
+  assert.ok(!existsSync(out) || readdirSync(out).length === 0, 'no candidate left behind')
+})
+
+test('--run-tests --ci-run auto records produced results bound to the package tests tree; gh stand-in supplies the run id', { timeout: 290000 }, (t) => {
+  const src = guardedSource(t, { 'zz-ok.test.mjs': "import test from 'node:test'\nimport assert from 'node:assert/strict'\ntest('stub ok', () => assert.equal(1, 1))\ntest('stub skipped', { skip: true }, () => {})\n" })
+  const head = git(src, 'rev-parse', 'HEAD').stdout.trim()
+  const gh = fakeGh(t, { stdout: JSON.stringify([{ databaseId: 424242, conclusion: 'success', status: 'completed', headSha: head, createdAt: '2026-01-04T00:00:00Z' }]) })
+  const out = path.join(tempDir(t, 'os-erp-rc-out-'), 'release')
+  const r = candidate(src, out, ['--run-tests', '--ci-run', 'auto'], { OS_ERP_GH: gh.file })
+  assert.equal(r.status, 0, r.stderr.slice(-3000) + r.stdout.slice(-3000))
+  const name = readdirSync(out).find(f => f.endsWith('.evidence'))
+  const dir = path.join(out, name)
+  const ev = JSON.parse(readFileSync(path.join(dir, 'EVIDENCE.json'), 'utf8'))
+  const zip = path.join(out, name.replace('.evidence', '.zip'))
+  // 焦点测试：亲自运行，带计数与耗时，哈希等于仓库 tests/ 树
+  const ft = ev.focused_tests
+  assert.equal(ft.result, 'passed')
+  assert.equal(ft.origin, 'produced')
+  assert.ok(ft.duration_ms >= 0)
+  const stubs = readdirSync(path.join(src, 'tests')).filter(f => f.endsWith('.test.mjs') && f !== 'zz-ok.test.mjs').length // 每个桩 1 个用例 + zz-ok 的 2 个（1 通过、1 跳过）
+  assert.deepEqual(ft.summary_counts, { tests: stubs + 2, pass: stubs + 1, fail: 0, cancelled: 0, skipped: 1, todo: 0 })
+    assert.equal(ft.tests_tree_sha256, hashTestsTree(src))
+  for (const g of Object.values(ev.guards)) { assert.equal(g.result, 'passed'); assert.equal(g.origin, 'produced'); assert.ok(g.duration_ms >= 0) }
+  // CI：来自 gh 替身，且被标注为查询结果
+  assert.equal(ev.ci_run_id, '424242')
+  assert.equal(ev.ci_lookup.mode, 'auto')
+  assert.equal(ev.ci_lookup.source, 'gh run list')
+  assert.match(readFileSync(path.join(gh.dir, 'args.txt'), 'utf8'), new RegExp(`--commit ${head}`))
+
+  const pkg = tempDir(t, 'os-erp-rc-pkg-')
+  for (const [n, bytes] of Object.entries(unzipSync(new Uint8Array(readFileSync(zip))))) if (!n.endsWith('/')) put(pkg, n.split('/').slice(1).join('/'), bytes)
+  const listing = JSON.parse(readFileSync(path.join(pkg, 'release/tests-tree.json'), 'utf8'))
+  assert.equal(listing.tree_sha256, ft.tests_tree_sha256)
+  assert.ok(!existsSync(path.join(pkg, 'tests')), 'tests/ itself is not shipped (it holds TLS key fixtures)')
+  const verify = file => spawnSync(process.execPath, ['scripts/verify-release.mjs', `--evidence=${file}`], { cwd: pkg, env: { PATH }, encoding: 'utf8' })
+  assert.equal(verify(path.join(dir, 'EVIDENCE.json')).status, 0, verify(path.join(dir, 'EVIDENCE.json')).stderr)
+  const mutate = fn => { const e = JSON.parse(JSON.stringify(ev)); fn(e); const f = path.join(dir, 'tampered.json'); writeFileSync(f, JSON.stringify(e)); return verify(f) }
+  for (const [label, fn, re] of [
+    ['counts missing', e => { delete e.focused_tests.summary_counts }, /summary_counts/],
+    ['count field missing', e => { delete e.focused_tests.summary_counts.todo }, /summary_counts/],
+    ['zero tests', e => { e.focused_tests.summary_counts = { tests: 0, pass: 0, fail: 0, cancelled: 0, skipped: 0, todo: 0 } }, /at least one passing/],
+    ['failures with passed', e => { e.focused_tests.summary_counts.fail = 1 }, /failed or cancelled/],
+    ['duration missing', e => { delete e.focused_tests.duration_ms }, /duration_ms/],
+    ['tests hash missing', e => { delete e.focused_tests.tests_tree_sha256 }, /tests_tree_sha256/],
+    ['tests hash wrong', e => { e.focused_tests.tests_tree_sha256 = '0'.repeat(64) }, /tests tree binding failed/],
+    ['auto ci id without gh source', e => { e.ci_lookup.source = 'operator' }, /ci_lookup/],
+    ['auto ci null without reason', e => { e.ci_run_id = null; delete e.ci_lookup.reason }, /ci_lookup/],
+    ['none mode with id', e => { e.ci_lookup = { mode: 'none' } }, /ci_lookup/]
+  ]) {
+    const x = mutate(fn)
+    assert.notEqual(x.status, 0, label)
+    assert.match(x.stderr, re, label)
+  }
+  // 包内清单被改（哈希与 MANIFEST 不符 / 自身不一致）同样被拒
+  writeFileSync(path.join(pkg, 'release/tests-tree.json'), JSON.stringify({ ...listing, files: listing.files.slice(1) }))
+  const swapped = verify(path.join(dir, 'EVIDENCE.json'))
+  assert.notEqual(swapped.status, 0)
+  assert.match(swapped.stderr, /tests-tree\.json|tests tree binding failed/)
+})
+
+test('without gh the candidate still builds, with ci_run_id null and the reason recorded; nothing is invented', { timeout: 290000 }, (t) => {
+  const src = minimalSource(t)
+  const out = path.join(tempDir(t, 'os-erp-rc-out-'), 'release')
+  const r = candidate(src, out, ['--ci-run=auto'], { OS_ERP_GH: '/nonexistent/gh' })
+  assert.equal(r.status, 0, r.stderr.slice(-3000) + r.stdout.slice(-3000))
+  const ev = JSON.parse(readFileSync(path.join(out, readdirSync(out).find(f => f.endsWith('.evidence')), 'EVIDENCE.json'), 'utf8'))
+  assert.equal(ev.ci_run_id, null)
+  assert.equal(ev.ci_lookup.mode, 'auto')
+  assert.match(ev.ci_lookup.reason, /gh unavailable/)
+  assert.equal(ev.focused_tests.result, 'not run') // 没有 --run-tests 就不得出现 produced 的焦点结果
+  assert.equal(ev.focused_tests.origin, undefined)
 })
