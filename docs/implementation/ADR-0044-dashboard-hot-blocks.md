@@ -16,7 +16,7 @@
 |---|---|---|---|
 | 指标 `below_safe` | 不看 SKU 状态 | 只算 `status='active'` | 停用 SKU 不再计入；与看板数字一致 |
 | AI `stock_alert` | 内连接 products；按缺口降序，并列未定义；无 LIMIT | 同字段（去掉 `sku_id`）、同排序，并列按 sku id；`LIMIT -1`（不限） | 行集合相同；并列顺序变确定 |
-| MCP `inventory.stock_alert` | 只含**有库存行**的 SKU；不看状态；按**货主组织**过滤；LIMIT 100 | 含无库存行的缺货 SKU；只算 active；按**仓库所属组织**累计（`ctx.scope`）；LIMIT 100；输出仍是五个键 | 无库存的缺货 SKU 现在会出现（原先是漏报）；受限令牌只累计其范围内仓库的库存；空范围返回空而不是全库 |
+| MCP `inventory.stock_alert` | 只含**有库存行**的 SKU；不看状态；按**货主组织**过滤；LIMIT 100 | 只算 active；按**仓库所属组织**累计（`ctx.scope`）；LIMIT 100；输出仍是五个键。**全局范围**含无库存行的缺货 SKU；**受限范围**只列范围内至少有一行库存的 SKU（`listBelowSafe(..., { visibleOnly: true })`） | 全局：无库存的缺货 SKU 现在会出现（原先是漏报）；受限令牌只累计其范围内仓库的库存，范围外令牌得到空清单（`tests/mcp-tool-matrix.test.mjs` 的 scope_excluded 状态要求这一点），不会把全部缺货 SKU 当成"0 库存"列出；空范围返回空而不是全库 |
 
 MCP 的范围依据从 `owner_org_id` 改为仓库所属组织，是 ADR-0038 的统一判据（AA2 对其余库存工具做同样处理）；本工作流只动低库存这一处。
 

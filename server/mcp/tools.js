@@ -823,8 +823,8 @@ export const TOOLS = [
       const days = Number(args.expiring_days) || Number(getInvParam(db, 'expire_warn_days', 90))
       const f = orgFilter(ctx, 's', 'owner_org_id')
       // AA5：低库存与看板 / 预警页同一口径（lib/stock.js listBelowSafe，按仓库所属组织收口，ctx.scope 即令牌范围）；
-      // 输出字段保持原来的五个键。口径差异见 ADR-0044（含无库存行的 SKU、只算 active、并列按 sku id）。
-      const below = listBelowSafe(db, 100, ctx.scope).map(({ sku_id, sku_code, sku_name, safe_stock, qty_on_hand }) => ({ sku_id, sku_code, sku_name, safe_stock, qty_on_hand }))
+      // 输出字段保持原来的五个键。口径差异见 ADR-0044（全局范围含无库存行的 SKU、只算 active、并列按 sku id；受限范围只列范围内有库存行的 SKU）。
+      const below = listBelowSafe(db, 100, ctx.scope, { visibleOnly: true }).map(({ sku_id, sku_code, sku_name, safe_stock, qty_on_hand }) => ({ sku_id, sku_code, sku_name, safe_stock, qty_on_hand }))
       const expiring = db.prepare(`
         SELECT s.sku_id, k.name AS sku_name, s.batch_no, s.warehouse_id, w.name AS warehouse_name,
                COALESCE(s.expire_at, s.expire_date) AS expire_at, s.qty_on_hand

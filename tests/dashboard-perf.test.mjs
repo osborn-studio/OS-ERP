@@ -120,22 +120,20 @@ test('MCP inventory.stock_alert: same rows as the original for active SKUs that 
   // 缺口大者在前
   const shortage = all.map((r) => r.safe_stock - r.qty_on_hand)
   assert.deepEqual(shortage, [...shortage].sort((a, b) => b - a))
-  // 受限范围：只累计范围内仓库的库存。夹具里货主组织 = 仓库组织，所以与旧的"按货主过滤的库存行"逐行相同（有库存行、active 的 SKU）
+  // 受限范围：只累计范围内仓库的库存，且只列范围内有库存行的 SKU。夹具里货主组织 = 仓库组织，所以与旧的"按货主过滤的库存行"逐行相同
   const only101 = call({ scope: 'org', orgIds: [101] })
   const old101 = db.prepare(OLD_MCP(' AND s.owner_org_id IN (101)')).all().filter((r) => r.sku_id !== ids.inactive)
-  // 新口径还会列出"范围内没有任何库存行"的缺货 SKU（nostock、onlyW2 在 101 范围内为 0），旧查询看不到它们——文档化的差异
-  const new101 = only101.filter((r) => r.sku_id !== ids.nostock && r.sku_id !== ids.onlyW2)
   const rowKey = (r) => `${r.sku_id}|${r.sku_code}|${r.sku_name}|${r.safe_stock}|${r.qty_on_hand}`
-  assert.deepEqual(new Set(new101.map(rowKey)), new Set(old101.map(rowKey)), 'complete rows equal the original owner-filtered query')
+  assert.deepEqual(only101.map(rowKey).sort(), old101.map(rowKey).sort(), 'complete rows equal the original owner-filtered query')
   assert.equal(only101.find((r) => r.sku_id === ids.multiLow).qty_on_hand, 30, 'only the org 101 warehouse is counted')
-  assert.equal(only101.find((r) => r.sku_id === ids.onlyW2).qty_on_hand, 0, 'org 202 stock is invisible to org 101 (shown as 0, not leaked)')
+  assert.ok(!only101.some((r) => r.sku_id === ids.onlyW2 || r.sku_id === ids.nostock), 'SKUs with no stock row in scope are not listed (no leak of the low-stock list, no false zero)')
   // 货主与仓库组织不一致时（文档化的差异）：新口径以仓库所属组织为准，旧口径以 owner_org_id 为准
   db.pragma('foreign_keys=OFF')
   db.prepare('UPDATE inventory_stocks SET owner_org_id = 202 WHERE sku_id = ? AND warehouse_id = ?').run(ids.tieA, w1)
   db.pragma('foreign_keys=ON')
   const tieA = (rows) => rows.find((r) => r.sku_id === ids.tieA)
   assert.equal(tieA(call({ scope: 'org', orgIds: [101] })).qty_on_hand, 10, 'warehouse org 101 sees the stock regardless of owner_org_id')
-  assert.equal(tieA(call({ scope: 'org', orgIds: [202] })).qty_on_hand, 0, 'org 202 owns the lot but does not hold the warehouse')
+  assert.equal(tieA(call({ scope: 'org', orgIds: [202] })), undefined, 'org 202 owns the lot but does not hold the warehouse: SKU not visible to it')
   assert.equal(tieA(db.prepare(OLD_MCP(' AND s.owner_org_id IN (202)')).all())?.qty_on_hand, 10, 'original filter followed owner_org_id')
   // 空范围不是全库
   assert.deepEqual(call({ scope: 'none', orgIds: [] }), [])
