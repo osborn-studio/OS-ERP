@@ -70,7 +70,13 @@ const DECLARED = [
   'server/db/migrations/055_agent_token_revoke_reason.cjs',
   'tests/authz-followups.test.mjs',
   // 采购链读接口范围收口（ADR-0017）
-  'tests/purchase-chain-scope.test.mjs'
+  'tests/purchase-chain-scope.test.mjs',
+  // 脚本数据目录卫生与单实例安装验收（ADR-0019）
+  'scripts/check-data-paths.mjs',
+  'scripts/db-inventory.mjs',
+  'scripts/local-manage.mjs',
+  'tests/data-path-guard.test.mjs',
+  'tests/local-instance.test.mjs'
 ]
 
 /** 参与覆盖率统计的源文件（**排除** node_modules / dist / data） */

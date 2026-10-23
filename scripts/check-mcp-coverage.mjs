@@ -16,17 +16,25 @@
  *   · 不查业务正确性（那是 `test-mcp*.mjs` 与 `test-*.mjs` 的事）；
  *   · 不查页面渲染（前端由 `tsc` 与 `vite build` 兜）。
  *
- * 用法：node scripts/check-mcp-coverage.mjs [cosmetic|food|apparel]
- *   需要库：不设 `GML_DATA_DIR` 时读仓库 `data/`（**只读打开**，不写库）。
+ * 用法：GML_DATA_DIR=/absolute/dir node scripts/check-mcp-coverage.mjs [cosmetic|food|apparel]
+ *   需要库：**必须**显式绝对 `GML_DATA_DIR`（ADR-0001 / ADR-0019），且不许是仓库 `data/`；
+ *   库文件路径由 `server/db/index.js` 的 `dbPathFor()` 解析（**只读打开**，不写库）。
+ *   退出码 2 = 数据目录 / 行业码不合法。
  * ============================================================================
  */
-import path from 'node:path'
-import { fileURLToPath } from 'node:url'
 import Database from 'better-sqlite3'
+import { requireExplicitDataDir, dbPathFor, assertIndustry } from '../server/db/index.js'
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const INDUSTRY = process.argv[2] || 'cosmetic'
-const DB_PATH = path.join(ROOT, 'data', `gml_${INDUSTRY}.db`)
+let INDUSTRY
+let DB_PATH
+try {
+  requireExplicitDataDir()
+  INDUSTRY = assertIndustry(process.argv[2]) || 'cosmetic'
+  DB_PATH = dbPathFor(INDUSTRY)
+} catch (e) {
+  console.error(`${e.code || 'USAGE'}: ${e.message}`)
+  process.exit(2)
+}
 
 let pass = 0
 let fail = 0
@@ -49,6 +57,7 @@ const { GENERIC_DOC_TOOLS, ownershipColumns } = await import('../server/mcp/cata
 const db = new Database(DB_PATH, { readonly: true })
 
 section(`MCP 覆盖守卫（${INDUSTRY}）`)
+console.log(`  库文件：${DB_PATH}`)
 
 // ---------------------------------------------------------------- ① 通用工具必须真实现
 section('① 声明过的通用单据工具，必须真的注册')

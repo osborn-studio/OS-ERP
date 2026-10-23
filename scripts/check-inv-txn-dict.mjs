@@ -90,17 +90,18 @@
  *   请把库复制到 `/tmp` 后用 `GML_DATA_DIR=<副本目录>` 指过去 —— 这是本项目跑测试的既有约定。
  *
  * 与 `server/db/index.js` 的依赖面**刻意压到最小**（本项目纪律第三条）：
- *   只读它的两个**常量** `DATA_DIR` / `INDUSTRIES`（都是纯字符串/纯数据，模块加载期不做任何 I/O），
- *   **不调用** `getDb` / `getDbFor` / `initSchema` / `dbPathFor`，也不用 `spawn` 起任何服务端。
+ *   只用它的 `INDUSTRIES` 常量与两个纯路径函数 `requireExplicitDataDir` / `dbPathFor`
+ *   （不开连接、不建表），**不调用** `getDb` / `getDbFor` / `initSchema`，也不用 `spawn` 起任何服务端。
  *   下面会把**解析后的绝对路径**逐个打出来 —— "我设了 env" 不构成免责，
  *   能说出"这条命令的每个进程分别落在哪个库"才算。
- *   指向开发库（`<repo>/data`）时本脚本会**显式告警**（不阻止，但会让你看见）。
+ *   缺显式 `GML_DATA_DIR` 或指向开发库（`<repo>/data`）⇒ **拒绝运行，退出码 2**（ADR-0019；
+ *   原来只是告警，而只读打开仍会在开发库旁建 -shm/-wal）。
  */
 import Database from 'better-sqlite3'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { DATA_DIR, INDUSTRIES } from '../server/db/index.js'
+import { INDUSTRIES, requireExplicitDataDir, dbPathFor } from '../server/db/index.js'
 // 「两处必须一致」的那另一处就是 `DOC_TYPE_LABEL`（库存流水类型的**中文文案**，
 // 前端台账页显示的就是它：`/meta/dict` 的 `stock_doc_types` 与 `/inventory/ledger` 的
 // `doc_type_name` 都取自这一份）。这里只取它的常量表，不调用 stock.js 的任何函数 ——
@@ -108,8 +109,14 @@ import { DATA_DIR, INDUSTRIES } from '../server/db/index.js'
 import { DOC_TYPE_LABEL } from '../server/lib/stock.js'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-/** 解析后的绝对数据目录 —— 打印与告警都以它为准 */
-const DATA_DIR_ABS = path.resolve(DATA_DIR)
+/** 解析后的绝对数据目录 —— 打印以它为准；缺省/仓库 data/ 在这里就拒绝 */
+let DATA_DIR_ABS
+try {
+  DATA_DIR_ABS = path.resolve(requireExplicitDataDir())
+} catch (e) {
+  console.error(`${e.code}: ${e.message}`)
+  process.exit(2)
+}
 
 const USAGE = [
   '用法：node scripts/check-inv-txn-dict.mjs [--strict]',
@@ -249,10 +256,6 @@ function gateWithoutWriter(gateCodes, writeCodes) {
 
 console.log(`库存流水字典守卫${STRICT ? '（--strict：含单号前缀）' : ''}`)
 console.log(`数据目录（解析后绝对路径）：${DATA_DIR_ABS}`)
-if (DATA_DIR_ABS === path.join(ROOT, 'data')) {
-  console.log('⚠️ 上面这个路径就是**开发库目录**：只读打开仍会建 -shm/-wal。')
-  console.log('⚠️ 按本项目纪律，请复制到 /tmp 后用 GML_DATA_DIR=<副本目录> 再跑本守卫。')
-}
 console.log('─'.repeat(66))
 
 // ---- 判据 ⑤ 的原料 + 扫描器自检（与具体库无关，先算一次）----
@@ -276,7 +279,7 @@ const selectedIndustries = process.env.GML_TEST_INDUSTRIES
   ? process.env.GML_TEST_INDUSTRIES.split(',').map(x => x.trim()) : Object.keys(INDUSTRIES)
 if (!selectedIndustries.length || selectedIndustries.some(x => !Object.hasOwn(INDUSTRIES, x))) throw new Error('Invalid GML_TEST_INDUSTRIES')
 for (const code of selectedIndustries) {
-  const file = path.join(DATA_DIR_ABS, INDUSTRIES[code].db)
+  const file = dbPathFor(code)
   console.log(`\n===== [${code}] ${file} =====`)
   const db = openRo(file)
   try {
