@@ -3,7 +3,7 @@
 <!-- generated -->
 <!-- 由 `node scripts/gen-codemap.mjs` 生成，勿手改；CI 校验不漂移 -->
 
-共 641 条路由（含 8 条子路由器挂载），39 个路由文件。路由、分类与中间件链来自 `node scripts/check-route-authz.mjs --list`（只显示中间件名，权限码以源码为准）。“调用的 lib 函数”只列 server/lib 与 server/mcp 的函数（`lib/http.js` 的响应工具不列）；“处理器内 SQL 表”含本文件内辅助函数；“经 lib 触达的表”为跨文件可能触达的上界。
+共 643 条路由（含 8 条子路由器挂载），39 个路由文件。路由、分类与中间件链来自 `node scripts/check-route-authz.mjs --list`（只显示中间件名，权限码以源码为准）。“调用的 lib 函数”只列 server/lib 与 server/mcp 的函数（`lib/http.js` 的响应工具不列）；“处理器内 SQL 表”含本文件内辅助函数；“经 lib 触达的表”为跨文件可能触达的上界。
 
 ## 扫描边界（必读）
 
@@ -412,15 +412,17 @@
 
 | 处理器 | 方法 | 路径 | 分类 | 中间件链 | 调用的 lib 函数 | 处理器内 SQL 表 | 经 lib 触达的表 |
 |---|---|---|---|---|---|---|---|
-| `meta.js:91` | GET | `/api/meta/health` | NO_AUTH | optionalAuth | lib/ops-status.js: computeOpsStatus | products | login_throttle_meta, settings, users |
-| `meta.js:114` | GET | `/api/meta/metrics` | AUTH_ONLY | requireAuth | lib/ops-status.js: computeOpsStatus, opsCounters | — | login_throttle_meta, settings, users |
-| `meta.js:123` | GET | `/api/meta/dict` | NO_AUTH | （无） | — | inv_txn_types | — |
-| `meta.js:185` | GET | `/api/meta/settings` | GATED | requireAuth → requireRole | lib/settings.js: ensureSettings, listSettings | — | setting_audit_log, settings, users |
-| `meta.js:196` | PUT | `/api/meta/settings` | GATED | requireAuth → requireRole | lib/settings.js: ensureSettings, writeSetting | — | audit_logs, setting_audit_log, settings, users |
-| `meta.js:224` | POST | `/api/meta/settings/reset` | GATED | requireAuth → requireRole | lib/settings.js: ensureSettings, resetSetting | — | audit_logs, setting_audit_log, settings, users |
-| `meta.js:248` | GET | `/api/meta/settings/defs` | GATED | requireAuth → requireRole | — | — | users |
-| `meta.js:275` | GET | `/api/meta/settings/audit` | GATED | requireAuth → requireRole | lib/settings.js: listSettingAudit | — | setting_audit_log, users |
-| `meta.js:291` | GET | `/api/meta/settings/audit/check` | GATED | requireAuth → requireRole | lib/settings.js: auditSettingTrail, ensureSettings | — | setting_audit_log, settings, users |
+| `meta.js:102` | GET | `/api/meta/health` | NO_AUTH | optionalAuth | lib/ops-status.js: computeOpsStatus | products | login_throttle_meta, settings, users |
+| `meta.js:125` | GET | `/api/meta/metrics` | AUTH_ONLY | requireAuth | lib/ops-status.js: computeOpsStatus, opsCounters | — | login_throttle_meta, settings, users |
+| `meta.js:134` | GET | `/api/meta/dict` | NO_AUTH | （无） | — | inv_txn_types | — |
+| `meta.js:196` | GET | `/api/meta/settings` | GATED | requireAuth → requireRole | lib/settings.js: ensureSettings, listSettings | — | setting_audit_log, settings, users |
+| `meta.js:207` | PUT | `/api/meta/settings` | GATED | requireAuth → requireRole | lib/settings.js: ensureSettings, writeSetting | — | audit_logs, setting_audit_log, settings, users |
+| `meta.js:235` | POST | `/api/meta/settings/reset` | GATED | requireAuth → requireRole | lib/settings.js: ensureSettings, resetSetting | — | audit_logs, setting_audit_log, settings, users |
+| `meta.js:259` | GET | `/api/meta/settings/defs` | GATED | requireAuth → requireRole | — | — | users |
+| `meta.js:286` | GET | `/api/meta/settings/audit` | GATED | requireAuth → requireRole | lib/settings.js: listSettingAudit | — | setting_audit_log, users |
+| `meta.js:302` | GET | `/api/meta/settings/audit/check` | GATED | requireAuth → requireRole | lib/settings.js: auditSettingTrail, ensureSettings | — | setting_audit_log, settings, users |
+| `meta.js:336` | GET | `/api/meta/audit-logs` | GATED | requireAuth → requirePerm → requireGlobalData | lib/audit-view.js: buildWhere, parseFilters, viewRow<br>lib/settings.js: readSetting | audit_logs | orgs, role_permissions, roles, settings, user_roles, users |
+| `meta.js:358` | GET | `/api/meta/audit-logs/export.csv` | GATED | requireAuth → requirePerm → requireGlobalData | lib/audit-view.js: buildWhere, csvLine, parseFilters, viewRow | audit_logs | orgs, role_permissions, roles, user_roles, users |
 
 ## server/routes/metrics.js
 

@@ -92,6 +92,7 @@ import Users from './pages/system/Users'
 import MyScope from './pages/system/MyScope'
 import Dict from './pages/system/Dict'
 import AiLogs from './pages/system/AiLogs'
+import AuditLogs from './pages/system/AuditLogs'
 import DocKernel from './pages/system/DocKernel'
 import CodeRules from './pages/system/CodeRules'
 import Notify from './pages/system/Notify'
@@ -261,6 +262,7 @@ export default function App() {
         <Route path="/system/roles" element={<Roles />} />
         <Route path="/system/dict" element={<Dict />} />
         <Route path="/system/ai-logs" element={<AiLogs />} />
+        <Route path="/system/audit-logs" element={<AuditLogs />} />
         <Route path="/system/doc-kernel" element={<DocKernel />} />
         <Route path="/system/code-rules" element={<CodeRules />} />
         <Route path="/system/notify" element={<Notify />} />

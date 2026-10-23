@@ -3,7 +3,7 @@
 <!-- generated -->
 <!-- 由 `node scripts/gen-codemap.mjs` 生成，勿手改；CI 校验不漂移 -->
 
-共 73 个模块。“路由”只列在处理器区域内直接引用该函数的路由（路由超过 5 条时按路由文件汇总，明细见 [routes.md](routes.md)）；“MCP 工具”来自 `server/mcp/tools.js` 的 40 个工具；“被模块调用”是其它 lib/mcp 模块里的跨文件引用。“—”表示静态扫描没找到调用方，不等于死代码。
+共 74 个模块。“路由”只列在处理器区域内直接引用该函数的路由（路由超过 5 条时按路由文件汇总，明细见 [routes.md](routes.md)）；“MCP 工具”来自 `server/mcp/tools.js` 的 40 个工具；“被模块调用”是其它 lib/mcp 模块里的跨文件引用。“—”表示静态扫描没找到调用方，不等于死代码。
 
 ## 扫描边界（必读）
 
@@ -200,6 +200,23 @@
 | `auditStrictRow` | fn | — | — | lib/account-security.js, lib/funds-review.js |
 | `insertAuditRow` | fn | — | — | — |
 | `normalizeDetail` | fn | — | — | — |
+
+## `server/lib/audit-view.js`
+
+审计日志查看器的查询与 CSV 编码（Z7 / roadmap-v5 Z7）
+
+| 导出 | 类型 | 路由 | MCP 工具 | 被模块调用 |
+|---|---|---|---|---|
+| `AUDIT_EXPORT_MAX_ROWS` | const | — | — | — |
+| `AUDIT_PAGE_MAX` | const | — | — | — |
+| `AuditViewError` | class | — | — | — |
+| `CSV_HEADER` | const | — | — | — |
+| `buildWhere` | fn | GET /api/meta/audit-logs<br>GET /api/meta/audit-logs/export.csv | — | — |
+| `csvCell` | fn | — | — | — |
+| `csvLine` | fn | GET /api/meta/audit-logs/export.csv | — | — |
+| `parseFilters` | fn | GET /api/meta/audit-logs<br>GET /api/meta/audit-logs/export.csv | — | — |
+| `redactDetail` | fn | — | — | — |
+| `viewRow` | fn | GET /api/meta/audit-logs<br>GET /api/meta/audit-logs/export.csv | — | — |
 
 ## `server/lib/backup-alert.js`
 
@@ -527,10 +544,10 @@ HTTP 响应与错误归一：`ok` / `fail` / `wrap` 的**唯一实现**（统一
 | `hidesInternals` | fn | — | — | — |
 | `newIncidentId` | fn | — | — | — |
 | `ok` | fn | 572 条：accounting.js×17, ai.js×4, approval.js×13, ar.js×23, auth.js×15, costing.js×11, credit.js×13, dashboard.js×7, dealers.js×15, demand.js×13, dms.js×13, docflow.js×15, im.js×8, inv-txn-types.js×2, inventory.js×23, invoice.js×14, mall.js×16, manufacture.js×26, master.js×15, meta.js×9, metrics.js×6, notify.js×8, oms.js×12, order-center.js×21, outsourcing.js×9, pos.js×39, pricing.js×8, promo.js×35, purchase-chain.js×33, purchase.js×12, qc.js×9, qc2.js×19, qimen.js×2, quote.js×10, refund.js×8, report.js×38, requisitions.js×14, sales.js×13, warehouses.js×4 | — | lib/crud.js |
-| `pageParams` | fn | 65 条：accounting.js×1, ai.js×1, approval.js×2, auth.js×2, costing.js×1, credit.js×1, dealers.js×3, demand.js×2, dms.js×4, docflow.js×1, im.js×2, inv-txn-types.js×1, inventory.js×8, manufacture.js×4, master.js×2, notify.js×1, oms.js×2, order-center.js×3, outsourcing.js×3, pricing.js×1, promo.js×5, purchase.js×3, qc.js×1, qc2.js×3, quote.js×1, refund.js×1, requisitions.js×2, sales.js×3, warehouses.js×1 | — | lib/crud.js |
-| `paged` | fn | 58 条：accounting.js×1, ai.js×1, auth.js×2, costing.js×1, dealers.js×3, demand.js×2, dms.js×4, im.js×2, inv-txn-types.js×1, inventory.js×8, manufacture.js×4, master.js×2, oms.js×2, order-center.js×3, outsourcing.js×3, pricing.js×1, promo.js×5, purchase.js×3, qc.js×1, qc2.js×3, requisitions.js×2, sales.js×3, warehouses.js×1 | — | lib/crud.js |
+| `pageParams` | fn | 66 条：accounting.js×1, ai.js×1, approval.js×2, auth.js×2, costing.js×1, credit.js×1, dealers.js×3, demand.js×2, dms.js×4, docflow.js×1, im.js×2, inv-txn-types.js×1, inventory.js×8, manufacture.js×4, master.js×2, meta.js×1, notify.js×1, oms.js×2, order-center.js×3, outsourcing.js×3, pricing.js×1, promo.js×5, purchase.js×3, qc.js×1, qc2.js×3, quote.js×1, refund.js×1, requisitions.js×2, sales.js×3, warehouses.js×1 | — | lib/crud.js |
+| `paged` | fn | 59 条：accounting.js×1, ai.js×1, auth.js×2, costing.js×1, dealers.js×3, demand.js×2, dms.js×4, im.js×2, inv-txn-types.js×1, inventory.js×8, manufacture.js×4, master.js×2, meta.js×1, oms.js×2, order-center.js×3, outsourcing.js×3, pricing.js×1, promo.js×5, purchase.js×3, qc.js×1, qc2.js×3, requisitions.js×2, sales.js×3, warehouses.js×1 | — | lib/crud.js |
 | `statusOf` | fn | — | — | — |
-| `wrap` | fn | 627 条：accounting.js×18, ai.js×5, approval.js×13, ar.js×23, auth.js×16, costing.js×12, credit.js×13, dashboard.js×7, dealers.js×18, demand.js×15, dms.js×17, docflow.js×15, im.js×10, inv-txn-types.js×4, inventory.js×31, invoice.js×14, mall.js×16, manufacture.js×30, master.js×17, meta.js×9, metrics.js×6, notify.js×8, oms.js×14, order-center.js×24, outsourcing.js×12, pos.js×39, pricing.js×9, promo.js×40, purchase-chain.js×33, purchase.js×15, qc.js×10, qc2.js×22, qimen.js×3, quote.js×10, refund.js×8, report.js×39, requisitions.js×16, sales.js×16 | — | lib/crud.js |
+| `wrap` | fn | 629 条：accounting.js×18, ai.js×5, approval.js×13, ar.js×23, auth.js×16, costing.js×12, credit.js×13, dashboard.js×7, dealers.js×18, demand.js×15, dms.js×17, docflow.js×15, im.js×10, inv-txn-types.js×4, inventory.js×31, invoice.js×14, mall.js×16, manufacture.js×30, master.js×17, meta.js×11, metrics.js×6, notify.js×8, oms.js×14, order-center.js×24, outsourcing.js×12, pos.js×39, pricing.js×9, promo.js×40, purchase-chain.js×33, purchase.js×15, qc.js×10, qc2.js×22, qimen.js×3, quote.js×10, refund.js×8, report.js×39, requisitions.js×16, sales.js×16 | — | lib/crud.js |
 
 ## `server/lib/im-sync.js`
 
@@ -1112,9 +1129,9 @@ HTTP 响应与错误归一：`ok` / `fail` / `wrap` 的**唯一实现**（统一
 | `MASK` | const | — | — | — |
 | `PII_KEY` | const | — | — | — |
 | `SENSITIVE_KEY` | const | — | — | — |
-| `redactText` | fn | — | — | lib/logger.js |
+| `redactText` | fn | — | — | lib/audit-view.js, lib/logger.js |
 | `redactUrl` | fn | — | — | — |
-| `redactValue` | fn | POST /api/qimen | — | lib/audit-trail.js, lib/http.js, lib/logger.js |
+| `redactValue` | fn | POST /api/qimen | — | lib/audit-trail.js, lib/audit-view.js, lib/http.js, lib/logger.js |
 
 ## `server/lib/refund.js`
 
@@ -1311,7 +1328,7 @@ HTTP 响应与错误归一：`ok` / `fail` / `wrap` 的**唯一实现**（统一
 | `logSettingChange` | fn | — | — | — |
 | `meta` | fn | — | — | — |
 | `normalizeSettingValue` | fn | — | — | — |
-| `readSetting` | fn | GET /api/invoices/meta | — | 15 个：lib/accounting.js, lib/annual.js, lib/approval.js, lib/closing.js, lib/credit.js, lib/funds-review.js … |
+| `readSetting` | fn | GET /api/invoices/meta<br>GET /api/meta/audit-logs | — | 15 个：lib/accounting.js, lib/annual.js, lib/approval.js, lib/closing.js, lib/credit.js, lib/funds-review.js … |
 | `replaySettings` | fn | — | — | — |
 | `resetSetting` | fn | POST /api/meta/settings/reset | — | — |
 | `settingDef` | fn | — | — | — |
