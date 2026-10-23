@@ -267,9 +267,9 @@ r.get(
   })
 )
 
-r.get('/pending', requireAuth, wrap((req, res) => {
+r.get('/pending', requireAuth, attachOrgScope, wrap((req, res) => {
   const { page, pageSize } = pageParams(req)
-  return ok(res, pendingForMe(getDb(), actorOf(req), { page, pageSize }))
+  return ok(res, pendingForMe(getDb(), actorOf(req), { page, pageSize, scopeCtx: scopeOf(req) }))
 }))
 
 // 详情（含 records 即审批历史）：范围外与不存在同形（同一句 404），不泄漏存在性（ADR-0037）
@@ -290,7 +290,8 @@ r.get(
   '/todos',
   requireAuth,
   requirePerm('system:approval:view', 'system:approval:decide', 'system:approval:manage'),
-  wrap((req, res) => ok(res, approvalTodosFor(getDb(), actorOf(req))))
+  attachOrgScope,
+  wrap((req, res) => ok(res, approvalTodosFor(getDb(), actorOf(req), scopeOf(req))))
 )
 
 r.post(

@@ -193,6 +193,41 @@ test('approval instances are scoped to the org of the document they point at', {
     assert.equal(okData(await api('/api/approval/todos', { token: viewA.token })).count, 0)
   })
 
+  await t.test('approval_manager_global=0 (Z9): managers with a restricted scope see only in-scope instances plus their own approver queue', async () => {
+    const setSwitch = (v) => db.prepare("INSERT OR REPLACE INTO settings (key,value) VALUES ('approval_manager_global',?)").run(String(v))
+    db.prepare("INSERT OR IGNORE INTO role_permissions (role_code, perm_code) VALUES ('viewer','system:approval:manage')").run()
+    db.prepare("INSERT OR IGNORE INTO role_permissions (role_code, perm_code) VALUES ('viewer','system:approval:decide')").run()
+    try {
+      // default (1) = ADR-0015 behaviour: org-A manager still sees every pending instance
+      assert.deepEqual(nos(await api('/api/approval/pending', { token: viewA.token })), ['PRQ-AP-A', 'PRQ-AP-B', 'PRQ-AP-N'])
+      setSwitch(0)
+      const keepB = await api(`/api/approval/instances/${inst.B}`, { token: viewA.token })
+      notFound(keepB, 'detail of foreign org pending instance')
+      assert.deepEqual(nos(await api('/api/approval/pending', { token: viewA.token })), ['PRQ-AP-A'])
+      assert.deepEqual(nos(await api('/api/approval/pending', { token: viewB.token })), ['PRQ-AP-B'])
+      assert.deepEqual(nos(await api('/api/approval/pending', { token: viewNone.token })), [], 'no-org manager: empty, not whole queue')
+      assert.equal(okData(await api('/api/approval/todos', { token: viewA.token })).count, 1)
+      assert.equal(okData(await api('/api/approval/todos', { token: viewNone.token })).count, 0)
+      assert.deepEqual(nos(await api('/api/approval/instances', { token: viewA.token })), ['PRQ-AP-A'])
+      const ov = okData(await api('/api/approval/overview', { token: viewA.token }))
+      assert.deepEqual([ov.pending, ov.total], [1, 1])
+      // decide on a foreign document is still 404 and writes nothing
+      const recsB = db.prepare('SELECT COUNT(*) n FROM approval_records WHERE instance_id=?').get(inst.B).n
+      notFound(await api(`/api/approval/instances/${inst.B}/decide`, { token: viewA.token, body: { decision: 'approve' } }), 'decide foreign')
+      assert.equal(db.prepare('SELECT COUNT(*) n FROM approval_records WHERE instance_id=?').get(inst.B).n, recsB, 'no write')
+      // a real approver keeps their own queue (role finance), and global-scope managers see everything
+      assert.deepEqual(nos(await api('/api/approval/pending', { token: finA.token })), ['PRQ-AP-A', 'PRQ-AP-B', 'PRQ-AP-N'])
+      assert.deepEqual(nos(await api('/api/approval/pending', { token: glob.token })), ['PRQ-AP-A', 'PRQ-AP-B', 'PRQ-AP-N'])
+      assert.deepEqual(nos(await api('/api/approval/pending', { token: f.admin })), ['PRQ-AP-A', 'PRQ-AP-B', 'PRQ-AP-N'])
+      setSwitch(1)
+      assert.deepEqual(nos(await api('/api/approval/pending', { token: viewA.token })), ['PRQ-AP-A', 'PRQ-AP-B', 'PRQ-AP-N'])
+      okData(await api(`/api/approval/instances/${inst.B}`, { token: viewA.token }))
+    } finally {
+      db.prepare("DELETE FROM settings WHERE key='approval_manager_global'").run()
+      db.prepare("DELETE FROM role_permissions WHERE role_code='viewer' AND perm_code IN ('system:approval:manage','system:approval:decide')").run()
+    }
+  })
+
   await t.test('cancel: only submitter/admin, and the document must be in scope', async () => {
     const st = (i) => db.prepare('SELECT status FROM approval_instances WHERE id=?').get(i).status
     notFound(await api(`/api/approval/instances/${inst.A}/cancel`, { token: purB.token, body: {} }), 'foreign org cannot even see it')
