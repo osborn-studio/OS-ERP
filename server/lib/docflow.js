@@ -35,6 +35,7 @@ import { getDb } from '../db/index.js'
 // 于是 doc_events.created_at 比库里其它 datetime('now','localtime') 早 8 小时：
 // 界面上「流转时间」与「单据时间」对不上，跨零点时甚至差一天。
 import { localNow } from './dates.js'
+import { docScopeBuilder } from './doc-scope-registry.js'
 
 export class DocFlowError extends Error {
   constructor(message, { code = 'DOC_FLOW_ERROR', httpStatus = 400, detail = null } = {}) {
@@ -83,6 +84,152 @@ export function createPermOf(docType) {
   return typeof docType === 'string' && Object.prototype.hasOwnProperty.call(DOC_CREATE_PERMS, docType)
     ? DOC_CREATE_PERMS[docType]
     : null
+}
+
+// ---------------------------------------------------------------------------
+// 单据 → 数据范围谓词的分发表（ADR-0032）
+// ---------------------------------------------------------------------------
+//
+// 用途：`/api/docflow` 的 `/events`、`/overview`、`/history`、`/trace` 读的是**跨所有单据类型**的流转留痕。
+// 留痕行只有 (doc_type, doc_id)，没有统一的组织归属，所以"这条事件该不该给这个账号看"必须回到
+// 它指向的**单据本身**，用该单据所属领域已有的范围谓词判定（判据只在各领域库有一份，这里只做分发）。
+//
+// 每个已注册 doc_types.code 必须在此有一行（缺项 ⇒ 对受限范围不可见，并被 tests/docflow-scope.test.mjs 报红）：
+//   builder   谓词构建器名：purchase / sales / order-center 由各领域库经 doc-scope-registry 登记
+//             （避免与它们循环依赖）；org / warehouse / store / dealer 是本文件内的通用"归属组织"构建器；
+//             'global' ⇒ 该类单据（主数据 / 财务总账类）没有可按组织切的归属，只有全局范围（admin 或 data_scope=all）可见。
+//   table     主表名（必须等于 doc_types.table_name，测试校验）。
+//   cols      通用构建器用的归属列；'warehouse' 多列表示"任一仓在范围内即可见"（调拨）。
+//   via / kind 传给领域构建器的形状参数（采购 org|wh；销售 order|delivery|return）。
+// 谓词都写在别名 `t`（单据主表）上，调用方包成 `doc_id IN (SELECT t.id FROM <table> t WHERE <pred>)`。
+// 归属为 NULL 的单据对受限范围不可见；空 / 非法范围一律失败关闭。Y12（审批实例范围）将复用本表。
+export const DOC_SCOPE_RESOLVERS = Object.freeze({
+  // 采购（purchaseScopeSql，ADR-0017/0020）
+  PRQ: { builder: 'purchase', table: 'purchase_requisitions', via: 'org' },
+  PI: { builder: 'purchase', table: 'purchase_invoices', via: 'org' },
+  PST: { builder: 'purchase', table: 'purchase_settlements', via: 'org' },
+  PAY: { builder: 'purchase', table: 'purchase_payments', via: 'org' },
+  PO: { builder: 'purchase', table: 'purchase_orders', via: 'wh' },
+  GR: { builder: 'purchase', table: 'purchase_receipts', via: 'wh' },
+  PRT: { builder: 'purchase', table: 'purchase_returns', via: 'wh' },
+  INS: { builder: 'purchase', table: 'purchase_inspections', via: 'wh' },
+  // 销售（salesScopeSql，ADR-0026）：报价与订单同形（仓 / 门店归属）
+  QT: { builder: 'sales', table: 'sales_quotes', kind: 'order' },
+  SO: { builder: 'sales', table: 'sales_orders', kind: 'order' },
+  DL: { builder: 'sales', table: 'sales_deliveries', kind: 'delivery' },
+  SR: { builder: 'sales', table: 'sales_returns', kind: 'return' },
+  SI: { builder: 'org', table: 'sales_invoices', cols: ['org_id'] },
+  // 订货中心（ocScope，ADR-0027）：按客户归属组织
+  OC: { builder: 'order-center', table: 'oc_orders' },
+  OCS: { builder: 'order-center', table: 'oc_statements' },
+  // POS / 门店（门店归属组织；账号绑了门店则只限该门店，ADR-0025）
+  PS: { builder: 'store', table: 'pos_orders', cols: ['store_id'] },
+  PSF: { builder: 'store', table: 'pos_shifts', cols: ['store_id'] },
+  RC: { builder: 'store', table: 'pos_daily_closes', cols: ['store_id'] },
+  YQ: { builder: 'store', table: 'store_requisitions', cols: ['store_id'] },
+  SH: { builder: 'store', table: 'store_shipments', cols: ['store_id'] },
+  // 经销商往来（经销商档案 dealers.org_id）
+  DR: { builder: 'dealer', table: 'dealer_requisitions', cols: ['dealer_id'] },
+  DS: { builder: 'dealer', table: 'dealer_statements', cols: ['dealer_id'] },
+  RB: { builder: 'dealer', table: 'dealer_rebates', cols: ['dealer_id'] },
+  // 库存 / 生产 / 委外 / 质检：仓库归属组织（warehouses.org_id）
+  TF: { builder: 'warehouse', table: 'stock_transfers', cols: ['from_warehouse_id', 'to_warehouse_id'] },
+  CK: { builder: 'warehouse', table: 'stock_checks', cols: ['warehouse_id'] },
+  AS: { builder: 'warehouse', table: 'assembly_orders', cols: ['warehouse_id'] },
+  MO: { builder: 'warehouse', table: 'production_orders', cols: ['warehouse_id'] },
+  MR: { builder: 'warehouse', table: 'material_issues', cols: ['warehouse_id'] },
+  WW: { builder: 'warehouse', table: 'outsourcing_orders', cols: ['warehouse_id'] },
+  WM: { builder: 'warehouse', table: 'outsourcing_materials', cols: ['warehouse_id'] },
+  WR: { builder: 'warehouse', table: 'outsourcing_receipts', cols: ['warehouse_id'] },
+  QCR: { builder: 'org', table: 'qc_requests', cols: ['org_id'] },
+  QCI: { builder: 'warehouse', table: 'qc_inspections', cols: ['warehouse_id'] },
+  DH: { builder: 'warehouse', table: 'qc_defect_handlings', cols: ['warehouse_id'] },
+  // 无组织归属 ⇒ 仅全局范围：财务总账 / 应收 / 收款 / 退款 / 成本调整 / 电商订单
+  AR: { builder: 'global', table: 'ar_documents' },
+  RCP: { builder: 'global', table: 'receipts' },
+  VOUCHER: { builder: 'global', table: 'vouchers' },
+  RFD: { builder: 'global', table: 'refunds' },
+  CA: { builder: 'global', table: 'cost_adjustments' },
+  OM: { builder: 'global', table: 'oms_orders' }
+})
+
+const idList = (orgScope) =>
+  orgScope && Array.isArray(orgScope.orgIds) && orgScope.scope !== 'dealer' && orgScope.scope !== 'none'
+    ? orgScope.orgIds.map(Number).filter(Number.isFinite)
+    : []
+
+/** 通用"归属组织"构建器：列直接带 org_id / 经仓库 / 门店 / 经销商档案的 org_id 取归属。 */
+const GENERIC_BUILDERS = {
+  org: (ids, spec) => ({ sql: `(${spec.cols.map((c) => `t.${c} IN (${ids.map(() => '?').join(',')})`).join(' OR ')})`, params: spec.cols.flatMap(() => ids) }),
+  warehouse: (ids, spec) => ({
+    sql: `(${spec.cols.map((c) => `t.${c} IN (SELECT id FROM warehouses WHERE org_id IN (${ids.map(() => '?').join(',')}))`).join(' OR ')})`,
+    params: spec.cols.flatMap(() => ids)
+  }),
+  store: (ids, spec, ctx) => {
+    const base = `t.${spec.cols[0]} IN (SELECT id FROM stores WHERE org_id IN (${ids.map(() => '?').join(',')}))`
+    // 绑了门店的内部账号（自定义角色）只限本店，与 POS 路由的门店绑定一致（ADR-0025）
+    const bound = ctx.user && ctx.user.store_id != null ? Number(ctx.user.store_id) : null
+    return bound != null && Number.isFinite(bound)
+      ? { sql: `(${base} AND t.${spec.cols[0]} = ?)`, params: [...ids, bound] }
+      : { sql: base, params: ids }
+  },
+  dealer: (ids, spec) => ({ sql: `t.${spec.cols[0]} IN (SELECT id FROM dealers WHERE org_id IN (${ids.map(() => '?').join(',')}))`, params: ids })
+}
+
+/**
+ * 某账号在某单据类型上的范围。
+ *   ctx = { db, user, orgScope }（orgScope 即 `req.orgScope`，缺省按"无范围"失败关闭）
+ *   返回：`{ all: true }`（全局范围，不加过滤）| `{ sql, params }`（对别名 t 的谓词）| `null`（该类单据对该账号完全不可见）
+ * 未登记的类型：全局范围可见（admin 不被工程缺口挡住），受限范围不可见（失败关闭）。
+ */
+export function docScopeOf(ctx, docType) {
+  if (ctx && ctx.orgScope && ctx.orgScope.scope === 'all') return { all: true }
+  const spec = typeof docType === 'string' && Object.prototype.hasOwnProperty.call(DOC_SCOPE_RESOLVERS, docType) ? DOC_SCOPE_RESOLVERS[docType] : null
+  if (!spec || spec.builder === 'global') return null
+  const orgScope = ctx ? ctx.orgScope : null
+  const full = { ...ctx, orgScope }
+  const generic = GENERIC_BUILDERS[spec.builder]
+  if (generic) {
+    const ids = idList(orgScope)
+    return ids.length ? generic(ids, spec, full) : null
+  }
+  const build = docScopeBuilder(spec.builder)
+  if (!build) return null
+  const out = build(full, spec)
+  return out && out.sql && out.sql !== '1=0' ? out : null
+}
+
+/**
+ * doc_events 的范围谓词（对别名 `alias` 的事件行）。全局范围 ⇒ `1=1`；
+ * 受限范围 ⇒ 每个可见类型一段 `(doc_type=? AND doc_id IN (SELECT t.id FROM <表> t WHERE <谓词>))` 的并集；
+ * 没有任何可见类型 ⇒ `1=0`。事件的 doc_id 为 NULL 或指向已不存在的单据，对受限范围不可见。
+ */
+export function docEventScope(ctx, alias = 'e') {
+  if (ctx && ctx.orgScope && ctx.orgScope.scope === 'all') return { all: true, sql: '1=1', params: [] }
+  const parts = []
+  const params = []
+  for (const [code, spec] of Object.entries(DOC_SCOPE_RESOLVERS)) {
+    const p = docScopeOf(ctx, code)
+    if (!p || p.all) continue
+    parts.push(`(${alias}.doc_type=? AND ${alias}.doc_id IN (SELECT t.id FROM ${spec.table} t WHERE ${p.sql}))`)
+    params.push(code, ...p.params)
+  }
+  return parts.length ? { all: false, sql: `(${parts.join(' OR ')})`, params } : { all: false, sql: '1=0', params: [] }
+}
+
+/** 单据是否在范围内（详情类读取用）：范围外与不存在同形。 */
+export function docInScope(ctx, docType, id) {
+  const p = docScopeOf(ctx, docType)
+  if (!p) return false
+  if (p.all) return true
+  const spec = DOC_SCOPE_RESOLVERS[docType]
+  if (!Number.isFinite(Number(id))) return false
+  return !!ctx.db.prepare(`SELECT 1 FROM ${spec.table} t WHERE t.id=? AND ${p.sql}`).get(Number(id), ...p.params)
+}
+
+/** doc_types 里已注册、但 DOC_SCOPE_RESOLVERS 缺项的类型（守卫用；非空 ⇒ 这些类型对受限范围不可见）。 */
+export function unmappedScopeDocTypes(db = getDb()) {
+  return db.prepare('SELECT code FROM doc_types').all().map((r) => r.code).filter((c) => !Object.prototype.hasOwnProperty.call(DOC_SCOPE_RESOLVERS, c))
 }
 
 // ---------------------------------------------------------------------------
@@ -539,10 +686,15 @@ export function logEvent(p) {
 }
 
 /** 单据一生：按时间正序列出全部流转 */
-export function historyOf(db = getDb(), { docType, id = null, docNo = null, limit = 200 }) {
+export function historyOf(db = getDb(), { docType, id = null, docNo = null, limit = 200, scope = null }) {
   const type = getDocType(db, docType)
   const conds = ['doc_type=?']
   const args = [type.code]
+  // 范围（ADR-0032）：传 docEventScope(ctx, 'doc_events') 的结果；受限范围只返回范围内单据的留痕
+  if (scope && !scope.all) {
+    conds.push(scope.sql)
+    args.push(...scope.params)
+  }
   if (id != null) {
     conds.push('doc_id=?')
     args.push(id)
@@ -611,13 +763,17 @@ export function pruneOrphanEvents(db = getDb(), { dryRun = false } = {}) {
 }
 
 /** 全链路联查：给定任意单号，把它所在业务流上所有单据的流转串起来 */
-export function traceByDocNo(db = getDb(), docNo) {
+export function traceByDocNo(db = getDb(), docNo, { scope = null } = {}) {
+  // 范围（ADR-0032）：命中单号的事件与 payload 里提到该单号的"关联事件"都要过同一道范围谓词，
+  // 否则受限账号可以用别的组织的单号，经 payload 联查读到范围外单据的留痕。
+  const sc = scope && !scope.all ? ` AND ${scope.sql}` : ''
+  const sp = scope && !scope.all ? scope.params : []
   const events = db
-    .prepare('SELECT * FROM doc_events WHERE doc_no=? ORDER BY id')
-    .all(docNo)
+    .prepare(`SELECT * FROM doc_events WHERE doc_no=?${sc} ORDER BY id`)
+    .all(docNo, ...sp)
   const related = db
-    .prepare('SELECT * FROM doc_events WHERE payload_json LIKE ? ORDER BY id LIMIT 200')
-    .all(`%${docNo}%`)
+    .prepare(`SELECT * FROM doc_events WHERE payload_json LIKE ?${sc} ORDER BY id LIMIT 200`)
+    .all(`%${docNo}%`, ...sp)
   const seen = new Set(events.map((e) => e.id))
   const merged = [...events, ...related.filter((e) => !seen.has(e.id))].sort((a, b) => a.id - b.id)
   return merged
@@ -651,6 +807,11 @@ function label(m, code) {
 export default {
   DocFlowError,
   DOC_CREATE_PERMS,
+  DOC_SCOPE_RESOLVERS,
+  docScopeOf,
+  docEventScope,
+  docInScope,
+  unmappedScopeDocTypes,
   createPermOf,
   listDocTypes,
   getDocType,

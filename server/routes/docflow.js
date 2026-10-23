@@ -41,11 +41,21 @@ import {
   effectOwnerOf,
   historyOf,
   traceByDocNo,
+  docEventScope,
+  docScopeOf,
+  docInScope,
   explainLifecycle,
   createPermOf
 } from '../lib/docflow.js'
 import { listDocNoRules, previewDocNo, nextDocNoAuto, nextDocNoByRule } from '../lib/docno.js'
 import { audit } from '../middleware/audit.js'
+// 领域库在求值期把各自的范围谓词登记到 doc-scope-registry；本路由依赖它们，显式 import 保证一定已登记（ADR-0032）。
+import '../lib/purchase.js'
+import '../lib/sales-order.js'
+import '../lib/order-center.js'
+
+/** 读接口的范围上下文：req.orgScope 由 attachOrgScope 挂上；缺失 ⇒ 失败关闭（按无范围算）。 */
+const scopeCtx = (req) => ({ db: getDb(), user: req.user, orgScope: req.orgScope || { scope: 'none', orgIds: [] } })
 
 const r = Router()
 
@@ -84,23 +94,29 @@ export function handleFlowError(res, e) {
 r.get(
   '/overview',
   requireAuth,
+  attachOrgScope,
   requireInternal('全局单据总览'),
   wrap((req, res) => {
     const db = getDb()
     const c = (sql) => db.prepare(sql).get().c
+    // ADR-0032：流转留痕与状态分布按账号数据范围统计；总数（类型 / 状态 / 动作 / 业务流 / 规则）是静态定义，不含单据数据。
+    const ctx = scopeCtx(req)
+    const evScope = docEventScope(ctx, 'e')
     const recent = db
       .prepare(
-        `SELECT doc_type,doc_no,action_name,from_state,to_state,actor_name,source,created_at
-         FROM doc_events ORDER BY id DESC LIMIT 12`
+        `SELECT e.doc_type,e.doc_no,e.action_name,e.from_state,e.to_state,e.actor_name,e.source,e.created_at
+         FROM doc_events e WHERE ${evScope.sql} ORDER BY e.id DESC LIMIT 12`
       )
-      .all()
-    // 各单据类型的实际状态分布（用真实数据回答「现在系统里有多少单在什么状态」）
+      .all(...evScope.params)
+    // 各单据类型的实际状态分布（用真实数据回答「现在系统里有多少单在什么状态」）；只统计范围内的单据
     const dist = []
     for (const t of db.prepare("SELECT code,name,table_name FROM doc_types WHERE status='active' ORDER BY sort_order").all()) {
+      const p = docScopeOf(ctx, t.code)
+      if (!p) continue
       try {
         const rows = db
-          .prepare(`SELECT ${t.table_name === 'pos_shifts' ? 'status' : 'status'} s, COUNT(*) c FROM ${t.table_name} GROUP BY status`)
-          .all()
+          .prepare(`SELECT status s, COUNT(*) c FROM ${t.table_name} t WHERE ${p.all ? '1=1' : p.sql} GROUP BY status`)
+          .all(...(p.all ? [] : p.params))
         if (!rows.length) continue
         dist.push({ docType: t.code, name: t.name, total: rows.reduce((n, x) => n + x.c, 0), states: rows.map((x) => ({ state: x.s, count: x.c })) })
       } catch {
@@ -112,7 +128,7 @@ r.get(
       states: c('SELECT COUNT(*) c FROM doc_states'),
       actions: c('SELECT COUNT(*) c FROM doc_actions'),
       flows: c("SELECT COUNT(*) c FROM biz_flows WHERE status='active'"),
-      events: c('SELECT COUNT(*) c FROM doc_events'),
+      events: db.prepare(`SELECT COUNT(*) c FROM doc_events e WHERE ${evScope.sql}`).get(...evScope.params).c,
       noRules: c("SELECT COUNT(*) c FROM doc_no_rules WHERE status='active'"),
       recent,
       distribution: dist
@@ -256,10 +272,16 @@ r.post(
 r.get(
   '/history/:docType/:id',
   requireAuth,
+  attachOrgScope,
   requireInternal('总部单据历史；订货方请查看自己的业务单据'),
   wrap((req, res) => {
     try {
-      return ok(res, historyOf(getDb(), { docType: req.params.docType, id: Number(req.params.id) }))
+      const db = getDb()
+      const ctx = scopeCtx(req)
+      // ADR-0032：先解析类型（未注册 ⇒ 404），再核对单据在范围内；范围外与不存在同形 404，不泄漏存在性
+      const type = getDocType(db, req.params.docType)
+      if (!docInScope(ctx, type.code, req.params.id)) return fail(res, '单据不存在', 404)
+      return ok(res, historyOf(db, { docType: type.code, id: Number(req.params.id), scope: docEventScope(ctx, 'doc_events') }))
     } catch (e) {
       return handleFlowError(res, e)
     }
@@ -270,10 +292,12 @@ r.get(
 r.get(
   '/trace',
   requireAuth,
+  attachOrgScope,
   requireInternal('总部单据联查'),
   wrap((req, res) => {
     if (!req.query.doc_no) return fail(res, '需要 doc_no')
-    return ok(res, traceByDocNo(getDb(), String(req.query.doc_no)))
+    // ADR-0032：命中单号与 payload 关联的事件都只返回范围内单据的留痕（范围外 ⇒ 空列表，与无此单号同形）
+    return ok(res, traceByDocNo(getDb(), String(req.query.doc_no), { scope: docEventScope(scopeCtx(req), 'doc_events') }))
   })
 )
 
@@ -281,12 +305,15 @@ r.get(
 r.get(
   '/events',
   requireAuth,
+  attachOrgScope,
   requireInternal('全局单据日志'),
   wrap((req, res) => {
     const db = getDb()
     const { page, pageSize, offset } = pageParams(req)
-    const conds = ['1=1']
-    const args = []
+    // ADR-0032：先套范围谓词（别名 doc_events），再叠加调用者的过滤条件
+    const evScope = docEventScope(scopeCtx(req), 'doc_events')
+    const conds = [evScope.sql]
+    const args = [...evScope.params]
     if (req.query.doc_type) {
       conds.push('doc_type=?')
       args.push(String(req.query.doc_type))

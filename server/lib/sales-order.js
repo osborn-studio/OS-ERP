@@ -27,6 +27,7 @@
 // 只不过那次解决的是"通用入口 vs 业务入口"，这次解决的是"HTTP 入口 vs Agent 入口"。
 
 import { advanceStatus, nowText } from './docflow.js'
+import { registerDocScopeBuilder } from './doc-scope-registry.js'
 import { releaseForDoc } from './stock.js'
 import { release as creditRelease, projectOrderHold, resolveSubject } from './credit.js'
 
@@ -269,3 +270,9 @@ export function cancelOrder(db, { id, reason = null, actor = null, source = 'api
 }
 
 export default { SalesOrderError, cancelOrder, salesScopeSql, assertSalesDocInScope, assertSalesTargetInScope, quoteScopeSql, assertQuoteInScope, assertQuoteTargetInScope }
+
+// 单据流读接口（ADR-0032）：销售范围谓词登记给 docflow 的 DOC_SCOPE_RESOLVERS。`spec.kind` ∈ order | delivery | return。
+registerDocScopeBuilder('sales', ({ orgScope }, spec) => {
+  const s = salesScopeSql(orgScope, spec.kind, 't')
+  return s.empty ? null : { sql: s.sql, params: s.params }
+})
