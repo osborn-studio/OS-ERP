@@ -18,7 +18,7 @@ import bcrypt from 'bcryptjs'
 import { getDb, getDbFor, INDUSTRIES, DEFAULT_INDUSTRY, normalizeIndustry } from '../db/index.js'
 import { ok, fail, bizFail, wrap, pageParams, paged, failFromError } from '../lib/http.js'
 import { issueSessionCookies, clearSessionCookies, sessionTransport, crossSiteBrowserRequest } from '../middleware/session-transport.js'
-import { signToken, JWT_SECRET, requireAuth, requireRole, ROLES, userPermissions, resolveOrgScope } from '../middleware/auth.js'
+import { signToken, JWT_SECRET, requireAuth, requireRole, ROLES, userPermissions, resolveOrgScope, permContext } from '../middleware/auth.js'
 import { audit } from '../middleware/audit.js'
 import { createAccount, updateAccount, changePassword, logoutAll, replaceRolePermissions } from '../lib/account-security.js'
 import { consumeLoginAttempt } from '../lib/login-throttle.js'
@@ -275,6 +275,88 @@ r.get(
     const perms = userPermissions(db, req.user.uid, req.user.role)
     return ok(res, { permissions: perms, orgScope: resolveOrgScope(db, req.user) })
   })
+)
+
+/** 范围名 → 面向业务人员的一句话含义（"我能看到什么"）；口径见 ADR-0015/0017/0026/0027 */
+const SCOPE_LABELS = { all: '全部数据', subtree: '本组织及下级', org: '仅本组织', self: '仅本人', dealer: '仅本经销商', none: '无（未关联组织）' }
+const MY_SCOPE_NAME_LIMIT = 20
+
+/**
+ * 当前用户的有效数据范围（只读，只描述调用者自己）。
+ * 判据只有一处：`resolveOrgScope`。本处只把结果翻成可读结构，不另算一套范围。
+ * 不返回：其他用户、范围外组织的名称或 id、门店/经销商的其它字段。
+ */
+function describeMyScope(db, user) {
+  const row = db
+    .prepare('SELECT role, org_id, data_scope, dealer_id, store_id FROM users WHERE id=?')
+    .get(user.uid)
+  const role = row?.role || user.role
+  const isAdmin = permContext(db, user).isSuper
+  const eff = resolveOrgScope(db, user)
+  const roleDefault = db.prepare('SELECT data_scope FROM roles WHERE code=?').get(role)?.data_scope || null
+  const userScope = row?.data_scope && row.data_scope !== '' ? row.data_scope : null
+
+  const org = row?.org_id ? db.prepare('SELECT id, name FROM orgs WHERE id=?').get(row.org_id) || null : null
+  const store = row?.store_id ? db.prepare('SELECT id, name FROM stores WHERE id=?').get(row.store_id) || null : null
+  const dealerId = eff.dealerId ?? row?.dealer_id ?? null
+  const dealer = dealerId ? db.prepare('SELECT id, name FROM dealers WHERE id=?').get(dealerId) || null : null
+
+  const source = isAdmin ? 'admin' : eff.scope === 'none' ? 'no_org' : userScope ? 'user' : 'role_default'
+
+  const inScope = { all: false, count: null, names: [], truncated: false }
+  if (isAdmin || (eff.scope === 'all' && !eff.orgIds)) inScope.all = true
+  else if (Array.isArray(eff.orgIds)) {
+    inScope.count = eff.orgIds.length
+    inScope.names = db
+      .prepare('SELECT name FROM orgs WHERE id IN (SELECT value FROM json_each(?)) ORDER BY path, id LIMIT ?')
+      .all(JSON.stringify(eff.orgIds), MY_SCOPE_NAME_LIMIT)
+      .map((o) => o.name)
+    inScope.truncated = inScope.count > inScope.names.length
+  }
+
+  const ex = []
+  const label = SCOPE_LABELS[eff.scope] || eff.scope
+  ex.push(`你当前生效的数据范围是「${label}」${source === 'role_default' ? '（来自角色默认）' : source === 'user' ? '（管理员为你的账号单独设置）' : source === 'admin' ? '（管理员账号）' : ''}。`)
+  if (eff.scope === 'all') {
+    ex.push('可以看到所有组织的数据，包括归属为空的单据；没有按组织的隐藏。')
+  } else if (eff.scope === 'subtree') {
+    ex.push(`只能看到「${org?.name || '所属组织'}」及其下级共 ${inScope.count} 个组织的数据。其它组织的列表行与合计不会出现，直接打开其详情会提示"不存在"（404），这是有意不暴露存在性。`)
+  } else if (eff.scope === 'org') {
+    ex.push(`只能看到「${org?.name || '所属组织'}」这一个组织的数据，不含其下级组织。`)
+  } else if (eff.scope === 'self') {
+    ex.push(`数据范围为「仅本人」。目前组织范围型的业务接口（采购链、销售、订货中心等）按你所属的「${org?.name || '所属组织'}」这一个组织过滤，并不按创建人再细分；是否更窄取决于具体页面。`)
+  } else if (eff.scope === 'dealer') {
+    if (dealer && role === 'dealer') ex.push(`经销商账号：只看绑定经销商「${dealer.name}」自己的数据。按组织划分的内部页面（采购链等）对你不可用。`)
+    else if (dealer) ex.push(`账号绑定了经销商「${dealer.name}」，但你不是经销商角色：销售、订货中心等按组织划分的接口对"仅本经销商"范围的内部账号返回空，绑定本身不会让你看到该经销商的订单。`)
+    else ex.push('数据范围为「仅本经销商」，但账号未绑定经销商，因此看不到任何数据。请联系管理员绑定经销商。')
+  } else {
+    if (role === 'store' || role === 'dealer') ex.push('账号没有所属组织；门店 / 经销商角色按绑定的门店或经销商访问自己的数据，不依赖所属组织。按组织划分的内部页面对你为空或不可用。')
+    else ex.push('账号没有关联所属组织，按"空范围不等于全库"的原则，组织范围型列表会是空的（返回 200 与空列表，不是报错）。请联系管理员为你设置所属组织，或调整数据范围。')
+  }
+  if (store) ex.push(`账号绑定了门店「${store.name}」：门店类角色只处理本门店的数据。`)
+  if (!isAdmin && eff.scope !== 'all') ex.push('"没有权限"与"范围内没有数据"是两回事：前者是 403（角色缺权限点），后者是 200 加空列表。')
+
+  return {
+    role,
+    role_name: ROLES[role] || role,
+    is_admin: isAdmin,
+    data_scope_effective: eff.scope,
+    data_scope_source: source,
+    user_data_scope: userScope,
+    role_default_scope: roleDefault,
+    org,
+    org_ids_in_scope: inScope,
+    store,
+    dealer,
+    explanations: ex
+  }
+}
+
+/** 当前用户的有效数据范围与白话解释（Z6；只读、只含调用者自己的信息） */
+r.get(
+  '/my-scope',
+  requireAuth,
+  wrap((req, res) => ok(res, describeMyScope(getDb(), req.user)))
 )
 
 /** 角色及其权限（管理员） */

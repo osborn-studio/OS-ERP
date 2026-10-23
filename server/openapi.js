@@ -124,6 +124,7 @@ export function buildOpenApi() {
     // `roles/{code}/permissions` 是**整体覆盖**（后端先删后插），调用方必须提交完整勾选集合。
     '/api/auth/permissions': { get: { tags: ['认证'], summary: '权限点字典（按模块分组，供角色权限矩阵渲染）', responses: { 200: jsonResp(null) } } },
     '/api/auth/my-permissions': { get: { tags: ['认证'], summary: '当前用户的有效权限点与数据范围（前端据此收敛按钮与数据）', responses: { 200: jsonResp(null) } } },
+    '/api/auth/my-scope': { get: { tags: ['认证'], summary: '**当前用户的有效数据范围**与白话解释（只读，仅描述调用者自己：角色、是否管理员、生效范围及来源、所属组织/门店/经销商、范围内组织数与前 20 个名称）', responses: { 200: jsonResp(null), 401: jsonResp(null) } } },
     '/api/auth/roles-permissions': { get: { tags: ['认证'], summary: '**角色与权限矩阵**：每个角色的权限点集合（仅管理员）', responses: { 200: jsonResp(null), 403: jsonResp(null) } } },
     '/api/auth/roles/{code}/permissions': {
       put: {

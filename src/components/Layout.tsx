@@ -244,7 +244,9 @@ export const MENUS: MenuItem[] = [
       { key: 'dict', label: '枚举字典', path: '/system/dict' },
       { key: 'ai', label: 'AI 查询日志', path: '/system/ai-logs' }
     ]
-  }
+  },
+  // 我的数据范围：不写 roles = 每个登录用户可见（Z6）。只描述调用者自己，所以不需要权限点。
+  { key: 'my-scope', label: '我的数据范围', icon: ShieldCheck, path: '/system/my-scope' }
 ]
 
 function canSee(roles: string[] | undefined, role: string) {

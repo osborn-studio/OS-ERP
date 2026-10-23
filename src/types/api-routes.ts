@@ -11,14 +11,14 @@
 // 【注意】本文件由脚本写出：**文件标识块也必须由脚本输出**，否则下次 gen:api 会把它冲掉 ——
 //   "登记了不等于守住了"。改格式请改 scripts/gen-api-types.mjs。
 // ============================================================================
-// 路径 520 条 ｜ 标签 34 个
+// 路径 521 条 ｜ 标签 34 个
 //
 // 用法：
 //   import { typedGet, typedPost } from '../api/typed'
 //   typedGet('/api/purchase/chain/overview')   // 路径写错编译期就报
 
 export const OPENAPI_VERSION = '1.37.0'
-export const API_ROUTE_COUNT = 520
+export const API_ROUTE_COUNT = 521
 
 /** 全部已登记的接口路径 */
 export type ApiRoute =
@@ -82,6 +82,7 @@ export type ApiRoute =
   | '/api/auth/logout-all'
   | '/api/auth/me'
   | '/api/auth/my-permissions'
+  | '/api/auth/my-scope'
   | '/api/auth/permissions'
   | '/api/auth/roles-permissions'
   | '/api/auth/roles/{code}/permissions'
@@ -605,6 +606,7 @@ export type ApiRouteMap = {
   '/api/auth/logout-all': { post: true }
   '/api/auth/me': { get: true }
   '/api/auth/my-permissions': { get: true }
+  '/api/auth/my-scope': { get: true }
   '/api/auth/permissions': { get: true }
   '/api/auth/roles-permissions': { get: true }
   '/api/auth/roles/{code}/permissions': { put: true }
@@ -1137,6 +1139,7 @@ export const API_ROUTES: readonly ApiRoute[] = [
   '/api/auth/logout-all',
   '/api/auth/me',
   '/api/auth/my-permissions',
+  '/api/auth/my-scope',
   '/api/auth/permissions',
   '/api/auth/roles-permissions',
   '/api/auth/roles/{code}/permissions',
@@ -1661,6 +1664,7 @@ export const ROUTE_METHODS: Record<ApiRoute, string[]> = {
   '/api/auth/logout-all': ['post'],
   '/api/auth/me': ['get'],
   '/api/auth/my-permissions': ['get'],
+  '/api/auth/my-scope': ['get'],
   '/api/auth/permissions': ['get'],
   '/api/auth/roles-permissions': ['get'],
   '/api/auth/roles/{code}/permissions': ['put'],
