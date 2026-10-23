@@ -23,4 +23,7 @@ F13 引入 5xx 事件号 `incident_id`，但日志仍是 `console` 文本：没�
 - 生产 stderr/stdout 变为 JSON 行；依赖旧文本格式 grep 的运维脚本需改用 `GML_LOG_FORMAT=text` 或解析 JSON。
 - 未接入的 `console.*`（启动横幅、脚本、其他模块）保持原样，后续按需迁移。
 - 多代理链下 `trust proxy` 的跳数/地址范围必须由部署方显式配置；本 ADR 不改变默认。
+- 未命中任何路由的请求，访问日志 `route` 记 `[unmatched]`，不记原始路径（路径段可能含手机号 / 邮箱 / 凭据，`redact` 只认 `key=value`）。Codex 审计指出，已修。
+- 可信代理的请求号：`trust proxy` 只证明连接对端是自家代理，不证明它覆盖了 `x-request-id`。部署契约：受信代理必须覆盖（而非透传）该头；否则客户端可自选请求号，只影响日志关联，不影响鉴权 / 节流 / 审计归属。此项为配置前提，代码默认不信任。
+- 5xx `error` 行的 `route` 沿用 `redactUrl(originalUrl)`（既有行为，未收紧）；如需消除路径段 PII，后续改为路由模板。
 - `msg` 应为固定短句，变量放字段；`msg` 也会过 `redactText`，但不应依赖它。

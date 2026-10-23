@@ -132,3 +132,11 @@ test('5xx: log line carries incident_id and req_id matching the response and hea
   const access = rows.find(r => r.msg === 'request')
   assert.equal(access.status, 500); assert.equal(access.incident_id, err.incident_id); assert.equal(access.req_id, headerId)
 })
+
+test('unmatched paths never log raw path segments (PII / credentials)', async (t) => {
+  const base = await serve(t)
+  const lines = await capture(() => fetch(`${base}/nope/13812345678/alice@example.test/opaqueCred`).then(r => r.text()), { GML_LOG_FORMAT: 'json', GML_LOG_LEVEL: undefined })
+  const raw = JSON.stringify(lines)
+  assert.ok(!raw.includes('13812345678') && !raw.includes('alice@') && !raw.includes('opaqueCred'))
+  assert.equal(JSON.parse(lines[0][0]).route, '[unmatched]')
+})

@@ -20,7 +20,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { randomUUID } from 'node:crypto'
 import { runtimeMode } from '../runtime.js'
-import { redactValue, redactText, redactUrl } from './redact.js'
+import { redactValue, redactText } from './redact.js'
 
 const als = new AsyncLocalStorage()
 const LEVELS = { debug: 10, info: 20, warn: 30, error: 40 }
@@ -93,7 +93,8 @@ function inboundRequestId(req) {
 
 function routeOf(req) {
   if (req.route?.path !== undefined) return `${req.baseUrl || ''}${req.route.path}`
-  return redactUrl(String(req.originalUrl || req.url || '').split('?')[0])
+  // 未命中路由：原始路径段可能含手机号 / 邮箱 / 不透明凭据（redact 只认 key=value），一律不记原文
+  return '[unmatched]'
 }
 
 /** 最先挂载：分配 / 透传请求号、回写响应头、结束时记一行访问日志（健康检查降为 debug） */
