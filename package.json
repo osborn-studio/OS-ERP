@@ -19,6 +19,7 @@
     "migrate": "node scripts/migrate.mjs",
     "check:mcp": "node scripts/check-mcp-coverage.mjs",
     "check:data-paths": "node scripts/check-data-paths.mjs",
+    "check:route-authz": "node scripts/check-route-authz.mjs",
     "check:file-header": "node scripts/check-file-header.mjs",
     "docs:build": "node scripts/build-docs-wiki.mjs",
     "release": "node scripts/package-release.mjs",
