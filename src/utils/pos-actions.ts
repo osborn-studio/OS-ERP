@@ -8,6 +8,7 @@
  *   - 交班核款 / 退回：当前用户是开班人（cashier_id，缺 id 时按姓名 / 账号兜底，口径同服务端 assertShiftChecker）
  *     → 可见但禁用，原因 POS_SELF_APPROVE（需另一人复核）。admin 不豁免。
  *   - 接收缴款：缴款人（handed_by）是当前用户 → 可见但禁用（SAME_PERSON）。
+ *   - 作废订单需 pos.refund（order_void）；差异结案需 pos.shift.settle（variance_settle，AA9）。
  *   - 作废已报数的班次另需 pos.shift.review（服务端在路由里补的校验）。
  * 【不变量 / 边界】这只是体验层提示，不替代服务端授权：服务端仍会拒绝（403 / 404 / 409）。
  *   客户端看不到 doc_events 里"代他人报数"的人，所以服务端可能对"看似可点"的核款仍返回 409 POS_SELF_APPROVE，
@@ -18,6 +19,7 @@ export type PosActionKey =
   | 'shift_open' | 'shift_declare' | 'shift_approve' | 'shift_reject' | 'shift_cancel'
   | 'cashdrop_create' | 'cashdrop_receive' | 'cashdrop_cancel'
   | 'daily_close' | 'stock_check_create' | 'stock_check_adjust'
+  | 'order_void' | 'variance_settle'
 
 export type PosActionState = { visible: boolean; enabled: boolean; reason: string }
 export type PosActions = Record<PosActionKey, PosActionState>
@@ -39,7 +41,9 @@ export const PERM = {
   cashdrop: 'pos.cashdrop',
   receive: 'pos.cashdrop.receive',
   dailyclose: 'pos.dailyclose',
-  check: 'pos.store.check'
+  check: 'pos.store.check',
+  refund: 'pos.refund',
+  settle: 'pos.shift.settle'
 } as const
 
 export const SELF_APPROVE_REASON = '你开班或报数的班次不能由自己核款 / 退回，需另一人复核（POS_SELF_APPROVE）'
@@ -74,7 +78,8 @@ export function selectPosActions(input: PosActionInput): PosActions {
   const all = (state: PosActionState): PosActions => ({
     shift_open: state, shift_declare: state, shift_approve: state, shift_reject: state, shift_cancel: state,
     cashdrop_create: state, cashdrop_receive: state, cashdrop_cancel: state,
-    daily_close: state, stock_check_create: state, stock_check_adjust: state
+    daily_close: state, stock_check_create: state, stock_check_adjust: state,
+    order_void: state, variance_settle: state
   })
   if (!Array.isArray(p)) return all(HIDDEN)
 
@@ -105,6 +110,8 @@ export function selectPosActions(input: PosActionInput): PosActions {
   if (has(PERM.dailyclose)) {
     out.daily_close = input.dailyCloseGate && input.dailyCloseGate.ok === false ? off(DAILY_CLOSE_BLOCKED_REASON) : on()
   }
+  if (has(PERM.refund)) out.order_void = on()
+  if (has(PERM.settle)) out.variance_settle = on()
   if (has(PERM.check)) {
     out.stock_check_create = on()
     out.stock_check_adjust = on()

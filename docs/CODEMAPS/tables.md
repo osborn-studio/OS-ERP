@@ -3,7 +3,7 @@
 <!-- generated -->
 <!-- 由 `node scripts/gen-codemap.mjs` 生成，勿手改；CI 校验不漂移 -->
 
-共 198 张表、59 个迁移。“建于”= schema.sql / 迁移编号 / 运行时建表的文件；“改于”= ALTER、addColumn（无后缀）、建索引（·idx）、触发器（·trg）、DROP（·drop）所在迁移编号。“触达”= 该文件的 SQL 文本里出现这张表（server/db/ 下的种子与启动文件不计）。
+共 198 张表、60 个迁移。“建于”= schema.sql / 迁移编号 / 运行时建表的文件；“改于”= ALTER、addColumn（无后缀）、建索引（·idx）、触发器（·trg）、DROP（·drop）所在迁移编号。“触达”= 该文件的 SQL 文本里出现这张表（server/db/ 下的种子与启动文件不计）。
 
 ## 扫描边界（必读）
 
@@ -276,3 +276,4 @@
 | 060 | `060_qimen_secrets.cjs` | 奇门网关每平台密钥（封存）、防重放 nonce 表与 oms.platform.manage 权限点 | qimen_nonces | platforms, qimen_nonces |
 | 061 | `061_hot_query_indexes.cjs` | 大库热点查询索引（低库存预警 / 看板待办计数） | — | — |
 | 062 | `062_audit_view_permission.cjs` | 审计日志查看权限点 system:audit:view | — | — |
+| 066 | `066_pos_settle_permission.cjs` | 交班差异结案权限点 pos.shift.settle | — | — |

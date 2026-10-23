@@ -301,3 +301,72 @@ test('HTTP: admin bound to a store passes the gates and can check a shift opened
   const self = await api(`/api/pos/shifts/${mine.id}/approve`, { token: boundAdmin.token, body: { counted_cash: 100 } })
   assert.equal(self.status, 409, JSON.stringify(self.body))
 })
+
+// ---------------------------------------------------------------------------
+// AA9：作废订单 pos.refund、差异结案 pos.shift.settle（迁移 066，ADR-0025 补充）
+// ---------------------------------------------------------------------------
+test('migration 066 registers pos.shift.settle and grants admin / store / finance once (ADR-0007)', () => {
+  const db = new Database(':memory:')
+  try {
+    db.pragma('foreign_keys=ON')
+    db.exec(readFileSync(new URL('../server/db/schema.sql', import.meta.url), 'utf8'))
+    runMigrations(db)
+    const row = db.prepare('SELECT module FROM permissions WHERE code=?').get('pos.shift.settle')
+    assert.ok(row && row.module === 'pos')
+    const grants = (role) => db.prepare('SELECT perm_code FROM role_permissions WHERE role_code=?').all(role).map((r) => r.perm_code)
+    for (const role of ['admin', 'store', 'finance']) assert.ok(grants(role).includes('pos.shift.settle'), `${role} holds pos.shift.settle`)
+    for (const role of ['viewer', 'sales', 'purchase', 'dealer', 'warehouse']) assert.ok(!grants(role).includes('pos.shift.settle'), `${role} must not hold it`)
+    db.prepare("DELETE FROM role_permissions WHERE role_code='store' AND perm_code='pos.shift.settle'").run()
+    runMigrations(db)
+    assert.ok(!grants('store').includes('pos.shift.settle'), 'trimmed grant stays trimmed')
+  } finally {
+    db.close()
+  }
+})
+
+function makePendingClosedShift(db, storeId) {
+  const s = makeShift(db, { storeId, openerId: 9, openerName: 'cashier-x', status: 'open' })
+  db.prepare("UPDATE pos_shifts SET status='closed', variance=-30, variance_note='short', variance_handled='pending' WHERE id=?").run(s.id)
+  return s
+}
+const handledOf = (db, id) => db.prepare('SELECT variance_handled FROM pos_shifts WHERE id=?').get(id).variance_handled
+
+test('HTTP: settle-variance requires pos.shift.settle (role name no longer decides), void requires pos.refund', { timeout: 300000 }, async (t) => {
+  const f = await server(t)
+  const { api, db } = f
+  const clerk = await f.account('pos_settle_user', 'store', { store_id: 1 })
+  const finance = await f.account('pos_settle_fin', 'finance', {})
+  const shift = makePendingClosedShift(db, 1)
+  const body = { handled: 'absorb', note: 'aa9' }
+  const url = `/api/pos/shifts/${shift.id}/settle-variance`
+
+  // 撤掉 store / finance 角色的 settle 授权：403 且状态不动（角色名 finance 不再是通行证）
+  db.prepare("DELETE FROM role_permissions WHERE perm_code='pos.shift.settle' AND role_code IN ('store','finance')").run()
+  assert.equal((await api(url, { token: clerk.token, body })).status, 403)
+  assert.equal((await api(url, { token: finance.token, body })).status, 403)
+  assert.equal(handledOf(db, shift.id), 'pending')
+  // 撤掉 pos.refund 后作废订单 403
+  db.prepare("DELETE FROM role_permissions WHERE role_code='store' AND perm_code='pos.refund'").run()
+  assert.equal((await api('/api/pos/orders/1/void', { token: clerk.token, body: {} })).status, 403)
+  db.prepare("INSERT OR IGNORE INTO role_permissions (role_code,perm_code) VALUES ('store','pos.refund')").run()
+
+  // 别家门店的挂账班次：即使持有权限也 404，状态不动
+  db.prepare("INSERT OR IGNORE INTO role_permissions (role_code,perm_code) VALUES ('store','pos.shift.settle')").run()
+  const other = makePendingClosedShift(db, 2)
+  assert.equal((await api(`/api/pos/shifts/${other.id}/settle-variance`, { token: clerk.token, body })).status, 404)
+  assert.equal(handledOf(db, other.id), 'pending')
+  // 持有权限的本店账号 200
+  const own = await api(url, { token: clerk.token, body })
+  assert.equal(own.status, 200, JSON.stringify(own.body))
+  assert.equal(handledOf(db, shift.id), 'absorb')
+  // 持有权限的无门店 finance（总部）可结任意门店
+  db.prepare("INSERT OR IGNORE INTO role_permissions (role_code,perm_code) VALUES ('finance','pos.shift.settle')").run()
+  const hq = await api(`/api/pos/shifts/${other.id}/settle-variance`, { token: finance.token, body: { handled: 'charge' } })
+  assert.equal(hq.status, 200, JSON.stringify(hq.body))
+  assert.equal(handledOf(db, other.id), 'charge')
+  // 没有任何角色授权的 sales 账号 403
+  const sales = await f.account('pos_settle_sales', 'sales', { data_scope: 'all' })
+  const third = makePendingClosedShift(db, 1)
+  assert.equal((await api(`/api/pos/shifts/${third.id}/settle-variance`, { token: sales.token, body })).status, 403)
+  assert.equal(handledOf(db, third.id), 'pending')
+})

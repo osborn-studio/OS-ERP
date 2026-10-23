@@ -511,14 +511,19 @@ r.post(
   })
 )
 
-/** 总部落案挂账差异（`pending` → charge / absorb）。这一步不是状态流转，见 lib/pos2.js 说明 */
+/**
+ * 落案挂账差异（`pending` → charge / absorb）。这一步不是状态流转，见 lib/pos2.js 说明。
+ * AA9：闸是权限点 `pos.shift.settle`（不再看角色名）；绑了门店的非 admin 账号只能结本店班次，别家 404。
+ * 无门店绑定的总部账号（如 finance）持权限即可结任意门店。
+ */
 r.post(
   '/shifts/:id/settle-variance',
   requireAuth,
-  requireRole('admin', 'finance'),
+  requirePerm('pos.shift.settle'),
   wrap((req, res) => {
-    const { db } = storeCtx(req)
+    const db = getDb()
     const id = Number(req.params.id)
+    if (req.user.role !== 'admin' && req.user.store_id) assertShiftOfStore(db, id, req.user.store_id)
     const detail = settleVariance(db, req, { shiftId: id, handled: req.body?.handled, note: req.body?.note ?? null })
     audit(req, { action: 'SETTLE_VARIANCE', module: 'pos', entity: 'pos_shifts', entityId: id, detail: req.body?.handled })
     return ok(res, detail)
