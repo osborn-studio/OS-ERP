@@ -31,7 +31,7 @@
 import path from 'node:path'
 import {
   EXIT_OK, EXIT_FAILED, EXIT_USAGE, DrillError, INDUSTRY_DB,
-  parseArgs, loadBackupSet, prepareTargetDir, verifyAndRestore, runtimeMarkerOf,
+  parseArgs, loadBackupSet, prepareTargetDir, verifyAndRestore, runtimeMarkerOf, materializeEntry,
   migrateInProduction, startProductionServer, loginClient, sqlProbes, httpProbes,
   bootstrapDrillAdmin, drillPassword, readPasswordFromStdin, writeReport, stampNow, backupAgeSeconds
 } from './lib/drill-common.mjs'
@@ -62,6 +62,7 @@ const report = {
 
 let target = null
 let server = null
+const cleanups = []
 let exitCode = EXIT_FAILED
 
 try {
@@ -89,11 +90,13 @@ try {
   report.target_dir = target
 
   // 备份必须是生产分类的库：演练以生产模式启动，demo/test 标记的库会被 ADR-0001 的闸门拒绝
-  const marker = runtimeMarkerOf(entry.file)
+  const plain = materializeEntry(entry)
+  cleanups.push(plain.cleanup)
+  const marker = runtimeMarkerOf(plain.file)
   if (marker !== 'production') throw new DrillError('DRILL_BACKUP_NOT_PRODUCTION', `备份 ${path.basename(entry.file)} 的运行模式标记为 ${marker ?? '缺失'}，恢复演练只接受 production 库`, EXIT_USAGE)
 
   // 账号来源判定要在动任何文件之前完成：有账号就必须给 --drill-username + stdin 密码
-  const backupValues = sqlProbes(entry.file)
+  const backupValues = sqlProbes(plain.file)
   let username = args['drill-username'] || null
   let password = null
   let createdByDrill = false
@@ -160,6 +163,7 @@ try {
   if (e.output) report.server = { ...(report.server || {}), output_tail: e.output }
 } finally {
   if (server) await server.stop()
+  for (const c of cleanups) c()
 }
 
 report.timing.total_ms = since(t0)
