@@ -2,6 +2,10 @@
 
 更新：2026-10-22。全新公开仓库：[osborn-studio/OS-ERP](https://github.com/osborn-studio/OS-ERP)，采用 MIT，仅导入清理后的当前文件快照。旧仓库保留为私有归档，其 PR/Actions/历史对象不导入本仓库。未发布正式 Release、未部署。来源及旧 checkout 使用限制见 [PUBLICATION_HISTORY](../PUBLICATION_HISTORY.md)，MIT 决策不替代第三方权属核验。
 
+## 第六批当前状态（2026-10-23）
+
+按 [roadmap-v2](roadmap-v2.md) 的 W1–W12，12 路 Sonnet 5.5 subagent 并行实现，每路完成后用 Codex CLI（gpt-6.1-sol，只读沙箱）独立审计并修复其高危发现，再由主执行器集成：W1 采购链详情/预览读接口范围（ADR-0020）；W2 路由授权清单守卫 `check-route-authz`（ADR-0021，638 条路由分类，暴露 POS/销售/订货中心组织范围、`docflow/no-issue`、`auth/orgs`、奇门缺 app_key 放行等真实缺口）；W3 前端 403/空范围/能力关闭统一提示；W4 出站 TLS/SNI 固定地址联调测试；W5 MCP 40 工具 × 3 所有者状态矩阵（修复 4 个工具级越权，含确认人绕过）；W6 备份 AES-256-GCM 加密与三库一致性点（ADR-0022）；W7 结构化 JSON 日志与 request-id（ADR-0023）；W8 发行包验收改为生产初始化流程；W9 运行时 SBOM 与生成式第三方声明 + CI 漂移校验；W10 安装/操作手册生产口径重写；W11 容量基线脚本；W12 付款释放台账与原子作废（ADR-0024，迁移 057）。验证以托管 CI 为准。
+
 ## 第五批当前状态（2026-10-23）
 
 第五批 4 路 subagent 并行，已合入 `integration`：采购链全部读接口统一门禁与组织范围（ADR-0017）；收付款证据与二人复核（ADR-0018，迁移 056，新增设置 `funds_*` 与权限 `finance.funds.review`，默认开启，F10 人工资金模式落地）；脚本数据目录卫生守卫 `check-data-paths` 与单实例安装验收 `tests/local-instance.test.mjs`（ADR-0019，F11）；应收界面展示授信释放/恢复效果与投影校验。PR #2 已合并到 main；第五批将作为新 PR 提交，验证以托管 CI 为准。
