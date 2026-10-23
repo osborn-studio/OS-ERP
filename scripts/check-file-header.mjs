@@ -82,6 +82,8 @@ const DECLARED = [
   'tests/credit-hold-projection.test.mjs',
   // 待办范围与 Agent Token 有效状态（ADR-0015）
   'server/db/migrations/055_agent_token_revoke_reason.cjs',
+  'server/db/migrations/059_indexes.cjs',
+  'scripts/explain-audit.mjs',
   'tests/authz-followups.test.mjs',
   // 采购链读接口范围收口（ADR-0017）
   'tests/purchase-chain-scope.test.mjs',
