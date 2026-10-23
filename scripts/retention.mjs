@@ -8,8 +8,10 @@
  * 【判据】
  *   · 默认 `--dry-run`：只读打开库，按行业打印将删除的行数，不改任何东西。`--execute` 才删。
  *   · 每个行业库**一个事务**：三类删除 + 一条 `RETENTION_PURGE` 严格审计（auditStrictRow）。审计写不进 ⇒ 整个事务回滚，什么都不删。
- *   · **永不清理**：audit_logs 里 module ∈ {finance, settings, auth, approval, privacy, retention} 或 action 以 `FUNDS_` 开头的行
- *     （账务 / 资金复核 / 配置 / 账号权限 / 审批 / 隐私处理 / 清理摘要本身）；mcp_call_logs 里 level='danger' 的行。
+ *   · **只清理白名单模块**：audit_logs 里 module ∈ {master, notify, im, docflow, demand, quality} 的行才可能被删；
+ *     其余模块（finance / settings / auth / approval / privacy / retention 以及 purchase / sales / pos / dealer / inventory …
+ *     这些业务单据的写操作审计就是账务证据）、module 为空或未知的行、`FUNDS_` 开头的行，一律保留。
+ *     mcp_call_logs 里 level='danger' 的行也保留。
  *   · 保留设置读出来不是整数或越界（见 SETTING_RULES 的 min/max）⇒ 该库 fail-closed，退出码 1，不删。
  *   · 必须显式 GML_DATA_DIR（ADR-0001 / ADR-0019），且不许是仓库 data/；不存在的行业库只报 absent，不创建。
  *
@@ -26,9 +28,12 @@ import { INDUSTRIES, requireExplicitDataDir, dbPathFor } from '../server/db/inde
 import { SETTING_RULES, settingRow, normalizeSettingValue, castSettingValue } from '../server/lib/settings.js'
 import { auditStrictRow } from '../server/lib/audit-trail.js'
 
-export const PROTECTED_AUDIT_MODULES = ['finance', 'settings', 'auth', 'approval', 'privacy', 'retention']
-const PLACEHOLDERS = PROTECTED_AUDIT_MODULES.map(() => '?').join(',')
-const AUDIT_ELIGIBLE = `created_at < datetime('now','localtime',?) AND COALESCE(module,'') NOT IN (${PLACEHOLDERS}) AND action NOT LIKE 'FUNDS\\_%' ESCAPE '\\'`
+// 白名单而非黑名单：审计行里几乎每个业务模块的 CREATE/UPDATE/pay/approve/void 都是账务证据（purchase/sales/pos/dealer/
+// inventory/…），逐个列"不许删"必然漏。所以只有**明确登记为无账务 / 无授权影响**的模块才可被清理；
+// 新增或未知模块、module 为空的行一律保留。要扩大范围是政策变更（改本清单 + ADR-0030 + 测试）。
+export const PURGEABLE_AUDIT_MODULES = ['master', 'notify', 'im', 'docflow', 'demand', 'quality']
+const PLACEHOLDERS = PURGEABLE_AUDIT_MODULES.map(() => '?').join(',')
+const AUDIT_ELIGIBLE = `created_at < datetime('now','localtime',?) AND module IN (${PLACEHOLDERS}) AND action NOT LIKE 'FUNDS\\_%' ESCAPE '\\'`
 const NOTIFY_ELIGIBLE = `created_at < datetime('now','localtime',?)`
 const MCP_ELIGIBLE = `created_at < datetime('now','localtime',?) AND COALESCE(level,'') <> 'danger'`
 
@@ -79,7 +84,7 @@ function windowDays(db, key) {
 function countsFor(db, days) {
   const off = (d) => `-${d} days`
   return {
-    audit_logs: db.prepare(`SELECT COUNT(*) n FROM audit_logs WHERE ${AUDIT_ELIGIBLE}`).get(off(days.audit), ...PROTECTED_AUDIT_MODULES).n,
+    audit_logs: db.prepare(`SELECT COUNT(*) n FROM audit_logs WHERE ${AUDIT_ELIGIBLE}`).get(off(days.audit), ...PURGEABLE_AUDIT_MODULES).n,
     notify_logs: db.prepare(`SELECT COUNT(*) n FROM notify_logs WHERE ${NOTIFY_ELIGIBLE}`).get(off(days.notify)).n,
     mcp_call_logs: db.prepare(`SELECT COUNT(*) n FROM mcp_call_logs WHERE ${MCP_ELIGIBLE}`).get(off(days.mcp)).n
   }
@@ -105,13 +110,13 @@ for (const code of codes) {
     const counts = db.transaction(() => {
       const off = (d) => `-${d} days`
       const done = {
-        audit_logs: db.prepare(`DELETE FROM audit_logs WHERE ${AUDIT_ELIGIBLE}`).run(off(days.audit), ...PROTECTED_AUDIT_MODULES).changes,
+        audit_logs: db.prepare(`DELETE FROM audit_logs WHERE ${AUDIT_ELIGIBLE}`).run(off(days.audit), ...PURGEABLE_AUDIT_MODULES).changes,
         notify_logs: db.prepare(`DELETE FROM notify_logs WHERE ${NOTIFY_ELIGIBLE}`).run(off(days.notify)).changes,
         mcp_call_logs: db.prepare(`DELETE FROM mcp_call_logs WHERE ${MCP_ELIGIBLE}`).run(off(days.mcp)).changes
       }
       auditStrictRow(db, {
         userName: actor, action: 'RETENTION_PURGE', module: 'retention', entity: 'logs', entityId: code,
-        detail: { counts: done, days, protected_audit_modules: PROTECTED_AUDIT_MODULES }
+        detail: { counts: done, days, purgeable_audit_modules: PURGEABLE_AUDIT_MODULES }
       })
       return done
     }).immediate()

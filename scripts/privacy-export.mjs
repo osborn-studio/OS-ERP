@@ -46,8 +46,18 @@ try {
   fatal(e.code || 'USAGE', e.message)
 }
 
+// 自由文本里的凭据：`token=x`（redactText）、JSON 片段 `"token":"x"`、`Authorization: Bearer x`、裸 `Bearer x`。
+const KV_SECRET = /(["']?(?:[A-Za-z0-9_.-]*(?:password|passwd|secret|token|authorization|cookie|jwt|key)[A-Za-z0-9_.-]*)["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|(?:Bearer\s+)?[^\s,;&}\]]+)/gi
+const BEARER = /\bBearer\s+[A-Za-z0-9._~+/=-]+/gi
+function scrubText(str) {
+  const t = str.trim()
+  if ((t.startsWith('{') && t.endsWith('}')) || (t.startsWith('[') && t.endsWith(']'))) {
+    try { return JSON.stringify(scrub(JSON.parse(t))) } catch { /* 不是合法 JSON：按文本处理 */ }
+  }
+  return redactText(str).replace(KV_SECRET, (_m, k) => `${k}${MASK}`).replace(BEARER, `Bearer ${MASK}`)
+}
 function scrub(v) {
-  if (typeof v === 'string') return redactText(v)
+  if (typeof v === 'string') return scrubText(v)
   if (Array.isArray(v)) return v.map(scrub)
   if (v && typeof v === 'object') {
     return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, SENSITIVE_KEY.test(k) && x !== null && x !== '' ? MASK : scrub(x)]))

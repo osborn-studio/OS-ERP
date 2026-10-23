@@ -10,7 +10,7 @@
  *   + pos_orders.member_phone。金额、单号、状态、数量、时间一律不动（财务要用）。
  *
  * 【改它要注意什么】新增含手机号 / 收货信息的商城表，必须同时加到这里的 `collect`，导出与抹除才会一起覆盖；
- *   伪名 = `erased:` + 带钥哈希（密钥来自 GML_SECRET_KEY / JWT 密钥，见 secret-box.keyedPseudonym），换密钥后旧伪名不再可重算。
+ *   伪名 = `erased:` + 带钥哈希（手机号再加 `-<客户id>`；密钥来自 GML_SECRET_KEY / JWT 密钥，见 secret-box.keyedPseudonym），换密钥后旧伪名不再可重算。
  * ============================================================================
  */
 import fs from 'node:fs'
@@ -29,6 +29,11 @@ export function fatal(code, message) {
 }
 
 export const pseudo = (kind, value) => `${ERASED_PREFIX}${keyedPseudonym(kind, value)}`
+/** 手机号伪名 = `erased:<带钥哈希>`；mall_customers.phone 是 UNIQUE，老客户抹除后同号再注册还会再被抹除，
+ *  所以按客户行 id 加后缀（`-<id>`，无客户行记 0）保证每个生命周期各有一个。哈希部分相同 ⇒ 仍可关联同一号码。 */
+export const phoneHash = (phone) => keyedPseudonym('phone', phone)
+export const phonePseudonym = (phone, customerId) => `${ERASED_PREFIX}${phoneHash(phone)}-${customerId ?? 0}`
+export const erasedLike = (phone) => `${ERASED_PREFIX}${phoneHash(phone)}-%`
 
 export function openIndustryDbs(codes, readonly) {
   const out = []
@@ -52,10 +57,10 @@ export function collect(db, phone) {
   const items = orders.length
     ? db.prepare(`SELECT * FROM oms_order_items WHERE oms_order_id IN (${orders.map(() => '?').join(',')}) ORDER BY id`).all(...orders.map((o) => o.id))
     : []
+  // 销售单有两条来路：H5 订单转出（oms_orders.sales_order_id），以及 POS 日结上传（pos2.js 把 member_phone 抄进 receiver_phone，
+  // receiver 写成「会员 <手机号>」）。两条都要覆盖，否则抹除后销售单上还留着原号码。
   const salesIds = orders.map((o) => o.sales_order_id).filter((x) => x != null)
-  const sales = salesIds.length
-    ? db.prepare(`SELECT * FROM sales_orders WHERE id IN (${salesIds.map(() => '?').join(',')}) ORDER BY id`).all(...salesIds)
-    : []
+  const sales = db.prepare(`SELECT * FROM sales_orders WHERE receiver_phone=?${salesIds.length ? ` OR id IN (${salesIds.map(() => '?').join(',')})` : ''} ORDER BY id`).all(phone, ...salesIds)
   return {
     customer,
     member_account: customer && has(db, 'member_accounts') ? db.prepare('SELECT * FROM member_accounts WHERE customer_id=?').get(customer.id) || null : null,

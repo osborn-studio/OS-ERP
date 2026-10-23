@@ -34,6 +34,7 @@ function fixture(t, { openOrder = false } = {}) {
   ins.run(pf, 'H5-2', `会员${PHONE}`, openOrder ? 'pending' : 'completed', 200.5, 0, 200.5, '张三妈', '13500000000', '北京市朝阳区某街2号', null)
   ins.run(pf, 'H5-3', `会员${OTHER}`, 'completed', 50, 0, 50, '李四', OTHER, '广州市天河区某路3号', null)
   const so = db.prepare("INSERT INTO sales_orders (doc_no,order_date,status,receiver,receiver_phone,receiver_address,receivable_amount) VALUES ('SO-1','2026-01-01','completed','张三',?, '上海市浦东新区某路1号',100)").run(PHONE).lastInsertRowid
+  db.prepare("INSERT INTO sales_orders (doc_no,channel,order_date,status,receiver,receiver_phone,receivable_amount,remark) VALUES ('XS-POS','store','2026-01-02','completed',?,?,9,'POS 日结上传 POS-1')").run(`会员 ${PHONE}`, PHONE)
   db.prepare("UPDATE oms_orders SET sales_order_id=? WHERE platform_order_no='H5-1'").run(so)
   db.prepare("INSERT INTO pos_orders (doc_no,store_id,warehouse_id,biz_date,member_phone,pay_amount) VALUES ('POS-1',1,1,'2026-01-01',?,9)").run(PHONE)
   db.close()
@@ -95,7 +96,7 @@ test('erase pseudonymizes personal columns, keeps finance fields and ids, writes
   assert.equal(r.status, 0, r.stderr + r.stdout)
   const db = open(dir)
   const cust = db.prepare('SELECT * FROM mall_customers WHERE id=?').get(cid)
-  assert.match(cust.phone, /^erased:[0-9a-f]{24}$/)
+  assert.match(cust.phone, /^erased:[0-9a-f]{24}-\d+$/)
   assert.match(cust.name, /^erased:/)
   assert.equal(cust.points, 120); assert.equal(cust.total_amount, 300.5); assert.equal(cust.total_orders, 2)
   const orders = db.prepare('SELECT * FROM oms_orders ORDER BY id').all()
@@ -111,6 +112,8 @@ test('erase pseudonymizes personal columns, keeps finance fields and ids, writes
   assert.equal(db.prepare("SELECT member_phone FROM pos_orders WHERE doc_no='POS-1'").get().member_phone, cust.phone)
   const so = db.prepare("SELECT * FROM sales_orders WHERE doc_no='SO-1'").get()
   assert.match(so.receiver, /^erased:/); assert.equal(so.receiver_phone, cust.phone); assert.match(so.receiver_address, /^erased:/); assert.equal(so.receivable_amount, 100)
+  const posSo = db.prepare("SELECT * FROM sales_orders WHERE doc_no='XS-POS'").get()
+  assert.equal(posSo.receiver, `会员 ${cust.phone}`); assert.equal(posSo.receiver_phone, cust.phone); assert.equal(posSo.receivable_amount, 9)
   assert.equal(db.prepare('SELECT pay_amount FROM pos_orders').get().pay_amount, 9)
   const audits = db.prepare("SELECT * FROM audit_logs WHERE action='PRIVACY_ERASE'").all()
   assert.equal(audits.length, 1)
@@ -130,6 +133,38 @@ test('erase pseudonymizes personal columns, keeps finance fields and ids, writes
   db2.close()
   // a number that never existed is an error
   assert.equal(run('scripts/privacy-erase.mjs', dir, ['13000000000', '--confirm', '--actor', 'boss']).status, 1)
+})
+
+test('a customer who re-registers after an erase can be erased again (pseudonyms are unique per customer row)', (t) => {
+  const { dir } = fixture(t)
+  assert.equal(run('scripts/privacy-erase.mjs', dir, [PHONE, '--confirm', '--actor', 'boss']).status, 0)
+  const db = open(dir)
+  const first = db.prepare("SELECT phone FROM mall_customers WHERE phone LIKE 'erased:%'").get().phone
+  db.prepare('INSERT INTO mall_customers (phone,name) VALUES (?,?)').run(PHONE, '张三回来了')
+  db.close()
+  const r = run('scripts/privacy-erase.mjs', dir, [PHONE, '--confirm', '--actor', 'boss'])
+  assert.equal(r.status, 0, r.stderr + r.stdout)
+  const db2 = open(dir)
+  const erased = db2.prepare("SELECT phone FROM mall_customers WHERE phone LIKE 'erased:%' ORDER BY id").all().map((x) => x.phone)
+  assert.equal(erased.length, 2)
+  assert.equal(erased[0], first)
+  assert.notEqual(erased[1], first)
+  assert.equal(erased[0].split('-')[0], erased[1].split('-')[0], 'same keyed hash links lifecycles of one number')
+  assert.equal(db2.prepare("SELECT COUNT(*) n FROM audit_logs WHERE action='PRIVACY_ERASE'").get().n, 2)
+  db2.close()
+})
+
+test('export scrubs credentials embedded in free text and JSON fragments', (t) => {
+  const { dir } = fixture(t)
+  const db = open(dir)
+  db.prepare("UPDATE oms_orders SET remark=? WHERE platform_order_no='H5-2'").run('{"token":"jsonsecret1","note":"hi"}')
+  db.prepare("UPDATE oms_orders SET remark=? WHERE platform_order_no='H5-1'").run('Authorization: Bearer headersecret2 and api_key: keysecret3')
+  db.close()
+  const out = path.join(dir, 'scrub.json')
+  assert.equal(run('scripts/privacy-export.mjs', dir, [PHONE, '--out', out]).status, 0)
+  const text = readFileSync(out, 'utf8')
+  for (const leaked of ['jsonsecret1', 'headersecret2', 'keysecret3']) assert.ok(!text.includes(leaked), leaked)
+  assert.ok(text.includes('hi'), 'non-secret text survives')
 })
 
 test('pseudonyms are keyed: a different secret yields different values', (t) => {
