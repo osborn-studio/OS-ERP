@@ -8,6 +8,10 @@
 
 <!-- generated -->
 
+## 第十批（进行中）：见 roadmap-v6
+
+- [ADR-0045 Prometheus 指标导出与抓取令牌（AA10）](docs/implementation/ADR-0045-metrics-export.md) — `GET /api/meta/metrics?format=prometheus` 返回 `text/plain; version=0.0.4; charset=utf-8`（`Cache-Control: no-store`），每个指标族一行 `# HELP`、一行 `# TYPE`，名字统一前缀 `os_erp_`。无 `format` 或 `format=json` 与 ADR-0029 完全一致；其它 `format` 值 ⇒ 400（不静默回落）。
+
 ## 第九批（进行中）：见 roadmap-v5
 
 - [ADR-0038：库存域与采购订单状态/收货路由按组织范围收口](docs/implementation/ADR-0038-inventory-scope.md) — 一处判据：`server/lib/stock.js` 的 `stockScopeSql(orgScope, alias, column='warehouse_id')`，键为 `warehouses.org_id`。不传或 `all` ⇒ `1=1`；`dealer` / `none` / 空集合 ⇒ `1=0`；仓库 `org_id` 为 NULL 对受限范围不可见。同文件还有 `warehouseInScope` / `assertWarehouseInScope`（写目…
