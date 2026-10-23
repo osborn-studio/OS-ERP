@@ -119,7 +119,12 @@ const DECLARED = [
   // POS 前端按权限显示（Y5）
   'src/utils/pos-actions.ts',
   'src/pages/pos/usePosPermissions.ts',
-  'tests/pos-actions.test.mjs'
+  'tests/pos-actions.test.mjs',
+  // 写路径并发与 SQLITE_BUSY 治理（ADR-0035）
+  'server/lib/tx.js',
+  'scripts/lib/bench-contender.mjs',
+  'tests/write-contention.test.mjs',
+  'tests/fixtures/write-contention-worker.mjs'
 ]
 
 /** 参与覆盖率统计的源文件（**排除** node_modules / dist / data） */

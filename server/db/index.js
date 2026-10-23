@@ -177,6 +177,20 @@ export function requireExplicitDataDir(env = process.env) {
   return dir
 }
 
+/**
+ * `busy_timeout` 毫秒数（ADR-0035）。缺省 5000（沿用旧值）；`GML_SQLITE_BUSY_MS` 必须是 0..300000 的十进制整数，
+ * 其它值抛 `SQLITE_BUSY_MS_INVALID`（拼错的配置宁可启动失败，也不要静默回落成别的等待时间）。
+ */
+export const DEFAULT_SQLITE_BUSY_MS = 5000
+export function sqliteBusyMs(env = process.env) {
+  const raw = env.GML_SQLITE_BUSY_MS
+  if (raw === undefined || raw === '') return DEFAULT_SQLITE_BUSY_MS
+  if (!/^\d+$/.test(raw) || Number(raw) > 300000) {
+    throw Object.assign(new Error(`GML_SQLITE_BUSY_MS 必须是 0..300000 的整数毫秒，收到「${showValue(raw)}」`), { code: 'SQLITE_BUSY_MS_INVALID' })
+  }
+  return Number(raw)
+}
+
 export function getDbFor(industry) {
   const mode = runtimeMode()
   if (path.resolve(requireDataDirectory()) !== path.resolve(DATA_DIR)) {
@@ -198,8 +212,8 @@ export function getDbFor(industry) {
   }
   db.pragma('journal_mode = WAL')
   db.pragma('foreign_keys = ON')
-  // POS / 商城并发写：遇锁等待 5s 而不是立刻抛 SQLITE_BUSY
-  db.pragma('busy_timeout = 5000')
+  // POS / 商城并发写：遇锁等待（默认 5s，`GML_SQLITE_BUSY_MS` 可调）而不是立刻抛 SQLITE_BUSY
+  db.pragma(`busy_timeout = ${sqliteBusyMs()}`)
   pools.set(code, db)
   return db
 }
@@ -246,5 +260,5 @@ export default {
   getDb, getDbFor, initSchema, initSchemaFor, DB_PATH, DATA_DIR,
   INDUSTRIES, DEFAULT_INDUSTRY, isSeeded, tableCount,
   runWithIndustry, getCurrentIndustry, dbPathFor, industryList, requireExplicitDataDir,
-  assertIndustry, normalizeIndustry, industryError, INDUSTRY_CODE_INVALID, showValue
+  assertIndustry, normalizeIndustry, industryError, INDUSTRY_CODE_INVALID, showValue, sqliteBusyMs
 }
