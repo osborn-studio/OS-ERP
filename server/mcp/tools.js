@@ -48,6 +48,7 @@ import {
 } from '../lib/docflow.js'
 // 金额/数量与权限点的**唯一判据**（与 HTTP 入口同一个）
 import { numAmount, numQty, permContext, hasPerm } from '../middleware/auth.js'
+import { assertCanViewDocType, canViewDocType, TOKEN_OWNER_PERM_DENIED } from './doc-perms.js'
 
 /**
  * `perms`（ADR-0011）：有主令牌调用该工具时，**令牌所有者此刻**必须持有其中任一权限点
@@ -2016,18 +2017,31 @@ export const TOOLS = [
   {
     name: 'doc.list_types',
     level: 'read',
-    perms: [],
+    perms: [], // X5：按单据类型的查看权限在 handler 内校验（doc-perms.js），不是整工具一个权限点
     title: '单据类型字典（AI 的入口地图）',
     description:
       '列出系统里全部单据类型：每种单据有哪些状态、在什么状态下能做哪些动作、哪些动作是高危（需人工确认）。'
       + 'AI 打算操作单据前应先调它，不要凭猜测拼 action。',
     inputSchema: { type: 'object', properties: {} },
-    handler({ db }) {
-      const types = db
+    handler({ db, ctx }) {
+      // X5：只返回所有者当前有查看权限的类型；未映射的类型（含无主令牌）也不列。有主令牌一个都看不了 ⇒ 明确拒绝。
+      const owner = ctx?.ownerUserId != null ? permContext(db, { uid: ctx.ownerUserId }) : null
+      const all = db
         .prepare(`SELECT code,name,module,table_name,has_lines FROM doc_types WHERE status='active' ORDER BY sort_order, code`)
         .all()
+      const types = all.filter((t0) => canViewDocType(db, ctx, t0, owner))
+      if (owner && !types.length) {
+        const err = new Error('令牌所有者当前没有查看任何单据类型的权限；委托令牌不能超过所有者本人的权限')
+        err.code = TOKEN_OWNER_PERM_DENIED
+        err.status = 403
+        throw err
+      }
       const states = db.prepare('SELECT doc_type,code,name,kind,is_initial,is_final FROM doc_states ORDER BY doc_type,sort_order').all()
-      const actions = db.prepare('SELECT doc_type,action,action_name,from_state,to_state,is_danger FROM doc_actions ORDER BY doc_type,sort_order').all()
+      const visible = new Set(types.map((x) => x.code))
+      const actions = db
+        .prepare('SELECT doc_type,action,action_name,from_state,to_state,is_danger FROM doc_actions ORDER BY doc_type,sort_order')
+        .all()
+        .filter((a) => visible.has(a.doc_type))
       const out = types.map((t2) => ({
         code: t2.code,
         name: t2.name,
@@ -2048,7 +2062,7 @@ export const TOOLS = [
   {
     name: 'doc.query',
     level: 'read',
-    perms: [],
+    perms: [], // X5：同上，按 doc_type 校验
     title: '查任意单据列表',
     description:
       '按单据类型（`doc.list_types` 里的 code）查单据列表，可按状态与关键词过滤。'
@@ -2065,6 +2079,7 @@ export const TOOLS = [
     },
     handler({ db, args, ctx }) {
       const type = docTypeOrThrow(db, args.doc_type)
+      assertCanViewDocType(db, ctx, type) // X5：先过类型级查看权限，再谈范围
       const table = safeTable(type.table_name)
       const statusField = type.status_field || 'status'
       const docNoField = type.doc_no_field || 'doc_no'
@@ -2106,7 +2121,7 @@ export const TOOLS = [
   {
     name: 'doc.get',
     level: 'read',
-    perms: [],
+    perms: [], // X5：同上，按 doc_type 校验
     title: '查任意单据详情 + 流转留痕',
     description:
       '给单据类型与 id（或单号），返回单头字段与**完整流转留痕**（谁、什么时候、从哪个状态到哪个状态）。'
@@ -2122,6 +2137,7 @@ export const TOOLS = [
     },
     handler({ db, args, ctx }) {
       const type = docTypeOrThrow(db, args.doc_type)
+      assertCanViewDocType(db, ctx, type) // X5：权限先于取行，避免用错误码探测单据是否存在
       const table = safeTable(type.table_name)
       const docNoField = type.doc_no_field || 'doc_no'
       let row = null

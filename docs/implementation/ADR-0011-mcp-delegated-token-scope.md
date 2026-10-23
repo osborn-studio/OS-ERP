@@ -85,6 +85,53 @@
 
 ### 明确记录的边界（矩阵中不是漏判）
 
-- `report.dashboard_kpi` / `org.tree` / `doc.list_types` / `doc.query` / `doc.get` 没有功能权限点（`perms: []`），与 HTTP 侧同类接口"只要登录、按范围收窄"一致，矩阵里记为 `NO_PERM_POINT`；它们的停用与范围两格照常断言。若要给通用单据读工具加按类型的查看权限点，是新的产品决定，不在本次验收内。
+- `report.dashboard_kpi` / `org.tree` 没有功能权限点（`perms: []`），与 HTTP 侧同类接口"只要登录、按范围收窄"一致，矩阵里记为 `NO_PERM_POINT`；它们的停用与范围两格照常断言。`doc.list_types` / `doc.query` / `doc.get` 原先同属此列，已由文末「X5 补充」改为按单据类型校验，不再记为 `NO_PERM_POINT`。
 - `pricing.update_price` 改的是全局价格主数据，HTTP 的 `master.price.edit` 也只验权限点；范围外状态下它仍执行（矩阵记 `GLOBAL_PARITY`，且只允许改价格表与留痕）。
 - 幂等重放发生在领域范围判定之前：同一令牌、同一幂等键、同一参数的重放会返回**首次执行时**缓存的结果，不会再次写业务行。所有者随后被撤权 / 缩范围时，这一重放仍会回放旧结果（凭据层的停用 / 版本失效 / 权限闸门仍先于重放生效）。矩阵每次调用换新幂等键，以免把"命中缓存"误判成"范围放行"。
+
+## X5 补充：通用单据读工具按单据类型校验所有者查看权限
+
+**缺口**：`doc.list_types` / `doc.query` / `doc.get` 以内核 `doc_types` 驱动，原先 `perms: []`，只受数据范围约束——仓库角色没有 `finance.voucher.view`，HTTP 查不了凭证，委托令牌却能 `doc.get VOUCHER`，违反"令牌能做的事 = 令牌范围 ∩ 所有者当前权限"。
+
+**决定**：
+1. 单一映射表 `DOC_VIEW_PERMS`（`server/mcp/doc-perms.js`）：`doc_type → 任一命中即可的权限点`。HTTP 侧有 `requirePerm` 的类型直接取同一码（采购链复用 `PO_READ_PERMS`）；HTTP 侧只有 `requireAuth` 或按角色名闸的类型，按模块「查看」权限点显式钉死（`explicit`，比 HTTP 严，委托不应比本人宽）。
+2. `doc.query` / `doc.get`：先取类型，再校验所有者**此刻**权限（`TOKEN_OWNER_PERM_DENIED`，HTTP 403 语义），然后才取行与判范围——权限判定与单据是否存在无关，不构成存在性探测。
+3. `doc.list_types`：只返回所有者有权查看的类型（及其动作）；有主令牌一个类型都看不了时直接 `TOKEN_OWNER_PERM_DENIED`。
+4. 外部主体：所有者是经销商 / 门店身份时，`INTERNAL_MODULES`（purchase / inventory / produce / outsource / quality / finance，与 docflow、审批入口同一判据）及 oms / dealer 模块的类型一律拒绝，即使被授予了权限点（对应 HTTP 路由整体 `requireInternal`）。
+5. 未映射类型 fail-closed：`doc.query` / `doc.get` 报 `DOC_TYPE_UNMAPPED`（对有主与无主令牌都拒绝），`doc.list_types` 不列出；`scripts/check-mcp-coverage.mjs` 的 ②b 节在映射缺类型、含不存在的权限点、含已删除类型、含空权限列表时报红。
+6. 无主令牌（独立服务主体）没有所有者可对照，对已映射类型不查权限点（口径同 ADR-0011 既有约定）。
+7. 工具本身保持 `perms: []`（`tools/list` 仍可见），类型级判定在 handler 内；`doc.transition` 不变（边权限 `assertEdgePermitted` 已按类型判定）。
+
+**映射表**（`explicit` = HTTP 侧无 `requirePerm`，本表新定）：
+
+| doc_type | 查看权限点 | 来源 |
+|---|---|---|
+| PRQ / PO / GR / PRT / PI / PST / PAY | purchase.order.view \| purchase.inbound \| purchase.return（`PO_READ_PERMS`，purchase-chain.js `readGate`） | http |
+| INS | quality.inspect.view | http（qc.js） |
+| QCI / DH / QCR | quality.qc.view | http（qc2.js） |
+| SO / DL / SR | sales.order.view | explicit |
+| QT | sales.quote.view | http |
+| SI | sales.invoice.view | http |
+| AR / RCP | finance.receipt.view | http（ar.js） |
+| RFD | finance.refund.view | http |
+| VOUCHER | finance.voucher.view | http |
+| CA | cost.view | http |
+| CK / TF / AS | inventory.stock.view | explicit |
+| MO / MR | produce.bom.view | http（manufacture.js `P_VIEW`） |
+| WW / WM / WR | produce.order.view | explicit |
+| OC | order.view | explicit |
+| OCS | order.statement.view | http |
+| DR / DS / RB | dms.dealer.view | explicit |
+| OM | oms.order.view | explicit |
+| PS | pos.cashier | explicit |
+| PSF | pos.shift | explicit |
+| RC | pos.dailyclose | explicit |
+| YQ / SH | pos.store.requisition | explicit |
+
+**验收**：`tests/mcp-doc-perms.test.mjs`（映射完整性、逐类型拒绝/放行、权限实时回读、无存在性探测、未映射拒绝、无主令牌）；矩阵"权限移除"状态下这三个工具为 `DENIED` 且错误码精确为 `TOKEN_OWNER_PERM_DENIED`，不再出现 `NO_PERM_POINT`。
+
+**Codex 审计（原文要点）**：映射初版有 4 处 P1——QCI/DH 用了 `quality.inspect.view`（HTTP 为 `quality.qc.view`）、PRQ/PI/PST/PAY 用了单据自己的 view 码（HTTP 为 `PO_READ_PERMS`）、MO/MR 用了 `produce.order.view`（HTTP 为 `produce.bom.view`）、未复刻 `requireInternal` 的外部主体限制。均已修正并补测试。
+
+**已知残余（二审 P1，未修，说明）**：POS（`RC`）与门店要货（`YQ` / `SH`）的 HTTP 路由除权限点外还有按角色名 / 门店绑定的闸（`pos.js` 门店绑定或 HQ 角色、`requisitions.js` `requireRole(...HQ)`）。MCP 这里只复刻"权限点 + 内部/外部主体 + 实体范围"，不复刻按角色名的闸：角色名闸是旧机制，权限点矩阵才是委托口径（"令牌 ≤ 所有者权限点"），且受限所有者的门店 / 组织范围仍由 `scopeEntityIds` 收窄。无门店绑定又 `data_scope=all` 的所有者拿到 `pos.dailyclose` 即可读日结单，属于权限点授予过宽的配置问题，后续由角色权限收口（X 系列）统一处理，而非在 MCP 层再造第二套角色名判据。
+
+**产品影响**：此前依赖 AI 令牌读取其角色无权查看的单据类型的集成会开始被拒绝；需要为该角色补授上表对应权限点。
