@@ -408,3 +408,85 @@ test('Y6 bound doc types: owner without binding is denied; with binding sees onl
     grant('warehouse', allBoundPerms)
   })
 })
+
+// AA1（ADR-0041）：doc.query / order.trace_document 的归属判定走 DOC_SCOPE_RESOLVERS（与 doc.get / HTTP 同一份），
+// 不再按 dealer_id 等列名推断；doc.query 把范围谓词下推进 SQL（limit 准确）；越界单据当作不存在。
+test('AA1 doc.query and order.trace_document use the resolver table with owner scope and binding', { timeout: 300000 }, async (t) => {
+  const f = await server(t)
+  const { db, api, mcp } = f
+  const admin = (await api('/api/auth/login', { body: { username: 'admin', password: '12345', industry: 'cosmetic' } })).body.data.token
+  const r = (await api('/api/auth/users', { token: admin, body: { username: 'aa1_owner', name: 'aa1', role: 'warehouse', password: secret(), data_scope: 'all' } })).body
+  assert.equal(r.success, true, JSON.stringify(r))
+  const ownerId = r.data.id
+  const token = createToken(db, { name: 'aa1', ownerUserId: ownerId, industry: 'cosmetic', scopes: 'read' }).token
+  const free = createToken(db, { name: 'aa1-free', industry: 'cosmetic', scopes: 'read' }).token
+  const call = (name, args, tk = token) => mcp('tools/call', { name, arguments: args }, tk)
+  const setPerms = (codes) => {
+    db.prepare("DELETE FROM role_permissions WHERE role_code='warehouse'").run()
+    const ins = db.prepare('INSERT INTO role_permissions (role_code, perm_code) VALUES (?,?)')
+    for (const c of codes) ins.run('warehouse', c)
+  }
+  setPerms(['sales.order.view', 'purchase.order.view', 'inventory.stock.view'])
+
+  const whA = db.prepare("SELECT id, org_id FROM warehouses WHERE status='active' AND org_id IS NOT NULL ORDER BY id LIMIT 1").get()
+  const whB = db.prepare("SELECT id, org_id FROM warehouses WHERE status='active' AND org_id IS NOT NULL AND org_id<>? ORDER BY id LIMIT 1").get(whA.org_id)
+  assert.ok(whA && whB, 'fixture: warehouses in two different orgs')
+  const dealer = Number(db.prepare("INSERT INTO dealers (code, name, org_id) VALUES ('AA1-D','AA1经销商',?)").run(whA.org_id).lastInsertRowid)
+  const insSO = db.prepare(`INSERT INTO sales_orders (doc_no, channel, dealer_id, order_date, status, total_qty, goods_amount, receivable_amount, warehouse_id)
+    VALUES (?,'dealer',?,date('now','localtime'),'draft',1,10,10,?)`)
+  const soOwn1 = Number(insSO.run('AA1-SO-OWN1', dealer, whA.id).lastInsertRowid)
+  const soOwn2 = Number(insSO.run('AA1-SO-OWN2', dealer, whA.id).lastInsertRowid)
+  // 经销商属本组织、出货仓属他组织：旧的 dealer_id 推断会放行
+  const soOther = Number(insSO.run('AA1-SO-OTHER', dealer, whB.id).lastInsertRowid)
+  // 再塞一批更新的越界单据，让「取 limit×3 再过滤」的旧实现取不满
+  for (let i = 0; i < 9; i++) insSO.run(`AA1-SO-NOISE${i}`, dealer, whB.id)
+  const insTxn = db.prepare(`INSERT INTO inventory_transactions (biz_date,doc_type,doc_no,warehouse_id,owner_org_id,sku_id,batch_no,direction,qty,unit_cost,amount,source)
+    VALUES (date('now','localtime'),'SAL_OUT',?,?,?,(SELECT id FROM product_skus ORDER BY id LIMIT 1),'','out',1,1,1,'test')`)
+  insTxn.run('AA1-SO-OTHER', whB.id, whA.org_id) // 流水货主在所有者组织，但单据属他组织
+  db.prepare('UPDATE users SET org_id=?, data_scope=? WHERE id=?').run(whA.org_id, 'org', ownerId)
+
+  const notFound = (res) => toolErr(res) === 'NOT_FOUND'
+
+  await t.test('doc.query SO returns exactly the resolver-visible rows and limit stays accurate', async () => {
+    const res = await call('doc.query', { doc_type: 'SO', limit: 2, keyword: 'AA1-SO' })
+    assert.ok(okTool(res), JSON.stringify(res.body).slice(0, 300))
+    const nos = toolText(res).rows.map((x) => x.doc_no).sort()
+    assert.deepEqual(nos, ['AA1-SO-OWN1', 'AA1-SO-OWN2'], 'limit 2 must be filled with in-scope rows even when newer rows are out of scope')
+    const all = toolText(await call('doc.query', { doc_type: 'SO', limit: 100, keyword: 'AA1-SO' })).rows.map((x) => x.doc_no)
+    assert.ok(!all.includes('AA1-SO-OTHER') && !all.some((n) => n.includes('NOISE')), 'out-of-scope SO must not appear')
+  })
+
+  await t.test('doc.query on a global-only type is empty for a restricted scope but not for the unowned all-scope token', async () => {
+    setPerms(['finance.voucher.view'])
+    const res = await call('doc.query', { doc_type: 'VOUCHER' })
+    assert.ok(okTool(res))
+    assert.equal(toolText(res).rows.length, 0, 'VOUCHER has no org ownership: invisible to a restricted scope')
+    const free2 = await call('doc.query', { doc_type: 'VOUCHER' }, free)
+    assert.ok(okTool(free2))
+    setPerms(['sales.order.view', 'purchase.order.view', 'inventory.stock.view'])
+  })
+
+  await t.test('order.trace_document: out-of-scope doc is NOT_FOUND (even with in-scope-owner ledger lines); in-scope doc is found', async () => {
+    const out = await call('order.trace_document', { doc_no: 'AA1-SO-OTHER' })
+    assert.ok(notFound(out), JSON.stringify(out.body).slice(0, 300))
+    const none = await call('order.trace_document', { doc_no: 'AA1-NO-SUCH' })
+    assert.ok(notFound(none))
+    assert.equal(JSON.stringify(toolText(out)), JSON.stringify(toolText(none)).replace('AA1-NO-SUCH', 'AA1-SO-OTHER'), 'same shape as nonexistent')
+    const own = await call('order.trace_document', { doc_no: 'AA1-SO-OWN1' })
+    assert.ok(okTool(own))
+    assert.equal(toolText(own).documents.length, 1)
+  })
+
+  await t.test('order.trace_document honours the owner per-type view permission (binding / permission rules of doc-perms)', async () => {
+    setPerms(['purchase.order.view'])
+    const res = await call('order.trace_document', { doc_no: 'AA1-SO-OWN1' })
+    assert.ok(notFound(res), 'owner without sales.order.view must not trace a sales order')
+    setPerms(['sales.order.view', 'purchase.order.view', 'inventory.stock.view'])
+  })
+
+  await t.test('unowned all-scope token still sees everything (unchanged)', async () => {
+    assert.ok(okTool(await call('order.trace_document', { doc_no: 'AA1-SO-OTHER' }, free)))
+    const q = await call('doc.query', { doc_type: 'SO', keyword: 'AA1-SO-OTHER' }, free)
+    assert.equal(toolText(q).rows.length, 1)
+  })
+})
