@@ -319,6 +319,15 @@ function assertPurchaseWriteScope(ctx, db, { orgs = [], warehouses = [], stores 
     }
     assertOrgInScope(ctx, row.org_id, `${label}的${what} #${id} 所属组织`)
   }
+  // 受限范围下"没有任何归属"不等于"不受限"：org / 仓库 / 门店一个都没给（令牌也没绑组织）时，
+  // 单据会落成无主行，而范围内的人永远看不到它 —— 与读侧 `AND 1=0` 同口径，fail-closed（W5 矩阵验收发现）。
+  const given = [...orgs, ...warehouses, ...stores].some((v) => v != null)
+  if (!given) {
+    const e = new Error(`${label}：受限数据范围下必须指明归属（org_id / 仓库 / 门店），不能创建无主单据`)
+    e.code = 'ORG_OUT_OF_SCOPE'; e.status = 403
+    e.detail = { label, visibleOrgCount: s.orgIds.length }
+    throw e
+  }
   for (const id of orgs) assertOrgInScope(ctx, id, `${label}的货主组织 #${id}`)
   for (const id of warehouses) look('warehouses', id, '仓库')
   for (const id of stores) look('stores', id, '门店')
@@ -365,9 +374,19 @@ function actorPermCtx(db, ctx) {
   return permContext(db, { uid: id })
 }
 
-/** 固定权限码闸门（用于没有"边"的动作，如转单 / 收货） */
+/**
+ * 令牌所有者**此刻**的权限上下文；无主令牌返回 null（它是独立服务主体，没有"所有者"可对照）。
+ * 为什么与执行人分开判：danger 工具的执行人是确认单上的签字人，签字人有权限不等于所有者有权限 ——
+ * 令牌能做的事 = 令牌范围 ∩ 所有者当前权限（ADR-0011），不能靠换一个有权限的人来点确认去绕开。
+ */
+function ownerPermCtx(db, ctx) {
+  return ctx?.ownerUserId != null ? permContext(db, { uid: ctx.ownerUserId }) : null
+}
+
+/** 固定权限码闸门（用于没有"边"的动作，如转单 / 收货）：执行人与令牌所有者**都**必须持有 */
 function assertMcpPerm(db, ctx, code, label) {
-  if (hasPerm(actorPermCtx(db, ctx), code)) return
+  const owner = ownerPermCtx(db, ctx)
+  if (hasPerm(actorPermCtx(db, ctx), code) && (!owner || hasPerm(owner, code))) return
   throw new DocFlowError(`当前身份没有「${label}」的操作权限（需 ${code}）`, {
     code: 'PERM_DENIED',
     httpStatus: 403,
@@ -391,6 +410,11 @@ function gatePurchaseEdge(ctx, db, { docType, id, action }) {
     db, docType, fromState: row[statusField], action,
     permCtx: actorPermCtx(db, ctx), entry: 'MCP'
   })
+  // 委托口径（ADR-0011）：确认人签字不能替所有者"补"权限 —— 所有者此刻也必须持有这条边的权限点
+  const owner = ownerPermCtx(db, ctx)
+  if (owner) {
+    assertEdgePermitted({ db, docType, fromState: row[statusField], action, permCtx: owner, entry: 'MCP' })
+  }
   return row
 }
 
@@ -460,6 +484,26 @@ function ownershipColumnsOf(db, table) {
   if (has('to_warehouse_id')) out.warehouses.push('to_warehouse_id')
   if (has('material_warehouse_id')) out.warehouses.push('material_warehouse_id')
   return out
+}
+
+/**
+ * 任意单据（doc_types 登记的类型）是否在本次调用的范围内；不受限时直接放行。
+ * 越界、单据不存在、类型未知都按"不存在"处理（不泄露存在性；受限范围下 fail-closed）。
+ */
+function assertDocInScope(ctx, db, docType, docId, { code = 'NOT_FOUND', label = '单据' } = {}) {
+  const e = scopeEntityIds(ctx, db)
+  if (!e) return null
+  const t = db.prepare("SELECT table_name FROM doc_types WHERE code=? AND status='active'").get(String(docType || ''))
+  let row = null
+  if (t) {
+    const table = safeTable(t.table_name)
+    row = db.prepare(`SELECT * FROM ${table} WHERE id=?`).get(Number(docId))
+    if (row && entityRowVisible(e, row, ownershipColumnsOf(db, table))) return row
+  }
+  const err = new Error(`${label}不存在或不在本令牌的数据范围内`)
+  err.code = code
+  err.status = 404
+  throw err
 }
 
 export const TOOLS = [
@@ -1292,6 +1336,12 @@ export const TOOLS = [
       // 原来这里只有一行 `UPDATE sales_orders SET status='cancelled'`：
       // 库存占用没释放（那批货永远卖不出去）、授信没还回去（额度只减不增），
       // 而单子看起来"已作废"，一切正常。
+      // 与 `sales.list_orders` 同一份范围映射：列表里看不到的订单，也不能作废（W5 矩阵验收发现此前缺这一道）
+      const so = db.prepare('SELECT * FROM sales_orders WHERE id=?').get(Number(args.order_id))
+      const soScope = scopeEntityIds(ctx, db)
+      if (so && !entityRowVisible(soScope, so, { stores: ['store_id'], dealers: ['dealer_id'], warehouses: ['warehouse_id'] })) {
+        const e = new Error('销售订单不存在'); e.code = 'ORDER_NOT_FOUND'; e.status = 404; throw e
+      }
       const actor = ctx?.confirmedBy?.id
         ? { id: ctx.confirmedBy.id, name: ctx.confirmedBy.name }
         : { id: null, name: `MCP:${ctx?.tokenName || ''}` }
@@ -1353,6 +1403,8 @@ export const TOOLS = [
         e.status = 404
         throw e
       }
+      // 审批实例挂在某张单据上：单据不在本次调用的数据范围内，就不能替它签字（W5 矩阵验收发现此前缺这一道）
+      assertDocInScope(ctx, db, inst.doc_type, inst.doc_id, { code: 'APPROVAL_NOT_FOUND', label: `审批实例 #${inst.id} 对应的单据` })
       const out = decideApproval(db, {
         instanceId: inst.id,
         decision: 'approve',
