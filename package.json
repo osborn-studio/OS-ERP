@@ -22,6 +22,8 @@
     "check:file-header": "node scripts/check-file-header.mjs",
     "docs:build": "node scripts/build-docs-wiki.mjs",
     "release": "node scripts/package-release.mjs",
+    "sbom": "node scripts/gen-sbom.mjs",
+    "notices": "node scripts/gen-third-party-notices.mjs",
     "test:runtime": "node --test tests/runtime-isolation.test.mjs",
     "bootstrap:admin": "node scripts/bootstrap-admin.mjs",
     "test:bootstrap": "node --test tests/admin-bootstrap.test.mjs",

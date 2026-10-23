@@ -43,6 +43,8 @@ const DECLARED = [
   'server/lib/outbound-url.js',
   'server/lib/secret-box.js',
   'scripts/check-mcp-coverage.mjs',
+  'scripts/gen-sbom.mjs',
+  'scripts/gen-third-party-notices.mjs',
   'scripts/check-file-header.mjs',
   'scripts/db-backup.mjs',
   'server/db/migrations/runner.js',
