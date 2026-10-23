@@ -28,7 +28,7 @@ function fixture() {
 test('fixture: license text included, missing LICENSE gets fallback marker, dev excluded, head preserved', () => {
   const d = fixture()
   try {
-    const { text, stats } = generate({ root: d })
+    const { text, stats } = generate({ root: d, roots: [] })
     assert.ok(text.startsWith('# head\nhand-written\n'))
     assert.equal(text.split(MARKER).length, 2)
     assert.ok(!text.includes('stale generated content'))
@@ -38,7 +38,7 @@ test('fixture: license text included, missing LICENSE gets fallback marker, dev 
     assert.ok(noLic.includes(FALLBACK_MARKER) && noLic.includes('`ISC`'))
     assert.ok(!text.includes('dev-only'))
     assert.deepEqual(stats.fallbacks, ['no-lic@2.0.0'])
-    assert.equal(generate({ root: d }).text, text)
+    assert.equal(generate({ root: d, roots: [] }).text, text)
   } finally { fs.rmSync(d, { recursive: true, force: true }) }
 })
 
@@ -49,7 +49,7 @@ test('fixture: unregistered OR expression fails instead of silently choosing', (
     const lock = JSON.parse(fs.readFileSync(lp, 'utf8'))
     lock.packages['node_modules/no-lic'].license = '(MIT OR GPL-3.0-only)'
     fs.writeFileSync(lp, JSON.stringify(lock))
-    assert.throws(() => generate({ root: d }), /SPDX_CHOICES/)
+    assert.throws(() => generate({ root: d, roots: [] }), /SPDX_CHOICES/)
   } finally { fs.rmSync(d, { recursive: true, force: true }) }
 })
 
@@ -62,7 +62,8 @@ test('repo: every runtime dependency is present, marker preserved once, head int
   const pkgs = runtimePackages(lock)
   assert.ok(pkgs.length > 50)
   for (const p of pkgs) assert.ok(a.text.includes(`### ${p.name}@${p.version}\n`), `missing ${p.name}@${p.version}`)
-  assert.ok(!a.text.includes('### vite@') && !a.text.includes('### typescript@'), 'dev packages must not be listed')
+  assert.ok(!a.text.includes('### vite@') && !a.text.includes('### typescript@'), 'build-only dev packages must not be listed')
+  for (const r of ['react', 'react-dom', 'lucide-react', 'react-router-dom', 'recharts']) assert.ok(a.text.includes(`### ${r}@`), `frontend bundled ${r} missing`)
   assert.equal(a.text.split(MARKER).length, 2)
   const head = before.slice(0, before.indexOf(MARKER))
   assert.ok(a.text.startsWith(head.replace(/\s+$/, '')))
@@ -97,4 +98,28 @@ test('sbom: generated runtime SBOM covers every lock runtime package, is determi
   assert.equal(bom.components.length, refs.size)
   assert.ok(!a.includes(ROOT) && !a.includes('serialNumber'))
   assert.equal(bom.metadata.component.name, 'os-erp')
+})
+
+test('every bare package imported from src/ is covered by the distributed set', () => {
+  const lock = JSON.parse(fs.readFileSync(path.join(ROOT, 'package-lock.json'), 'utf8'))
+  const names = new Set(runtimePackages(lock).map((p) => p.name))
+  const walk = (d, o = []) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const p = path.join(d, e.name); e.isDirectory() ? walk(p, o) : /\.(tsx?|jsx?)$/.test(e.name) && o.push(p) } return o }
+  const imported = new Set()
+  for (const f of walk(path.join(ROOT, 'src'))) for (const m of fs.readFileSync(f, 'utf8').matchAll(/from\s+'([^.'/][^']*)'/g)) {
+    const parts = m[1].split('/'); imported.add(m[1].startsWith('@') ? parts.slice(0, 2).join('/') : parts[0])
+  }
+  assert.ok(imported.size > 0)
+  for (const n of imported) assert.ok(names.has(n), `src imports ${n} but it is not in the distributed set`)
+})
+
+test('fixture: README license section is extracted and labelled when no license file exists', () => {
+  const d = fixture()
+  try {
+    const body = 'Permission is hereby granted, free of charge, to any person obtaining a copy of this software. '.repeat(3)
+    fs.writeFileSync(path.join(d, 'node_modules/no-lic/Readme.md'), `# x\n\n## License\n\n${body}\n\n## Other\n`)
+    const { text, stats } = generate({ root: d, roots: [] })
+    assert.deepEqual(stats.fallbacks, [])
+    assert.deepEqual(stats.readme, ['no-lic@2.0.0'])
+    assert.ok(text.includes('license section extracted from `Readme.md`') && text.includes('Permission is hereby granted'))
+  } finally { fs.rmSync(d, { recursive: true, force: true }) }
 })

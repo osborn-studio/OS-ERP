@@ -4,7 +4,7 @@
  * 文件标识：scripts/gen-sbom.mjs ｜ 生成运行时依赖的 CycloneDX SBOM 到 release/sbom.cdx.json（W9）
  * ============================================================================
  * 【做什么】调用 `npm sbom --sbom-format cyclonedx --package-lock-only`（只依据 package-lock.json，
- *   不依赖本机 node_modules），再按锁文件的运行时集合（entry 无 dev 标记）过滤 —— 与
+ *   不依赖本机 node_modules），再按发行物集合（非 dev 包 ∪ 前端打包闭包，见 scripts/lib/runtime-closure.mjs）过滤 —— 与
  *   `--omit dev` 的语义一致。【为什么不直接用 --omit dev】npm 10.9 的 `--omit dev` 会漏掉
  *   运行时包（本仓库实测漏 6 个：es-errors、function-bind、hasown、ms@2.1.3、object-assign、
  *   util-deprecate，而 `npm ls --omit dev` 与锁文件都显示它们是运行时依赖）。脚本因此以锁文件
@@ -20,6 +20,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { distributedPackages } from './lib/runtime-closure.mjs'
 
 const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0)
 
@@ -41,13 +42,7 @@ export function normalizeSbom(bom, pkgName) {
 
 /** 锁文件里的运行时包（非 dev）→ "name@version" 集合，与 npm sbom 的 bom-ref 形态一致。 */
 export function runtimeRefs(lock) {
-  const refs = new Set()
-  for (const [key, v] of Object.entries(lock.packages || {})) {
-    if (!key || v.dev || v.link) continue
-    const i = key.lastIndexOf('node_modules/')
-    if (i >= 0) refs.add(`${key.slice(i + 'node_modules/'.length)}@${v.version}`)
-  }
-  return refs
+  return new Set(distributedPackages(lock).map((p) => `${p.name}@${p.version}`))
 }
 
 export function filterToRuntime(bom, refs) {
