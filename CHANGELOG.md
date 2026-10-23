@@ -8,6 +8,10 @@
 
 <!-- generated -->
 
+## 第十批（进行中）：见 roadmap-v6
+
+- [ADR-0044：低库存口径统一与看板热点块（AA5）](docs/implementation/ADR-0044-dashboard-hot-blocks.md) — `metrics.js` / `ai.js` / `tools.js` 全部改调 `countBelowSafe` / `listBelowSafe`（`lib/stock.js`）。口径差异（有意为之，逐条列出）
+
 ## 第九批（进行中）：见 roadmap-v5
 
 - [ADR-0038：库存域与采购订单状态/收货路由按组织范围收口](docs/implementation/ADR-0038-inventory-scope.md) — 一处判据：`server/lib/stock.js` 的 `stockScopeSql(orgScope, alias, column='warehouse_id')`，键为 `warehouses.org_id`。不传或 `all` ⇒ `1=1`；`dealer` / `none` / 空集合 ⇒ `1=0`；仓库 `org_id` 为 NULL 对受限范围不可见。同文件还有 `warehouseInScope` / `assertWarehouseInScope`（写目…

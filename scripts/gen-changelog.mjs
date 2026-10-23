@@ -33,7 +33,8 @@ export const BATCHES = [
   { id: 6, title: '第六批：详情范围、路由守卫、备份加密、日志与付款台账', from: 20, to: 24 },
   { id: 7, title: '第七批：POS/销售/订货中心范围、运维健康与个人信息', from: 25, to: 30 },
   { id: 8, title: '第八批（进行中）：见 roadmap-v4', from: 31, to: 37 },
-  { id: 9, title: '第九批（进行中）：见 roadmap-v5', from: 38, to: 49 }
+  { id: 9, title: '第九批（进行中）：见 roadmap-v5', from: 38, to: 40 },
+  { id: 10, title: '第十批（进行中）：见 roadmap-v6', from: 41, to: 52 }
 ]
 const UNMAPPED_TITLE = '未归批（ADR 编号超出 BATCHES 区间，需要更新 scripts/gen-changelog.mjs）'
 
