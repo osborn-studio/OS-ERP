@@ -73,6 +73,8 @@ const DECLARED = [
   'tests/purchase-chain-scope.test.mjs',
   // 脚本数据目录卫生与单实例安装验收（ADR-0019）
   'scripts/check-data-paths.mjs',
+  'scripts/check-route-authz.mjs',
+  'tests/route-authz-guard.test.mjs',
   'scripts/db-inventory.mjs',
   'scripts/local-manage.mjs',
   'tests/data-path-guard.test.mjs',
