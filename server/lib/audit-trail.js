@@ -17,6 +17,7 @@
  */
 
 import { redactValue } from './redact.js'
+import { incCounter } from './process-counters.js'
 
 export const SECURITY_AUDIT_UNAVAILABLE = 'SECURITY_AUDIT_UNAVAILABLE'
 export const AUDIT_OUTSIDE_TX = 'AUDIT_OUTSIDE_TX'
@@ -65,14 +66,21 @@ export function insertAuditRow(db, row, options) {
  */
 export function auditStrictRow(db, row) {
   if (!db.inTransaction) {
+    incCounter('audit_strict_write_failures_total', 'outside_tx')
     throw fault(AUDIT_OUTSIDE_TX, `严格审计「${row?.action}」必须在事务内写入，否则审计失败不能回滚业务变更`, 500)
   }
   let changes = 0
   try {
     changes = insertAuditRow(db, row).changes
   } catch {
+    incCounter('audit_strict_write_failures_total', 'insert_error')
+    incCounter('security_audit_unavailable_total')
     throw fault(SECURITY_AUDIT_UNAVAILABLE, '安全审计暂不可用，变更未提交', 503)
   }
-  if (changes !== 1) throw fault(SECURITY_AUDIT_UNAVAILABLE, '安全审计暂不可用，变更未提交', 503)
+  if (changes !== 1) {
+    incCounter('audit_strict_write_failures_total', 'no_row')
+    incCounter('security_audit_unavailable_total')
+    throw fault(SECURITY_AUDIT_UNAVAILABLE, '安全审计暂不可用，变更未提交', 503)
+  }
   return changes
 }
