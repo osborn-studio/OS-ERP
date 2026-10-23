@@ -85,14 +85,33 @@ if (evidenceArg) {
         if (needSource && !String(v.source ?? '').trim()) bad(field, 'a passed result must name its source')
       }
     }
+    // 只有这两项可以是人工声明；其余必须由脚本亲自产生（origin=produced）。
+    const produced = (field, v) => { if (v && v.result === 'passed' && v.origin !== 'produced') bad(field, 'must have origin: produced') }
     result('focused_tests', ev.focused_tests, { needSource: true })
     result('regression', ev.regression, { needSource: true })
     if (!ev.guards || typeof ev.guards !== 'object' || !Object.keys(ev.guards).length) bad('guards', 'missing guard entries')
-    else for (const [name, g] of Object.entries(ev.guards)) result(`guards.${name}`, g, { needSource: false })
-    for (const f of ['verify_release', 'secret_scan']) { result(f, ev[f], { needSource: false }); if (ev[f]?.result !== 'passed') bad(f, 'must be passed') }
+    else {
+      const expected = ['tsc', 'check-file-header', 'check-bizcode-shape', 'check-data-paths', 'check-api-contract']
+      if (Object.keys(ev.guards).sort().join() !== [...expected].sort().join()) bad('guards', `must contain exactly: ${expected.join(', ')}`)
+      for (const [name, g] of Object.entries(ev.guards)) { result(`guards.${name}`, g, { needSource: false }); produced(`guards.${name}`, g) }
+    }
+    for (const f of ['verify_release', 'secret_scan']) { result(f, ev[f], { needSource: false }); if (ev[f]?.result !== 'passed') bad(f, 'must be passed'); produced(f, ev[f]) }
     result('acceptance', ev.acceptance, { needSource: false })
+    produced('acceptance', ev.acceptance)
     if (ev.acceptance?.result !== 'passed' || ev.acceptance?.mode !== 'production') bad('acceptance', 'must be a passed production-mode run')
     if (!ev.artifact || !/^[0-9a-f]{64}$/.test(String(ev.artifact.sha256 ?? '')) || !/^RC-.+\.zip$/.test(String(ev.artifact.name ?? ''))) bad('artifact', 'needs an RC-*.zip name and sha256')
+    else {
+      if (ev.artifact.files !== Object.keys(manifest.files).length) bad('artifact', `files ${ev.artifact.files} != MANIFEST file count ${Object.keys(manifest.files).length}`)
+      const zipArg = process.argv.find(a => a.startsWith('--artifact='))?.slice(11)
+      if (zipArg) { // 把证据绑定到真实的 zip：文件名、哈希、字节数都要一致
+        try {
+          const bytes = fs.readFileSync(path.resolve(zipArg))
+          if (path.basename(zipArg) !== ev.artifact.name) bad('artifact', `name ${ev.artifact.name} != ${path.basename(zipArg)}`)
+          if (createHash('sha256').update(bytes).digest('hex') !== ev.artifact.sha256) bad('artifact', 'sha256 does not match the archive')
+          if (bytes.length !== ev.artifact.bytes) bad('artifact', 'bytes does not match the archive')
+        } catch (error) { bad('artifact', `cannot read ${zipArg} (${error.message})`) }
+      }
+    }
     const files = ev.synthetic_drill?.files
     if (!Array.isArray(files) || !files.length) bad('synthetic_drill', 'must reference capacity evidence files')
     else for (const f of files) {

@@ -71,6 +71,32 @@ test('candidate refuses a dirty working tree (modified, staged or untracked) bef
   }
 })
 
+test('candidate refuses git-ignored files that the packager would copy, and a secret hidden in a binary file', (t) => {
+  const src = minimalSource(t)
+  const out = path.join(tempDir(t, 'os-erp-rc-out-'), 'release')
+  put(src, 'public/artifacts/customer-export.csv', 'phone\n13800000000\n')
+  writeFileSync(path.join(src, '.gitignore'), readFileSync(path.join(src, '.gitignore'), 'utf8').replace('release/', 'release/\npublic/artifacts/'))
+  git(src, 'add', '-A'); git(src, 'commit', '-q', '-m', 'ignore artifacts')
+  const r = candidate(src, out)
+  assert.notEqual(r.status, 0)
+  assert.match(r.stderr, /git-ignored files/)
+  assert.match(r.stderr, /customer-export\.csv/)
+  assert.ok(!existsSync(out) || readdirSync(out).length === 0)
+})
+
+test('secret scan inspects binary and large files too', async (t) => {
+  const { scanSecrets } = await import(pathToFileURL(path.join(ROOT, 'scripts/release-candidate.mjs')).href)
+  const dir = tempDir(t, 'os-erp-rc-scan-')
+  const token = 'sk' + '-' + 'A'.repeat(40)
+  put(dir, 'ok.txt', 'nothing\n')
+  assert.equal(scanSecrets(dir).result, 'passed')
+  writeFileSync(path.join(dir, 'bin.dat'), Buffer.concat([Buffer.from([0, 1, 2]), Buffer.from(token)]))
+  assert.match(scanSecrets(dir).findings.join(), /bin\.dat: API secret key/)
+  rmSync(path.join(dir, 'bin.dat'))
+  writeFileSync(path.join(dir, 'big.txt'), Buffer.concat([Buffer.alloc(9 * 1024 * 1024, 32), Buffer.from(token)]))
+  assert.match(scanSecrets(dir).findings.join(), /big\.txt: API secret key/)
+})
+
 test('candidate refuses malformed flags rather than guessing', (t) => {
   const src = minimalSource(t)
   const out = tempDir(t, 'os-erp-rc-out-')
@@ -154,6 +180,14 @@ test('candidate builds RC-<version>-<sha>.zip with sha256, EVIDENCE.json and not
   const verify = (file = evFile) => spawnSync(process.execPath, ['scripts/verify-release.mjs', `--evidence=${file}`], { cwd: pkg, env: { PATH }, encoding: 'utf8' })
   assert.equal(verify().status, 0, verify().stderr)
   const mutate = fn => { const e = JSON.parse(JSON.stringify(ev)); fn(e); const f = path.join(dir, 'tampered.json'); writeFileSync(f, JSON.stringify(e)); return verify(f) }
+  // 证据绑定真实 zip：hash/名字不符即红
+  const bound = spawnSync(process.execPath, ['scripts/verify-release.mjs', `--evidence=${evFile}`, `--artifact=${zip}`], { cwd: pkg, env: { PATH }, encoding: 'utf8' })
+  assert.equal(bound.status, 0, bound.stderr)
+  const other = path.join(dir, `RC-other.zip`)
+  writeFileSync(other, 'not the archive')
+  const unbound = spawnSync(process.execPath, ['scripts/verify-release.mjs', `--evidence=${evFile}`, `--artifact=${other}`], { cwd: pkg, env: { PATH }, encoding: 'utf8' })
+  assert.notEqual(unbound.status, 0)
+  assert.match(unbound.stderr, /artifact/)
   for (const [label, fn, re] of [
     ['commit mismatch', e => { e.commit = 'a'.repeat(40) }, /commit/],
     ['version mismatch', e => { e.version = '9.9.9' }, /version/],
@@ -162,6 +196,11 @@ test('candidate builds RC-<version>-<sha>.zip with sha256, EVIDENCE.json and not
     ['guard passed but origin missing', e => { e.guards = { x: { result: 'passed' } } }, /guards/],
     ['bad ci id', e => { e.ci_run_id = 'run-1' }, /ci_run_id/],
     ['drill hash wrong', e => { e.synthetic_drill.files[0].sha256 = '0'.repeat(64) }, /synthetic_drill/],
+    ['acceptance attested not produced', e => { e.acceptance.origin = 'operator-attested' }, /acceptance/],
+    ['secret_scan attested', e => { e.secret_scan.origin = 'operator-attested' }, /secret_scan/],
+    ['invented guard', e => { e.guards = { invented: { result: 'passed', origin: 'produced' } } }, /guards/],
+    ['guard attested', e => { e.guards['tsc'] = { result: 'passed', origin: 'operator-attested' } }, /guards\.tsc/],
+    ['file count wrong', e => { e.artifact.files += 1 }, /artifact/],
     ['acceptance not passed', e => { e.acceptance.result = 'failed' }, /acceptance/],
     ['missing field', e => { delete e.built_at }, /built_at/]
   ]) {

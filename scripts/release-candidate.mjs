@@ -29,7 +29,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const RESULTS = new Set(['passed', 'failed'])
 const KNOWN = new Set(['output', 'skip-build', 'skip-docs', 'reuse-node-modules', 'run-guards', 'ci-run',
   'focused-result', 'focused-source', 'regression-result', 'regression-source'])
-const GUARDS = [
+export const GUARDS = [
   ['tsc', ['node_modules/typescript/bin/tsc', '--noEmit']],
   ['check-file-header', ['scripts/check-file-header.mjs']],
   ['check-bizcode-shape', ['scripts/check-bizcode-shape.mjs']],
@@ -87,7 +87,11 @@ function git(...argv) {
   if (r.status !== 0) throw new Error(`git ${argv.join(' ')} failed: ${r.stderr.trim()}`)
   return r.stdout.trim()
 }
+// git status 看不到被 .gitignore 忽略的文件，而打包器按目录整体复制；所以另查忽略文件：只允许依赖目录与构建/输出目录。
+const IGNORED_OK = /^(?:node_modules|dist|release)(?:\/|$)/
 function assertClean(when) {
+  const ignored = git('ls-files', '--others', '--ignored', '--exclude-standard').split('\n').filter(f => f && !IGNORED_OK.test(f))
+  if (ignored.length) throw new Error(`Working tree is dirty ${when}: git-ignored files would be copied into the package (the packager copies whole directories):\n${ignored.slice(0, 10).join('\n')}`)
   const status = git('status', '--porcelain', '--untracked-files=all')
   if (status) throw new Error(`Working tree is dirty ${when}; commit or stash first (a candidate must be built from a clean, committed tree):\n${status.split('\n').slice(0, 10).join('\n')}`)
 }
@@ -111,7 +115,7 @@ const SECRET_PATTERNS = [
   ['API secret key', new RegExp('\\bsk-' + '[A-Za-z0-9_-]{32,}')]
 ]
 const SECRET_NAMES = /(^|\/)\.env(\.|$)|\.(?:pem|p12|pfx|key)$|(^|\/)id_(?:rsa|ed25519)$|\.(?:db|db3|sqlite3?)(?:-|\.|$)/i
-function scanSecrets(dir) {
+export function scanSecrets(dir) {
   const findings = []
   let scanned = 0
   const walk = (d, prefix = '') => {
@@ -123,9 +127,9 @@ function scanSecrets(dir) {
       if (!item.isFile()) continue
       scanned++
       if (SECRET_NAMES.test(rel)) findings.push(`${rel}: forbidden file name`)
-      const bytes = fs.readFileSync(full)
-      if (bytes.length > 8 * 1024 * 1024 || bytes.includes(0)) continue
-      const text = bytes.toString('utf8')
+      const stat = fs.statSync(full)
+      if (stat.size > 64 * 1024 * 1024) { findings.push(`${rel}: larger than 64 MiB, cannot be scanned`); continue }
+      const text = fs.readFileSync(full).toString('latin1') // 模式都是 ASCII；二进制与大文件同样扫描，不跳过
       for (const [label, re] of SECRET_PATTERNS) if (re.test(text)) findings.push(`${rel}: ${label}`)
     }
   }
@@ -213,7 +217,7 @@ function main() {
     fs.mkdirSync(evidenceDir, { recursive: true })
     fs.writeFileSync(path.join(evidenceDir, 'EVIDENCE.json'), JSON.stringify(evidence, null, 2) + '\n')
     fs.writeFileSync(path.join(evidenceDir, 'RELEASE-NOTES.md'), extractNotes(fs.readFileSync(path.join(ROOT, 'CHANGELOG.md'), 'utf8'), version, { commit, builtAt }).text)
-    runNode(pkg, ['scripts/verify-release.mjs', `--evidence=${path.join(evidenceDir, 'EVIDENCE.json')}`], 'verify-release --evidence')
+    runNode(pkg, ['scripts/verify-release.mjs', `--evidence=${path.join(evidenceDir, 'EVIDENCE.json')}`, `--artifact=${zipFile}`], 'verify-release --evidence')
     console.log(JSON.stringify({ candidate: zipFile, sha256: zipHash, evidence: path.join(evidenceDir, 'EVIDENCE.json'), notes: path.join(evidenceDir, 'RELEASE-NOTES.md'), not_a_release: true }, null, 2))
   } catch (error) {
     cleanupOutputs()
