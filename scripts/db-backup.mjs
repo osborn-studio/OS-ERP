@@ -408,16 +408,19 @@ if (failed && process.env.GML_ALERT_CHANNEL) {
     for (const c of codes) {
       const src = dbPathFor(c)
       if (!fs.existsSync(src)) continue
-      const adb = new Database(src, { timeout: 5000 })
+      let adb
       try {
+        adb = new Database(src, { timeout: 5000 })
         const channel = getChannel(adb, code)
         if (channel) return { db: adb, channel, close: () => adb.close() }
-      } catch { /* 该库没有 notify_channels 表：试下一个库 */ }
-      adb.close()
+      } catch (e) {
+        console.error(`ALERT_LOOKUP_SKIPPED: ${c} ${e.code || 'ERROR'}`) // 该库打不开/没有 notify_channels 表：记一笔，试下一个库
+      }
+      try { adb?.close() } catch { /* ignore */ }
     }
     return null
   }
-  const alert = await sendBackupAlert({ channelCode: process.env.GML_ALERT_CHANNEL, results, dataDir: DATA_DIR, lookup })
+  const alert = await sendBackupAlert({ channelCode: process.env.GML_ALERT_CHANNEL, results, dataDir: DATA_DIR, failed, lookup })
   if (alert.status === 'sent') console.error('ALERT_SENT: 备份失败告警已发送')
   else console.error(`ALERT_NOT_SENT: ${alert.status}${alert.detail ? ` ${alert.detail}` : ''}`)
 }

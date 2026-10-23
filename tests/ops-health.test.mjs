@@ -129,7 +129,15 @@ test('sendBackupAlert: disabled, silent on success, missing channel, sent, faile
   assert.ok(calls.includes('close'))
 
   const bad = await sendBackupAlert({ ...base, channelCode: 'ops', sender: async () => ({ status: 'fail', error: 'OUTBOUND_ADDRESS_BLOCKED: x' }) })
-  assert.equal(bad.status, 'failed'); assert.match(bad.detail, /OUTBOUND_ADDRESS_BLOCKED/)
+  assert.deepEqual(bad, { status: 'failed', detail: 'OUTBOUND_ADDRESS_BLOCKED' })
+  // 网关回显凭据的响应体不得原样落到 stderr
+  const reflected = await sendBackupAlert({ ...base, channelCode: 'ops', sender: async () => ({ status: 'fail', error: 'HTTP 400 token=SYNTHETIC_SECRET' }) })
+  assert.deepEqual(reflected, { status: 'failed', detail: 'HTTP 400' })
+  assert.ok(!JSON.stringify(await sendBackupAlert({ ...base, channelCode: 'ops', sender: async () => ({ status: 'fail', error: 'weird SYNTHETIC_SECRET' }) })).includes('SYNTHETIC'))
+  // 只有报告写入失败（没有失败的库行）也要告警
+  const reportOnly = await sendBackupAlert({ ...base, channelCode: 'ops', results: [{ code: 'food', status: 'ok' }], failed: 1 })
+  assert.equal(reportOnly.status, 'sent')
+  assert.match(JSON.stringify(calls.at(-1).digest), /BACKUP_REPORT_FAILED/)
   const boom = await sendBackupAlert({ ...base, channelCode: 'ops', sender: async () => { throw Object.assign(new Error('x'), { code: 'EBOOM' }) } })
   assert.deepEqual(boom, { status: 'error', detail: 'EBOOM' })
 })
