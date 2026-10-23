@@ -17,12 +17,23 @@ if (!manifest.files?.['THIRD_PARTY_NOTICES.md']) fail('THIRD_PARTY_NOTICES.md is
 for (const required of ['CHANGELOG.md', 'release/sbom.cdx.json']) {
   if (!manifest.files?.[required]) fail(`${required} is not listed in MANIFEST.json`)
 }
-// SBOM 不只是“在清单里”：内容必须能解析为 CycloneDX 且含组件（哈希另在下面逐文件校验）。
+// SBOM 不只是“在清单里”：内容必须是结构合理的 CycloneDX（格式标记、1.x 版本号、非空组件且各有 name/version/唯一 bom-ref）。
+// 这是结构检查，不是完整 JSON Schema 校验；哈希另在下面逐文件校验。
 try {
   const sbom = JSON.parse(fs.readFileSync(path.join(root, 'release/sbom.cdx.json'), 'utf8'))
   if (sbom.bomFormat !== 'CycloneDX') fail('release/sbom.cdx.json: bomFormat is not CycloneDX')
-  else if (typeof sbom.specVersion !== 'string') fail('release/sbom.cdx.json: CycloneDX specVersion missing')
+  else if (!/^1\.\d+$/.test(String(sbom.specVersion))) fail('release/sbom.cdx.json: CycloneDX specVersion missing or not 1.x')
   else if (!Array.isArray(sbom.components) || !sbom.components.length) fail('release/sbom.cdx.json: no components')
+  else {
+    const refs = new Set()
+    for (const c of sbom.components) {
+      const ok = c && typeof c === 'object' && typeof c.name === 'string' && c.name && typeof c.version === 'string' && c.version
+      if (!ok) { fail('release/sbom.cdx.json: component without name/version'); break }
+      const ref = c['bom-ref']
+      if (ref !== undefined && (typeof ref !== 'string' || refs.has(ref))) { fail(`release/sbom.cdx.json: invalid or duplicate bom-ref ${String(ref)}`); break }
+      refs.add(ref)
+    }
+  }
 } catch (error) { fail(`release/sbom.cdx.json: cannot read SBOM (${error.message})`) }
 try {
   if (!fs.readFileSync(path.join(root, 'CHANGELOG.md'), 'utf8').includes('<!-- generated -->')) fail('CHANGELOG.md: generated marker missing')

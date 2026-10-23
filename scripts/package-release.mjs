@@ -41,6 +41,7 @@ for (const file of ['package.json', 'package-lock.json', 'index.html', 'vite.con
 fs.mkdirSync(path.join(dest, 'release'), { recursive: true })
 run(['scripts/gen-sbom.mjs', '--out', path.join(dest, 'release/sbom.cdx.json')])
 copy('docs/本地交付', 'docs/本地交付')
+copy('docs/implementation', 'docs/implementation') // CHANGELOG.md 链接的 ADR、整改跟踪与开发进度；接收方也能重跑 gen-changelog --check
 copy('public/docs', '手册')
 const write = (file, content, mode = 0o644) => fs.writeFileSync(path.join(dest, file), content, { mode })
 for (const [file, command] of [['install.command', 'setup'], ['start.command', 'start'], ['backup.command', 'backup']]) {
@@ -83,7 +84,7 @@ node scripts/verify-release.mjs 校验源码与构建产物（MANIFEST.json 记�
 
 ## 权属
 
-许可证见 LICENSE，第三方声明见 THIRD_PARTY_NOTICES.md，运行时依赖清单（CycloneDX SBOM）见 release/sbom.cdx.json，变更记录见 CHANGELOG.md（由 ADR 生成，不代表验收结论）。
+许可证见 LICENSE，第三方声明见 THIRD_PARTY_NOTICES.md，运行时依赖清单（CycloneDX SBOM）见 release/sbom.cdx.json，变更记录见 CHANGELOG.md（由 docs/implementation/ADR-*.md 生成，不代表验收结论；验收状态见 docs/implementation/backlog.md）。
 `
 write('00_先读我.md', guide)
 write('README.md', guide)
