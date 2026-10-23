@@ -60,3 +60,10 @@
 4. **持续跟踪而非自动豁免。** 待上游发布修复版本，核实实际修复提交、支持范围与锁文件结果，再独立更新。当前不关闭、不 dismiss、不虚称安全告警清零。
 
 F14 后续关闭还包含运行镜像最小化、非 root、镜像摘要固定、供应链清单等原有要求；本条告警记录不替代这些工作，也不证明系统具备生产部署能力。
+
+## 2026-10-23 依赖刷新（Z11）复核
+
+- **braces 链仍未修复。** npm 官方注册表 `braces` 最新版仍为 3.0.3（无首个修复版本）；`tailwindcss` 3.x 最新为 3.4.19（即当前锁定版本），其 `chokidar 3.6.0` 与 `micromatch 4.0.8` 仍依赖 `braces ^3.0.3`。无 Tailwind 3.4.x 补丁或可用的 `overrides` 目标版本；不为该包添加 override（没有可指向的已修复版本，强行覆盖到不存在的版本或到 braces 2.x/4.x 属于遮蔽而非修复，且 2.x 有更多旧公告）。升到 Tailwind 4 属大版本迁移，不在本次范围。因此维持"开发期传递依赖、告警 open"的状态，`tests/dockerfile-policy.test.mjs` 仍断言该链为 devDependency-only 且不进入运行时安装。
+- **补丁/次版本刷新**（`npm update`，不升大版本；`package.json` 的范围与精确固定均未放宽；锁文件 resolved 仍为既有 npmmirror 地址）：生产：`body-parser` 1.20.8→1.20.9、`on-finished` 2.4.1→2.4.2、`qs` 6.16.0→6.16.1、`node-abi` 3.98.0→3.100.0；开发：`rollup` 及全部平台包 4.64.6→4.65.0、`postcss` 8.5.30→8.5.31、`browserslist` 4.29.3→4.29.4、`caniuse-lite` 1.0.30001816→1.0.30001819、`electron-to-chromium` 1.5.455→1.5.463、`baseline-browser-mapping` 2.11.28→2.11.31、`node-releases` 2.0.58→2.0.60、`fast-equals` 5.4.4→5.4.5、`lilconfig` 3.1.3→3.1.4。精确固定 `playwright` 1.64.0→1.64.1（同一次版本内补丁，仅开发/浏览器测试用，随 `playwright-core` 同升）；`vite 6.4.5`、`react-router-dom 7.18.4`、`fflate 0.8.3`、`postcss-selector-parser 7.1.7` override 保持不动（vite/fflate/react-router-dom 在其次版本内无更新）。
+- 其余可用的更新均为大版本（express 5、react 19、tailwind 4、vite 8、zod 4、recharts 3 等），按约束未升。
+- `npm audit --omit=dev`：0 个漏洞（官方注册表）。`THIRD_PARTY_NOTICES.md` 与 SBOM（170 组件）已重新生成，`--check` 通过。此记录不关闭告警、不证明无风险。
