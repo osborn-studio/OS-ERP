@@ -46,16 +46,19 @@ export default function Notify() {
   const [tab, setTab] = useState('channels')
   const [edit, setEdit] = useState<any>(null)
 
-  const { data: meta, errorStatus: ms, errorCode: mc } = useFetch<any>('/notify/meta', undefined, [])
+  const { data: meta, reload: reloadMeta, errorStatus: ms, errorCode: mc } = useFetch<any>('/notify/meta', undefined, [])
   const { data: ov, reload: reloadOv, errorStatus: os, errorCode: oc } = useFetch<any>('/notify/overview', undefined, [])
   const { data: chData, loading: chLoading, reload: reloadCh, errorStatus: cs, errorCode: cc } = useFetch<any>('/notify/channels', undefined, [])
-  const failure = firstFailure({ errorStatus: ms, errorCode: mc }, { errorStatus: os, errorCode: oc }, { errorStatus: cs, errorCode: cc })
+  // 整页阻断只看 meta / overview（view 权限）；channels 需要 manage 权限，其 403 只在页内提示，不挡住有权查看的其它页签
+  const pageFailure = firstFailure({ errorStatus: ms, errorCode: mc }, { errorStatus: os, errorCode: oc })
+  const failure = firstFailure(pageFailure, { errorStatus: cs, errorCode: cc })
 
   const channels: any[] = chData?.list || []
   const providerLabel = (code: string) =>
     (meta?.providers || []).find((p: any) => p.code === code)?.label || code
 
   const reloadAll = () => {
+    reloadMeta()
     reloadOv()
     reloadCh()
   }
@@ -71,7 +74,7 @@ export default function Notify() {
     }
   }
 
-  if (isBlocked(failure)) return <ScopeBlocked failure={failure} onRetry={reloadAll} />
+  if (isBlocked(pageFailure)) return <ScopeBlocked failure={pageFailure} onRetry={reloadAll} />
 
   return (
     <div>

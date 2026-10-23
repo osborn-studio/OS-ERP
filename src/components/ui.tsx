@@ -326,10 +326,12 @@ export function useFetch<T = any>(path: string | null, params?: Record<string, a
   const reload = useCallback(async () => {
     if (!path) return
     setLoading(true)
-    setError(null); setErrorStatus(null); setErrorCode(null)
+    setError(null)
     try {
       const res = await api.get(path, params)
       setData(res.data)
+      // 只有成功响应才解除 403/功能关闭的阻断态，重试期间不提前回到"空数据"页面
+      setErrorStatus(null); setErrorCode(null)
     } catch (e: any) {
       setError(e.message)
       const status = e instanceof ApiError ? e.status : null
