@@ -33,7 +33,7 @@ import { localNow } from '../lib/dates.js'
 import { TOOLS, TOOL_MAP, toolToMcp } from './tools.js'
 import { validateToolArgs } from './validate.js'
 import { extractToken, verifyToken, tokenScopes, tokenAllow, tokenDeny, touchToken, SCOPE_LABEL } from './tokens.js'
-import { resolveDelegation, effectiveScope, ownerToolDenied, scopeCovers, scopeSnapshot } from './delegation.js'
+import { resolveDelegation, effectiveScope, ownerToolDenied, scopeCovers, scopeSnapshot, permSnapshot, permsCovered } from './delegation.js'
 import { requireAuth, requirePerm } from '../middleware/auth.js'
 import * as engine from '../lib/stock.js'
 import { versionInfo } from '../version.js'
@@ -241,8 +241,8 @@ function parseCachedResult(json) {
   } catch {
     v = {}
   }
-  if (v && typeof v === 'object' && v.__replay === 1 && 'data' in v) return { scope: v.scope ?? null, data: v.data }
-  return { scope: null, data: v }
+  if (v && typeof v === 'object' && v.__replay === 1 && 'data' in v) return { scope: v.scope ?? null, perms: v.perms ?? null, data: v.data }
+  return { scope: null, perms: null, data: v }
 }
 
 function cacheDeniedFields(db, row, tool, args) {
@@ -485,9 +485,16 @@ r.post('/', (req, res) => {
         // "首次执行时记下的有效范围"对照"当前有效范围"（不重跑 handler，因此不可能重复过账）。
         const stored = parseCachedResult(cached.result_json)
         if (!scopeCovers(ctx.scope, stored.scope)) {
-          const msg = '令牌所有者当前的数据范围已不覆盖该幂等键首次执行时的范围，缓存结果不再回放；请换用新的幂等键重新调用'
+          // 注意：首次调用已经提交。这里**不**建议"换新幂等键重试"——那会把已提交的写再执行一遍。
+          const msg = '令牌所有者当前的数据范围已不覆盖该幂等键首次执行时的范围，缓存结果不再回放。该键对应的操作此前已提交，请先用查询工具核对结果，不要重复提交'
           logCall(db, { token: row, tool, ok: false, errorCode: 'ORG_OUT_OF_SCOPE', errorMessage: msg, args, ip, idemKey, summary: `${CACHE_DENIED}：数据范围缩小，幂等缓存未被回放` })
           return toolError(res, id, 'ORG_OUT_OF_SCOPE', msg, { level: 'write' })
+        }
+        // 无声明权限点的工具（权限在 handler 内按边判）：所有者权限集合不得少于首次执行时
+        if (!(tool.perms || []).length && !permsCovered(delegation, stored.perms)) {
+          const msg = '令牌所有者当前的权限已少于该幂等键首次执行时，缓存结果不再回放。该键对应的操作此前已提交，请先用查询工具核对结果，不要重复提交'
+          logCall(db, { token: row, tool, ok: false, errorCode: 'TOKEN_OWNER_PERM_DENIED', errorMessage: msg, args, ip, idemKey, summary: `${CACHE_DENIED}：所有者权限减少，幂等缓存未被回放` })
+          return toolError(res, id, 'TOKEN_OWNER_PERM_DENIED', msg, { level: 'write' })
         }
         const data = stored.data
         logCall(db, { token: row, tool, ok: true, args, summary: '幂等命中，返回首次结果', durationMs: Date.now() - started, ip, idemKey })
@@ -603,7 +610,7 @@ r.post('/', (req, res) => {
       if (idemKey) {
         db.prepare(
           'INSERT OR IGNORE INTO mcp_idempotency (idempotency_key, tool_name, token_id, result_json, args_hash) VALUES (?,?,?,?,?)'
-        ).run(String(idemKey), tool.name, row.id, JSON.stringify({ __replay: 1, scope: scopeSnapshot(ctx.scope), data: out.data }), argsHash)
+        ).run(String(idemKey), tool.name, row.id, JSON.stringify({ __replay: 1, scope: scopeSnapshot(ctx.scope), perms: permSnapshot(delegation), data: out.data }), argsHash)
       }
       touchToken(db, row.id)
       // F13：写型 / 高危工具的审计与业务过账**同生共死** —— 审计写不进去，上面的过账、幂等缓存、

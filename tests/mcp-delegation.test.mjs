@@ -319,6 +319,39 @@ test('MCP tokens are delegations of their human owner', { timeout: 300000 }, asy
     assert.equal(txnCount(), rows)
   })
 
+  await t.test('Z8: perm-less write tool (doc.transition, edge permission checked inside the handler) is not replayed after the owner loses the edge permission', async () => {
+    const tz = issue('z8-edge')
+    const edges = db.prepare("SELECT a.doc_type, a.action, a.from_state, a.perm_code, d.table_name, d.status_field FROM doc_actions a JOIN doc_types d ON d.code=a.doc_type WHERE a.is_danger=0 AND a.perm_code IS NOT NULL AND a.perm_code<>''").all()
+    let hit = null
+    for (const e of edges) {
+      let row
+      try { row = db.prepare(`SELECT id FROM ${e.table_name} WHERE ${e.status_field}=? ORDER BY id LIMIT 1`).get(e.from_state) } catch { continue }
+      if (!row) continue
+      const held = !!db.prepare("SELECT 1 AS x FROM role_permissions WHERE role_code='warehouse' AND perm_code=?").get(e.perm_code)
+      db.prepare("INSERT OR IGNORE INTO role_permissions (role_code, perm_code) VALUES ('warehouse',?)").run(e.perm_code)
+      const key = `z8-edge-${Date.now()}-${++keySeq}`
+      const args = { doc_type: e.doc_type, id: row.id, action: e.action, idempotency_key: key }
+      const r = await mcp('tools/call', { name: 'doc.transition', arguments: args }, tz)
+      if (okTool(r)) { hit = { e, args, key, held }; break }
+      if (!held) db.prepare("DELETE FROM role_permissions WHERE role_code='warehouse' AND perm_code=?").run(e.perm_code)
+    }
+    assert.ok(hit, 'demo data must provide one doc edge the warehouse owner can drive through doc.transition')
+    const call = () => mcp('tools/call', { name: 'doc.transition', arguments: hit.args }, tz)
+    const had = db.prepare("SELECT 1 AS x FROM role_permissions WHERE role_code='warehouse' AND perm_code=?").get(hit.e.perm_code)
+    assert.ok(had)
+    db.prepare("DELETE FROM role_permissions WHERE role_code='warehouse' AND perm_code=?").run(hit.e.perm_code)
+    try {
+      const denied = await call()
+      assert.equal(toolErr(denied), 'TOKEN_OWNER_PERM_DENIED', JSON.stringify(denied.body).slice(0, 300))
+      assert.equal(denied.body.result._idempotent_replay, undefined)
+      assert.ok(cacheDenied(hit.key))
+    } finally {
+      db.prepare("INSERT OR IGNORE INTO role_permissions (role_code, perm_code) VALUES ('warehouse',?)").run(hit.e.perm_code)
+    }
+    assert.equal((await call()).body.result._idempotent_replay, true)
+    if (!hit.held) db.prepare("DELETE FROM role_permissions WHERE role_code='warehouse' AND perm_code=?").run(hit.e.perm_code)
+  })
+
   await t.test('Z8: a token that is not the original caller still gets IDEMPOTENCY_CONFLICT, never the cache', async () => {
     const a = issue('z8-a')
     const b = issue('z8-b')

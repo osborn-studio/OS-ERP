@@ -129,3 +129,25 @@ export function scopeSnapshot(scope) {
   if (!scope || scope.scope === 'all') return { scope: 'all', orgIds: null }
   return { scope: scope.scope, orgIds: Array.isArray(scope.orgIds) ? scope.orgIds.map(Number) : [] }
 }
+
+/**
+ * Z8（Codex 审计 P1）：声明了 `perms` 的工具，所有者权限点由 `ownerToolDenied` 在命中前精确重判；
+ * 但 `perms: []` 的工具（如 `doc.transition`，权限点在 handler 内按"边"判）命中缓存时不会进 handler。
+ * 对这类工具，缓存里同时记下首次执行时所有者的权限集合，重放时要求当前权限集合**不少于**它。
+ * 无主令牌没有所有者可对照，恒放行。
+ */
+export function permSnapshot(delegation) {
+  if (!delegation || delegation.ownerless) return null
+  const c = delegation.permCtx
+  if (c?.isSuper) return { super: true, perms: [] }
+  return { super: false, perms: [...(c?.perms || [])].map(String).sort() }
+}
+
+export function permsCovered(delegation, snapshot) {
+  if (!delegation || delegation.ownerless) return true
+  const c = delegation.permCtx
+  if (c?.isSuper) return true
+  if (!snapshot || snapshot.super) return false
+  const have = c?.perms || new Set()
+  return have.has('*') || snapshot.perms.every((p) => have.has(p))
+}

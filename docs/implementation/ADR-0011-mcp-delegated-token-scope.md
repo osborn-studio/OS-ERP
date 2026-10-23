@@ -169,9 +169,10 @@
 **决定**（只动 `server/mcp/server.js` 的幂等分支与 `delegation.js` 的两个纯函数，不碰 `tools.js`）：
 1. **范围快照**：首次成功执行时，缓存行 `result_json` 写成 `{"__replay":1,"scope":{scope,orgIds},"data":…}`（首次执行的有效范围 = 令牌范围 ∩ 所有者当时范围）。无迁移、无新列；读取时兼容 Z8 之前的裸 data 行（范围记为未知）。
 2. **命中前重验**：`scopeCovers(当前有效范围, 快照)`——当前不受限则放行；快照未知（旧行）或快照不受限而当前受限则拒；其余要求快照的组织集合是当前集合的子集。不覆盖 ⇒ 返回当前错误 `ORG_OUT_OF_SCOPE`，**不回放缓存**，也不进 handler。覆盖 ⇒ 缓存原样回放（`_idempotent_replay: true`，结果不变）。
-3. **不重跑 handler**：重验是纯比较，没有任何业务写入，因此不可能重复过账；业务过账、缓存、确认消费、严格审计仍在原来那一个事务里。代价是偏保守：范围缩小但仍包含首次目标时重放也会被拒——调用方换新幂等键即走工具自身的精确判定。
-4. **审计标记**：凡是"本可命中缓存 / 确认单却被当前闸门挡下"的拒绝，`mcp_call_logs.result_summary` 以 `cache_denied` 开头（含幂等键列），`error_code` 为当前错误码（`TOKEN_OWNER_PERM_DENIED`、`SCOPE_DENIED`、`TOKEN_OWNER_*`、`ORG_OUT_OF_SCOPE`…）。旧行（Z8 前）在受限范围下一律不回放（fail-closed），不受限范围照常回放。
-5. **二次确认**：确认单不是结果缓存——`used` 的确认单永远 `CONFIRM_NOT_APPROVED`，不会重复执行。`confirmed` 但未使用的确认单在使用时与其他调用同样重跑全部闸门（权限点在前、领域范围在 handler 内），被挡下时事务回滚、确认单保持 `confirmed`、审计带 `cache_denied`；闸门恢复后恰好执行一次。
+3. **权限快照（Codex 审计 P1）**：`perms: []` 的工具（目前仅 `doc.transition`，权限点在 handler 内按边判）命中缓存时进不了 handler，因此缓存同时记下首次执行时所有者的权限集合，重放要求当前集合不少于它，否则 `TOKEN_OWNER_PERM_DENIED` + `cache_denied`；声明了 `perms` 的工具仍由 `ownerToolDenied` 精确重判。
+4. **不重跑 handler**：重验是纯比较，没有任何业务写入，因此不可能重复过账；业务过账、缓存、确认消费、严格审计仍在原来那一个事务里。代价是偏保守：范围缩小但仍包含首次目标时重放也会被拒——被拒时错误信息要求先查询核对、不要换键重提（首次调用已提交，换键会重复执行）。
+5. **审计标记**：凡是"本可命中缓存 / 确认单却被当前闸门挡下"的拒绝，`mcp_call_logs.result_summary` 以 `cache_denied` 开头（含幂等键列），`error_code` 为当前错误码（`TOKEN_OWNER_PERM_DENIED`、`SCOPE_DENIED`、`TOKEN_OWNER_*`、`ORG_OUT_OF_SCOPE`…）。旧行（Z8 前）在受限范围下一律不回放（fail-closed），不受限范围照常回放。
+6. **二次确认**：确认单不是结果缓存——`used` 的确认单永远 `CONFIRM_NOT_APPROVED`，不会重复执行。`confirmed` 但未使用的确认单在使用时与其他调用同样重跑全部闸门（权限点在前、领域范围在 handler 内），被挡下时事务回滚、确认单保持 `confirmed`、审计带 `cache_denied`；闸门恢复后恰好执行一次。
 
 **验收**：`tests/mcp-delegation.test.mjs` 新增五条（失权后重放返回 `TOKEN_OWNER_PERM_DENIED` + `cache_denied` + 业务行不变、恢复后回放缓存且不新增行；范围缩小后重放 `ORG_OUT_OF_SCOPE`；旧缓存行受限范围下 fail-closed；他令牌复用键仍 `IDEMPOTENCY_CONFLICT`；确认单失权 / 缩范围保持未消费、恢复后恰好执行一次、用过的不再执行）。`tests/mcp-tool-matrix.test.mjs` 增加 `replay_after_permission_loss` 状态：对每个首次成功的写型工具，用同一幂等键依次在"权限被撤""范围被缩""全部恢复"下重放，断言前两格得到当前错误、不带 `_idempotent_replay`、业务表行数不变，第三格回放缓存且行数不变。
 
