@@ -7,13 +7,20 @@
  *   · 过滤只有一份实现（`buildWhere`），列表与导出不会各自漂移；
  *   · `detail` 读出时再过一遍 `redact.js`（写入侧已脱敏，但旧行 / 直接写库的行不保证）；
  *   · CSV 每个单元格都加引号；以 `= + - @ Tab CR`（含全角形态，允许前导空白）开头的值前置 `'`，防电子表格公式注入；
- *   · 导出有行数上限（`AUDIT_EXPORT_MAX_ROWS`），超出截断并在审计里记 truncated。
+ *   · 导出有行数上限（`AUDIT_EXPORT_MAX_ROWS`），超出截断并在审计里记 truncated；
+ *   · （AA6）列表总数是"最多 10,001"的封顶估算（`countCapped`）+ `has_more`，不再对百万行做整表 COUNT；翻页深度同样封顶；
+ *   · （AA6）关键词只搜 action / entity / user_name 且至少 2 个有效字符（`assertKeyword`，buildWhere 内也强制，绕不过）；
+ *   · （AA6）排序随过滤选择：命中 module / user_id 索引（末列 created_at）时按 `created_at DESC, id DESC`，索引直接给出顺序、无排序临时表；
+ *     其余按 `id DESC`（rowid 倒扫）。导出的游标与列表排序同一份（`orderOf` / `exportChunks`）。
  * ============================================================================
  */
 import { redactValue, redactText } from './redact.js'
 
 export const AUDIT_EXPORT_MAX_ROWS = 50000
 export const AUDIT_PAGE_MAX = 200
+/** 列表总数封顶：数到 CAP+1 即停（COUNT 的上界是 10,001 行，与表大小无关）；翻页深度也不超过 CAP */
+export const AUDIT_COUNT_CAP = 10000
+export const KEYWORD_MIN_CHARS = 2
 const DETAIL_MAX = 8000
 const CSV_CELL_MAX = 32000
 
@@ -31,6 +38,14 @@ const str = (v, max = 200) => {
 }
 const likeEsc = (s) => s.replace(/[\\%_]/g, (c) => `\\${c}`)
 
+/** 有效字符数：去掉空白 / 控制符 / 零宽等格式符后的码点数（防 "a" + 零宽字符 凑够 2 个） */
+const effectiveLen = (s) => [...s.replace(/[\s\p{Cc}\p{Cf}]/gu, '')].length
+
+/** 关键词至少 KEYWORD_MIN_CHARS 个有效字符（太短的 LIKE '%x%' 命中面过大，且是整表扫描） */
+export function assertKeyword(keyword) {
+  if (effectiveLen(String(keyword)) < KEYWORD_MIN_CHARS) throw new AuditViewError(`keyword 至少需要 ${KEYWORD_MIN_CHARS} 个字符`)
+}
+
 /** query → 归一过滤对象（审计留痕里记的就是它） */
 export function parseFilters(query = {}) {
   const f = {}
@@ -38,6 +53,7 @@ export function parseFilters(query = {}) {
     const v = str(query[k])
     if (v) f[k] = v
   }
+  if (f.keyword !== undefined) assertKeyword(f.keyword)
   for (const k of ['from', 'to']) {
     const v = str(query[k], 10)
     if (!v) continue
@@ -57,18 +73,66 @@ export function buildWhere(f) {
   if (f.entity) { c.push('entity = ?'); a.push(f.entity) }
   if (f.entity_id) { c.push('entity_id = ?'); a.push(f.entity_id) }
   if (f.user) {
-    if (/^\d{1,12}$/.test(f.user)) { c.push('(user_id = ? OR user_name = ?)'); a.push(Number(f.user), f.user) }
+    // 纯数字 = 用户 ID（走 idx_audit_user_created）；不再 OR user_name（OR 会让该索引失效、退化为整表扫描）
+    if (/^\d{1,12}$/.test(f.user)) { c.push('user_id = ?'); a.push(Number(f.user)) }
     else { c.push("user_name LIKE ? ESCAPE '\\'"); a.push(`%${likeEsc(f.user)}%`) }
   }
   if (f.from) { c.push('created_at >= ?'); a.push(`${f.from} 00:00:00`) }
   if (f.to) { c.push('created_at <= ?'); a.push(`${f.to} 23:59:59`) }
-  if (f.keyword) {
+  if (f.keyword !== undefined) {
+    assertKeyword(f.keyword)
     const p = `%${likeEsc(f.keyword)}%`
-    // 不搜 detail：旧行的明细可能带明文，按原文匹配会成为读取侧脱敏之外的"侧信道"（Codex 复核 P1）
-    c.push("(action LIKE ? ESCAPE '\\' OR module LIKE ? ESCAPE '\\' OR entity LIKE ? ESCAPE '\\' OR entity_id LIKE ? ESCAPE '\\' OR user_name LIKE ? ESCAPE '\\')")
-    a.push(p, p, p, p, p)
+    // 只搜 action / entity / user_name。不搜 detail：旧行的明细可能带明文，按原文匹配会成为读取侧脱敏之外的"侧信道"（Codex 复核 P1）；
+    // 也不搜 module / entity_id（它们有精确过滤项，子串匹配只会扩大扫描面）
+    c.push("(action LIKE ? ESCAPE '\\' OR entity LIKE ? ESCAPE '\\' OR user_name LIKE ? ESCAPE '\\')")
+    a.push(p, p, p)
   }
   return { where: c.length ? `WHERE ${c.join(' AND ')}` : '', args: a }
+}
+
+/** 排序：module / user_id 过滤（索引末列 created_at）→ created_at DESC, id DESC；有 entity+entity_id 时让位给 idx_audit_entity（rowid 序）；其余 id DESC */
+export function orderOf(f) {
+  const userIsId = f.user && /^\d{1,12}$/.test(f.user)
+  const byTime = !!(f.module || userIsId) && !(f.entity && f.entity_id)
+  return { byTime, sql: byTime ? 'created_at DESC, id DESC' : 'id DESC' }
+}
+
+export const countSql = (where) => `SELECT COUNT(*) c FROM (SELECT 1 FROM audit_logs ${where} LIMIT ?)`
+
+/** 封顶计数：最多数到 CAP+1 行。返回 { total (≤CAP+1), has_more (total>CAP) }；has_more 时 total 只是下界 */
+export function countCapped(db, where, args) {
+  const total = db.prepare(countSql(where)).get(...args, AUDIT_COUNT_CAP + 1).c
+  return { total, has_more: total > AUDIT_COUNT_CAP }
+}
+
+/** 导出分批的两条语句（首批 / 带游标的后续批）；scripts/explain-audit.mjs 用同一份文本审计计划 */
+export function exportSql(where, order) {
+  const base = where ? `${where} AND id <= ?` : 'WHERE id <= ?'
+  return {
+    first: `SELECT * FROM audit_logs ${base} ORDER BY ${order.sql} LIMIT ?`,
+    next: `SELECT * FROM audit_logs ${base} AND ${order.byTime ? '(created_at, id) < (?, ?)' : 'id < ?'} ORDER BY ${order.sql} LIMIT ?`
+  }
+}
+
+/** 导出分批（游标与 orderOf 同序；snapshotMax 之后的新行不进文件）。同步生成器：每批 ≤ batch 行的 CSV 文本 */
+export function* exportChunks(db, { where, args, order, snapshotMax, exported, batch = 1000 }) {
+  const sql = exportSql(where, order)
+  const first = db.prepare(sql.first)
+  const next = db.prepare(sql.next)
+  let last = null
+  let sent = 0
+  while (sent < exported) {
+    const n = Math.min(batch, exported - sent)
+    const rows = last === null
+      ? first.all(...args, snapshotMax, n)
+      : next.all(...args, snapshotMax, ...(order.byTime ? [last.created_at, last.id] : [last.id]), n)
+    if (!rows.length) return
+    let chunk = ''
+    for (const row of rows) chunk += csvLine(viewRow(row))
+    last = rows[rows.length - 1]
+    sent += rows.length
+    yield chunk
+  }
 }
 
 const FREE_SECRET = /((?:password|passwd|secret|token|authorization|cookie|jwt|api[_-]?key)\s*[:：=]\s*)(?:Bearer\s+)?[^\s,;"'}&]+/gi

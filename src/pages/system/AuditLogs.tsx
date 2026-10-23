@@ -19,6 +19,7 @@ import { Card, Pagination, SectionTitle, Table, fmtInt, toast, useList } from '.
 import { FilterBar, Inp } from '../../components/DataPage'
 import { Download } from 'lucide-react'
 
+const AUDIT_COUNT_CAP = 10000 // 与 server/lib/audit-view.js 的 AUDIT_COUNT_CAP 一致
 type Draft = { module: string; action: string; user: string; entity: string; entity_id: string; from: string; to: string; keyword: string }
 const EMPTY: Draft = { module: '', action: '', user: '', entity: '', entity_id: '', from: '', to: '', keyword: '' }
 
@@ -80,7 +81,7 @@ export default function AuditLogs() {
         <Inp type="date" value={draft.from} onChange={set('from')} w={140} />
         <span className="text-slate-400">至</span>
         <Inp type="date" value={draft.to} onChange={set('to')} w={140} />
-        <Inp value={draft.keyword} onChange={set('keyword')} placeholder="关键字" w={150} />
+        <Inp value={draft.keyword} onChange={set('keyword')} placeholder="关键字（≥2 字：动作/对象/操作人）" w={230} />
         <button className="btn-primary btn-sm" onClick={() => setFilters(Object.fromEntries(Object.entries(draft).filter(([, v]) => v)))}>
           查询
         </button>
@@ -101,7 +102,11 @@ export default function AuditLogs() {
           ]}
         />
       </Card>
-      <Pagination page={page} pageSize={pageSize} total={total} onChange={setPage} />
+      {/* AA6：总数是服务端封顶估算（最多 10,001）；超过 10,000 时只能翻到前 10,000 条，更早的请加过滤条件或导出 */}
+      {total > AUDIT_COUNT_CAP && (
+        <div className="mt-2 text-[12px] text-slate-500">命中超过 {AUDIT_COUNT_CAP.toLocaleString()} 条（总数为估算）。仅可翻阅最新 {AUDIT_COUNT_CAP.toLocaleString()} 条，请加过滤条件缩小范围，或导出 CSV。</div>
+      )}
+      <Pagination page={page} pageSize={pageSize} total={Math.min(total, AUDIT_COUNT_CAP)} onChange={setPage} />
     </div>
   )
 }

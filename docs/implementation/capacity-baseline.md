@@ -263,3 +263,46 @@ node scripts/synth-pipeline.mjs --dir /tmp/synth-large --skus 20000 --txns 25000
 - `qty_on_hand <> 0` 的首页在头部有大段零库存行时会多读；`total` 仍是一次整表聚合（每次进入页面 / 改过滤条件付一次，翻页不付）。
 - `server/lib/metrics.js` 的 `below_safe` 指标（口径不含 `status='active'`，不同于看板）与 `routes/ai.js`、`mcp/tools.js` 里各自的低库存查询未改，仍是原写法；`metrics.js` 注册表里并没有 `dash.todo_counts`，那条语句实际在 `server/routes/dashboard.js`，本次改动落在那里。
 - 新增索引的写放大：`inventory_stocks` 每次库存变动多维护一棵 B 树（未单独测写路径）。
+
+## AA6 审计日志检索：迁移 065 + 封顶计数 + 导出 5 万行（**Mac mini / 合成 100 万行 / 非目标主机**）
+
+脚本：`node scripts/bench-audit-logs.mjs --rows 1000000 --out result.json`（自检：`tests/audit-bench.test.mjs` 小规模跑通）。临时库建在系统临时目录，结束即删。
+合成数据：100 万行 `audit_logs`，经 `insertAuditRow`（唯一 INSERT 点）写入，确定性种子；12 个 module 偏斜分布（`sales` 约 34 万行，`rare_mod` 20 行）、约 480 个 user（`user_id=499` 25 行）、40 种 entity、高基数 entity_id；`created_at` 每行 +30 秒回填。库文件 143 MB（明细很短，**真实审计明细更长，库会更大**）。
+
+**"前"= Z7 旧代码路径、无二级索引**（整表 `COUNT(*)`、`ORDER BY id DESC`、user 数字 `OR user_name`、导出 `id < ?` 游标）；**"后"= AA6 代码 + 迁移 065**（封顶计数 `LIMIT 10001`、按过滤选排序、`(created_at,id)` 游标）。同一进程内计时、每项预热一次后取中位数（列表/计数 3 次，导出 2 次）。**机器有负载**：运行时 `uptime` 的 1 分钟负载约 50–60（同机并行跑着其它工作流），只看量级。
+
+### 进程内计时（ms；列表 = 第 1 页 50 行；计数 = 页面总数；导出 = 5 万行封顶，含读出 + 读取侧脱敏 + CSV 编码，不含 socket）
+| 过滤 | 列表 前 → 后 | 计数 前 → 后 | 导出 前 → 后 |
+|---|---|---|---|
+| 常见 module（约 34 万行）| 0.21 → 0.17 | 107.95（=342 592）→ 0.57（=10 001）| 761.7 → 785.9（5 万行，8.3 MB）|
+| 稀有 module（20 行）| **181.87 → 0.08** | 119.22 → 0.01 | 250.3 → 0.12 |
+| module + 日期区间（1.1 万行）| **100.46 → 0.61** | 116.49 → 2.10（=10 001）| 558.2 → 306.1 |
+| 稀有 user_id（25 行）| **129.43 → 0.24** | 138.31 → 0.02 | 418.9 → 0.41 |
+| entity + entity_id | **142.71 → 0.03** | 123.37 → 0.02 | 166.3 → 0.07 |
+| 无过滤 | 0.15 → 0.75（噪声：两者都是 rowid 倒扫取 50 行）| **57.43（=1 020 000）→ 0.32（=10 001）** | 952.5 → 709.5（5 万行，8.4 MB）|
+
+读法（诚实边界）：
+- **索引的收益在"稀有/中等选择性"的过滤**（整表扫描 100–180 ms → 亚毫秒）。**常见 module** 在旧代码里本来就快（`ORDER BY id DESC` 沿 rowid 倒扫，很快凑够 50 行），索引没有改善它，导出同理（5 万行约 0.7–0.8 s，耗时主要在脱敏与 CSV 编码，不在查库）。
+- **计数是最大的单项收益**：每次列表请求都付一次整表 `COUNT(*)`（无过滤 57 ms，有过滤 108–138 ms，随表线性增长）；封顶后读量上界是 10 001 个索引项，与表大小无关。代价是 `total` 在超过 1 万时只是下界（响应带 `has_more`、`total_cap`，前端提示"总数为估算"，翻页深度也封顶在 1 万行）。
+- **导出 5 万行**：1 M 行表上无过滤/常见 module 约 0.7–0.8 s（进程内）；稀有过滤因命中少而近乎瞬时。HTTP 端到端还要加网络与 res.write 背压，未测。
+- **写放大**：追加 2 万行审计，每千行耗时 24.9 ms（无索引）→ 47.1 ms（三棵索引），**约 +90%**（同机负载抖动，量级可信、百分比不精确）。库文件 143 → 229 MB（+60%，三棵索引）。审计表几乎每次业务写入都追加一行，这是 065 的真实成本。
+- **建索引耗时**：对 100 万行执行 065 的 `up` 约 **5.1 s**（持写锁；升级演练 AA11 会把它纳入）。
+
+### EXPLAIN（同上库；"前"是旧语句，"后"是新语句）
+| 形态 | 前 | 后 |
+|---|---|---|
+| 列表 module / module+date | `SCAN audit_logs`（rowid 倒扫 + 逐行过滤）| `SEARCH … USING INDEX idx_audit_module_created (module=? [AND created_at>? AND created_at<?])`；`ORDER BY created_at DESC, id DESC` 由索引顺序给出，**无排序临时表** |
+| 列表 user_id | `SCAN audit_logs`（`user_id=? OR user_name=?` 使索引不可用）| `SEARCH … USING INDEX idx_audit_user_created (user_id=?)`，同样无排序临时表 |
+| 列表 entity+entity_id | `SCAN audit_logs` | `SEARCH … USING INDEX idx_audit_entity (entity=? AND entity_id=?)`（索引内按 rowid 序，`ORDER BY id DESC` 无需排序）|
+| 计数（有过滤）| `SCAN audit_logs`（整表 COUNT）| `SEARCH … USING COVERING INDEX idx_audit_*` 包在 `LIMIT 10001` 子查询里 |
+| 计数（无过滤）| `SCAN audit_logs` | `SCAN … USING COVERING INDEX`（索引扫描，`LIMIT 10001` 到数即停）|
+| 导出后续批 | 旧：`id < ?` 游标；有过滤时缺索引会退化为 rowid 区间扫描 | 新：`(created_at,id) < (?,?)` 游标走同一索引，无排序临时表 |
+
+`explain-audit`：新增 18 条 `audit.list_* / count_* / export_*` 语句（SQL 文本由 `server/lib/audit-view.js` 生成，与路由同一份），其中 12 条声明 `expectIndex`；**没有迁移 065 时这 12 条全部报红，有 065 时 0 违规**（`tests/audit-logs-view.test.mjs` 断言两侧）。`audit_logs` 已加入 `GROWTH_TABLES`（不看行数）。
+
+### 已知残余（未解决，不要读成已解决）
+- **关键词是子串匹配**（`LIKE '%x%'` 于 action / entity / user_name），任何索引都帮不上：命中多时靠 `LIMIT` 早停，**命中稀少时仍读全表**。已把范围收窄（不再搜 module / entity_id / detail）并要求至少 2 个有效字符；`explain-audit` 为 `audit.list_keyword` / `audit.count_keyword` 登记了带理由的豁免。组合 module / user 过滤（走索引）才会快。
+- **仅按日期区间或仅按 action 过滤**没有可用索引（`created_at` 单列、`action` 不在三棵索引里）：沿 rowid 倒扫，区间越旧读得越多。需要时再评估 `(created_at)` 索引，代价是再多一棵写放大。
+- **仅按 entity（不带 entity_id）**：`idx_audit_entity` 能命中但需要对命中行做临时排序，entity 很大（如全部 `sales_orders` 留痕）时仍可能慢。
+- 非字符串/含 `%` 的 `user` 子串过滤（按姓名）仍是整表扫描；纯数字现在只匹配 `user_id`（旧版也匹配 `user_name` 恰为该数字的行——行为收窄，已在代码注释中说明）。
+- 只在 Mac mini 上、合成数据、机器带负载；`dmserver` 上的数字、真实长明细的库体积、HTTP 端到端导出时间均**未测**。
