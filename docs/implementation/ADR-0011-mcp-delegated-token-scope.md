@@ -135,3 +135,30 @@
 **已知残余（二审 P1，未修，说明）**：POS（`RC`）与门店要货（`YQ` / `SH`）的 HTTP 路由除权限点外还有按角色名 / 门店绑定的闸（`pos.js` 门店绑定或 HQ 角色、`requisitions.js` `requireRole(...HQ)`）。MCP 这里只复刻"权限点 + 内部/外部主体 + 实体范围"，不复刻按角色名的闸：角色名闸是旧机制，权限点矩阵才是委托口径（"令牌 ≤ 所有者权限点"），且受限所有者的门店 / 组织范围仍由 `scopeEntityIds` 收窄。无门店绑定又 `data_scope=all` 的所有者拿到 `pos.dailyclose` 即可读日结单，属于权限点授予过宽的配置问题，后续由角色权限收口（X 系列）统一处理，而非在 MCP 层再造第二套角色名判据。
 
 **产品影响**：此前依赖 AI 令牌读取其角色无权查看的单据类型的集成会开始被拒绝；需要为该角色补授上表对应权限点。
+
+## Y6 补充：门店 / 经销商 / 订货主体绑定（关闭 X5 的残余）
+
+**缺口**：X5 只复刻"权限点 + 内部/外部主体 + 实体范围"。POS（PS/PSF/RC）、门店要货（YQ/SH）、经销商要货（DR）、订货中心（OC/OCS）的 HTTP 路由除权限点外还按**账号绑定**（`users.store_id` / `dealer_id`，ADR-0025 的 `requireStore` + `storeCtx`；`demand.js` 的 `dealerCtx`；`order-center.js` 的 `selfCustomerId` / `ocAccessCheck`）限定"只能看自己门店 / 自己经销商 / 自己订货主体的单据"。MCP 令牌的所有者即使没有任何绑定（`data_scope=all`、授予了 `pos.dailyclose` 之类权限点），也能经 `doc.query` / `doc.get` 读到**全部门店**的日结 / 要货 / 发货单。
+
+**决定**（`server/mcp/doc-perms.js` 单一声明，`DOC_VIEW_PERMS[type].binding` + `bindCol`）：
+
+| doc_type | binding | 归属列 | HTTP 依据 |
+|---|---|---|---|
+| PS（pos_orders）/ PSF（pos_shifts）/ RC（pos_daily_closes） | store | `store_id` | pos.js `requireStore` + `storeCtx`；跨店一律 404（ADR-0025） |
+| YQ（store_requisitions）/ SH（store_shipments） | store | `store_id` | requisitions.js `storeCtx`；`head.store_id !== store.id` 403 |
+| DR（dealer_requisitions） | dealer | `dealer_id` | demand.js `dealerCtx`（`WHERE dr.dealer_id=?`） |
+| OC（oc_orders）/ OCS（oc_statements） | subject | `customer_id` | order-center.js：role=dealer 取经销商档案、role=store 取门店档案，对应 `oc_customers(source_type,source_id)`；内部账号走组织范围 |
+| DS（dealer_statements）/ RB（dealer_rebates） | **不绑定** | — | dealers.js / dms.js 整体 `requireInternal` 的总部读，没有"经销商自视图"可绑；外部主体已被 X5 的 `dealer` 模块闸挡住（经销商看自己的对账走 OCS） |
+
+**判定**（每次调用回库读 `users`）：
+1. **豁免**：超管 / admin 所有者（`permContext.isSuper`，HTTP 侧 admin 不受绑定约束）与无主令牌（没有所有者可对照，ADR-0011 既有约定）。
+2. **类型级**：其余所有者必须具备该类型要求的绑定（store → `store_id`；dealer → `dealer_id`；subject → 仅外部主体：role=dealer 需 `dealer_id`、role=store 需 `store_id`，内部账号不要求）。缺则 `doc.query` / `doc.get` 报 `TOKEN_OWNER_BINDING_REQUIRED`（403），`doc.list_types` 不列出该类型。该判定先于取行，与单据是否存在无关（无存在性探测）。
+3. **单据级**：`doc.query` 把 `col = 所有者绑定` 下推进 SQL（subject 为 `customer_id IN (绑定档案)`），`limit` 准确；`doc.get` 取行后不属于绑定对象一律 `NOT_FOUND`（与"不存在"同形，不泄露存在性）。归属列取不到 ⇒ 拒绝（fail-closed）。叠加原有的令牌组织范围，二者取交集。
+4. 顺序：类型权限点（`TOKEN_OWNER_PERM_DENIED`）→ 绑定（`TOKEN_OWNER_BINDING_REQUIRED`）→ 取行 → 范围 / 绑定行级（`NOT_FOUND`）。
+
+**有意比 HTTP 严的一点（需知悉）**：HTTP 侧总部角色（`HQ_ROLES` / `HQ`，按角色名）可经 `/hq/*`、`requireRole(HQ)` 路由跨店读 POS / 要货 / 发货 / 经销商要货。MCP 不复刻角色名闸（X5 已说明），所以**非 admin 的总部角色所有者没有门店 / 经销商绑定时，读这些类型会被拒绝**；需要总部跨店读取的集成应使用 admin 所有者的令牌，或为所有者账号绑定具体门店 / 经销商。这是 fail-closed 的取舍，比 X5 时"权限点授予过宽即可读全部门店"的残余更安全。
+
+**验收**：`tests/mcp-doc-perms.test.mjs`（绑定表与归属列存在；无绑定逐类型 query/get/不存在 id 均 `TOKEN_OWNER_BINDING_REQUIRED` 且 list_types 隐藏；门店 / 经销商 / 订货主体绑定后只见本方、他方 `NOT_FOUND`、改绑 / 撤绑下一次调用即生效；admin 与无主令牌豁免；缺权限点仍为 `TOKEN_OWNER_PERM_DENIED`）；`tests/mcp-tool-matrix.test.mjs` 新增第 4 态 `owner_lacks_binding`（所有门店 / 经销商绑定类型 × query/get/list_types，写入矩阵 JSON 的 `binding_state`）；`scripts/check-mcp-coverage.mjs` ②b 增加绑定声明合法性与读工具已接入绑定闸的检查。
+
+**产品影响**：此前用"无绑定的非 admin 所有者"令牌读 POS / 要货 / 发货 / 日结 / 经销商要货 / 订货中心（外部主体）单据的集成会开始被拒绝；需为所有者账号绑定门店 / 经销商，或改用 admin 所有者令牌。
+

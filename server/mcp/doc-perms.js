@@ -24,11 +24,23 @@ import { TOKEN_OWNER_PERM_DENIED } from './delegation.js'
 
 export { TOKEN_OWNER_PERM_DENIED }
 export const DOC_TYPE_UNMAPPED = 'DOC_TYPE_UNMAPPED'
+/** Y6：类型要求门店 / 经销商 / 订货主体绑定，而所有者没有（工具层 403） */
+export const TOKEN_OWNER_BINDING_REQUIRED = 'TOKEN_OWNER_BINDING_REQUIRED'
 
 const http = (...perms) => ({ perms, source: 'http' })
 const explicit = (...perms) => ({ perms, source: 'explicit' })
+/**
+ * Y6：声明该类型的 HTTP 路由按「门店 / 经销商 / 订货主体」绑定。`col` = 单据表里承载归属的列。
+ *   store   → 所有者须有 `users.store_id`，且单据 `col` == 该门店（pos.js `storeCtx` / requisitions.js 门店侧）
+ *   dealer  → 所有者须有 `users.dealer_id`，且单据 `col` == 该经销商（demand.js `dealerCtx`）
+ *   subject → 订货中心：外部主体（role=dealer|store）须绑定对应档案，且单据的 customer_id 指向该档案
+ *             （order-center.js `ocAccessCheck` / `selfCustomerId`）；内部账号 HTTP 口径是组织范围，
+ *             已由 `scopeEntityIds` 覆盖，不要求绑定。
+ * 超管 / admin 所有者与无主令牌豁免（HTTP 侧 admin 不受绑定约束，无主令牌无所有者可对照）。
+ */
+const bound = (binding, col, entry) => ({ ...entry, binding, bindCol: col })
 
-/** doc_type → { perms: 任一命中即可, source: 'http' | 'explicit' } */
+/** doc_type → { perms: 任一命中即可, source: 'http' | 'explicit', binding?: 'store'|'dealer'|'subject', bindCol? } */
 export const DOC_VIEW_PERMS = Object.freeze({
   // 采购链：purchase-chain.js 的 readGate（PRQ/PO/GR/PRT/PI/PST/PAY 全部读路由）/ purchase.js 的列表路由 = PO_READ_PERMS
   PRQ: http(...PO_READ_PERMS),
@@ -66,19 +78,19 @@ export const DOC_VIEW_PERMS = Object.freeze({
   WM: explicit('produce.order.view'),
   WR: explicit('produce.order.view'),
   // 订货中心 / 经销商
-  OC: explicit('order.view'),
-  OCS: http('order.statement.view'),
-  DR: explicit('dms.dealer.view'),
+  OC: bound('subject', 'customer_id', explicit('order.view')),
+  OCS: bound('subject', 'customer_id', http('order.statement.view')),
+  DR: bound('dealer', 'dealer_id', explicit('dms.dealer.view')),
   DS: explicit('dms.dealer.view'),
   RB: explicit('dms.dealer.view'),
   // 线上订单
   OM: explicit('oms.order.view'),
   // 门店 / POS
-  PS: explicit('pos.cashier'),
-  PSF: explicit('pos.shift'),
-  RC: explicit('pos.dailyclose'),
-  YQ: explicit('pos.store.requisition'),
-  SH: explicit('pos.store.requisition')
+  PS: bound('store', 'store_id', explicit('pos.cashier')),
+  PSF: bound('store', 'store_id', explicit('pos.shift')),
+  RC: bound('store', 'store_id', explicit('pos.dailyclose')),
+  YQ: bound('store', 'store_id', explicit('pos.store.requisition')),
+  SH: bound('store', 'store_id', explicit('pos.store.requisition'))
 })
 
 /** 该类型的查看权限点；无映射返回 null（调用方必须按拒绝处理） */
@@ -122,7 +134,8 @@ export function canViewDocType(db, ctx, type, owner = ownerCtx(db, ctx)) {
   if (!perms) return false
   if (!owner) return true
   if (externalOwnerBlocked(db, ctx, type)) return false
-  return perms.some((p) => hasPerm(owner, p))
+  if (!perms.some((p) => hasPerm(owner, p))) return false
+  return holdsBinding(db, ctx, type, owner)
 }
 
 /** 读工具入口闸门：不可读则抛 403（未映射 `DOC_TYPE_UNMAPPED`，权限不足 `TOKEN_OWNER_PERM_DENIED`） */
@@ -130,6 +143,18 @@ export function assertCanViewDocType(db, ctx, type) {
   const perms = viewPermsOf(type.code)
   if (!perms) throw denied(DOC_TYPE_UNMAPPED, `单据类型「${type.name || type.code}」未登记查看权限点，默认拒绝（见 server/mcp/doc-perms.js）`)
   if (canViewDocType(db, ctx, type)) return
+  const owner = ownerCtx(db, ctx)
+  if (
+    owner && !externalOwnerBlocked(db, ctx, type) && perms.some((p) => hasPerm(owner, p)) &&
+    !holdsBinding(db, ctx, type, owner)
+  ) {
+    const b = bindingOf(type.code)
+    const what = b.binding === 'dealer' ? '经销商' : b.binding === 'store' ? '门店' : '订货主体（经销商 / 门店档案）'
+    throw denied(
+      TOKEN_OWNER_BINDING_REQUIRED,
+      `「${type.name || type.code}」按${what}绑定：令牌所有者账号没有对应绑定，不能读取；委托令牌不能超过所有者本人的权限`
+    )
+  }
   throw denied(
     TOKEN_OWNER_PERM_DENIED,
     externalOwnerBlocked(db, ctx, type)
@@ -141,4 +166,73 @@ export function assertCanViewDocType(db, ctx, type) {
 /** 活动单据类型里没有映射的 code（覆盖脚本用） */
 export function unmappedDocTypes(codes) {
   return codes.filter((c) => !viewPermsOf(c))
+}
+
+// ---------------------------------------------------------------------------
+// Y6：门店 / 经销商 / 订货主体绑定（ADR-0011 Y6 补充）
+// ---------------------------------------------------------------------------
+
+/** 该类型的绑定声明；无绑定返回 null */
+export function bindingOf(docType) {
+  const e = Object.prototype.hasOwnProperty.call(DOC_VIEW_PERMS, docType) ? DOC_VIEW_PERMS[docType] : null
+  return e && e.binding ? { binding: e.binding, col: e.bindCol } : null
+}
+
+/** 所有者的绑定事实（每次回库）：超管 / admin 豁免；无主令牌 = null（豁免） */
+function ownerBindingFacts(db, ctx, owner = ownerCtx(db, ctx)) {
+  if (!owner || owner.isSuper) return null
+  const u = db.prepare('SELECT role, store_id, dealer_id FROM users WHERE id=?').get(Number(ctx.ownerUserId))
+  return { role: u?.role ?? null, storeId: u?.store_id ?? null, dealerId: u?.dealer_id ?? null }
+}
+
+/**
+ * 订货主体：外部主体（role=dealer|store）绑定的订货档案 id 集合；内部账号 = 不适用（返回 undefined）。
+ * 只读，不像 HTTP 的 `selfCustomerId` 那样 ensureCustomer 建档（读工具不应写库）。
+ */
+function subjectCustomerIds(db, facts) {
+  if (facts.role !== 'dealer' && facts.role !== 'store') return undefined
+  const sid = facts.role === 'dealer' ? facts.dealerId : facts.storeId
+  if (sid == null) return []
+  return db.prepare('SELECT id FROM oc_customers WHERE source_type=? AND source_id=?').all(facts.role, Number(sid)).map((r) => r.id)
+}
+
+/** 类型级：所有者是否具备该类型要求的绑定（无绑定要求 / 豁免 = true） */
+export function holdsBinding(db, ctx, type, owner = ownerCtx(db, ctx)) {
+  const b = bindingOf(type.code)
+  if (!b) return true
+  const f = ownerBindingFacts(db, ctx, owner)
+  if (!f) return true
+  if (b.binding === 'store') return f.storeId != null
+  if (b.binding === 'dealer') return f.dealerId != null
+  if (f.role !== 'dealer' && f.role !== 'store') return true // 内部账号：HTTP 口径是组织范围，不要求绑定
+  return f.role === 'dealer' ? f.dealerId != null : f.storeId != null
+}
+
+/**
+ * 列表用的行级限定（拼进 WHERE）：返回 `{ sql, params }`，null = 不限。
+ * 调用前须已通过 `assertCanViewDocType`（绑定存在）；绑定存在但档案为空 ⇒ `1=0`。
+ */
+export function bindingWhere(db, ctx, type) {
+  const b = bindingOf(type.code)
+  const f = b ? ownerBindingFacts(db, ctx) : null
+  if (!f) return null
+  if (b.binding === 'store' || b.binding === 'dealer') {
+    const id = b.binding === 'store' ? f.storeId : f.dealerId
+    return id == null ? { sql: '1=0', params: [] } : { sql: `${b.col}=?`, params: [Number(id)] }
+  }
+  const ids = subjectCustomerIds(db, f)
+  if (ids === undefined) return null
+  if (!ids.length) return { sql: '1=0', params: [] }
+  return { sql: `${b.col} IN (${ids.map(() => '?').join(',')})`, params: ids }
+}
+
+/** 单据级：这一行是否属于所有者的绑定对象（无绑定要求 / 豁免 = true；取不到归属列 = false，fail-closed） */
+export function rowInBinding(db, ctx, type, row) {
+  const w = bindingWhere(db, ctx, type)
+  if (!w) return true
+  const b = bindingOf(type.code)
+  const v = row?.[b.col]
+  if (v == null) return false
+  if (b.binding === 'subject') return w.params.map(Number).includes(Number(v))
+  return w.params.length === 1 && Number(v) === Number(w.params[0])
 }

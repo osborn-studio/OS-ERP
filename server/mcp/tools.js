@@ -48,7 +48,7 @@ import {
 } from '../lib/docflow.js'
 // 金额/数量与权限点的**唯一判据**（与 HTTP 入口同一个）
 import { numAmount, numQty, permContext, hasPerm } from '../middleware/auth.js'
-import { assertCanViewDocType, canViewDocType, TOKEN_OWNER_PERM_DENIED } from './doc-perms.js'
+import { assertCanViewDocType, canViewDocType, bindingWhere, rowInBinding, TOKEN_OWNER_PERM_DENIED } from './doc-perms.js'
 
 /**
  * `perms`（ADR-0011）：有主令牌调用该工具时，**令牌所有者此刻**必须持有其中任一权限点
@@ -2086,6 +2086,12 @@ export const TOOLS = [
       const limit = Math.min(Math.max(Number(args.limit) || 20, 1), 100)
       const where = []
       const params = []
+      // Y6：绑定类型把「属于所有者门店 / 经销商 / 订货主体」下推进 SQL（不是取回后再滤，limit 才准）
+      const bw = bindingWhere(db, ctx, type)
+      if (bw) {
+        where.push(bw.sql)
+        params.push(...bw.params)
+      }
       if (args.status) {
         where.push(`${statusField}=?`)
         params.push(String(args.status))
@@ -2151,7 +2157,7 @@ export const TOOLS = [
       }
       // 越界不报"无权查看"：报 403 等于确认"这张单存在但不是你的"
       const e = scopeEntityIds(ctx, db)
-      if (!entityRowVisible(e, row, ownershipColumnsOf(db, table))) {
+      if (!entityRowVisible(e, row, ownershipColumnsOf(db, table)) || !rowInBinding(db, ctx, type, row)) {
         const err = new Error(`${type.name}不存在（doc_type=${type.code}）`)
         err.code = 'NOT_FOUND'
         err.status = 404

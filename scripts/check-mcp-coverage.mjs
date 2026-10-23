@@ -155,6 +155,17 @@ ok('映射里没有空权限列表（空 = 无人可看）', Object.entries(DOC_
 const genericSrc = ['doc.query', 'doc.get'].map((n) => String(toolMap.get(n)?.handler || ''))
 ok('`doc.query` / `doc.get` 走了类型级查看权限闸门（assertCanViewDocType）', genericSrc.every((x) => x.includes('assertCanViewDocType')), '读工具没有按类型校验所有者权限')
 ok('`doc.list_types` 按类型过滤（canViewDocType）', String(toolMap.get('doc.list_types')?.handler || '').includes('canViewDocType'), '字典会列出无权查看的类型')
+ok('`doc.query` / `doc.get` 对绑定类型过滤到所有者的门店 / 经销商（bindingWhere / rowInBinding，Y6）',
+  String(toolMap.get('doc.query')?.handler || '').includes('bindingWhere') && String(toolMap.get('doc.get')?.handler || '').includes('rowInBinding'),
+  '绑定类型的读工具没有按所有者绑定收窄')
+const badBind = []
+for (const [code, e] of Object.entries(DOC_VIEW_PERMS)) {
+  if (!e.binding) continue
+  const t = types.find((x) => x.code === code)
+  const cols = t ? db.prepare(`PRAGMA table_info(${t.table_name})`).all().map((c) => c.name) : []
+  if (!['store', 'dealer', 'subject'].includes(e.binding) || !cols.includes(e.bindCol)) badBind.push(`${code}:${e.binding}/${e.bindCol}`)
+}
+ok('DOC_VIEW_PERMS 的绑定声明合法且归属列真实存在（Y6）', badBind.length === 0, badBind.join(' / '))
 
 // ---------------------------------------------------------------- ③ 覆盖结论
 section('③ 覆盖结论（打印给人看，可复算）')
