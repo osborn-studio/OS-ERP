@@ -17,7 +17,8 @@ import { Router } from 'express'
 import bcrypt from 'bcryptjs'
 import { getDb, getDbFor, INDUSTRIES, DEFAULT_INDUSTRY, normalizeIndustry } from '../db/index.js'
 import { ok, fail, bizFail, wrap, pageParams, paged, failFromError } from '../lib/http.js'
-import { signToken, requireAuth, requireRole, ROLES, userPermissions, resolveOrgScope } from '../middleware/auth.js'
+import { issueSessionCookies, clearSessionCookies, sessionTransport, crossSiteBrowserRequest } from '../middleware/session-transport.js'
+import { signToken, JWT_SECRET, requireAuth, requireRole, ROLES, userPermissions, resolveOrgScope } from '../middleware/auth.js'
 import { audit } from '../middleware/audit.js'
 import { createAccount, updateAccount, changePassword, logoutAll, replaceRolePermissions } from '../lib/account-security.js'
 import { consumeLoginAttempt } from '../lib/login-throttle.js'
@@ -30,6 +31,8 @@ const loginFailed = res => bizFail(res, { status: 401, code: 'AUTH_INVALID_CREDE
 r.post(
   '/login',
   wrap(async (req, res) => {
+    // cookie 传输：登录会设置会话 Cookie，必须拒绝跨站浏览器发起的登录（登录 CSRF，ADR-0036）
+    if (sessionTransport() === 'cookie' && crossSiteBrowserRequest(req)) return bizFail(res, { status: 403, code: 'CROSS_SITE_LOGIN_REJECTED', message: '不允许跨站登录请求' })
     const { username, password, industry } = req.body || {}
     if (typeof username !== 'string' || !username.trim() || username.length > 64 || /[\u0000-\u001f\u007f]/u.test(username) ||
         typeof password !== 'string' || !password || Buffer.byteLength(password, 'utf8') > 1024) return fail(res, '账号与密码格式无效', 400, 'AUTH_INPUT_INVALID')
@@ -58,8 +61,10 @@ r.post(
       const token = signToken(user, code)
       audit({ user: { uid: user.id, name: user.name }, ip: req.ip }, { action: 'LOGIN', module: 'auth', entity: 'user', entityId: user.id, detail: code })
       succeeded = true
+      // cookie 传输（ADR-0036）：JWT 只进 HttpOnly Cookie，不出现在响应体；bearer 模式原样返回 token
+      const viaCookie = issueSessionCookies(req, res, token, JWT_SECRET)
       return ok(res, {
-        token,
+        ...(viaCookie ? { transport: 'cookie' } : { token }),
         industry: code,
         industryName: INDUSTRIES[code].name,
         industryLabel: INDUSTRIES[code].label,
@@ -173,13 +178,21 @@ r.put(
 r.post(
   '/change-password',
   requireAuth,
-  wrap(async (req, res) => ok(res, await changePassword(getDb(), req.user, req.body?.oldPassword, req.body?.newPassword, { ip: req.ip })))
+  wrap(async (req, res) => {
+    const result = await changePassword(getDb(), req.user, req.body?.oldPassword, req.body?.newPassword, { ip: req.ip })
+    clearSessionCookies(req, res) // cookie 传输：全部会话已失效，Cookie 一并清掉；bearer 模式空操作
+    return ok(res, result)
+  })
 )
 
 r.post(
   '/logout-all',
   requireAuth,
-  wrap((req, res) => ok(res, logoutAll(getDb(), req.user, { ip: req.ip })))
+  wrap((req, res) => {
+    const result = logoutAll(getDb(), req.user, { ip: req.ip })
+    clearSessionCookies(req, res)
+    return ok(res, result)
+  })
 )
 
 r.get(
