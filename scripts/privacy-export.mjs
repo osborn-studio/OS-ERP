@@ -6,6 +6,7 @@
  *
  * 【判据】
  *   · 用法：node scripts/privacy-export.mjs <手机号> --out <绝对路径.json> [--industry <行业>]
+ *   · Y8：同时导出与主体有确定关联的退款单、订货中心客户 / 地址 / 订单 / 对账单与名称快照、台账、含原号码或与主体订单绑定的审计 / 通知日志行（与抹除共用 collect）。
  *   · 只读打开数据库；必须显式 GML_DATA_DIR 且不许是仓库 data/（ADR-0019）。
  *   · `--out` 必填、必须是绝对路径、不许落在仓库目录内、不许覆盖已有文件（`wx`），文件权限 0600；不往 stdout 打印个人数据。
  *   · 键名命中 redact.js 的 SENSITIVE_KEY（password/token/secret/key…）的值遮成 [REDACTED]，字符串里的 `token=…` 也剥掉。
@@ -68,6 +69,14 @@ function scrub(v) {
   return v
 }
 
+/** Y8：与抹除同一份关联集合（collect 的扩展集），保证"导出了什么 = 抹除会动什么"。仅凭遮盖片段命中的日志行不能证明属于本人，只给行数。 */
+const extended = (c) => ({
+  refunds: c.refunds, oc_customers: c.oc_customers, oc_addresses: c.oc_addresses, oc_orders: c.oc_orders, oc_statements: c.oc_statements,
+  ar_documents: c.ar_documents, receipts: c.receipts, sales_invoices: c.sales_invoices, credit_accounts: c.credit_accounts,
+  member_balance_ledger: c.member_balance_ledger, audit_logs: c.audit_logs, notify_logs: c.notify_logs,
+  ambiguous_masked_log_rows: { audit_logs: c.ambiguous_masked.audit_logs.length, notify_logs: c.ambiguous_masked.notify_logs.length }
+})
+
 const dbs = openIndustryDbs(industry ? [industry] : Object.keys(INDUSTRIES), true)
 const result = { exported_at: new Date().toISOString(), subject_phone: phone, industries: {} }
 for (const { code, db } of dbs) {
@@ -75,7 +84,7 @@ for (const { code, db } of dbs) {
     const c = collect(db, phone)
     if (isEmpty(c)) continue
     const addresses = [...new Map(c.orders.filter((o) => o.receiver_address).map((o) => [`${o.receiver}|${o.receiver_phone}|${o.receiver_address}`, { receiver: o.receiver, receiver_phone: o.receiver_phone, receiver_address: o.receiver_address }])).values()]
-    result.industries[code] = scrub({ customer: c.customer, member_account: c.member_account, points_ledger: c.points_ledger, cart_items: c.cart_items, orders: c.orders.map((o) => ({ ...o, items: c.order_items.filter((i) => i.oms_order_id === o.id) })), addresses, sales_orders: c.sales_orders, pos_orders: c.pos_orders })
+    result.industries[code] = scrub({ customer: c.customer, member_account: c.member_account, points_ledger: c.points_ledger, cart_items: c.cart_items, orders: c.orders.map((o) => ({ ...o, items: c.order_items.filter((i) => i.oms_order_id === o.id) })), addresses, sales_orders: c.sales_orders, pos_orders: c.pos_orders, ...extended(c) })
   } finally {
     db.close()
   }

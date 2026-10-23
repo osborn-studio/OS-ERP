@@ -224,3 +224,283 @@ test('when the audit row cannot be written the erase rolls back', (t) => {
   assert.equal(db2.prepare("SELECT receiver FROM oms_orders WHERE platform_order_no='H5-1'").get().receiver, '张三')
   db2.close()
 })
+
+// ---------------------------------------------------------------------------------------------------------------
+// Y8：抹除覆盖面扩展（退款单 / 订货中心快照 / 日志里的部分遮盖号码）与 --report
+// ---------------------------------------------------------------------------------------------------------------
+const MASKED = '138****5678'
+const run2 = (dir, args, extra) => run('scripts/privacy-erase.mjs', dir, args, extra)
+
+function y8Fixture(t, opts) {
+  const f = fixture(t, opts)
+  const db = open(f.dir)
+  db.pragma('foreign_keys = OFF')
+  const soId = db.prepare("SELECT id FROM sales_orders WHERE doc_no='SO-1'").get().id
+  const omsId = db.prepare("SELECT id FROM oms_orders WHERE platform_order_no='H5-1'").get().id
+  const ret = db.prepare("INSERT INTO sales_returns (doc_no,order_id,channel,return_date,status,total_amount,refund_due) VALUES ('SR-1',?,'store','2026-01-05','completed',100,100)").run(soId).lastInsertRowid
+  const retB = db.prepare("INSERT INTO sales_returns (doc_no,order_id,channel,return_date,status,total_amount,refund_due) VALUES ('SR-2',?,'store','2026-01-06','completed',20,20)").run(soId).lastInsertRowid
+  const mkRefund = db.prepare("INSERT INTO refunds (doc_no,source_type,source_id,customer_type,customer_id,customer_name,refund_date,method,amount,status,bank_account,serial_no,remark) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)")
+  const rMember = mkRefund.run('RFD-M', 'sales_return', ret, 'member', f.cid, '张三', '2026-01-07', 'wechat', 100, 'confirmed', '招行 ****8821', 'SN-1', `联系 ${PHONE}`).lastInsertRowid
+  const rLinkedPerson = mkRefund.run('RFD-P', 'sales_return', ret, 'walkin', null, '张三', '2026-01-08', 'cash', 10, 'confirmed', null, null, null).lastInsertRowid
+  const rLinkedBiz = mkRefund.run('RFD-B', 'sales_return', retB, 'store', 7, '静安旗舰店', '2026-01-09', 'bank', 20, 'confirmed', null, null, null).lastInsertRowid
+  const rOther = mkRefund.run('RFD-O', 'sales_return', 999, 'member', 99, '李四', '2026-01-10', 'cash', 5, 'confirmed', null, null, null).lastInsertRowid
+  const ri = db.prepare('INSERT INTO refund_items (refund_id,return_id,return_doc_no,amount) VALUES (?,?,?,?)')
+  ri.run(rLinkedPerson, ret, 'SR-1', 10); ri.run(rLinkedBiz, retB, 'SR-2', 20)
+  const oc1 = db.prepare("INSERT INTO oc_customers (code,name,source_type,source_id,contact,phone,address) VALUES ('OC1','张三','dealer',1,'张三',?,'上海市某路9号')").run(PHONE).lastInsertRowid
+  const oc2 = db.prepare("INSERT INTO oc_customers (code,name,source_type,source_id,contact,phone,address) VALUES ('OC2','李四','dealer',2,'李四',?,'广州市某路')").run(OTHER).lastInsertRowid
+  const oc3 = db.prepare("INSERT INTO oc_customers (code,name,source_type,source_id,contact,phone,address) VALUES ('OC3','某某贸易有限公司','dealer',3,'王五',?,'杭州')").run('13600000003').lastInsertRowid
+  db.prepare("INSERT INTO oc_addresses (customer_id,name,contact,phone,address) VALUES (?,?,?,?,?)").run(oc3, '仓库', '张三', PHONE, '杭州市某仓')
+  db.prepare("INSERT INTO oc_addresses (customer_id,name,contact,phone,address) VALUES (?,?,?,?,?)").run(oc2, '总部', '李四', OTHER, '广州总部')
+  const mkOc = db.prepare("INSERT INTO oc_orders (doc_no,customer_id,customer_type,customer_name,order_date,status,total_amount) VALUES (?,?,?,?,?,?,?)")
+  mkOc.run('OC-ORD-1', oc1, 'dealer', '张三', '2026-01-01', 'completed', 321); mkOc.run('OC-ORD-2', oc2, 'dealer', '李四', '2026-01-01', 'completed', 654)
+  mkOc.run('OC-ORD-3', oc3, 'dealer', '某某贸易有限公司', '2026-01-01', 'completed', 987)
+  db.prepare("INSERT INTO oc_statements (doc_no,customer_id,customer_name,period_start,period_end,total_amount) VALUES ('OC-ST-1',?,'张三','2026-01-01','2026-01-31',321)").run(oc1)
+  db.prepare("INSERT INTO ar_documents (doc_no,subject_type,subject_id,subject_name,source_type,biz_date,amount) VALUES ('AR-1','oc',?,'张三','OC','2026-01-01',321)").run(oc1)
+  const ins = db.prepare('INSERT INTO audit_logs (user_id,user_name,action,module,entity,entity_id,detail) VALUES (?,?,?,?,?,?,?)')
+  ins.run(1, 'boss', 'SHIP', 'oms', 'oms_orders', String(omsId), JSON.stringify({ phone: MASKED, amount: 100, doc_no: 'H5-1' }))
+  ins.run(1, 'boss', 'PAY', 'purchase', 'purchase_payments', '5', JSON.stringify({ phone: MASKED, amount: 4321.5, doc_no: 'PAY-9' }))
+  ins.run(1, 'boss', 'SHIP', 'oms', 'oms_orders', '3', JSON.stringify({ phone: '139****4321', amount: 50 }))
+  ins.run(1, 'boss', 'NOTE', 'sales', 'sales_orders', '77', `customer called from ${PHONE} about refund`)
+  const nl = db.prepare("INSERT INTO notify_logs (channel_code,title,payload,status) VALUES ('c','t',?,'success')")
+  nl.run(`raw ${PHONE} appeared`); nl.run(`only masked ${MASKED} appeared`); nl.run('nothing personal 100.00')
+  db.close()
+  return { ...f, soId, omsId, ret, rMember, rLinkedPerson, rLinkedBiz, rOther, oc1, oc2, oc3 }
+}
+const snap = (dir, sql) => { const db = open(dir); try { return db.prepare(sql).all() } finally { db.close() } }
+
+test('--report prints per-table affected rows before executing, changes nothing and prints no personal data', (t) => {
+  const f = y8Fixture(t)
+  const before = JSON.stringify(snap(f.dir, 'SELECT * FROM refunds'))
+  const r = run2(f.dir, [PHONE, '--report'])
+  assert.equal(r.status, 0, r.stderr + r.stdout)
+  const j = JSON.parse(r.stdout)
+  assert.equal(j.mode, 'report')
+  const tb = j.industries.cosmetic.tables
+  assert.equal(tb.refunds.rows, 2, 'member refund + order-linked refund whose name is the subject; the store-name refund and other member are untouched')
+  assert.deepEqual(tb.refunds.columns, ['customer_name', 'remark'])
+  assert.equal(tb.oc_customers.rows, 1); assert.equal(tb.oc_addresses.rows, 1)
+  assert.equal(tb.oc_orders.rows, 1); assert.equal(tb.oc_statements.rows, 1); assert.equal(tb.ar_documents.rows, 1)
+  assert.equal(tb.audit_logs.rows, 2, 'tied row + raw-phone row')
+  assert.equal(tb.notify_logs.rows, 1)
+  assert.equal(j.industries.cosmetic.ambiguous_masked.audit_logs, 1, 'purchase PAY row only matches the masked pattern')
+  assert.equal(j.industries.cosmetic.ambiguous_masked.notify_logs, 1)
+  for (const leaked of ['张三', PHONE, '静安']) assert.ok(!r.stdout.includes(leaked), leaked)
+  assert.equal(JSON.stringify(snap(f.dir, 'SELECT * FROM refunds')), before)
+  assert.equal(snap(f.dir, "SELECT COUNT(*) n FROM audit_logs WHERE action='PRIVACY_ERASE'")[0].n, 0)
+  assert.equal(snap(f.dir, 'SELECT name FROM mall_customers WHERE phone=?'.replace('?', `'${PHONE}'`))[0].name, '张三')
+})
+
+test('--report needs neither --confirm nor --actor; --dry-run applies the real checks and still writes nothing', (t) => {
+  const f = y8Fixture(t)
+  assert.equal(run2(f.dir, [PHONE, '--dry-run']).status, 2, 'dry-run needs an actor')
+  assert.equal(run2(f.dir, [PHONE, '--dry-run', '--actor', 'clerk']).status, 2)
+  const d = run2(f.dir, [PHONE, '--dry-run', '--actor', 'boss'])
+  assert.equal(d.status, 0, d.stderr)
+  assert.equal(JSON.parse(d.stdout).mode, 'dry-run')
+  assert.equal(snap(f.dir, "SELECT COUNT(*) n FROM audit_logs WHERE action='PRIVACY_ERASE'")[0].n, 0)
+  assert.equal(snap(f.dir, "SELECT name FROM mall_customers WHERE phone='" + PHONE + "'")[0].name, '张三')
+  assert.equal(run2(f.dir, [PHONE, '--report', '--dry-run']).status, 2)
+})
+
+test('--report on open orders lists them without refusing; --dry-run refuses like the real run', (t) => {
+  const f = y8Fixture(t, { openOrder: true })
+  const rep = run2(f.dir, [PHONE, '--report'])
+  assert.equal(rep.status, 0)
+  assert.equal(JSON.parse(rep.stdout).industries.cosmetic.would_refuse, 'OPEN_ORDERS')
+  const dry = run2(f.dir, [PHONE, '--dry-run', '--actor', 'boss'])
+  assert.equal(dry.status, 1)
+  assert.match(dry.stderr, /OPEN_ORDERS/)
+})
+
+test('erase covers refunds, oc snapshots and log fragments; report counts equal the audited counts equal the real row changes', (t) => {
+  const f = y8Fixture(t)
+  const reportCounts = Object.fromEntries(Object.entries(JSON.parse(run2(f.dir, [PHONE, '--report']).stdout).industries.cosmetic.tables).map(([k, v]) => [k, v.rows]))
+  const db0 = open(f.dir)
+  const fk0 = db0.prepare('PRAGMA foreign_key_check').all().length
+  const fin0 = {
+    refunds: db0.prepare('SELECT id,doc_no,source_id,customer_type,customer_id,amount,status,method,bank_account,serial_no FROM refunds ORDER BY id').all(),
+    oc_orders: db0.prepare('SELECT id,doc_no,customer_id,total_amount,status FROM oc_orders ORDER BY id').all(),
+    ar: db0.prepare('SELECT id,doc_no,subject_id,amount FROM ar_documents').all(),
+    audit: db0.prepare('SELECT id,user_name,action,module,entity,entity_id,created_at FROM audit_logs ORDER BY id').all(),
+    n_audit: db0.prepare('SELECT COUNT(*) n FROM audit_logs').get().n
+  }
+  db0.close()
+  const r = run2(f.dir, [PHONE, '--confirm', '--actor', 'boss'])
+  assert.equal(r.status, 0, r.stderr + r.stdout)
+  const out = JSON.parse(r.stdout).cosmetic
+  assert.deepEqual(out.erased, reportCounts, 'report == executed')
+  const db = open(f.dir)
+  const pp = db.prepare('SELECT phone FROM mall_customers WHERE id=?').get(f.cid).phone
+  const audit = JSON.parse(db.prepare("SELECT detail FROM audit_logs WHERE action='PRIVACY_ERASE'").get().detail)
+  assert.deepEqual(audit.counts, reportCounts, 'audit == report')
+  // refunds
+  const rf = Object.fromEntries(db.prepare('SELECT doc_no,customer_name,remark FROM refunds').all().map((x) => [x.doc_no, x]))
+  assert.match(rf['RFD-M'].customer_name, /^erased:/); assert.equal(rf['RFD-M'].remark, `联系 ${pp}`)
+  assert.match(rf['RFD-P'].customer_name, /^erased:/)
+  assert.equal(rf['RFD-B'].customer_name, '静安旗舰店', 'business names on linked refunds are kept')
+  assert.equal(rf['RFD-O'].customer_name, '李四', 'other members untouched')
+  assert.deepEqual(db.prepare('SELECT id,doc_no,source_id,customer_type,customer_id,amount,status,method,bank_account,serial_no FROM refunds ORDER BY id').all(), fin0.refunds, 'finance fields unchanged')
+  // oc
+  const oc = Object.fromEntries(db.prepare('SELECT code,name,contact,phone,address FROM oc_customers').all().map((x) => [x.code, x]))
+  assert.equal(oc.OC1.phone, pp); assert.match(oc.OC1.name, /^erased:/); assert.match(oc.OC1.contact, /^erased:/); assert.match(oc.OC1.address, /^erased:/)
+  assert.equal(oc.OC2.name, '李四'); assert.equal(oc.OC2.phone, OTHER)
+  assert.equal(oc.OC3.name, '某某贸易有限公司', 'business name kept even though an address row carries the subject phone'); assert.equal(oc.OC3.contact, '王五')
+  const addr = db.prepare('SELECT customer_id,name,contact,phone,address FROM oc_addresses ORDER BY id').all()
+  assert.equal(addr[0].phone, pp); assert.match(addr[0].contact, /^erased:/); assert.match(addr[0].address, /^erased:/); assert.equal(addr[0].name, '仓库')
+  assert.equal(addr[1].phone, OTHER)
+  const ocs = Object.fromEntries(db.prepare('SELECT doc_no,customer_name FROM oc_orders').all().map((x) => [x.doc_no, x.customer_name]))
+  assert.match(ocs['OC-ORD-1'], /^erased:/); assert.equal(ocs['OC-ORD-2'], '李四'); assert.equal(ocs['OC-ORD-3'], '某某贸易有限公司')
+  assert.match(db.prepare('SELECT customer_name FROM oc_statements').get().customer_name, /^erased:/)
+  assert.match(db.prepare('SELECT subject_name FROM ar_documents').get().subject_name, /^erased:/)
+  assert.deepEqual(db.prepare('SELECT id,doc_no,customer_id,total_amount,status FROM oc_orders ORDER BY id').all(), fin0.oc_orders)
+  assert.deepEqual(db.prepare('SELECT id,doc_no,subject_id,amount FROM ar_documents').all(), fin0.ar)
+  // logs: tied + raw rows replaced, ambiguous untouched, evidence columns and amounts intact
+  const logs = db.prepare('SELECT id,action,entity,entity_id,detail FROM audit_logs WHERE action<>? ORDER BY id').all('PRIVACY_ERASE')
+  assert.deepEqual(JSON.parse(logs[0].detail), { phone: pp, amount: 100, doc_no: 'H5-1' })
+  assert.deepEqual(JSON.parse(logs[1].detail), { phone: MASKED, amount: 4321.5, doc_no: 'PAY-9' }, 'ambiguous masked-only row is not touched by default')
+  assert.deepEqual(JSON.parse(logs[2].detail), { phone: '139****4321', amount: 50 })
+  assert.equal(logs[3].detail, `customer called from ${pp} about refund`)
+  assert.deepEqual(db.prepare('SELECT id,user_name,action,module,entity,entity_id,created_at FROM audit_logs WHERE action<>? ORDER BY id').all('PRIVACY_ERASE'), fin0.audit)
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM audit_logs').get().n, fin0.n_audit + 1)
+  const nl = db.prepare('SELECT payload FROM notify_logs ORDER BY id').all().map((x) => x.payload)
+  assert.equal(nl[0], `raw ${pp} appeared`); assert.equal(nl[1], `only masked ${MASKED} appeared`); assert.equal(nl[2], 'nothing personal 100.00')
+  assert.equal(db.prepare('PRAGMA foreign_key_check').all().length, fk0)
+  assert.ok(!audit.residual_raw_phone.length || audit.residual_raw_phone.every((x) => !/^(refunds|oc_|audit_logs|notify_logs)/.test(x)), 'covered tables have no residual')
+  assert.ok(!JSON.stringify(audit).includes(PHONE))
+  db.close()
+})
+
+test('--include-ambiguous-masked also replaces masked-only log rows, never touching amounts or document numbers', (t) => {
+  const f = y8Fixture(t)
+  const rep = JSON.parse(run2(f.dir, [PHONE, '--report', '--include-ambiguous-masked']).stdout).industries.cosmetic
+  assert.equal(rep.tables.audit_logs.rows, 3); assert.equal(rep.tables.notify_logs.rows, 2)
+  assert.equal(run2(f.dir, [PHONE, '--confirm', '--actor', 'boss', '--include-ambiguous-masked']).status, 0)
+  const db = open(f.dir)
+  const pp = db.prepare('SELECT phone FROM mall_customers WHERE id=?').get(f.cid).phone
+  const pay = JSON.parse(db.prepare("SELECT detail FROM audit_logs WHERE action='PAY'").get().detail)
+  assert.deepEqual(pay, { phone: pp, amount: 4321.5, doc_no: 'PAY-9' })
+  assert.equal(db.prepare("SELECT detail FROM audit_logs WHERE action='PRIVACY_ERASE'").get().detail.includes('"include_ambiguous_masked":true'), true)
+  assert.equal(db.prepare('SELECT payload FROM notify_logs WHERE id=2').get().payload, `only masked ${pp} appeared`)
+  db.close()
+})
+
+test('a failure in the new tables rolls the whole database back (one transaction, nothing half-erased)', (t) => {
+  const f = y8Fixture(t)
+  const db = open(f.dir)
+  db.exec("CREATE TRIGGER block_oc BEFORE UPDATE OF customer_name ON oc_statements BEGIN SELECT RAISE(ABORT,'blocked'); END")
+  db.close()
+  const r = run2(f.dir, [PHONE, '--confirm', '--actor', 'boss'])
+  assert.equal(r.status, 1, r.stdout + r.stderr)
+  const db2 = open(f.dir)
+  assert.equal(db2.prepare('SELECT name FROM mall_customers WHERE phone=?').get(PHONE).name, '张三')
+  assert.equal(db2.prepare("SELECT customer_name FROM refunds WHERE doc_no='RFD-M'").get().customer_name, '张三')
+  assert.equal(db2.prepare("SELECT detail FROM audit_logs WHERE entity='sales_orders' AND entity_id='77'").get().detail.includes(PHONE), true)
+  assert.equal(db2.prepare("SELECT COUNT(*) n FROM audit_logs WHERE action='PRIVACY_ERASE'").get().n, 0)
+  db2.close()
+})
+
+test('export covers the same set as erase and reports (not exports) masked-only log rows', (t) => {
+  const f = y8Fixture(t)
+  const out = path.join(f.dir, 'y8.json')
+  assert.equal(run('scripts/privacy-export.mjs', f.dir, [PHONE, '--out', out]).status, 0)
+  const c = JSON.parse(readFileSync(out, 'utf8')).industries.cosmetic
+  assert.deepEqual(c.refunds.map((x) => x.doc_no).sort(), ['RFD-B', 'RFD-M', 'RFD-P'])
+  assert.equal(c.oc_customers.length, 1); assert.equal(c.oc_addresses.length, 1); assert.equal(c.oc_orders.length, 1); assert.equal(c.oc_statements.length, 1)
+  assert.equal(c.audit_logs.length, 2); assert.equal(c.notify_logs.length, 1)
+  assert.deepEqual(c.ambiguous_masked_log_rows, { audit_logs: 1, notify_logs: 1 })
+  const text = readFileSync(out, 'utf8')
+  assert.ok(!text.includes('PAY-9') && !text.includes('李四'), 'rows that cannot be tied to the subject are not exported')
+})
+
+test('report surfaces what the tool does not cover: master-data phones and raw numbers in other tables', (t) => {
+  const f = y8Fixture(t)
+  const db = open(f.dir)
+  db.prepare("INSERT INTO dealers (code,name,phone) VALUES ('D-X','某经销商',?)").run(PHONE)
+  db.prepare("INSERT INTO doc_events (doc_type,doc_id,action,to_state,payload_json) VALUES ('sales_order',1,'X','s',?)").run(`{"call":"${PHONE}"}`)
+  db.close()
+  const j = JSON.parse(run2(f.dir, [PHONE, '--report']).stdout).industries.cosmetic
+  assert.equal(j.manual_review['dealers.phone'], 1)
+  assert.ok(Object.keys(j.raw_phone_not_covered).includes('doc_events.payload_json'), JSON.stringify(j.raw_phone_not_covered))
+  assert.ok(!Object.keys(j.raw_phone_not_covered).some((k) => /^(refunds|oc_|mall_|oms_orders\.receiver)/.test(k)))
+  // 执行后：实际残留如实列出，且不被悄悄改写
+  const r = JSON.parse(run2(f.dir, [PHONE, '--confirm', '--actor', 'boss']).stdout).cosmetic
+  assert.equal(r.residual_raw_phone['doc_events.payload_json'], 1)
+  assert.equal(r.residual_raw_phone['dealers.phone'], 1)
+  const d = open(f.dir)
+  assert.equal(d.prepare('SELECT phone FROM dealers').get().phone, PHONE, 'master data is left alone')
+  d.close()
+})
+
+test('Y8 audit findings: identifiers that embed the number and JSON numbers are never rewritten; report predicts residue per row; oc-only subjects are found', (t) => {
+  const f = y8Fixture(t)
+  const db = open(f.dir)
+  const ins = db.prepare('INSERT INTO audit_logs (user_id,user_name,action,module,entity,entity_id,detail) VALUES (?,?,?,?,?,?,?)')
+  const tied = String(f.omsId)
+  const detail = '{"doc_no":"RC-13812345678","bank":"13812345678","amount":13812345678,"memo":"call 13812345678 now","n":1.50}'
+  ins.run(1, 'boss', 'EDIT', 'oms', 'oms_orders', tied, detail)
+  ins.run(1, 'boss', 'EDIT', 'oms', 'oms_orders', tied, 'ref RC-13812345678 and 13812345678-X untouched; tel:13812345678.')
+  db.prepare("UPDATE sales_orders SET remark=? WHERE doc_no='SO-1'").run('call 13812345678')
+  db.prepare("INSERT INTO sales_orders (doc_no,channel,order_date,status,receiver,receiver_phone,receivable_amount,remark) VALUES ('SO-OTHER','store','2026-03-01','completed','赵六','13999999999',1,'mentions 13812345678 in passing')").run()
+  db.prepare("INSERT INTO oc_addresses (customer_id,name,contact,phone,address) VALUES (?,?,?,?,?)").run(f.oc1, '备用', '张三', '13011112222', '备用地址路1号')
+  db.prepare("INSERT INTO oc_addresses (customer_id,name,contact,phone,address) VALUES (?,?,?,?,?)").run(f.oc1, '空号', '张三', null, '无电话地址')
+  db.close()
+  const rep = JSON.parse(run2(f.dir, [PHONE, '--report']).stdout).industries.cosmetic
+  assert.equal(rep.raw_phone_not_covered['sales_orders.remark'], 1, 'the untouched sales order remark is reported even though another row of the same column is cleaned')
+  const exec = JSON.parse(run2(f.dir, [PHONE, '--confirm', '--actor', 'boss']).stdout).cosmetic
+  assert.deepEqual(exec.residual_raw_phone, rep.raw_phone_not_covered, 'report prediction == measured residue')
+  const d = open(f.dir)
+  const pp = d.prepare('SELECT phone FROM mall_customers WHERE id=?').get(f.cid).phone
+  const rows = d.prepare("SELECT detail FROM audit_logs WHERE action='EDIT' ORDER BY id").all().map((x) => x.detail)
+  const j = JSON.parse(rows[0])
+  assert.equal(j.doc_no, 'RC-13812345678'); assert.equal(j.amount, 13812345678); assert.equal(j.n, 1.5)
+  assert.equal(j.bank, '13812345678', 'bank-ish keys keep their value'); assert.equal(j.memo, `call ${pp} now`)
+  assert.equal(rows[1], `ref RC-13812345678 and 13812345678-X untouched; tel:${pp}.`)
+  assert.equal(d.prepare("SELECT remark FROM sales_orders WHERE doc_no='SO-OTHER'").get().remark, 'mentions 13812345678 in passing')
+  const addrs = d.prepare('SELECT contact,phone,address FROM oc_addresses WHERE customer_id=? ORDER BY id').all(f.oc1)
+  assert.ok(addrs.length === 2 && addrs.every((a) => /^erased:/.test(a.contact) && /^erased:/.test(a.address)), JSON.stringify(addrs))
+  assert.match(addrs[0].phone, /^erased:/); assert.equal(addrs[1].phone, null)
+  d.close()
+})
+
+test('a subject that exists only as an order-center customer is found, erased once and then reported as already erased', (t) => {
+  const f = y8Fixture(t)
+  const db = open(f.dir)
+  db.prepare("INSERT INTO oc_customers (code,name,source_type,source_id,contact,phone,address) VALUES ('OC9','赵七','store',9,'赵七','13722223333','某地')").run()
+  db.close()
+  assert.equal(JSON.parse(run2(f.dir, ['13722223333', '--report']).stdout).industries.cosmetic.tables.oc_customers.rows, 1)
+  const r = run2(f.dir, ['13722223333', '--confirm', '--actor', 'boss'])
+  assert.equal(r.status, 0, r.stderr + r.stdout)
+  const d = open(f.dir)
+  assert.match(d.prepare("SELECT phone FROM oc_customers WHERE code='OC9'").get().phone, /^erased:[0-9a-f]{24}-0$/)
+  assert.equal(d.prepare("SELECT name FROM oc_customers WHERE code='OC9'").get().name.startsWith('erased:'), true)
+  d.close()
+  const again = run2(f.dir, ['13722223333', '--confirm', '--actor', 'boss'])
+  assert.equal(again.status, 0, again.stderr); assert.match(again.stdout, /already-erased/)
+})
+
+test('Y8 round 2: JSON edits are lossless, protection follows ancestors, phone-named fields are not mistaken for identifiers, association uses the same boundary rules', (t) => {
+  const f = y8Fixture(t)
+  const db = open(f.dir)
+  const ins = db.prepare('INSERT INTO audit_logs (user_id,user_name,action,module,entity,entity_id,detail) VALUES (?,?,?,?,?,?,?)')
+  const tied = String(f.omsId)
+  const raw = `{ "transaction_id":9007199254740993, "n": 1.50 ,"note":"tel ${PHONE} ok","invoice":{"id":"${PHONE}"},"bank_account":{"value":"${PHONE}"},"phone_number":"${MASKED}","preferred_phone":"${PHONE}" }`
+  ins.run(1, 'boss', 'R2A', 'oms', 'oms_orders', tied, raw)
+  // 与主体无关：单号里嵌了号码，同时带一个恰好同遮盖串的号码 ⇒ 只能算"遮盖串命中"，不能算属于主体
+  ins.run(1, 'boss', 'R2B', 'oms', 'oms_orders', '3', `{"doc_no":"RC-${PHONE}","phone":"${MASKED}"}`)
+  db.prepare("INSERT INTO notify_logs (channel_code,title,payload,status) VALUES ('c','t',?,'success')").run(`{"ref":"RC-${PHONE}","who":"${MASKED}"}`)
+  db.close()
+  const rep = JSON.parse(run2(f.dir, [PHONE, '--report']).stdout).industries.cosmetic
+  assert.equal(rep.ambiguous_masked.audit_logs, 2, 'PAY row + the R2B row (its masked phone is the only match)')
+  assert.equal(rep.ambiguous_masked.notify_logs, 2)
+  assert.ok(rep.masked_fragment_columns['audit_logs.detail'] >= 3)
+  assert.equal(run2(f.dir, [PHONE, '--confirm', '--actor', 'boss']).status, 0)
+  const d = open(f.dir)
+  const pp = d.prepare('SELECT phone FROM mall_customers WHERE id=?').get(f.cid).phone
+  const a = d.prepare("SELECT detail FROM audit_logs WHERE action='R2A'").get().detail
+  assert.equal(a, `{ "transaction_id":9007199254740993, "n": 1.50 ,"note":"tel ${pp} ok","invoice":{"id":"${PHONE}"},"bank_account":{"value":"${PHONE}"},"phone_number":"${pp}","preferred_phone":"${pp}" }`, 'byte-for-byte except the personal values')
+  assert.equal(d.prepare("SELECT detail FROM audit_logs WHERE action='R2B'").get().detail, `{"doc_no":"RC-${PHONE}","phone":"${MASKED}"}`, 'unrelated row untouched')
+  d.close()
+  const out = path.join(f.dir, 'r2.json')
+  assert.equal(run('scripts/privacy-export.mjs', f.dir, [OTHER, '--out', out]).status, 0)
+  assert.ok(!readFileSync(out, 'utf8').includes('R2B'))
+})
