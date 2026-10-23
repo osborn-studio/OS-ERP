@@ -71,4 +71,4 @@ export function collect(db, phone) {
   }
 }
 
-export const isEmpty = (c) => !c.customer && !c.cart_items.length && !c.orders.length && !c.pos_orders.length
+export const isEmpty = (c) => !c.customer && !c.cart_items.length && !c.orders.length && !c.sales_orders.length && !c.pos_orders.length

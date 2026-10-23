@@ -8,7 +8,7 @@
  * 【判据】
  *   · 默认 `--dry-run`：只读打开库，按行业打印将删除的行数，不改任何东西。`--execute` 才删。
  *   · 每个行业库**一个事务**：三类删除 + 一条 `RETENTION_PURGE` 严格审计（auditStrictRow）。审计写不进 ⇒ 整个事务回滚，什么都不删。
- *   · **只清理白名单模块**：audit_logs 里 module ∈ {master, notify, im, docflow, demand, quality} 的行才可能被删；
+ *   · **只清理白名单模块**：audit_logs 里 module ∈ {master, notify} 的行才可能被删；
  *     其余模块（finance / settings / auth / approval / privacy / retention 以及 purchase / sales / pos / dealer / inventory …
  *     这些业务单据的写操作审计就是账务证据）、module 为空或未知的行、`FUNDS_` 开头的行，一律保留。
  *     mcp_call_logs 里 level='danger' 的行也保留。
@@ -31,7 +31,7 @@ import { auditStrictRow } from '../server/lib/audit-trail.js'
 // 白名单而非黑名单：审计行里几乎每个业务模块的 CREATE/UPDATE/pay/approve/void 都是账务证据（purchase/sales/pos/dealer/
 // inventory/…），逐个列"不许删"必然漏。所以只有**明确登记为无账务 / 无授权影响**的模块才可被清理；
 // 新增或未知模块、module 为空的行一律保留。要扩大范围是政策变更（改本清单 + ADR-0030 + 测试）。
-export const PURGEABLE_AUDIT_MODULES = ['master', 'notify', 'im', 'docflow', 'demand', 'quality']
+export const PURGEABLE_AUDIT_MODULES = ['master', 'notify']
 const PLACEHOLDERS = PURGEABLE_AUDIT_MODULES.map(() => '?').join(',')
 const AUDIT_ELIGIBLE = `created_at < datetime('now','localtime',?) AND module IN (${PLACEHOLDERS}) AND action NOT LIKE 'FUNDS\\_%' ESCAPE '\\'`
 const NOTIFY_ELIGIBLE = `created_at < datetime('now','localtime',?)`

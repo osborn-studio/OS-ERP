@@ -47,8 +47,11 @@ try {
 }
 
 // 自由文本里的凭据：`token=x`（redactText）、JSON 片段 `"token":"x"`、`Authorization: Bearer x`、裸 `Bearer x`。
-const KV_SECRET = /(["']?(?:[A-Za-z0-9_.-]*(?:password|passwd|secret|token|authorization|cookie|jwt|key)[A-Za-z0-9_.-]*)["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|(?:Bearer\s+)?[^\s,;&}\]]+)/gi
+const KV_SECRET = /(["']?(?:[A-Za-z0-9_.-]*(?:password|passwd|pwd|secret|token|authorization|auth|credential|cookie|jwt|key)[A-Za-z0-9_.-]*)["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|(?:Bearer\s+)?[^\s,;&}\]]+)/gi
 const BEARER = /\bBearer\s+[A-Za-z0-9._~+/=-]+/gi
+// redact.js 的 SENSITIVE_KEY 不含 passwd / pwd / credential / auth* 这类写法；导出口径再补一层（只会多遮，不会少遮）
+const EXTRA_KEY = /passwd|pwd|credential|auth|bearer|private|signature|sign\b/i
+const sensitiveKey = (k) => SENSITIVE_KEY.test(k) || EXTRA_KEY.test(k)
 function scrubText(str) {
   const t = str.trim()
   if ((t.startsWith('{') && t.endsWith('}')) || (t.startsWith('[') && t.endsWith(']'))) {
@@ -60,7 +63,7 @@ function scrub(v) {
   if (typeof v === 'string') return scrubText(v)
   if (Array.isArray(v)) return v.map(scrub)
   if (v && typeof v === 'object') {
-    return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, SENSITIVE_KEY.test(k) && x !== null && x !== '' ? MASK : scrub(x)]))
+    return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, sensitiveKey(k) && x !== null && x !== '' ? MASK : scrub(x)]))
   }
   return v
 }

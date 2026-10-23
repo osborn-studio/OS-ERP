@@ -159,12 +159,27 @@ test('export scrubs credentials embedded in free text and JSON fragments', (t) =
   const db = open(dir)
   db.prepare("UPDATE oms_orders SET remark=? WHERE platform_order_no='H5-2'").run('{"token":"jsonsecret1","note":"hi"}')
   db.prepare("UPDATE oms_orders SET remark=? WHERE platform_order_no='H5-1'").run('Authorization: Bearer headersecret2 and api_key: keysecret3')
+  db.prepare("UPDATE oms_orders SET remark=? WHERE platform_order_no='H5-3'").run('{"passwd":"pwdsecret4"}')
   db.close()
   const out = path.join(dir, 'scrub.json')
   assert.equal(run('scripts/privacy-export.mjs', dir, [PHONE, '--out', out]).status, 0)
   const text = readFileSync(out, 'utf8')
-  for (const leaked of ['jsonsecret1', 'headersecret2', 'keysecret3']) assert.ok(!text.includes(leaked), leaked)
+  for (const leaked of ['jsonsecret1', 'headersecret2', 'keysecret3', 'pwdsecret4']) assert.ok(!text.includes(leaked), leaked)
   assert.ok(text.includes('hi'), 'non-secret text survives')
+})
+
+test('a subject that only appears on sales orders is still found by export and erase', (t) => {
+  const { dir } = fixture(t)
+  const db = open(dir)
+  db.prepare("INSERT INTO sales_orders (doc_no,channel,order_date,status,receiver,receiver_phone,receivable_amount) VALUES ('XS-ONLY','store','2026-02-01','completed','会员 13700000001','13700000001',5)").run()
+  db.close()
+  const out = path.join(dir, 'only.json')
+  assert.equal(run('scripts/privacy-export.mjs', dir, ['13700000001', '--out', out]).status, 0)
+  assert.equal(JSON.parse(readFileSync(out, 'utf8')).industries.cosmetic.sales_orders.length, 1)
+  assert.equal(run('scripts/privacy-erase.mjs', dir, ['13700000001', '--confirm', '--actor', 'boss']).status, 0)
+  const db2 = open(dir)
+  assert.match(db2.prepare("SELECT receiver_phone FROM sales_orders WHERE doc_no='XS-ONLY'").get().receiver_phone, /^erased:[0-9a-f]{24}-0$/)
+  db2.close()
 })
 
 test('pseudonyms are keyed: a different secret yields different values', (t) => {

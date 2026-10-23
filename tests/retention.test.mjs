@@ -29,6 +29,9 @@ function seed(db) {
   const audit = db.prepare(`INSERT INTO audit_logs (user_name, action, module, created_at) VALUES (?,?,?,${'?'})`)
   const at = (days) => db.prepare(`SELECT ${ago(days)} AS t`).get().t
   audit.run('u', 'OLD_PLAIN', 'master', at(400))
+  audit.run('u', 'QC_HANDLE_CONFIRM', 'quality', at(2000))
+  audit.run('u', 'SYNC_APPROVAL', 'im', at(2000))
+  audit.run('u', 'TRANSITION', 'docflow', at(2000))
   audit.run('u', 'NEW_PLAIN', 'master', at(10))
   // 业务单据写操作的审计是账务证据：不在白名单模块里的一律保留（含未知模块与空模块）
   audit.run('u', 'pay', 'purchase', at(2000))
@@ -82,7 +85,7 @@ test('--execute deletes only eligible rows and writes exactly one audit summary 
   const db2 = open(dir)
   const actions = db2.prepare('SELECT action FROM audit_logs ORDER BY id').all().map((x) => x.action)
   assert.ok(!actions.includes('OLD_PLAIN'))
-  for (const keep of ['NEW_PLAIN', 'OLD_FINANCE', 'OLD_SETTING', 'OLD_AUTH', 'FUNDS_CONFIRM', 'pay', 'APPROVE', 'CREATE', 'UNKNOWN_MODULE', 'NO_MODULE']) assert.ok(actions.includes(keep), keep)
+  for (const keep of ['NEW_PLAIN', 'OLD_FINANCE', 'OLD_SETTING', 'OLD_AUTH', 'FUNDS_CONFIRM', 'pay', 'APPROVE', 'CREATE', 'UNKNOWN_MODULE', 'NO_MODULE', 'QC_HANDLE_CONFIRM', 'SYNC_APPROVAL', 'TRANSITION']) assert.ok(actions.includes(keep), keep)
   assert.deepEqual(db2.prepare('SELECT title FROM notify_logs').all().map((x) => x.title), ['new'])
   assert.deepEqual(db2.prepare('SELECT tool_name FROM mcp_call_logs ORDER BY id').all().map((x) => x.tool_name), ['old_danger', 'new_read'])
   const summary = db2.prepare("SELECT * FROM audit_logs WHERE action='RETENTION_PURGE'").all()
