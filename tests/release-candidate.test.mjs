@@ -170,7 +170,7 @@ test('candidate builds RC-<version>-<sha>.zip with sha256, EVIDENCE.json and not
   const notes = readFileSync(path.join(dir, 'RELEASE-NOTES.md'), 'utf8')
   assert.match(notes, new RegExp(version.replace(/\./g, '\\.')))
   assert.match(notes, /not a published release/i)
-  assert.match(notes, /第八批/)
+  assert.match(notes, /第[一二三四五六七八九十]+批/) // 取 CHANGELOG 最新批次节，不写死批次名
 
   // 默认（无 --ci-run / 人工声明）时同样的证据字段是 null / not run
   // verify-release --evidence 接受真证据，拒绝篡改

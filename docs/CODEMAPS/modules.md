@@ -1369,7 +1369,7 @@ HTTP 响应与错误归一：`ok` / `fail` / `wrap` 的**唯一实现**（统一
 | `resolveCurrency` | fn | — | — | — |
 | `resolveOwnerOrg` | fn | — | inventory.adjust, inventory.get_cost, inventory.ownership_transfer, inventory.pick_suggestion, inventory.stock_in, inventory.stock_out, inventory.transfer | mcp/tools.js |
 | `setStockNowProvider` | fn | — | — | — |
-| `stockScopeSql` | fn | 13 条：inventory.js×13 | — | lib/transfer.js |
+| `stockScopeSql` | fn | 14 条：inventory.js×14 | — | lib/transfer.js |
 | `warehouseInScope` | fn | GET /api/inventory/serials/trace/:serialNo | — | — |
 
 ## `server/lib/transfer.js`
