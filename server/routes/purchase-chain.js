@@ -36,7 +36,7 @@ import {
   buildSettlement, getSettlement, transitionSettlement,
   createPayment, getPayment, transitionPayment, planAllocation,
   refreshOrderStats, refreshCloseFlags,
-  purchaseOverview, purchaseTodos, purchaseActions, PO_READ_PERMS, purchaseScopeSql
+  purchaseOverview, purchaseTodos, purchaseActions, PO_READ_PERMS, purchaseScopeSql, assertPurchaseDocInScope
 } from '../lib/purchase.js'
 import { explainLifecycle, assertEdgePermitted, getDocType } from '../lib/docflow.js'
 // 付款执行的证据闸 + 二人复核（ADR-0018）。`pay` 是采购域唯一真正动钱的动作，与收款确认走同一份判据。
@@ -114,6 +114,9 @@ function assertActionPermitted(req, db, docType, id) {
  */
 const readGate = [requireAuth, requireInternal('采购单据'), requirePerm(...PO_READ_PERMS), attachOrgScope]
 
+/** 主数据读（供货目录 / 取价）：同一门，但不挂组织范围 —— 主数据不分组织（ADR-0020）。 */
+const masterReadGate = [requireAuth, requireInternal('采购单据'), requirePerm(...PO_READ_PERMS)]
+
 r.get(
   '/chain/overview',
   readGate,
@@ -155,11 +158,13 @@ r.get(
 /** 采购授权链路：把「谁在什么权限下能把单子推到哪」直接列出来，供前端做按钮可用性 */
 r.get(
   '/chain/actions',
-  requireAuth,
+  readGate,
   guard((req, res) => {
     const { doc_type: docType, id } = req.query
     if (!docType || !id) return fail(res, '需要 doc_type 与 id', 400)
-    return ok(res, { list: purchaseActions(getDb(), String(docType), Number(id)) })
+    const db = getDb()
+    assertPurchaseDocInScope(db, String(docType), Number(id), req.orgScope)
+    return ok(res, { list: purchaseActions(db, String(docType), Number(id)) })
   })
 )
 
@@ -169,7 +174,7 @@ r.get(
 
 r.get(
   '/catalog',
-  requireAuth,
+  masterReadGate,
   guard((req, res) => {
     const db = getDb()
     const cond = ['1=1']
@@ -216,7 +221,7 @@ r.post(
 /** 单行取价试算：必须带来源（界面上回答「为什么是这个价」） */
 r.get(
   '/price',
-  requireAuth,
+  masterReadGate,
   guard((req, res) => {
     const db = getDb()
     const skuId = Number(req.query.sku_id)
@@ -235,7 +240,7 @@ r.get(
 /** 批量取价：新建请购/订单时整单试算，避免前端逐行请求 */
 r.post(
   '/price-preview',
-  requireAuth,
+  readGate,
   guard((req, res) => {
     const db = getDb()
     const { supplier_id: supplierId = null, lines = [], manual = null, at = null } = req.body || {}
@@ -243,6 +248,7 @@ r.post(
     const priced = resolvePurchasePrices(db, { lines, supplierId, at, manual })
     const issues = checkSupplyCatalog(db, { supplierId, lines })
     const orderId = req.body.order_id ? Number(req.body.order_id) : null
+    if (orderId) assertPurchaseDocInScope(db, 'PO', orderId, req.orgScope)
     const over = orderId ? checkOverReceive(db, { orderId, lines }) : []
     const total = priced.reduce((s, x) => s + Number(x.amount || 0), 0)
     const qty = priced.reduce((s, x) => s + Number(x.qty || 0), 0)
@@ -285,9 +291,10 @@ r.get(
 
 r.get(
   '/requisitions/:id',
-  requireAuth,
+  readGate,
   guard((req, res) => {
     const db = getDb()
+    assertPurchaseDocInScope(db, 'PRQ', Number(req.params.id), req.orgScope)
     const row = getRequisition(db, Number(req.params.id))
     if (!row) return fail(res, '请购单不存在', 404)
     row.actions = purchaseActions(db, 'PRQ', row.id)
@@ -434,9 +441,10 @@ r.get(
 
 r.get(
   '/invoices/:id',
-  requireAuth,
+  readGate,
   guard((req, res) => {
     const db = getDb()
+    assertPurchaseDocInScope(db, 'PI', Number(req.params.id), req.orgScope)
     const row = getInvoice(db, Number(req.params.id))
     if (!row) return fail(res, '采购发票不存在', 404)
     row.actions = purchaseActions(db, 'PI', row.id)
@@ -495,11 +503,13 @@ r.post(
 /** 发票来源建议：本供应商已入库但未开票的行，供财务一键带出 */
 r.get(
   '/invoices-available-lines',
-  requireAuth,
+  readGate,
   guard((req, res) => {
     const db = getDb()
     const supplierId = Number(req.query.supplier_id)
     if (!supplierId) return fail(res, '需要 supplier_id', 400)
+    // 入库按仓的组织收口（ADR-0020）；已开票量保持全量 —— 它是"这张订单行还剩多少可开"的事实，不能随调用者范围缩水。
+    const scope = purchaseScopeSql(req.orgScope, 'rc')
     // ⚠️ 必须**按订单行**归集（GROUP BY rc.order_id, ri.sku_id），不能按 sku_id 汇总。
     //
     // 按 sku 汇总时 `recv_qty` 是"该供应商该商品在**所有订单**上的入库合计"，
@@ -525,11 +535,11 @@ r.get(
            FROM purchase_receipt_items ri
            JOIN purchase_receipts rc ON rc.id=ri.receipt_id
            LEFT JOIN product_skus s ON s.id=ri.sku_id
-          WHERE rc.supplier_id=?
+          WHERE rc.supplier_id=? AND ${scope.wh}
           GROUP BY rc.order_id, ri.sku_id
           ORDER BY s.sku_code, rc.order_id`
       )
-      .all(supplierId)
+      .all(supplierId, ...scope.params)
     const list = rows
       .map((x) => ({
         ...x,
@@ -576,9 +586,10 @@ r.get(
 
 r.get(
   '/settlements/:id',
-  requireAuth,
+  readGate,
   guard((req, res) => {
     const db = getDb()
+    assertPurchaseDocInScope(db, 'PST', Number(req.params.id), req.orgScope)
     const row = getSettlement(db, Number(req.params.id))
     if (!row) return fail(res, '采购结算单不存在', 404)
     row.actions = purchaseActions(db, 'PST', row.id)
@@ -589,29 +600,32 @@ r.get(
 /** 结算试算：先看会结出什么，再决定要不要落单（避免建了又作废） */
 r.get(
   '/settlement-preview',
-  requireAuth,
+  readGate,
   guard((req, res) => {
     const db = getDb()
     const supplierId = Number(req.query.supplier_id)
     if (!supplierId) return fail(res, '需要 supplier_id', 400)
     const ps = req.query.period_start || null
     const pe = req.query.period_end || null
+    // 试算只汇总调用者范围内的入库（经仓的组织）与发票（自身 org_id）（ADR-0020）
+    const rcScope = purchaseScopeSql(req.orgScope, 'purchase_receipts')
+    const invScope = purchaseScopeSql(req.orgScope, 'purchase_invoices')
     const rc = db
       .prepare(
         `SELECT COUNT(*) c, COALESCE(SUM(total_amount),0) amt FROM purchase_receipts
-          WHERE supplier_id=? AND status IN ('received','inspected','closed')
+          WHERE supplier_id=? AND status IN ('received','inspected','closed') AND ${rcScope.wh}
             ${ps ? 'AND receipt_date>=?' : ''} ${pe ? 'AND receipt_date<=?' : ''}`
       )
-      .get(...[supplierId, ...(ps ? [ps] : []), ...(pe ? [pe] : [])])
+      .get(...[supplierId, ...rcScope.params, ...(ps ? [ps] : []), ...(pe ? [pe] : [])])
     const inv = db
       .prepare(
         `SELECT COUNT(*) c, COALESCE(SUM(amount),0) amt,
                 COALESCE(SUM(CASE WHEN invoice_type='fee' THEN amount ELSE 0 END),0) fee
            FROM purchase_invoices
-          WHERE supplier_id=? AND status IN ('verified','posted')
+          WHERE supplier_id=? AND status IN ('verified','posted') AND ${invScope.org}
             ${ps ? 'AND invoice_date>=?' : ''} ${pe ? 'AND invoice_date<=?' : ''}`
       )
-      .get(...[supplierId, ...(ps ? [ps] : []), ...(pe ? [pe] : [])])
+      .get(...[supplierId, ...invScope.params, ...(ps ? [ps] : []), ...(pe ? [pe] : [])])
     return ok(res, {
       supplier_id: supplierId,
       receipt_count: rc.c,
@@ -695,9 +709,10 @@ r.get(
 
 r.get(
   '/payments/:id',
-  requireAuth,
+  readGate,
   guard((req, res) => {
     const db = getDb()
+    assertPurchaseDocInScope(db, 'PAY', Number(req.params.id), req.orgScope)
     const row = getPayment(db, Number(req.params.id))
     if (!row) return fail(res, '付款单不存在', 404)
     row.actions = purchaseActions(db, 'PAY', row.id)
@@ -709,23 +724,35 @@ r.get(
 /** 付款前置：这张供应商还欠多少、FIFO 会核销到哪几张单 */
 r.get(
   '/payment-plan',
-  requireAuth,
+  readGate,
   guard((req, res) => {
     const db = getDb()
     const supplierId = Number(req.query.supplier_id)
     const amount = Number(req.query.amount || 0)
     if (!supplierId) return fail(res, '需要 supplier_id', 400)
+    // 只列 / 只核销调用者范围内的结算单（ADR-0020）；全局范围沿用 `planAllocation`，受限范围对已按范围过滤的清单做同口径 FIFO
+    const scope = purchaseScopeSql(req.orgScope, 'st')
     const open = db
       .prepare(
         `SELECT st.id, st.doc_no, st.settle_date, st.settle_amount, st.paid_amount,
                 (st.settle_amount - st.paid_amount) open_amount
            FROM purchase_settlements st
-          WHERE st.supplier_id=? AND st.status IN ('audited','settled')
+          WHERE st.supplier_id=? AND st.status IN ('audited','settled') AND ${scope.org}
             AND st.settle_amount - st.paid_amount > 0.01
           ORDER BY st.settle_date, st.id`
       )
-      .all(supplierId)
-    const plan = amount > 0 ? planAllocation(db, supplierId, amount) : []
+      .all(supplierId, ...scope.params)
+    let plan = []
+    if (amount > 0 && (!req.orgScope || req.orgScope.scope === 'all')) plan = planAllocation(db, supplierId, amount)
+    else if (amount > 0) {
+      let left = amount
+      for (const x of open) {
+        if (left <= 1e-6) break
+        const take = Math.min(left, Number(x.open_amount))
+        plan.push({ settle_id: x.id, amount: Math.round(take * 100) / 100, remark: 'FIFO 自动核销' })
+        left -= take
+      }
+    }
     return ok(res, {
       open_total: Math.round(open.reduce((s, x) => s + Number(x.open_amount || 0), 0) * 100) / 100,
       list: open,
@@ -880,10 +907,11 @@ r.get(
 /** 采购订单的四段关闭状态 + 后段金额 */
 r.get(
   '/orders/:id/closes',
-  requireAuth,
+  readGate,
   guard((req, res) => {
     const db = getDb()
     const id = Number(req.params.id)
+    assertPurchaseDocInScope(db, 'PO', id, req.orgScope)
     const order = db.prepare('SELECT * FROM purchase_orders WHERE id=?').get(id)
     if (!order) return fail(res, '采购订单不存在', 404)
     const flags = refreshCloseFlags(db, id)
