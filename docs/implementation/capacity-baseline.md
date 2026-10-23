@@ -49,7 +49,7 @@ node scripts/bench-api.mjs --concurrency 4 --iterations 30 --out "$GML_DATA_DIR/
 | GET /api/order-center/overview | 30 | 2.0 | 8.3 | 8.6 |
 | GET /api/notify/meta | 30 | 1.2 | 3.5 | 4.0 |
 
-解读限制：登录的 250 ms 主要是 bcrypt 同步计算在单线程事件循环里排队（4 个并发登录互相等待），体现的是登录串行化而非单次登录成本；其余接口是 demo 库（数百行量级）上的读，**不代表生产数据量**。本基线没有覆盖写路径（创建/审核/收付款）、并发写冲突下的 `SQLITE_BUSY`、长时间 soak、内存增长。
+解读限制：登录的 250 ms 主要是 bcrypt 同步计算在单线程事件循环里排队（4 个并发登录互相等待），体现的是登录串行化而非单次登录成本；其余接口是 demo 库（数百行量级）上的读，**不代表生产数据量**。本节的读基线没有覆盖写路径（创建/审核/收付款）、并发写冲突下的 `SQLITE_BUSY`（写档见文末"Y7 写路径基线"）、长时间 soak、内存增长。
 
 ## 仍需目标主机
 
@@ -87,3 +87,34 @@ node scripts/bench-api.mjs --concurrency 4 --iterations 30 --out "$GML_DATA_DIR/
 0 错误，`SQLITE_BUSY` 0。因为 HTTP 数字不可用，补一份**进程内逐语句计时**（同一进程里交替执行"前库/后库"各 300 次，排除网络与调度，但机器仍有负载，只看量级）：语句 p50 变化——`stock.txn_by_doc` 34→1 µs，`sales.items` 20→2 µs，`sales.list_page` 715→188 µs（p95 22.1→2.1 ms，子查询 `COUNT(*) FROM sales_order_items WHERE order_id=…` 不再逐行全表扫），`dash.sales_today` 52→3 µs，`stock.expiring` 30→8 µs，`rpt.sales_value` 18→6 µs，`rpt.purchase_value` 7→2 µs，`rpt.sales_cost` 76→43 µs，`po.refresh_invoice_amount` 4→1 µs；61 条里没有 p50 退化超过 15% 且绝对值超过 10 µs 的语句（唯一超 15% 的 `dash.sales_unpaid` 计划未变，是噪声）。
 
 **局限**：夹具库最大表约 1500 行，绝对数字小到不代表生产；要作为证据，需要在 `dmserver` 上用生产规模副本复跑 `explain-audit.mjs` 与 `bench-api.mjs`。新增索引的写放大（每个索引每次 INSERT/UPDATE 多维护一棵 B 树）未做写路径压测；`inventory_transactions` 新增 2 个（`doc_type, doc_id` 与 `doc_type, substr(biz_date,1,7)`），是写最频繁的表。
+
+## Y7 写路径基线（ADR-0035，**夹具规模，不是容量证据**）
+
+`node scripts/bench-api.mjs --profile=write`：对隔离的 demo 种子库副本并发创建采购单、确认收款（带 `evidence_ref`，复核在副本里关闭）、库存调拨（autoShip），每种 100 次，并发 8，共 300 个写请求。**单个服务进程的 SQLite 写是同步的，自己不会 BUSY**，所以脚本另起一个 worker 线程当外部写者，用独立连接周期性 `BEGIN IMMEDIATE` 占锁 30 ms、间隔 20 ms（约 60% 占锁率，比真实的偶发 CLI/备份写**重得多**），模拟其它进程。四组配置，每组一份新的种子库拷贝，Mac mini（负载不低，其它任务并行），数字只看量级：
+
+| 配置 | 成功/总数 | HTTP 500 | `write_retry` | 用尽 | 服务日志 BUSY 行 | 墙钟 s | 完整性核对 |
+|---|---|---|---|---|---|---|---|
+| 默认（busy 5000 ms，重试 4 次） | 300/300 | 0 | 0 | 0 | 0 | 2.67 | OK |
+| busy 5 ms，**重试关闭**（`--retry-max 1`） | 251/300 | 49 | 0 | 49 | 102 | 1.16 | OK |
+| busy 5 ms，重试 4 次 | 298/300 | 2 | 31 | 2 | 42 | 3.36 | OK |
+| busy 5 ms，重试 8 次 | 300/300 | 0 | 26 | 0 | 28 | 2.81 | OK |
+
+读法：
+
+- 默认 5 秒超时下，服务端**在锁上等待**而不是报错，所以 300/300 成功、没有一条 BUSY 日志，代价是尾延迟：本次默认组 `stock_transfer` 的 p95 约 850 ms（等外部写者释放，同机负载也有贡献）。这是"外部写者很重时的等待成本"，不是回归。
+- 把 `busy_timeout` 调小到 5 ms 并关闭重试，模拟"锁等不到就失败"：49/300 请求返回 500，服务日志里是 `SQLITE_BUSY`。开重试后失败降到 2（4 次）/ 0（8 次），代价是个别请求更慢（4 次组里一次确认收款 p95 约 1.5 s）。
+- **完整性核对全部通过**：成功数 = 库里的行数、无重复行、每张调拨恰好一条 `TR_OUT`、源仓库存恰好少成功调拨数、已确认收款数 = 成功数。失败的请求没有留下半截提交。脚本不重发失败请求（HTTP 路由没有幂等键），所以这里证明的是"服务端重试不会双写"，不是"客户端重发安全"。
+- "服务日志 BUSY 行"是按日志文本计的下限，且一次用尽会同时产生 `write_retry_exhausted` 与 500 错误日志，不要把它当请求数。
+- 外部写者的循环数（17–54）随运行时长变化；它只占锁、不写业务行。
+
+局限：夹具库（数百行）、单机、单个服务进程 + 线程模拟外部写者；没有测多服务实例、MCP 子进程、备份与写并发的真实叠加；没有测长时间 soak、WAL 增长与 checkpoint 饥饿；0 错误/低错误率**不能**外推到生产写入量。目标主机（`dmserver`）上的写基线仍待实测。
+
+复现：
+
+```bash
+export GML_RUNTIME_MODE=demo GML_DATA_DIR=$(mktemp -d /tmp/bench.XXXXXX)
+node scripts/reseed-all.mjs --force
+node scripts/bench-api.mjs --profile=write --iterations 100 --concurrency 8 --busy-ms 5 --retry-max 4 --out "$GML_DATA_DIR/write.json"
+```
+
+写档 JSON（`schema_version: 1`，`profile: "write"`）字段：`generated_at, scope_notice, host, config{..., contender_hold_ms, contender_gap_ms, sqlite_busy_ms, write_retry_max}, operations[3]{name, method, route, requests, errors, error_rate, status_histogram, latency_ms, ok}, contention{contender_cycles, contender_begin_failures, server_busy_log_lines, write_retry_log_lines, write_retry_exhausted_log_lines}, integrity{ok, run_id, ...}, totals`。读档的 schema 与字段未变。

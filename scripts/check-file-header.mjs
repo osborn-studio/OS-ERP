@@ -114,7 +114,12 @@ const DECLARED = [
   'tests/payment-reversal.test.mjs',
   // 门店 POS 路由授权（ADR-0025）
   'server/db/migrations/058_pos_permissions.cjs',
-  'tests/pos-authz.test.mjs'
+  'tests/pos-authz.test.mjs',
+  // 写路径并发与 SQLITE_BUSY 治理（ADR-0035）
+  'server/lib/tx.js',
+  'scripts/lib/bench-contender.mjs',
+  'tests/write-contention.test.mjs',
+  'tests/fixtures/write-contention-worker.mjs'
 ]
 
 /** 参与覆盖率统计的源文件（**排除** node_modules / dist / data） */
