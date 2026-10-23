@@ -425,6 +425,24 @@ test('AA4: QC disposition, warehouse master, purchase receipts/returns and POS s
     assert.deepEqual(insNames.sort(), ['AA4-QI-3', 'AA4-QI-4', 'AA4-QI-5'])
     assert.equal(okData(await api('/api/qc/handlings?pageSize=500', { token: NONEtoken })).list.length, 0)
 
+    // 检验单 / 报检单 / 待检来源的其余入口同一道门：提交结论会改写批次级可售状态
+    const qiB = ciOf('AA4-QI-1'); const rqB = db.prepare('SELECT request_id r FROM qc_inspections WHERE id=?').get(qiB).r
+    const ciSnap = () => JSON.stringify([db.prepare('SELECT * FROM qc_inspections WHERE id=?').get(qiB), db.prepare('SELECT * FROM qc_requests WHERE id=?').get(rqB)])
+    const c0 = ciSnap()
+    for (const act of ['submit', 'close', 'cancel']) expectStatus(await api(`/api/qc/inspections/${qiB}/${act}`, { token: A.token, body: {} }), 404, `inspection ${act}`)
+    for (const act of ['submit', 'close', 'cancel']) expectStatus(await api(`/api/qc/requests/${rqB}/${act}`, { token: A.token, body: {} }), 404, `request ${act}`)
+    expectStatus(await api(`/api/qc/requests/${rqB}`, { token: A.token }), 404, 'request get')
+    assert.equal(ciSnap(), c0)
+    const rqNames = okData(await api('/api/qc/requests?pageSize=500', { token: A.token })).list.map((r) => r.doc_no).filter((x) => x.startsWith('AA4-'))
+    assert.deepEqual(rqNames.sort(), ['AA4-QR-3', 'AA4-QR-4', 'AA4-QR-5'])
+    const insGrQ = db.prepare("INSERT INTO purchase_receipts (doc_no, supplier_id, warehouse_id, receipt_date, status) VALUES (?,?,?,date('now','localtime'),'received')")
+    const grQB = Number(insGrQ.run('ZQ-QGR-B', supplierId, whB.id).lastInsertRowid)
+    expectStatus(await api(`/api/qc/pending/detail?source_type=purchase_receipt&source_id=${grQB}`, { token: A.token }), 404, 'pending detail B')
+    assert.equal((await api(`/api/qc/pending/detail?source_type=purchase_receipt&source_id=${grQB}`, { token: f.admin })).status, 200)
+    assert.ok(!okData(await api('/api/qc/pending', { token: A.token })).list.some((r) => r.source_id === grQB))
+    assert.ok(okData(await api('/api/qc/pending', { token: f.admin })).list.some((r) => r.source_id === grQB))
+    expectStatus(await api('/api/qc/requests', { token: A.token, body: { source_type: 'purchase_receipt', source_id: grQB } }), 404, 'request from foreign receipt')
+
     // 目标隔离仓不在范围内 ⇒ 403，不出库不建调拨单
     const tfBefore = count('stock_transfers'); const aQty = stockQty(whA.id)
     const b1 = snap(dAc)

@@ -171,6 +171,9 @@ function judge(defectQty, ac) {
 export function pendingSources(db, q = {}) {
   const where = []
   const args = []
+  // ADR-0038 补充：待检来源随来源仓的组织范围（orgScope 不传 = 全局）
+  const scope = stockScopeSql(q.orgScope, '')
+  where.push(scope.sql); args.push(...scope.params)
   if (q.sourceType) {
     where.push('source_type = ?')
     args.push(q.sourceType)
@@ -506,9 +509,11 @@ export function getRequest(db, id) {
 }
 
 export function listRequests(db, q = {}) {
-  const { page = 1, pageSize = 20, status = null, sourceType = null, keyword = null } = q
+  const { page = 1, pageSize = 20, status = null, sourceType = null, keyword = null, orgScope = null } = q
   const where = []
   const args = []
+  const scope = stockScopeSql(orgScope, 'rq')
+  where.push(scope.sql); args.push(...scope.params)
   if (status) { where.push('rq.status = ?'); args.push(status) }
   if (sourceType) { where.push('rq.source_type = ?'); args.push(sourceType) }
   if (keyword) {

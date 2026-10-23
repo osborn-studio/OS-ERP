@@ -539,7 +539,7 @@ HTTP 响应与错误归一：`ok` / `fail` / `wrap` 的**唯一实现**（统一
 |---|---|---|---|---|
 | `GENERIC_5XX_MESSAGE` | const | — | — | — |
 | `bizFail` | fn | 8 条：auth.js×1, demand.js×1, notify.js×1, outsourcing.js×1, quote.js×1, sales.js×3 | — | — |
-| `fail` | fn | 189 条：accounting.js×1, ai.js×1, approval.js×5, ar.js×4, auth.js×2, costing.js×1, credit.js×5, dealers.js×10, demand.js×9, dms.js×7, docflow.js×8, im.js×3, inventory.js×14, invoice.js×2, mall.js×7, manufacture.js×5, master.js×11, meta.js×3, notify.js×1, oms.js×10, order-center.js×8, outsourcing.js×7, pos.js×9, pricing.js×3, promo.js×5, purchase-chain.js×10, purchase.js×7, qc.js×2, qc2.js×4, qimen.js×1, quote.js×2, refund.js×1, requisitions.js×11, sales.js×10 | — | lib/crud.js |
+| `fail` | fn | 190 条：accounting.js×1, ai.js×1, approval.js×5, ar.js×4, auth.js×2, costing.js×1, credit.js×5, dealers.js×10, demand.js×9, dms.js×7, docflow.js×8, im.js×3, inventory.js×14, invoice.js×2, mall.js×7, manufacture.js×5, master.js×11, meta.js×3, notify.js×1, oms.js×10, order-center.js×8, outsourcing.js×7, pos.js×9, pricing.js×3, promo.js×5, purchase-chain.js×10, purchase.js×7, qc.js×2, qc2.js×5, qimen.js×1, quote.js×2, refund.js×1, requisitions.js×11, sales.js×10 | — | lib/crud.js |
 | `failFromError` | fn | 169 条：accounting.js×18, auth.js×1, dms.js×17, mall.js×3, meta.js×2, pos.js×3, promo.js×40, purchase-chain.js×33, purchase.js×9, refund.js×4, report.js×39 | — | — |
 | `hidesInternals` | fn | — | — | — |
 | `newIncidentId` | fn | — | — | — |
@@ -1051,7 +1051,7 @@ HTTP 响应与错误归一：`ok` / `fail` / `wrap` 的**唯一实现**（统一
 | `qcOverview` | fn | GET /api/qc/overview | — | — |
 | `recalcDisposition` | fn | — | — | — |
 | `samplingPlan` | fn | — | — | — |
-| `sourceDetail` | fn | GET /api/qc/pending/detail | — | — |
+| `sourceDetail` | fn | GET /api/qc/pending/detail<br>POST /api/qc/requests | — | — |
 | `submitInspection` | fn | POST /api/qc/inspections/:id/submit | — | — |
 | `submitRequest` | fn | POST /api/qc/requests/:id/submit | — | — |
 | `transitionInspection` | fn | POST /api/qc/inspections/:id/close<br>POST /api/qc/inspections/:id/cancel | — | — |
@@ -1347,8 +1347,8 @@ HTTP 响应与错误归一：`ok` / `fail` / `wrap` 的**唯一实现**（统一
 | `applyStockGain` | fn | POST /api/inventory/adjust<br>POST /api/inventory/checks/:id/adjust | inventory.adjust | lib/pos2.js, mcp/tools.js |
 | `applyStockIn` | fn | POST /api/inventory/assembly/:id/confirm<br>POST /api/outsourcing/orders/:id/receive<br>POST /api/requisitions/store/shipments/:id/receive | — | lib/mfg.js, lib/pos2.js, lib/purchase.js, lib/returns.js, lib/transfer.js |
 | `applyStockOut` | fn | 7 条：inventory.js×3, oms.js×1, outsourcing.js×1, requisitions.js×1, sales.js×1 | — | lib/mfg.js, lib/pos2.js, lib/purchase.js, lib/qc2.js, lib/transfer.js |
-| `assertStockDocInScope` | fn | 11 条：inventory.js×7, qc.js×4 | — | — |
-| `assertWarehouseInScope` | fn | 8 条：inventory.js×3, master.js×1, purchase.js×4 | — | lib/transfer.js |
+| `assertStockDocInScope` | fn | 18 条：inventory.js×7, qc.js×4, qc2.js×7 | — | — |
+| `assertWarehouseInScope` | fn | 9 条：inventory.js×3, master.js×1, purchase.js×4, qc2.js×1 | — | lib/transfer.js |
 | `availableQty` | fn | — | — | — |
 | `clearInvTypeCache` | fn | POST /api/master/inv-txn-types<br>PUT /api/master/inv-txn-types/:code | — | — |
 | `clearParamCache` | fn | — | — | — |
@@ -1370,7 +1370,7 @@ HTTP 响应与错误归一：`ok` / `fail` / `wrap` 的**唯一实现**（统一
 | `resolveOwnerOrg` | fn | — | inventory.adjust, inventory.get_cost, inventory.ownership_transfer, inventory.pick_suggestion, inventory.stock_in, inventory.stock_out, inventory.transfer | mcp/tools.js |
 | `setStockNowProvider` | fn | — | — | — |
 | `stockScopeSql` | fn | 16 条：inventory.js×14, master.js×1, warehouses.js×1 | — | lib/qc.js, lib/qc2.js, lib/transfer.js |
-| `warehouseInScope` | fn | 34 条：inventory.js×1, pos.js×32, warehouses.js×1 | — | lib/qc2.js |
+| `warehouseInScope` | fn | 36 条：inventory.js×1, pos.js×32, qc2.js×2, warehouses.js×1 | — | lib/qc2.js |
 
 ## `server/lib/transfer.js`
 

@@ -34,7 +34,7 @@
 
 沿用同一判据（`stockScopeSql` / `assertWarehouseInScope` / `purchaseScopeSql.wh`），范围只在路由入口落地，lib 内部调用不传 `orgScope` 时口径不变。
 
-1. **质检处置（`lib/qc2.js` + `routes/qc2.js`）**：`createHandling` / `confirmHandling` / `cancelHandling` / `getHandling` / `listHandlings` 接受可选 `orgScope`，路由 `/api/qc/handlings*` 用 `attachOrgScope` 传入。处置单（及其检验单）的源仓在范围外 ⇒ 与不存在同形 404（`QC2_NOT_FOUND`），先于任何状态判断，不出库不建调拨；让步 / 返工自动生成的调拨在建单前用 `assertTransferTargetsInScope` 校验源仓与隔离仓**两端**，越界 403 `TARGET_OUT_OF_SCOPE` 且整笔不动。隔离仓选择：受限范围优先取范围内的隔离仓（同类型多仓时不再固定取最小 id 的别组织仓），范围内没有则落到 403；全局范围仍取最小 id，行为不变。处置单、检验单（`/api/qc/inspections*` 列表 / 详情，含内嵌处置单）同样按源仓裁剪。让步 / 返工会改写 sku+批次级（跨仓）的 `inventory_batches.qc_status`：受限账号处置时，该批次在范围外仓仍有库存 ⇒ 403 `TARGET_OUT_OF_SCOPE`，不得借此改变别组织货的可售状态。
+1. **质检处置（`lib/qc2.js` + `routes/qc2.js`）**：`createHandling` / `confirmHandling` / `cancelHandling` / `getHandling` / `listHandlings` 接受可选 `orgScope`，路由 `/api/qc/handlings*` 用 `attachOrgScope` 传入。处置单（及其检验单）的源仓在范围外 ⇒ 与不存在同形 404（`QC2_NOT_FOUND`），先于任何状态判断，不出库不建调拨；让步 / 返工自动生成的调拨在建单前用 `assertTransferTargetsInScope` 校验源仓与隔离仓**两端**，越界 403 `TARGET_OUT_OF_SCOPE` 且整笔不动。隔离仓选择：受限范围优先取范围内的隔离仓（同类型多仓时不再固定取最小 id 的别组织仓），范围内没有则落到 403；全局范围仍取最小 id，行为不变。处置单、检验单（`/api/qc/inspections*` 列表 / 详情 / 提交 / 关闭 / 作废，含内嵌处置单）、报检单（`/api/qc/requests*`）与待检来源（`/api/qc/pending`、`/pending/detail`）同样按其仓裁剪（范围外 404、先于任何状态推进；报检指定仓越界 403）。让步 / 返工会改写 sku+批次级（跨仓）的 `inventory_batches.qc_status`：受限账号处置时，该批次在范围外仓仍有库存 ⇒ 403 `TARGET_OUT_OF_SCOPE`，不得借此改变别组织货的可售状态。
    - 模块 07 旧质检（`routes/qc.js`，`purchase_inspections`）：判退会经 `createPurchaseReturn` 出库，所以列表 / 详情 / 提交 / 关闭 / 作废按到货仓取单（范围外 404、先于写），建单与到货单装填按 `assertPurchaseDocInScope('GR')`，待检列表按到货仓裁剪。
 2. **仓库主数据（`routes/warehouses.js`、`routes/master.js` 货位）**：`GET /api/master/warehouses`（列表含 `all=1`、详情）按 `warehouses.org_id` 裁剪，范围外详情与不存在同形 404，org 为 NULL 的仓与无组织账号读为空。新建 / 修改 / 停用 / 删除拒绝三条写路由追加 `requireGlobalData`：仅全局数据范围可写（受限账号改仓库的 `org_id` / 状态 / 类型会改写别组织的库存可见性）；受限账号 403 `GLOBAL_DATA_FORBIDDEN`，库不变。`GET /api/master/locations` 随仓裁剪，`POST /api/master/locations` 目标仓需在范围内（403）。
 3. **采购收货单 / 退货单（`routes/purchase.js`）**：`GR` 沿用 `assertPurchaseDocInScope`，新增 `PRT`（`purchase_returns`，经 `warehouse_id`）；收货单列表 / 详情 / 关闭、退货单列表 / 作废 / 完成按范围，范围外 404 且不推进状态。`POST /returns` 在任何库存写入前 `assertWarehouseInScope(退货仓)`（不存在的仓对受限范围同为 403）。`GET /orders/:id/receive-suggest` 同样先判订单范围（404）。
@@ -44,8 +44,8 @@
 
 - `GET /api/master/options` 的 `warehouses` / `warehouses_all` 下拉候选仍返回全部启用仓的 id / 名称 / 编码 / 类型（供各业务页选择，改动会影响经销商 / 门店下拉，另批评估）。
 - `GET /api/purchase/orders`（列表 / 详情）仍只有权限闸；采购订单的范围读见 ADR-0017/0020 的采购链路由，`purchase.js` 内同名读接口待另批核对。
-- 质检报检单（QCR）、`/api/qc/pending`、`/api/qc/overview|audit` 汇总以及 qc2 检验单提交 / 关闭 / 作废（无库存后果）不按仓裁剪。
-- POS 写路径（收银出库、盘点）仍用门店首个启用仓 `wh`，不叠加组织范围（AA9 另改该文件的门禁）。
+- `/api/qc/overview`、`/api/qc/audit` 的汇总计数不按仓裁剪（只返回总数，不含单据明细）。
+- POS 写路径默认仓 `wh` 取范围内首个启用仓（与读同一过滤）；无组织范围的门店账号仍是门店首个启用仓，行为不变。
 
 ### 验证入口
 

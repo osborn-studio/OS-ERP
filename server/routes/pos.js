@@ -60,11 +60,8 @@ function storeCtx(req) {
   if (!u.store_id) throw Object.assign(new Error('当前账号未绑定门店'), { status: 403 })
   const store = db.prepare('SELECT * FROM stores WHERE id=?').get(u.store_id)
   if (!store) throw Object.assign(new Error('门店不存在'), { status: 404 })
-  const wh = db
-    .prepare("SELECT * FROM warehouses WHERE store_id=? AND status='active' ORDER BY id LIMIT 1")
-    .get(store.id)
-  // ADR-0038 补充（AA4）：库存读取覆盖**本店全部启用仓**（`whs`），范围只由账号绑定的门店决定；
-  // `wh`（首个启用仓）仍是写路径（收银出库 / 盘点等）的默认仓，口径不变。
+  // ADR-0038 补充（AA4）：库存读取覆盖**本店全部启用仓**（`whs`）；
+  // `wh`（范围内首个启用仓）是写路径（收银出库 / 日结 / 盘点等）的默认仓。
   // 账号另带组织范围（org / subtree + 具体组织）时再叠加仓库归属组织：门店绑定不能把别组织的仓挂进来读。
   // 没有组织（none / self / all 等）时门店绑定仍是唯一依据（ADR-0025，门店账号通常不带组织）。
   const os = resolveOrgScope(db, u)
@@ -73,7 +70,8 @@ function storeCtx(req) {
     .prepare("SELECT * FROM warehouses WHERE store_id=? AND status='active' ORDER BY id")
     .all(store.id)
     .filter((w) => !orgRestricted || warehouseInScope(db, w.id, os))
-  return { db, store, wh, whs, u }
+  // 写路径默认仓（收银 / 日结 / 盘点出库）同样只取范围内的首个启用仓；无组织限制时与原来的首个启用仓一致
+  return { db, store, wh: whs[0] || null, whs, u }
 }
 
 function requireStore() {
