@@ -356,7 +356,7 @@ group('meta.js', 'handler-scope', '运维计数器：处理器内 isOpsAdmin（a
 group('meta.js', 'public', '字典（角色名/经销商等级/仓库类型），前端登录前即需渲染；不含业务数据', [['GET', '/dict']])
 group('mall.js', 'public', '商城匿名浏览/登录入口；会话路由另有 requireMall（mall-session）', [['POST', '/login'], ['GET', '/home'], ['GET', '/products'], ['GET', '/products/:skuId']])
 group('promo.js', 'public', '商城活动墙：只返回"任何人都能参与"的自动促销（见处理器内 SQL 条件）', [['GET', '/shop/promotions']])
-group('qimen.js', 'public', '奇门网关模拟承接方：由 body.app_key + 签名 verifySign 在处理器内自鉴权；ADR-0028 起 app_key / 签名必填，缺失、未知平台或错签名一律 401，不再放行；生产运行时由 capabilities 关闭（503）', [['POST', '/']])
+group('qimen.js', 'public', '奇门网关模拟承接方：由 body.app_key + 签名 verifySign 在处理器内自鉴权；ADR-0028 起 app_key / 签名必填，ADR-0033 起签名为平台独立密钥 HMAC-SHA256 + 5 分钟时间窗 + nonce 防重放，缺失、未知平台、未签发密钥、错签名、过期或重放一律 401；生产运行时由 capabilities 关闭（503）', [['POST', '/']])
 
 // —— 只读自身 / 自身范围 ——
 group('auth.js', 'self', '返回/修改当前登录者自己的资料、权限或其数据范围内的组织树', [
@@ -370,7 +370,6 @@ for (const [f, p] of [['costing.js', '/meta'], ['credit.js', '/meta'], ['im.js',
   group(f, 'meta', '模块静态元数据/枚举（状态、类型、开关），前端渲染表单与筛选用，不含单据数据', [['GET', p]])
 }
 group('qc2.js', 'meta', '抽样方案静态查询（AQL 表计算），无业务数据', [['GET', '/sample-plan']])
-group('qimen.js', 'meta', '奇门接口能力清单（静态）', [['GET', '/capabilities']])
 group('docflow.js', 'meta', '单据类型/状态机/生命周期/流转图/取号规则的静态配置读取', [
   ['GET', '/types'], ['GET', '/types/:code/machine'], ['GET', '/types/:code/lifecycle'], ['GET', '/flows'], ['GET', '/flows/:code'], ['GET', '/no-rules']
 ])

@@ -72,6 +72,7 @@ test('production HTTP rejects entire restricted surfaces without data side effec
     ['/API/MALL/checkout/?enable=true', 'POST', {}, 'public_mall'],
     ['/api/qimen', 'POST', { method: 'taobao.qimen.inventory.query', request: {} }, 'qimen_gateway'],
     ['/api/qimen/capabilities', 'GET', undefined, 'qimen_gateway'],
+    ['/api/qimen/platforms/1/secret', 'POST', {}, 'qimen_gateway'],
     ['/api/oms/sync/1', 'POST', { count: 2 }, 'oms_simulation'],
     ['/api/oms/stock-push', 'POST', { platform_id: 1 }, 'oms_simulation'],
     ['/api/oms/orders/1/ship', 'POST', {}, 'oms_simulation'],

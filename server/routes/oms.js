@@ -21,6 +21,7 @@ import { requireAuth, requireRole, requireInternal, currentUser } from '../middl
 import { audit } from '../middleware/audit.js'
 import { nextDocNo } from '../lib/docno.js'
 import { advanceStatus, tryTransition, nowText, logEvent } from '../lib/docflow.js'
+import { publicPlatform } from '../lib/qimen-auth.js'
 import { applyStockOut, pickBatches, releaseStock, reserveStock, reserveForDoc, planShipment, releaseForDoc } from '../lib/stock.js'
 
 const r = Router()
@@ -84,7 +85,8 @@ r.get(
          FROM platforms pf LEFT JOIN warehouses w ON w.id=pf.warehouse_id ORDER BY pf.id`
       )
       .all()
-    return ok(res, rows)
+    // 封存的奇门密钥不出库：只给 has_secret / secret_rotated_at（ADR-0033）
+    return ok(res, rows.map(publicPlatform))
   })
 )
 
