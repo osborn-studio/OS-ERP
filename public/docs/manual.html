@@ -128,15 +128,35 @@
 <a class="toc-l2" data-depth="2" href="#十六-ai-数据承接台和-mcp">十六 AI 数据承接台和 MCP</a>
 <a class="toc-l2" data-depth="2" href="#十七-系统管理">十七 系统管理</a>
 <a class="toc-l2" data-depth="2" href="#十八-操作异常处理">十八 操作异常处理</a>
+<a class="toc-l2" data-depth="2" href="#十九-收付款证据与二人复核">十九 收付款证据与二人复核</a>
+<a class="toc-l3" data-depth="3" href="#191-规则">19.1 规则</a>
+<a class="toc-l3" data-depth="3" href="#192-操作">19.2 操作</a>
+<a class="toc-l3" data-depth="3" href="#193-系统设置中的三个开关危险项">19.3 系统设置中的三个开关（危险项）</a>
+<a class="toc-l3" data-depth="3" href="#194-常见提示">19.4 常见提示</a>
+<a class="toc-l2" data-depth="2" href="#二十-通知渠道密钥与出站策略">二十 通知渠道密钥与出站策略</a>
+<a class="toc-l3" data-depth="3" href="#201-渠道密钥">20.1 渠道密钥</a>
+<a class="toc-l3" data-depth="3" href="#202-出站策略">20.2 出站策略</a>
+<a class="toc-l3" data-depth="3" href="#203-摘要接口的数据范围">20.3 摘要接口的数据范围</a>
+<a class="toc-l2" data-depth="2" href="#二十一-agent-token-有效状态与清扫">二十一 Agent Token 有效状态与清扫</a>
+<a class="toc-l3" data-depth="3" href="#211-令牌是所有者的委托">21.1 令牌是所有者的委托</a>
+<a class="toc-l3" data-depth="3" href="#212-有效状态">21.2 有效状态</a>
+<a class="toc-l3" data-depth="3" href="#213-清扫">21.3 清扫</a>
+<a class="toc-l3" data-depth="3" href="#214-注意">21.4 注意</a>
+<a class="toc-l2" data-depth="2" href="#二十二-采购工作台或待办看不到数据怎么办组织与数据范围">二十二 采购工作台或待办看不到数据怎么办（组织与数据范围）</a>
+<a class="toc-l3" data-depth="3" href="#221-先判断是哪种情况">22.1 先判断是哪种情况</a>
+<a class="toc-l3" data-depth="3" href="#222-管理员核对步骤">22.2 管理员核对步骤</a>
+<a class="toc-l2" data-depth="2" href="#二十三-备份校验恢复演练与升级回退">二十三 备份校验、恢复演练与升级回退</a>
   </nav>
   <main id="doc">
 <h1 id="伴圆ai原生erp-操作手册">伴圆AI原生ERP 操作手册</h1>
-<p>本手册对应2026年10月21日本地交付版，供管理员、业务关键用户及实施人员完成演示操作。范围包括总部后台、门店 POS、线上商城、经销商订货及 MCP 管理。数据均为虚构样例，操作结果用于验证流程，不代表真实账务或支付。</p>
+<p>本手册供管理员、业务关键用户及实施人员使用，2026年10月23日修订。范围包括总部后台、门店 POS、线上商城、经销商订货及 MCP 管理。</p>
+<p><strong>运行模式提示</strong>：系统缺省是生产模式（空库、无样本数据、只有 bootstrap 建立的管理员，见安装手册第五章）；第一至第十八章中的样本账号（admin、scm、store01、dealer01 等）、固定验证码、商城、奇门与 MCP 演示<strong>仅在显式的演示模式（<code>GML_RUNTIME_MODE=demo</code>）下可用</strong>，数据均为虚构样例。生产模式下商城、奇门、OMS 模拟、IM 同步和 MCP 返回 503 <code>FEATURE_DISABLED</code>。第十九章起是生产模式的专项说明。</p>
 <h2 id="一-登录和通用操作">一 登录和通用操作</h2>
-<ol><li>启动系统，打开 /login，先选美妆连锁或连锁餐饮。</li><li>选择角色卡片或手工填账号密码，点击登录。管理员 admin / 12345，其他常用角色密码为 123456。</li><li>从左侧进入对应业务模块。门店账号从 /pos 进入本店业务，经销商从订货中心进入本人数据。</li><li>退出后重新选择行业即可切换独立行业库。不同角色比较建议使用不同浏览器用户配置或无痕窗口，避免同一浏览器会话相互覆盖。</li></ol>
+<ol><li>启动系统，打开 /login，先选美妆连锁或连锁餐饮。</li><li>选择角色卡片或手工填账号密码，点击登录。生产模式只用 bootstrap 建立的管理员及其创建的账号；下文及演示手册里的 admin、scm 等样本账号与初始密码仅限演示模式，不得在生产使用。</li><li>从左侧进入对应业务模块。门店账号从 /pos 进入本店业务，经销商从订货中心进入本人数据。</li><li>退出后重新选择行业即可切换独立行业库。不同角色比较建议使用不同浏览器用户配置或无痕窗口，避免同一浏览器会话相互覆盖。</li></ol>
 <p>列表通常支持关键词、状态筛选、分页及详情。新增后先保存草稿，核对后再提交或确认；行内按钮随状态、权限变化。遇到拒绝提示，应核对前置单据、可用库存、当前角色和数据范围，不要反复点击。</p>
 <p>操作成功后，返回列表刷新，核对状态和数量金额；对库存和财务操作再查看流水或来源单号。已过账单据不得靠删除来撤销业务，应走系统提供的退货、红冲或作废路径。</p>
 <h2 id="二-角色和数据范围">二 角色和数据范围</h2>
+<p>下表是<strong>演示模式</strong>样本账号的职责示例；生产模式由管理员自行建立用户并分配角色与组织。</p>
 <div class="table-wrap"><table><thead><tr><th>账号</th><th>工作入口</th><th>范围提醒</th></tr></thead><tbody><tr><td>admin</td><td>全部模块和系统设置</td><td>管理员权力大，不作为日常业务账号</td></tr>
 <tr><td>scm</td><td>采购、库存、计划生产、质量、委外</td><td>查看及操作仍取决于具体权限点</td></tr>
 <tr><td>purchase / warehouse / sales</td><td>本岗位模块</td><td>不等于具备全流程审批权限</td></tr>
@@ -224,6 +244,69 @@
 <h2 id="十八-操作异常处理">十八 操作异常处理</h2>
 <p>失败后记录行业、账号、页面、单号、输入值、错误提示及时间。先确认是否已经生成单据，再决定重试，尤其是发货、入库、付款和核销。库存不足应回查可用量及批次，权限不足应由管理员确认职责范围，不能临时都改成管理员。</p>
 <p>需要恢复初始样本时按安装手册先停机备份，再改名保留 data 目录并重新启动。回归脚本只能在独立测试副本执行，不在正在演示或真实业务环境运行。</p>
+<h2 id="十九-收付款证据与二人复核">十九 收付款证据与二人复核</h2>
+<p>适用生产模式。依据 ADR-0018。系统是<strong>人工登记</strong>资金：确认收款、执行付款只是内部业务记录，不会自动向银行、支付平台转账或收款；但这两个动作现在必须有凭证，且默认由第二个人复核。</p>
+<h3 id="191-规则">19.1 规则</h3>
+<div class="table-wrap"><table><thead><tr><th>项目</th><th>说明</th></tr></thead><tbody><tr><td>适用动作</td><td>收款单确认（入口 /finance/receivables）、付款单执行付款（入口 /purchase/payments）</td></tr>
+<tr><td>证据</td><td>默认必填：银行流水号或凭证号，另可写说明。缺凭证号时服务端拒绝（<code>FUNDS_EVIDENCE_REQUIRED</code>）</td></tr>
+<tr><td>二人复核</td><td>默认每笔都要。发起人确认后单据进入&quot;待复核&quot;，此时应收、授信额度、结算单<strong>都没有变化</strong></td></tr>
+<tr><td>复核人</td><td>须持有权限点 <code>finance.funds.review</code>（资金收付复核），内置角色默认只有 admin 与 finance 有；<strong>发起人不能复核自己</strong>（<code>FUNDS_SELF_REVIEW</code>）</td></tr>
+<tr><td>复核结果</td><td>通过：同一事务内完成原确认逻辑（核销应收、释放授信或标记付款已付）并写严格审计；驳回：必须写原因，单据回到可再次发起的状态</td></tr>
+<tr><td>待复核期间</td><td>收款单不能作废，付款单不能再执行或作废（<code>FUNDS_REVIEW_PENDING</code>）；要先由复核人驳回</td></tr>
+<tr><td>审计</td><td>发起、确认、复核通过、复核驳回都写严格审计；审计表写不进去时整笔回滚并返回 503 <code>SECURITY_AUDIT_UNAVAILABLE</code></td></tr></tbody></table></div>
+<h3 id="192-操作">19.2 操作</h3>
+<ol><li>发起人（例如出纳）在收款单详情填写凭证号与说明，点击确认；付款单点击&quot;执行付款&quot;并在提示框填写银行流水号或凭证号。</li><li>单据显示&quot;待复核&quot;。收款单状态仍是草稿、付款单仍是已审批，这是正常的；列表以&quot;待复核&quot;标签区分。</li><li>另一位持 <code>finance.funds.review</code> 的用户打开同一单据，核对凭证与金额后点&quot;复核通过&quot;，或点&quot;驳回&quot;并填写原因。通过后单据才变成已确认 / 已付。</li><li>被驳回的单据，发起人补充凭证后可再次发起，复核记录会被覆盖，历史保留在审计里。</li><li>不要为了省事用同一个账号或共享账号完成两步；那等于取消了复核。</li></ol>
+<h3 id="193-系统设置中的三个开关危险项">19.3 系统设置中的三个开关（危险项）</h3>
+<p>入口 /system/settings，分组&quot;资金收付&quot;。三项都是危险配置，修改必须写原因并进入配置变更审计：</p>
+<div class="table-wrap"><table><thead><tr><th>设置</th><th>缺省</th><th>含义</th></tr></thead><tbody><tr><td><code>funds_evidence_required</code></td><td>开</td><td>确认必须填凭证号</td></tr>
+<tr><td><code>funds_review_required</code></td><td>开</td><td>确认需第二人复核</td></tr>
+<tr><td><code>funds_review_threshold</code></td><td>0</td><td>金额不低于该值（元）才进复核；0 表示每笔都复核</td></tr></tbody></table></div>
+<p>关闭任何一项都等于允许一个人无凭证地确认收付款。<strong>生产环境保持缺省</strong>；单人演示环境才考虑关闭，且要留下原因记录。阈值调高只是让小额免复核，同样是风险决定，须由管理层批准。</p>
+<h3 id="194-常见提示">19.4 常见提示</h3>
+<p><code>FUNDS_NOT_READY</code> 单据不在可确认状态；<code>FUNDS_NOT_PENDING</code> 单据不在待复核；<code>FUNDS_COMMENT_REQUIRED</code> 驳回没写原因；<code>FUNDS_BAD_DECISION</code> 复核结果不是通过或驳回。出现这些先刷新单据状态，不要反复点击。</p>
+<h2 id="二十-通知渠道密钥与出站策略">二十 通知渠道密钥与出站策略</h2>
+<p>适用生产模式。依据 ADR-0008。入口 /system/notify（需要系统通知相关权限）。</p>
+<h3 id="201-渠道密钥">20.1 渠道密钥</h3>
+<ul><li>渠道的&quot;签名密钥&quot;保存后<strong>不再回显</strong>：界面只显示&quot;已设置&quot;和末 4 位（密钥不少于 12 个字符时）。编辑时留空表示保持原密钥，填写表示设置或轮换，勾选&quot;清除密钥&quot;表示清空。</li><li>库里的密钥是封存存储的，不是明文。封存密钥来自环境变量 <code>GML_SECRET_KEY</code>（至少 16 字符）；没有设置则由登录签名密钥派生。</li><li>如果更换了登录签名密钥而没有设置 <code>GML_SECRET_KEY</code>，旧封存值会变成&quot;密钥不可读&quot;（响应里 <code>secret_unreadable</code>），发送失败并留日志，需重新录入或配置旧密钥。建议在生产启用时就明确设置 <code>GML_SECRET_KEY</code> 并安全保管。</li><li>轮换步骤：①把旧值移入环境变量 <code>GML_SECRET_KEY_PREVIOUS</code>（逗号分隔，只用于解密）；②设置新的 <code>GML_SECRET_KEY</code>；③重启服务；④让每个渠道保存一次（重新写入即用新密钥封存）；⑤确认没有仍需旧密钥才能解开的渠道后，清掉 <code>GML_SECRET_KEY_PREVIOUS</code>。</li><li>发送签名：钉钉、飞书、通用 Webhook 带时间戳和签名；企业微信没有签名方案。日志只记录发出的消息体，不含密钥。</li></ul>
+<h3 id="202-出站策略">20.2 出站策略</h3>
+<p>渠道地址和每次发送都经过同一套检查：</p>
+<ul><li>生产只允许 <code>https</code>；禁止 URL 中带用户名密码；禁止 <code>localhost</code>、回环、私网、链路本地、云元数据地址等（含各种变形写法）。发送前解析域名，<strong>解析出的每个地址</strong>都要通过检查，并钉住该地址连接，不重新解析。</li><li>不跟随重定向（3xx 一律失败，错误码 <code>OUTBOUND_REDIRECT</code>）；总超时默认 8 秒（<code>OUTBOUND_TIMEOUT</code>）；响应体上限 256KB（<code>OUTBOUND_BODY_TOO_LARGE</code>）。</li><li>可选环境变量 <code>GML_WEBHOOK_ALLOWED_HOSTS</code>（逗号分隔主机名）只能进一步收窄；把内网地址写进去也不会放行。</li><li>保存时被拒绝会提示原因，且不落库；库里已有但不再合规的地址在发送时失败并写 <code>fail</code> 日志，错误文本以 <code>OUTBOUND_</code> 开头。</li><li>这是应用层策略，<strong>不能替代网络出口防火墙</strong>；Teredo 地址段未做特殊处理。</li></ul>
+<h3 id="203-摘要接口的数据范围">20.3 摘要接口的数据范围</h3>
+<p>通知预览、推送、日志、总览（<code>/api/notify/preview</code>、<code>/push</code>、<code>/logs</code>、<code>/overview</code>）需要内部账号、对应通知权限且数据范围为全局。门店、经销商，以及只有子树、单组织、本人范围的账号返回 403（<code>GLOBAL_DATA_FORBIDDEN</code> 或角色 403）。原因是摘要来自没有组织列的采购订单和审批实例，无法诚实地按范围缩小。内置 purchase 角色默认是子树范围，如确需让某人预览或推送全库摘要，由管理员评估后将其数据范围设为&quot;全部&quot;。</p>
+<h2 id="二十一-agent-token-有效状态与清扫">二十一 Agent Token 有效状态与清扫</h2>
+<p>依据 ADR-0011、ADR-0015。</p>
+<p><strong>先确认能不能用</strong>：生产模式下 MCP 与 Agent 凭据管理整体关闭（<code>/mcp</code>、<code>/api/mcp</code> 返回 503 <code>FEATURE_DISABLED</code>），/system/mcp 控制台和本章的令牌接口在生产不可用。本章适用于演示或测试模式，以及未来经单独验收启用 Agent 能力之后。</p>
+<h3 id="211-令牌是所有者的委托">21.1 令牌是所有者的委托</h3>
+<p>有主令牌的实际权限 = 令牌自身声明的范围与<strong>所有者此刻</strong>的权限点、数据范围的交集。所有者被停用、改密、被改角色或权限集、被调整组织或数据范围后，已签发的令牌立刻被拒（调用返回 <code>TOKEN_OWNER_REVOKED</code>、<code>TOKEN_OWNER_INACTIVE</code> 等）；重新启用账号<strong>不会</strong>让旧令牌复活，需要重新签发。令牌只从 <code>Authorization: Bearer</code> 头读取，查询串或请求体里的令牌不被接受。</p>
+<h3 id="212-有效状态">21.2 有效状态</h3>
+<p>/system/mcp 的&quot;人工确认与审计&quot;页有令牌表，同时显示两列：</p>
+<div class="table-wrap"><table><thead><tr><th>列</th><th>含义</th></tr></thead><tbody><tr><td>状态</td><td>数据库里这一行的历史状态（active、revoked 等）</td></tr>
+<tr><td>有效状态</td><td>现状：<code>active</code>、<code>revoked</code>、<code>expired</code>、<code>owner_missing</code>、<code>owner_inactive</code>、<code>revoked_by_owner_change</code></td></tr></tbody></table></div>
+<p>&quot;状态&quot;仍是 active 但&quot;有效状态&quot;不是 active，说明令牌实际已经不能用，只是数据库行还没追上现状。读页面本身不修改数据。</p>
+<h3 id="213-清扫">21.3 清扫</h3>
+<p>点&quot;清扫失效令牌&quot;（括号内是可清扫数量；没有可清扫行时按钮不可用），或由有 <code>system.mcp.manage</code> 权限的账号调用 <code>POST /api/mcp/tokens/sweep</code>。清扫把&quot;状态仍 active、但所有者缺失或所有者安全版本已变化&quot;的令牌标为已吊销，记录原因（<code>owner_auth_changed</code>、<code>owner_missing</code> 等）和时间，并在备注里写清扫人；操作幂等，可重复执行。清扫<strong>不会</strong>改变调用判据：清扫前旧令牌被拒是 <code>TOKEN_OWNER_REVOKED</code>，清扫后是 <code>TOKEN_REVOKED</code>，都是拒绝。过期令牌不改写。不做自动清扫，建议在人员变动、角色调整后手动清扫一次。管理员主动吊销走令牌行的吊销按钮。</p>
+<h3 id="214-注意">21.4 注意</h3>
+<p>恢复备份会回退账号安全版本：已清扫的令牌不会复活，未清扫的可能重新显示为有效。恢复后应轮换或全局吊销令牌。</p>
+<h2 id="二十二-采购工作台或待办看不到数据怎么办组织与数据范围">二十二 采购工作台或待办看不到数据怎么办（组织与数据范围）</h2>
+<p>依据 ADR-0015、ADR-0017。升级到包含这些收口的版本后，采购工作台（/purchase/workbench）、请购、发票、结算、付款、应付以及审批待办只显示<strong>你所属组织范围内</strong>的单据。账号没有组织归属时，列表是<strong>空的</strong>，而不是报错——这是有意的，空范围不会变成全库。</p>
+<h3 id="221-先判断是哪种情况">22.1 先判断是哪种情况</h3>
+<div class="table-wrap"><table><thead><tr><th>现象</th><th>可能原因</th><th>处理</th></tr></thead><tbody><tr><td>页面提示 403 / 没有权限</td><td>账号是经销商或门店，或角色没有采购读权限（如 sales）</td><td>内部采购岗位才可进入；确认角色与权限点</td></tr>
+<tr><td>页面正常但列表和看板都是空</td><td>账号没有组织归属，或所属组织下确实没有单据，或角色数据范围是&quot;本人 / 单组织 / 子树&quot;而单据在别的组织</td><td>按 22.2 核对</td></tr>
+<tr><td>看得到列表但没有&quot;待办&quot;</td><td>待办还要按每条待办所需的动作权限过滤：看得到却点不动的不算待办</td><td>核对角色的动作权限点</td></tr>
+<tr><td>审批待办是 0</td><td>只统计当前审批级指向你本人（用户 / 角色 / 权限点）的实例；只有&quot;查看&quot;权限的账号是 0</td><td>核对审批流配置与审批人；提交人看自己的进度使用审批实例列表的&quot;我提交的&quot;视图（接口 <code>GET /api/approval/instances?mine=1</code>）</td></tr>
+<tr><td>单据归属为空（NULL）</td><td>对子树 / 单组织范围的账号不可见，只有&quot;全部&quot;范围可见</td><td>由管理员补齐单据组织归属，或评估后使用全局账号</td></tr></tbody></table></div>
+<h3 id="222-管理员核对步骤">22.2 管理员核对步骤</h3>
+<p>账号的可见范围由两个字段决定：账号的<strong>组织归属</strong> <code>org_id</code>，和<strong>数据范围</strong> <code>data_scope</code>。账号上的 <code>data_scope</code> 非空时优先，为空则取其角色的默认范围；两者都没有时按&quot;本人（self）&quot;处理。可取值：<code>all</code>（全部）、<code>subtree</code>（本组织及下级）、<code>org</code>（本组织）、<code>self</code>（本人）、<code>dealer</code>（经销商）。</p>
+<ol><li>在 /system/roles 查看该账号角色的默认数据范围（内置 purchase、warehouse 默认为子树范围），在 /system/users 核对账号状态与角色。在 /master/org 确认目标组织存在且处于启用状态。</li><li>组织归属与账号级数据范围通过账号更新接口 <code>PUT /api/auth/users/:id</code> 的 <code>org_id</code>、<code>data_scope</code> 字段设置（新建账号的接口同样接受）。<strong>当前用户管理页面是否提供这两个字段的编辑入口，本手册未逐页核实</strong>；若页面没有，请由具备管理员权限的实施人员调用该接口，不要直接改数据库。</li><li>二选一：给账号设置正确的 <code>org_id</code>（推荐，最小授权）；或经评估后把 <code>data_scope</code> 设为 <code>all</code>（同时会开放通知摘要等全局口径，权力更大，须留痕并经管理层批准）。</li><li>这类安全字段变更会使该账号的登录会话与已签发令牌失效；保存后<strong>用该账号本人重新登录验证</strong>，不要只看管理员页面上的值。</li><li>仍然为空时，用管理员打开同一页面对比：管理员能看到而该账号看不到，是范围问题；管理员也看不到，是确实没有单据。</li></ol>
+<p>不要为了让页面有数据而临时把所有人改成管理员。</p>
+<h2 id="二十三-备份校验恢复演练与升级回退">二十三 备份校验、恢复演练与升级回退</h2>
+<p>面向运维人员。命令、参数与判据的完整说明见安装手册第七、八章与 <code>docs/operations/restore-runbook.md</code>，这里给操作节奏和每步的判据。所有命令在仓库（代码副本）根目录执行，Node 22。</p>
+<div class="table-wrap"><table><thead><tr><th>频率</th><th>动作</th><th>命令（参数名逐字）</th><th>通过判据</th></tr></thead><tbody><tr><td>每日</td><td>校验备份</td><td><code>GML_RUNTIME_MODE=production GML_DATA_DIR=&lt;数据目录&gt; GML_DB= node scripts/db-backup.mjs</code>，可加行业名与 <code>--keep=N</code></td><td>退出码 0；<code>backup-report-&lt;stamp&gt;.json</code> 中每库 <code>status</code> 为 <code>ok</code>；无 <code>*.db.failed</code> 文件</td></tr>
+<tr><td>每月及升级前</td><td>恢复演练</td><td><code>node scripts/db-restore-drill.mjs --backup-dir=&lt;备份目录&gt; --target-dir=&lt;空目录&gt; --drill-username=&lt;账号&gt; --industry=cosmetic</code>（密码经 stdin 传入）</td><td>退出码 0；报告 <code>passed</code> 为 <code>true</code>；记录 <code>timing.rto_ms</code> 与 <code>backup.age_seconds</code></td></tr>
+<tr><td>升级前</td><td>回退演练</td><td><code>node scripts/upgrade-rollback-drill.mjs --backup-dir=&lt;备份目录&gt; --target-dir=&lt;空目录&gt;</code></td><td>退出码 0；<code>passed</code> 为 <code>true</code>；所有 <code>invariants[]</code> 通过</td></tr>
+<tr><td>升级时</td><td>迁移状态 / 校验和</td><td><code>node scripts/migrate.mjs --status</code>、<code>node scripts/verify-migrations.mjs</code>（同样需要上述三个环境变量）</td><td>无待执行异常；校验和全部一致</td></tr></tbody></table></div>
+<p>操作要点：</p>
+<ul><li>演练目标目录必须是<strong>空的新目录</strong>，不能是线上数据目录（<code>DRILL_TARGET_IS_LIVE</code>）；不要清空旧目录复用，旧报告是证据。演练结束归档报告，再删除目标目录（里面有线上数据副本）。</li><li>备份文件 sha256 与报告不符（<code>RESTORE_SHA256_MISMATCH</code>）说明该备份不可用，立刻检查介质并重新备份。</li><li>演练密码一律经管道 stdin 传入（密码管理器或隐藏输入），不要写在命令行、环境变量或日志里。</li><li>升级失败：不要重试、不要手工改迁移登记表、不要收养校验和；停服，切回旧代码，必要时按恢复手册用升级前备份恢复，并把失败迁移的报错原文与回退演练报告交开发。</li><li>如实告知边界：演练耗时不是生产 RTO，需在目标主机实测；三库不是同一业务时刻的备份；没有备份加密与异地副本；备份应保密并另行复制到异地。</li></ul>
   </main>
 </div>
 <div class="foot">
