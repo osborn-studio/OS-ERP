@@ -26,6 +26,7 @@ import {
   assertCanRead,
   isExternalUser,
   attachOrgScope,
+  resolveOrgScope,
   // 内部模块码的**唯一出处**已提到 middleware/auth.js（批次 T：审批提交入口也要用同一条判定）
   INTERNAL_MODULES
 } from '../middleware/auth.js'
@@ -442,6 +443,15 @@ r.post(
         orgId: orgId ? Number(orgId) : null,
         warehouseId: whId ? Number(whId) : null,
         bizDate
+      }
+      // 规则按 org / 仓分计数器：受限范围不得替范围外的组织 / 仓取号（会烧别人的序号）。
+      const scope = resolveOrgScope(db, req.user)
+      if (scope.scope !== 'all' && (args.orgId != null || args.warehouseId != null)) {
+        const allowed = new Set((scope.orgIds || []).map(Number))
+        const whOrg = args.warehouseId != null ? db.prepare('SELECT org_id FROM warehouses WHERE id=?').get(args.warehouseId)?.org_id : null
+        if ((args.orgId != null && !allowed.has(args.orgId)) || (args.warehouseId != null && !allowed.has(Number(whOrg)))) {
+          throw new DocFlowError('org_id / warehouse_id 超出当前账号的组织范围，拒绝取号', { code: 'DOC_NO_SCOPE_DENIED', httpStatus: 403 })
+        }
       }
       // 先按规则取号；没有规则才回落旧逻辑。**只取一次**：规则命中时再调一次 nextDocNoByRule 会多烧一个序号。
       const byRuleNo = nextDocNoByRule(db, args)

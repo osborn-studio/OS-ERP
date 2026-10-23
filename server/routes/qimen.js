@@ -208,9 +208,13 @@ r.post(
 
     if (method === 'taobao.qimen.inventory.query') {
       const itemCodes = request.itemCodes || []
-      const wh = request.warehouseCode
-        ? db.prepare('SELECT * FROM warehouses WHERE code=?').get(request.warehouseCode)
+      // 平台绑定了发货仓时只能查自己的仓；给了未知仓编码一律空结果（不能因为查不到仓就退化成全仓汇总）
+      let wh = request.warehouseCode
+        ? db.prepare('SELECT * FROM warehouses WHERE code=?').get(String(request.warehouseCode))
         : null
+      const denied = (request.warehouseCode && !wh) || (platform.warehouse_id && wh && wh.id !== platform.warehouse_id)
+      if (denied) return respond({ warehouseCode: String(request.warehouseCode), items: [] })
+      if (!wh && platform.warehouse_id) wh = db.prepare('SELECT * FROM warehouses WHERE id=?').get(platform.warehouse_id) || null
       const conds = ['st.qty_on_hand <> 0']
       const params = []
       if (wh) {
@@ -228,7 +232,7 @@ r.post(
         )
         .all(...params)
       return respond({
-        warehouseCode: request.warehouseCode || 'ALL',
+        warehouseCode: request.warehouseCode || wh?.code || 'ALL',
         items: rows.map((x) => ({ itemCode: x.sku_code, quantity: x.qty, reserved: x.reserved, available: x.qty - x.reserved }))
       })
     }

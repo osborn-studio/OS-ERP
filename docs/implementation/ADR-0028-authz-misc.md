@@ -28,6 +28,12 @@
 
 取值口径：与该类型 HTTP 创建路由挂的权限码一致；创建路由用角色闸门（`requireRole`）的类型（PO、PRT、SO、DL、SR、TF、CK、AS、OM、DR、DS、RB 等）取同域的编辑 / 状态机首条出边权限码。这是权限点口径，不改变那些路由自己的角色闸门。映射表与 `doc_types`、`permissions` 的一致性由 `tests/authz-misc.test.mjs` 守：新增 doc_types 缺映射、映射指向不存在的权限码、映射里有过期类型，测试都会变红。
 
+## Codex 独立审计后的补充
+
+- `/no-issue` 的 `org_id` / `warehouse_id` 受调用者组织范围约束（范围外 ⇒ 403 `DOC_NO_SCOPE_DENIED`，不取号）：规则按组织 / 仓分计数器，放任会替别人烧序号。
+- `SH`（总部发货单）映射为 `sales.outbound`（仓管 / 销售 / 管理员），不是状态机边上的门店收货权限 `pos.store.requisition`。
+- 奇门库存查询：平台绑定了发货仓则只能查该仓；他仓、未知仓编码都返回空，不再退化成全仓汇总。
+
 ## 契约变化
 
 - `POST /api/docflow/no-issue`：新增 403（`DOC_TYPE_PERM_UNMAPPED` / `DOC_CREATE_PERM_DENIED`）。外部主体与无创建权限的角色由 200 变 403；管理员取未映射类型由原来的取号或 500 变 403。
@@ -37,6 +43,8 @@
 - OpenAPI：`/docflow/no-issue` 的 summary 写明创建权限与 DOC_TYPE_PERM_UNMAPPED 并声明 403，版本号不动（避免与同批其他工作流的契约版本冲突），`gen:api` 重新生成后 `src/types/api-routes.ts` 内容无变化。
 
 ## 边界
+
+- 审计指出但不属于本批（原已登记为 `unassigned` 或不在 X4 文件范围）：`purchase-chain.js` 动作路由 `/:id/:action`、`/requisitions/:id/convert`、`/payments/:id/review` 与 `/orders/:id/receive-check` 的单据级范围；`docflow.js` 的 `/events`、`/overview`、`/history`、`/trace` 只做内部主体校验、不按组织过滤；奇门签名密钥是公开演示常量且 `/capabilities` 向任何登录账号列出各平台 `app_key`（本网关生产关闭，非生产环境即演示口径）。
 
 - MCP 工具 `purchase.settlement.build` / `purchase.payment.create`（`server/mcp/tools.js`）仍不传 `orgScope`，按供应商全量；它们受 MCP 工具矩阵与所有者权限约束，范围化另批处理。
 - 其余 `purchase-chain.js` 动作路由（`/:id/:action`）的单据级组织范围判定仍未做，登记在 `check-route-authz` 的 handler-scope 例外里（`unassigned`）。

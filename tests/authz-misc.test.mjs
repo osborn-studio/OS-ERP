@@ -97,6 +97,7 @@ test('doc type to create-permission mapping is total and points at real permissi
     assert.ok(perms.has(createPermOf(code)), `${code} -> ${DOC_CREATE_PERMS[code]} must be a real permission code`)
   }
   for (const code of Object.keys(DOC_CREATE_PERMS)) assert.ok(types.includes(code), `stale mapping entry ${code}`)
+  assert.equal(DOC_CREATE_PERMS.SH, 'sales.outbound')
   assert.equal(createPermOf('NOPE'), null)
   assert.equal(createPermOf('toString'), null)
 })
@@ -128,6 +129,19 @@ test('no-issue requires the create permission of the doc type; dry runs are exem
   const so = okData(await issue(sales.token, { doc_type: 'SO' }))
   assert.match(so.docNo, /^SO/)
   okData(await issue(f.admin, { doc_type: 'PAY' }))
+
+  // 受限范围不得替范围外的组织 / 仓取号
+  const whs = db.prepare('SELECT w.id, w.org_id, o.path FROM warehouses w JOIN orgs o ON o.id = w.org_id WHERE w.status=\'active\' GROUP BY w.org_id').all()
+  const wA = whs[0]
+  const wB = whs.find((w) => !w.path.startsWith(wA.path) && !wA.path.startsWith(w.path))
+  const scoped = await f.account('ni_scoped', 'purchase', { org_id: wA.org_id, data_scope: 'org' })
+  const before0 = seqBefore()
+  forbidden(await issue(scoped.token, { doc_type: 'PO', org_id: wB.org_id }), 'foreign org')
+  forbidden(await issue(scoped.token, { doc_type: 'PO', warehouse_id: wB.id }), 'foreign warehouse')
+  assert.equal(seqBefore(), before0)
+  okData(await issue(scoped.token, { doc_type: 'PO', org_id: wA.org_id, warehouse_id: wA.id }))
+  okData(await issue(scoped.token, { doc_type: 'PO' }))
+  okData(await issue(f.admin, { doc_type: 'PO', org_id: wB.org_id }))
 
   // 一次取号只消耗一个序号
   const one = seqBefore()
@@ -218,6 +232,20 @@ test('qimen gateway never passes through unauthenticated or badly signed calls',
   const unknown = await api('/api/qimen', { body: { method: 'bogus.method', request: {}, app_key: pf.app_key, sign: md5(`${pf.app_key}bogus.methodGML-DEMO-SECRET`) } })
   assert.equal(unknown.status, 200)
   assert.equal(unknown.body.code, '1002')
+  // 平台绑定发货仓：只能查自己的仓；他仓 / 未知仓编码 / 缺省都不能退化成全仓汇总
+  const whRows = db.prepare('SELECT id, code FROM warehouses ORDER BY id LIMIT 2').all()
+  db.prepare('UPDATE platforms SET warehouse_id=? WHERE app_key=?').run(whRows[0].id, pf.app_key)
+  const invMethod = 'taobao.qimen.inventory.query'
+  const invSign = md5(`${pf.app_key}${invMethod}GML-DEMO-SECRET`)
+  const inv = async (request) => (await api('/api/qimen', { body: { method: invMethod, request, app_key: pf.app_key, sign: invSign } })).body
+  assert.deepEqual((await inv({ warehouseCode: whRows[1].code })).items, [])
+  assert.deepEqual((await inv({ warehouseCode: 'NO-SUCH-WH' })).items, [])
+  const own = await inv({})
+  assert.equal(own.warehouseCode, whRows[0].code)
+  const ownSum = db.prepare('SELECT COALESCE(SUM(qty_on_hand),0) q FROM inventory_stocks WHERE warehouse_id=? AND qty_on_hand<>0').get(whRows[0].id).q
+  assert.ok(own.items.length <= 100)
+  if (own.items.length < 100) assert.equal(own.items.reduce((a, x) => a + x.quantity, 0), ownSum)
+  assert.equal((await inv({ warehouseCode: whRows[0].code })).warehouseCode, whRows[0].code)
   // 停用平台不再通过
   db.prepare("UPDATE platforms SET status='disabled' WHERE app_key=?").run(pf.app_key)
   await unauthorized({ method, request: {}, app_key: pf.app_key, sign: md5(`${pf.app_key}${method}GML-DEMO-SECRET`) }, 'disabled platform')

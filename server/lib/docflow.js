@@ -69,7 +69,8 @@ export const DOC_CREATE_PERMS = Object.freeze({
   // 财务
   AR: 'finance.receipt.edit', RCP: 'finance.receipt.edit', VOUCHER: 'finance.voucher.gen', RFD: 'finance.refund.edit',
   // 门店要货 / 发货 / POS
-  YQ: 'pos.store.requisition', SH: 'pos.store.requisition', PS: 'pos.cashier', PSF: 'pos.shift', RC: 'pos.dailyclose',
+  YQ: 'pos.store.requisition', SH: 'sales.outbound', // SH：总部发货，创建路由是仓管 / 销售 / 供应链角色，不是门店（状态机边的权限码是门店收货口径）
+   PS: 'pos.cashier', PSF: 'pos.shift', RC: 'pos.dailyclose',
   // 生产与委外
   MO: 'produce.order.edit', WW: 'produce.order.edit', WM: 'produce.issue', WR: 'produce.receipt', MR: 'produce.issue',
   // 电商 / 经销商 / 订货中心
