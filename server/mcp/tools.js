@@ -937,9 +937,9 @@ export const TOOLS = [
         .all(no)
         .filter((t) => !e || e.orgIds.includes(Number(t.owner_org_id)))
       const hits = []
-      let existing = 0 // 库里确有此单号的单据行数（不论是否可见；探测**全部**在用单据类型，不只是下面列出的几类）
+      let existing = 0 // 库里确有此单号的单据行数（不论是否可见；探测**全部**已登记类型（含停用），不只是几类常用单据）
       const LABELS = { PO: '采购订单', SO: '销售订单', TF: '调拨单', MO: '生产/组装单', WW: '委外单' }
-      for (const type of db.prepare("SELECT * FROM doc_types WHERE status='active' ORDER BY code").all()) {
+      for (const type of db.prepare("SELECT * FROM doc_types ORDER BY code").all()) {
         try {
           const row = db.prepare(`SELECT * FROM ${safeTable(type.table_name)} WHERE ${type.doc_no_field || 'doc_no'}=?`).get(no)
           if (!row) continue
@@ -954,7 +954,9 @@ export const TOOLS = [
       if (!hits.length && (existing > 0 || !txns.length)) {
         const err = new Error(`未找到单据 ${no}`); err.code = 'NOT_FOUND'; err.status = 404; throw err
       }
-      return ok({ doc_no: no, documents: hits, inventory_transactions: txns }, `找到 ${hits.length} 张单据、${txns.length} 条库存流水`)
+      // 单号跨表不唯一、流水又只记单号：同号单据里只要有一张不可见，就无法证明流水属于可见的那张 ⇒ 不返回流水
+      const ledger = existing > hits.length ? [] : txns
+      return ok({ doc_no: no, documents: hits, inventory_transactions: ledger }, `找到 ${hits.length} 张单据、${ledger.length} 条库存流水`)
     }
   },
 

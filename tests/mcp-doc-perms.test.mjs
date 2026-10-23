@@ -495,6 +495,25 @@ test('AA1 doc.query and order.trace_document use the resolver table with owner s
     assert.ok(okTool(await call('order.trace_document', { doc_no: 'AA1-SH-OTHER' }, free)), 'unowned all-scope token still resolves it')
   })
 
+  await t.test('order.trace_document: inactive type and shared doc numbers do not unlock ledger lines of a hidden doc (Codex AA1 P1 x2)', async () => {
+    // 停用类型：SH 置为停用后，越界单据仍须被探测到
+    db.prepare("UPDATE doc_types SET status='inactive' WHERE code='SH'").run()
+    try {
+      assert.ok(notFound(await call('order.trace_document', { doc_no: 'AA1-SH-OTHER' })), 'inactive type must still be probed')
+    } finally {
+      db.prepare("UPDATE doc_types SET status='active' WHERE code='SH'").run()
+    }
+    // 同号：可见的 SO 与越界的 SH 共用单号，流水不得借可见单据放出
+    const storeB = db.prepare('SELECT id FROM stores WHERE org_id IS NOT NULL AND org_id<>? ORDER BY id LIMIT 1').get(whA.org_id)
+    db.prepare(`INSERT INTO store_shipments (doc_no, store_id, from_warehouse_id, to_warehouse_id, ship_date, status)
+      VALUES ('AA1-SO-OWN2', ?, ?, ?, date('now','localtime'), 'shipped')`).run(storeB.id, whB.id, whB.id)
+    insTxn.run('AA1-SO-OWN2', whB.id, whA.org_id)
+    const res = await call('order.trace_document', { doc_no: 'AA1-SO-OWN2' })
+    assert.ok(okTool(res))
+    assert.equal(toolText(res).documents.length, 1, 'only the visible SO is returned')
+    assert.equal(toolText(res).inventory_transactions.length, 0, 'ledger lines cannot be attributed to the visible doc, so none are returned')
+  })
+
   await t.test('unowned all-scope token still sees everything (unchanged)', async () => {
     assert.ok(okTool(await call('order.trace_document', { doc_no: 'AA1-SO-OTHER' }, free)))
     const q = await call('doc.query', { doc_type: 'SO', keyword: 'AA1-SO-OTHER' }, free)
