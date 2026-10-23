@@ -2,6 +2,10 @@
 
 更新：2026-10-22。全新公开仓库：[osborn-studio/OS-ERP](https://github.com/osborn-studio/OS-ERP)，采用 MIT，仅导入清理后的当前文件快照。旧仓库保留为私有归档，其 PR/Actions/历史对象不导入本仓库。未发布正式 Release、未部署。来源及旧 checkout 使用限制见 [PUBLICATION_HISTORY](../PUBLICATION_HISTORY.md)，MIT 决策不替代第三方权属核验。
 
+## 第五批当前状态（2026-10-23）
+
+第五批 4 路 subagent 并行，已合入 `integration`：采购链全部读接口统一门禁与组织范围（ADR-0017）；收付款证据与二人复核（ADR-0018，迁移 056，新增设置 `funds_*` 与权限 `finance.funds.review`，默认开启，F10 人工资金模式落地）；脚本数据目录卫生守卫 `check-data-paths` 与单实例安装验收 `tests/local-instance.test.mjs`（ADR-0019，F11）；应收界面展示授信释放/恢复效果与投影校验。PR #2 已合并到 main；第五批将作为新 PR 提交，验证以托管 CI 为准。
+
 ## 第四批当前状态（2026-10-22）
 
 第四批 4 路 subagent 并行，已合入 `integration`（PR #2）：授信占用投影单一写入者与对账守卫（ADR-0014，修复 `test-quote-credit` 原有两项失败）；待办接口权限/范围与 Agent Token 有效状态（ADR-0015，迁移 055，新增 `/api/mcp/tokens/:id` 与 `sweep`）；恢复演练与升级失败回退演练脚本及恢复手册（ADR-0016，`docs/operations/restore-runbook.md`）；托管 CI 新增 `docker` job（linux/amd64 构建 + `scripts/docker-smoke.mjs` 冒烟）。验证结果以 PR #2 的托管 CI 为准。
