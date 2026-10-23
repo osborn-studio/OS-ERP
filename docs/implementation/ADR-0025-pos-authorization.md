@@ -64,7 +64,7 @@
 
 - **作废订单**：`POST /api/pos/orders/:id/void` 服务端早已是 `requireStore()` + `requirePerm('pos.refund')`（见上表，`voidPosOrder` 是该路径唯一入口），本条补的是前端：`src/utils/pos-actions.ts` 新增 `order_void`（需 `pos.refund`），POS 本机单据列表的"作废"按钮无权限即隐藏（权限未加载也隐藏）。
 - **差异结案**：`POST /api/pos/shifts/:id/settle-variance` 由 `requireRole('admin','finance')` 改为 `requirePerm('pos.shift.settle')`。迁移 066（`066_pos_settle_permission.cjs`）登记该权限点，**首次出现时**授予 `admin`、内置 `finance`（原按角色名放行者，保持其既有能力）与内置 `store`（店长，v6 AA9 指定）；`verify()` 只查字典，管理员事后削减不被恢复（ADR-0007）。063~065 由并行工作流占用，运行器按文件名排序，缺号无影响。
-- **范围**：原路由借用 `storeCtx`，无门店绑定的 admin / finance 反而 403；现在不再要求门店绑定。为避免 `store` 角色获得该权限后能结别家门店的班次，绑了门店的非 admin 账号按 `assertShiftOfStore` 只能结本店班次，别家 404（`SHIFT_NOT_FOUND`，状态不动）；无门店绑定的总部账号持权限可结任意门店。`lib/pos2.js` 的 `settleVariance` 本身没有角色判断（库函数供种子与流程测试直接调用），闸只在路由，与 `separateChecker` 同口径。
+- **范围**：原路由借用 `storeCtx`，无门店绑定的 admin / finance 反而 403；现在不再要求门店绑定。为避免 `store` 角色获得该权限后能结别家门店的班次，绑了门店的非 admin 账号按 `assertShiftOfStore` 只能结本店班次，别家 404（`SHIFT_NOT_FOUND`，状态不动）；无门店绑定的账号只有总部角色（`HQ_ROLES`：admin / finance 等）持权限可结任意门店，未绑门店的 `store` 等非总部账号 403（独立审计 P1：否则未绑定的店长账号借新授权可跨店结案）。`lib/pos2.js` 的 `settleVariance` 本身没有角色判断（库函数供种子与流程测试直接调用），闸只在路由，与 `separateChecker` 同口径。
 - **前端**：`variance_settle`（需 `pos.shift.settle`）门控班次详情里的"长短款落案"与总部监控页的"责任人承担 / 公司承担"按钮。
 - **已知边界**：持有 `pos.shift.settle` 的 `store` 账号可结案本店挂账差异，其中包括自己核款时选择"挂账待查"的那一笔——这是 v6 AA9 指定的授予范围；若要保持"门店挂账、总部落案"，管理员应从 `store` 角色收回该权限点。
 - **验证**：`tests/pos-authz.test.mjs` 迁移 066（字典、授权、削减后不恢复）、撤权后 403 且状态不动、跨店 404、同店 200、总部 finance 200、无权限 sales 403、撤 `pos.refund` 后作废 403；`tests/pos-actions.test.mjs` 两个新选择器键。

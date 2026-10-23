@@ -364,6 +364,11 @@ test('HTTP: settle-variance requires pos.shift.settle (role name no longer decid
   const hq = await api(`/api/pos/shifts/${other.id}/settle-variance`, { token: finance.token, body: { handled: 'charge' } })
   assert.equal(hq.status, 200, JSON.stringify(hq.body))
   assert.equal(handledOf(db, other.id), 'charge')
+  // 未绑门店的 store 账号即使持有权限也不能跨店结案（Codex 审计 P1）
+  const unbound = await f.account('pos_settle_unbound', 'store', {})
+  const fourth = makePendingClosedShift(db, 1)
+  assert.equal((await api(`/api/pos/shifts/${fourth.id}/settle-variance`, { token: unbound.token, body })).status, 403)
+  assert.equal(handledOf(db, fourth.id), 'pending')
   // 没有任何角色授权的 sales 账号 403
   const sales = await f.account('pos_settle_sales', 'sales', { data_scope: 'all' })
   const third = makePendingClosedShift(db, 1)
