@@ -247,7 +247,7 @@ node scripts/upgrade-rollback-drill.mjs --backup-dir=$INSTANCE/data/backups --ta
 <h3 id="75-边界务必如实告知客户">7.5 边界（务必如实告知客户）</h3>
 <ul><li>恢复演练的耗时来自演练机，<strong>不是生产 RTO</strong>；生产规模 RPO/RTO 要在目标主机（dmserver）上实测后才能承诺。</li><li>三个行业库各自独立快照，不是同一业务时刻；跨库一致需要停服窗口内备份。</li><li>目前没有备份加密、没有异地副本；备份与数据在同一块盘时，盘坏即备份坏，需另行复制到异地并按敏感文件保管。</li><li>备份恢复会回退账号安全版本（<code>auth_version</code>），恢复后应让用户重新登录并轮换已签发的令牌。</li><li>演练探针只有用户、商品、采购单、收款单计数和应收未收余额，不是逐笔比对。</li></ul>
 <h2 id="八-升级">八 升级</h2>
-<p>升级顺序：①对当前版本做 7.1 备份；②对该备份集跑 7.3 回退演练，必须通过；③在新目录解压新版本并执行 <code>setup</code>，实例目录保持不变（<code>--instance=</code> 指向同一个绝对目录）；④停旧服务、启动新版本；⑤运行 <code>migrate.mjs --status</code> 与 <code>verify-migrations.mjs</code>，登录并对数。</p>
+<p>升级顺序：①对当前版本做 7.1 备份；②对该备份集跑 7.3 回退演练，必须通过（它只证明&quot;这份备份 + 当时运行演练的代码&quot;能起来，<strong>不证明新版本的迁移与回退兼容</strong>）；③再在新目录解压新版本并 <code>setup</code>，用<strong>新版本的代码</strong>对同一备份集重跑 7.2 恢复演练与 7.3 回退演练，通过后才继续；④实例目录保持不变（<code>--instance=</code> 指向同一个绝对目录），停旧服务、启动新版本；⑤运行 <code>migrate.mjs --status</code> 与 <code>verify-migrations.mjs</code>，登录并对数。</p>
 <p>迁移报错（含 <code>MIGRATION_CHECKSUM_MISMATCH</code>）时：<strong>不要</strong>重试、不要手工改 <code>schema_migrations</code>、不要使用 <code>--adopt-checksums</code>；停服、切回旧代码，按恢复手册第 5 节回退。<code>--adopt-checksums</code> 只用于经评审确认&quot;库结构与新文件一致&quot;的历史迁移文件修订。</p>
 <p>行为变化提示：升级到包含 ADR-0008、0015、0017 的版本后，内置 <code>purchase</code> 角色默认的子树范围在账号没有组织归属时会看到空的采购工作台与待办，需管理员为账号挂组织或设置数据范围（见操作手册对应一节）；收款确认与付款执行默认需要凭证号和第二人复核（ADR-0018）。这些是收口的直接后果，不是故障。</p>
 <h2 id="九-演示模式仅-demo不得用于真实数据">九 演示模式（仅 demo，不得用于真实数据）</h2>
@@ -269,7 +269,7 @@ node scripts/upgrade-rollback-drill.mjs --backup-dir=$INSTANCE/data/backups --ta
 <tr><td>NODE_MODULE_VERSION 或 invalid ELF 错误</td><td>依赖混用了不同系统或 Node 版本；切到 Node 22，重新运行 setup</td></tr>
 <tr><td>Port unavailable</td><td>更换端口（<code>GML_LOCAL_PORT</code>），不要随意结束其他服务</td></tr>
 <tr><td>登录页没有可用账号</td><td>生产模式默认无账号，先按 5.2 运行 bootstrap-admin</td></tr>
-<tr><td><code>DATA_DIRECTORY_REQUIRED</code> / <code>DATA_DIRECTORY_IS_REPOSITORY</code></td><td><code>GML_DATA_DIR</code> 必须是绝对路径且不能是代码副本里的 <code>data/</code>；退出码 2</td></tr>
+<tr><td><code>DATA_DIRECTORY_REQUIRED</code></td><td>数据库相关命令要求 <code>GML_DATA_DIR</code> 是绝对路径。<code>DATA_DIRECTORY_IS_REPOSITORY</code>（不得指向代码副本 <code>data/</code>）只由 ADR-0019 列出的几个检查类脚本使用，退出码因脚本而异（<code>db-backup.mjs</code> 为 2，<code>bootstrap-admin.mjs</code> 为 1）</td></tr>
 <tr><td><code>BOOTSTRAP_*</code> 错误</td><td>按错误码核对参数、密码规则和模式；库中已有账号时不能再次 bootstrap</td></tr>
 <tr><td><code>MIGRATION_CHECKSUM_MISMATCH</code></td><td>部署的代码与建库时不一致；停服，按第八章回退，不要收养校验和</td></tr>
 <tr><td>接口返回 503 <code>FEATURE_DISABLED</code></td><td>该能力在生产模式下被关闭（商城、奇门、OMS 模拟、IM 同步、MCP），不是故障</td></tr>
