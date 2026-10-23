@@ -346,11 +346,11 @@ export function buildOpenApi() {
     '/api/dealers/statements/{id}/close': { post: { tags: ['经销商'], summary: '结清对账单（须同主体同期间应收已收齐；force 手动结清须写理由）', parameters: [idParam], responses: { 200: jsonResp(null) } } },
     '/api/dealers/statements/{id}/void': { post: { tags: ['经销商'], summary: '作废对账单（只作废本凭证，不动底层应收台账；须写理由）', parameters: [idParam], responses: { 200: jsonResp(null) } } },
 
-    '/api/oms/platforms': { get: { tags: ['线上 OMS'], summary: '平台店铺列表（含订单数/GMV/最近同步）', responses: { 200: jsonResp(null) } } },
+    '/api/oms/platforms': { get: { tags: ['线上 OMS'], summary: '平台店铺列表（含订单数/GMV/最近同步）；受限范围只列履约仓归属组织在范围内的平台（ADR-0039）', responses: { 200: jsonResp(null) } } },
     '/api/qimen/platforms/{id}/secret': { post: { tags: ['线上 OMS'], summary: '签发/轮换奇门平台密钥（oms.platform.manage；明文仅此一次返回；已有密钥需 rotate:true，ADR-0033）', parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'integer' } }], responses: { 200: jsonResp(null), 403: jsonResp(null), 404: jsonResp(null), 409: jsonResp(null) } } },
     '/api/oms/sync/{platformId}': { post: { tags: ['线上 OMS'], summary: '从平台拉取订单（演示为模拟数据源；生产 503）。订单归平台绑定组织（履约仓所属组织）：平台未绑定 422 PLATFORM_ORG_UNBOUND，履约仓不在调用者组织范围内 403', parameters: [{ name: 'platformId', in: 'path', required: true, schema: { type: 'integer' } }], responses: { 200: jsonResp(null), 403: jsonResp(null), 404: jsonResp(null), 422: jsonResp(null) } } },
-    '/api/oms/orders': { get: { tags: ['线上 OMS'], summary: '线上订单列表', parameters: [q('platform_id', '平台'), q('status', '状态'), q('pending', '=1 只看待发货'), q('startDate', '开始日期'), q('endDate', '结束日期'), q('keyword', '关键字')], responses: { 200: jsonResp(null) } } },
-    '/api/oms/orders/{id}': { get: { tags: ['线上 OMS'], summary: '线上订单详情', parameters: [idParam], responses: { 200: jsonResp(null) } } },
+    '/api/oms/orders': { get: { tags: ['线上 OMS'], summary: '线上订单列表；按平台绑定组织（履约仓所属组织）过滤，未绑定平台的订单仅全局范围可见（ADR-0039）', parameters: [q('platform_id', '平台'), q('status', '状态'), q('pending', '=1 只看待发货'), q('startDate', '开始日期'), q('endDate', '结束日期'), q('keyword', '关键字')], responses: { 200: jsonResp(null) } } },
+    '/api/oms/orders/{id}': { get: { tags: ['线上 OMS'], summary: '线上订单详情；范围外与不存在同形 404（ADR-0039）', parameters: [idParam], responses: { 200: jsonResp(null), 404: jsonResp(null) } } },
     '/api/oms/orders/{id}/convert': { post: { tags: ['线上 OMS'], summary: '线上订单转销售订单（占库）；销售订单归平台绑定组织的履约仓，平台未绑定 422，平台范围外 404', parameters: [idParam], responses: { 200: jsonResp(null), 404: jsonResp(null), 422: jsonResp(null) } } },
     '/api/oms/orders/convert-batch': { post: { tags: ['线上 OMS'], summary: '批量转单（逐单同上：范围外按「订单不存在」、未绑定平台按原因计入 failed）', responses: { 200: jsonResp(null) } } },
     '/api/oms/orders/{id}/ship': { post: { tags: ['线上 OMS'], summary: '发货并回传平台（同时出库）', parameters: [idParam], responses: { 200: jsonResp(null) } } },
@@ -361,8 +361,8 @@ export function buildOpenApi() {
     //    别照 `meta.js` 里那条历史遗留的 `closed` 文案去写这个动作。
     '/api/oms/orders/{id}/complete': { post: { tags: ['线上 OMS'], summary: '完成线上订单（OM shipped → completed；纯状态，不动库存）', parameters: [idParam], responses: { 200: jsonResp(null), 404: jsonResp(null), 409: jsonResp(null) } } },
     '/api/oms/stock-push': { post: { tags: ['线上 OMS'], summary: '推送可售库存至平台', responses: { 200: jsonResp(null) } } },
-    '/api/oms/sync-logs': { get: { tags: ['线上 OMS'], summary: '同步日志', parameters: [q('platform_id', '平台'), q('sync_type', '类型 order/stock/shipment/refund/price')], responses: { 200: jsonResp(null) } } },
-    '/api/oms/stats': { get: { tags: ['线上 OMS'], summary: '线上经营分析（平台 GMV/趋势/热销）', parameters: [q('days', '统计天数')], responses: { 200: jsonResp(null) } } },
+    '/api/oms/sync-logs': { get: { tags: ['线上 OMS'], summary: '同步日志；只含范围内平台（ADR-0039）', parameters: [q('platform_id', '平台'), q('sync_type', '类型 order/stock/shipment/refund/price')], responses: { 200: jsonResp(null) } } },
+    '/api/oms/stats': { get: { tags: ['线上 OMS'], summary: '线上经营分析（平台 GMV/趋势/热销）；只统计范围内平台（ADR-0039）', parameters: [q('days', '统计天数')], responses: { 200: jsonResp(null) } } },
 
     '/api/dashboard/summary': { get: { tags: ['看板'], summary: '经营 KPI 总览', responses: { 200: jsonResp(null) } } },
     '/api/dashboard/trend': { get: { tags: ['看板'], summary: '销售/采购/线上趋势', parameters: [q('days', '统计天数')], responses: { 200: jsonResp(null) } } },
@@ -1170,7 +1170,7 @@ export function buildOpenApi() {
     openapi: '3.0.3',
     info: {
       title: 'GML 供应链协同系统 API',
-      version: '1.36.0',
+      version: '1.37.0',
       description:
         '化妆品 / 服装 双行业轻量级供应链协同系统接口文档。覆盖主数据、采购、销售、存货、经销商、门店要货、委外管理、计划与生产、生产制造（BOM / 领料 / 完工入库）、质量检验、线上 OMS 与经营看板。\n\n' +
         '**多行业**：登录 `POST /api/auth/login` 时传 `industry`（`cosmetic` / `apparel`）选择行业版本；' +

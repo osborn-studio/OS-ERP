@@ -8,6 +8,10 @@
 
 <!-- generated -->
 
+## 第九批（进行中）：见 roadmap-v5
+
+- [ADR-0039：OMS 读接口与 MCP 单据历史工具按组织范围收口](docs/implementation/ADR-0039-oms-mcp-history-scope.md) — 判据：沿用 ADR-0034 的「平台绑定组织 = 平台履约仓 `platforms.warehouse_id` 所属组织 `warehouses.org_id`」。判据仍只在 `server/lib/sales-order.js` 一处： - `omsPlatformScopeSql(orgScope, alias)`：作用在 `platforms` 行； - `omsOrderScopeSql(orgScope, alias)`：作用在 `oms_orders` 行（经 …
+
 ## 第八批（进行中）：见 roadmap-v4
 
 - [ADR-0031：采购链动作路由与 MCP 采购工具的单据范围](docs/implementation/ADR-0031-purchase-action-scope.md) — 动作路由统一的门 `actionGate` = `requireAuth` → `requireInternal('采购单据')` → `attachOrgScope`，用于四条 `/:id/:action`、`/requisitions/:id/convert`、`/payments/:id/review`。外部主体（dealer / store）在动作权限之前就 403。 2. 单据范围判定紧跟动作权限、先于任何写：`assertActionPermitted` 在 `a…
