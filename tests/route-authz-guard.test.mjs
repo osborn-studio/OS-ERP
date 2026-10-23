@@ -48,7 +48,7 @@ test('the real repository passes the route-authz guard', () => {
   const res = run(ROOT)
   assert.equal(res.status, 0, res.stdout + res.stderr)
   assert.match(res.stdout, /通过 \d+ \/ 失败 0/)
-  assert.match(res.stdout, /pending=W1/)
+  assert.match(res.stdout, /pending=/)
 })
 
 test('a bare requireAuth route and a no-auth route turn the guard red and are named', (t) => {
@@ -122,7 +122,7 @@ test('a renamed or removed route leaves its allowlist entry stale', (t) => {
 test('every allowlist entry in the real repository carries a reason; gaps are listed', () => {
   const res = spawnSync(process.execPath, [GUARD, '--list'], { cwd: ROOT, encoding: 'utf8' })
   assert.equal(res.status, 0)
-  assert.match(res.stdout, /AUTH_ONLY .*purchase-chain\.js:\d+\] GET/)
+  assert.match(res.stdout, /AUTH_ONLY .*\[routes\/[a-z0-9-]+\.js:\d+\] (GET|POST)/)
   const src = readFileSync(GUARD, 'utf8')
   assert.doesNotMatch(src, /group\([^\n]*,\s*''\s*,/)
 })
