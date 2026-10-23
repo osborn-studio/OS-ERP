@@ -374,9 +374,19 @@ function actorPermCtx(db, ctx) {
   return permContext(db, { uid: id })
 }
 
-/** 固定权限码闸门（用于没有"边"的动作，如转单 / 收货） */
+/**
+ * 令牌所有者**此刻**的权限上下文；无主令牌返回 null（它是独立服务主体，没有"所有者"可对照）。
+ * 为什么与执行人分开判：danger 工具的执行人是确认单上的签字人，签字人有权限不等于所有者有权限 ——
+ * 令牌能做的事 = 令牌范围 ∩ 所有者当前权限（ADR-0011），不能靠换一个有权限的人来点确认去绕开。
+ */
+function ownerPermCtx(db, ctx) {
+  return ctx?.ownerUserId != null ? permContext(db, { uid: ctx.ownerUserId }) : null
+}
+
+/** 固定权限码闸门（用于没有"边"的动作，如转单 / 收货）：执行人与令牌所有者**都**必须持有 */
 function assertMcpPerm(db, ctx, code, label) {
-  if (hasPerm(actorPermCtx(db, ctx), code)) return
+  const owner = ownerPermCtx(db, ctx)
+  if (hasPerm(actorPermCtx(db, ctx), code) && (!owner || hasPerm(owner, code))) return
   throw new DocFlowError(`当前身份没有「${label}」的操作权限（需 ${code}）`, {
     code: 'PERM_DENIED',
     httpStatus: 403,
@@ -400,6 +410,11 @@ function gatePurchaseEdge(ctx, db, { docType, id, action }) {
     db, docType, fromState: row[statusField], action,
     permCtx: actorPermCtx(db, ctx), entry: 'MCP'
   })
+  // 委托口径（ADR-0011）：确认人签字不能替所有者"补"权限 —— 所有者此刻也必须持有这条边的权限点
+  const owner = ownerPermCtx(db, ctx)
+  if (owner) {
+    assertEdgePermitted({ db, docType, fromState: row[statusField], action, permCtx: owner, entry: 'MCP' })
+  }
   return row
 }
 

@@ -72,7 +72,7 @@
 | 状态 | 做法 | 期望 |
 |---|---|---|
 | 所有者停用 | 直接改库（绕过吊销钩子） | 40/40 凭据层 `TOKEN_OWNER_INACTIVE` |
-| 失去权限 | 只删该工具 `perms` 里的权限点；`perms` 为空的工具撤掉角色全部权限 | 声明了 `perms` 的 27 个：`tools/list` 不再列出，调用 `TOKEN_OWNER_PERM_DENIED`；`perms` 为空的 8 个（7 个采购推进 + `doc.transition`）：边权限实时判（`PERM_DENIED`，执行人 = 确认单签字人，用"被撤权的所有者"做签字人来证明）；另 5 个读工具见下 |
+| 失去权限 | 只删该工具 `perms` 里的权限点；`perms` 为空的工具撤掉角色全部权限 | 声明了 `perms` 的 27 个：`tools/list` 不再列出，调用 `TOKEN_OWNER_PERM_DENIED`；`perms` 为空的 8 个（7 个采购推进 + `doc.transition`）：边权限实时判（`PERM_DENIED`；签字人用仍有全部权限的超管，证明拒绝来自所有者而非签字人）；另 5 个读工具见下 |
 | 范围排除 | 所有者改为一个全新的、无任何数据的单组织 | 写 / 高危工具 `ORG_OUT_OF_SCOPE` 或"越界当作不存在"（`NOT_FOUND` / `DOC_NOT_FOUND` / `ORDER_NOT_FOUND` / `APPROVAL_NOT_FOUND`）；列表类读工具只返回空集；主数据类读工具与 HTTP 同口径不按组织收窄 |
 
 ### 矩阵发现并修复的工具级漏洞（`server/mcp/tools.js`）
@@ -80,6 +80,8 @@
 1. `sales.cancel_order`：没有任何范围判定——列表里看不到的订单，范围受限的所有者经人工确认后仍能作废（实测写入 `doc_events`）。现与 `sales.list_orders` 同一份范围映射（门店 / 经销商 / 发货仓），越界按 `ORDER_NOT_FOUND`。
 2. `purchase.create_requisition` / `create_invoice` / `build_settlement` / `create_payment`：归属目标（`org_id`、令牌组织、仓库、门店）全为空时 `assertPurchaseWriteScope` 直接放行，受限所有者可以建出范围内永远看不到的无主单据。现受限范围下"没有任何归属"一律 `ORG_OUT_OF_SCOPE`（fail-closed，与读侧 `AND 1=0` 同口径）。
 3. `approval.approve`：只靠确认人的审批身份，不看审批对象是否在调用范围内。现通过 `assertDocInScope` 校验审批实例所挂单据，越界 `APPROVAL_NOT_FOUND`。
+
+4. 采购推进 / 转单 / 收货共 7 个 danger 工具（`perms` 为空）：执行人是确认单签字人，原先只验签字人的权限——所有者被撤权后，别人点确认仍能执行。（Codex 独立审计指出，矩阵最初用"被撤权的所有者自签"掩盖了它。）现 `gatePurchaseEdge` / `assertMcpPerm` 对**所有者当前权限**再判一次，签字人有权限不能替所有者补权限；无主令牌仍不受此门约束。
 
 ### 明确记录的边界（矩阵中不是漏判）
 

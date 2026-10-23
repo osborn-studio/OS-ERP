@@ -278,8 +278,9 @@ test('MCP delegation matrix: every tool x {owner inactive, permission removed, s
     dropPerms(permFree ? fullRolePerms : needs)
     try {
       const before = snapshot()
-      // 高危且无 perms 的采购推进类：执行人是确认单上的签字人 → 用"被撤权的所有者"做签字人，证明边权限是实时判的
-      const r = await invoke(tool, baseline[tool.name].args, { confirmer: ownerId })
+      // 高危且无 perms 的采购推进类：执行人是确认单上的签字人。这里让一个**仍有全部权限**的人（超管 admin）签字，
+      // 证明拒绝来自"所有者此刻没有这条边 / 权限点"，而不是签字人没权限（Codex 审计指出：不能用被撤权的所有者自签来证明）。
+      const r = await invoke(tool, baseline[tool.name].args, { confirmer: adminId })
       const changed = diff(before, snapshot())
       let result
       if (needs.length) result = PERM_DENY_CODES.has(r.final.code) && r.final.kind === 'tool_error' ? 'DENIED' : 'LEAK'
