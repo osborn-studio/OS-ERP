@@ -17,7 +17,7 @@ import { Router } from 'express'
 import { localDate } from '../lib/dates.js'
 import { getDb } from '../db/index.js'
 import { ok, fail, wrap, pageParams, paged, bizFail } from '../lib/http.js'
-import { requireAuth, requireRole, currentUser, scopeFilter, assertCanRead, numAmount, numQty } from '../middleware/auth.js'
+import { requireAuth, requireRole, currentUser, scopeFilter, assertCanRead, numAmount, numQty, attachOrgScope, isExternalUser } from '../middleware/auth.js'
 import { audit } from '../middleware/audit.js'
 import { nextDocNo } from '../lib/docno.js'
 import { advanceStatus, tryTransition, nowText, logEvent } from '../lib/docflow.js'
@@ -29,10 +29,61 @@ import { ensureAr, arOfOrder, createReceipt, confirmReceipt } from '../lib/ar.js
 // D1 退货闭环：来源行绑定 + 退量上限 + 成本追溯 + 应收冲减（与门店退货共用同一份判据）
 import { createSalesReturn, ReturnError } from '../lib/returns.js'
 // D5：作废订单的唯一实现（HTTP 与 MCP 两个入口共用）
-import { cancelOrder, SalesOrderError } from '../lib/sales-order.js'
+import { cancelOrder, SalesOrderError, salesScopeSql, assertSalesDocInScope, assertSalesTargetInScope } from '../lib/sales-order.js'
 
 const r = Router()
 const W = ['sales', 'warehouse', 'admin']
+// 进门 + 挂组织范围（ADR-0026）。所有销售读写路由用同一组前置中间件。
+const G = [requireAuth, attachOrgScope]
+
+// 内部账号的组织范围（ADR-0026）。外部主体（经销商 / 门店）返回 null：它们只受 scopeFilter / assertCanRead
+// 的主体绑定约束，行为不变；内部账号缺 `req.orgScope` 时按「无范围」处理（fail-closed）。
+const internalOrgScope = (req) => (isExternalUser(req) ? null : req.orgScope || { scope: 'none', orgIds: [] })
+
+/**
+ * 读列表 / 统计的范围片段（前导 AND，可直接拼接）：主体绑定（scopeFilter）+ 内部账号的组织范围，
+ * 二者同在一个入口，列表、统计、详情不会各写各的。`bindAlias` 是带 dealer_id/store_id 的表别名，
+ * `kind` / `docAlias` 描述组织谓词挂在哪张单据上。
+ */
+function readScope(req, { bindAlias, kind = 'order', docAlias = bindAlias }) {
+  const bind = scopeFilter(req, bindAlias)
+  const org = internalOrgScope(req)
+  if (!org) return bind
+  const o = salesScopeSql(org, kind, docAlias)
+  return { sql: `${bind.sql} AND ${o.sql} `, params: [...bind.params, ...o.params] }
+}
+
+/** 取单后的范围断言：内部账号范围外 ⇒ 与不存在同形的 404；外部主体不走这里。返回 true 表示已回复 4xx（调用方直接 return）。 */
+function denyOutOfOrgScope(req, res, db, kind, id) {
+  const org = internalOrgScope(req)
+  if (!org) return false
+  try {
+    assertSalesDocInScope(db, kind, id, org)
+    return false
+  } catch (e) {
+    if (e instanceof SalesOrderError) {
+      fail(res, e.message, e.status)
+      return true
+    }
+    throw e
+  }
+}
+
+/** 写路径目标（仓 / 门店）校验：内部账号必须都在范围内，否则 403。返回 true 表示已回复 4xx（调用方直接 return）。 */
+function denyTargetOutOfScope(req, res, db, target) {
+  const org = internalOrgScope(req)
+  if (!org) return false
+  try {
+    assertSalesTargetInScope(db, target, org)
+    return false
+  } catch (e) {
+    if (e instanceof SalesOrderError) {
+      fail(res, e.message, e.status)
+      return true
+    }
+    throw e
+  }
+}
 
 const actorOf = (req) => {
   const u = currentUser(req)
@@ -117,13 +168,13 @@ function resolvePrice(db, skuId, { channel, dealer }) {
 // ---------- 销售订单 ----------
 r.get(
   '/orders',
-  requireAuth,
+  ...G,
   wrap((req, res) => {
     const db = getDb()
     const { page, pageSize, offset } = pageParams(req)
     const conds = []
     const params = []
-    const scope = scopeFilter(req, 'so')
+    const scope = readScope(req, { bindAlias: 'so', kind: 'order' })
     if (scope.sql) {
       conds.push(scope.sql.replace(/^\s*AND\s*/, '').replace(/\s*$/, '').trim())
       params.push(...scope.params)
@@ -160,7 +211,7 @@ r.get(
 
 r.get(
   '/orders/:id',
-  requireAuth,
+  ...G,
   wrap((req, res) => {
     const db = getDb()
     const order = loadOrder(db, Number(req.params.id))
@@ -170,13 +221,16 @@ r.get(
     // 于是列表看不到的其他门店订单，详情却能直接打开。
     const d = assertCanRead(req, order)
     if (!d.ok) return fail(res, d.message, d.status)
+    // 内部账号：组织范围外与不存在同形（ADR-0026）
+    const oos = denyOutOfOrgScope(req, res, db, 'order', order.id)
+    if (oos) return
     return ok(res, order)
   })
 )
 
 r.post(
   '/orders',
-  requireAuth,
+  ...G,
   requireRole(...W),
   wrap((req, res) => {
     const db = getDb()
@@ -211,6 +265,9 @@ r.post(
         db.prepare("SELECT id FROM warehouses WHERE status='active' LIMIT 1").get()?.id
     }
     if (!whId) return fail(res, '没有可用仓库，请先在仓库档案中维护')
+    // 写路径目标校验（ADR-0026）：出货仓与门店的归属组织必须在调用者范围内
+    const oosTarget = denyTargetOutOfScope(req, res, db, { warehouseId: whId, storeId: store_id || null })
+    if (oosTarget) return
     // 单头金额：运费与整单折扣也必须非负、两位小数。
     // 以前它们直接 `Number(discount_amount || 0)` 进库，配合行价格就能算出负应收。
     const chkFreight = numAmount(freight, '运费')
@@ -276,16 +333,22 @@ r.post(
 
 r.put(
   '/orders/:id',
-  requireAuth,
+  ...G,
   requireRole(...W),
   wrap((req, res) => {
     const db = getDb()
     const id = Number(req.params.id)
     const order = db.prepare('SELECT * FROM sales_orders WHERE id=?').get(id)
     if (!order) return fail(res, '销售订单不存在', 404)
+    const oos = denyOutOfOrgScope(req, res, db, 'order', id)
+    if (oos) return
     if (!['draft'].includes(order.status)) return fail(res, '只有草稿订单可以修改')
     const { items, receiver, receiver_phone, receiver_address, freight, discount_amount, remark, warehouse_id } =
       req.body || {}
+    if (warehouse_id != null) {
+      const oosWh = denyTargetOutOfScope(req, res, db, { warehouseId: warehouse_id })
+      if (oosWh) return
+    }
     // 与建单同一套校验：修改草稿同样是"把钱写进库"的入口，不能只在 create 上拦。
     const chkFreight = freight === undefined ? { ok: true, value: null } : numAmount(freight, '运费')
     if (!chkFreight.ok) return fail(res, chkFreight.message)
@@ -355,13 +418,15 @@ r.put(
 // 确认订单：占用库存（防超卖）
 r.post(
   '/orders/:id/confirm',
-  requireAuth,
+  ...G,
   requireRole(...W),
   wrap((req, res) => {
     const db = getDb()
     const id = Number(req.params.id)
     const order = db.prepare('SELECT * FROM sales_orders WHERE id=?').get(id)
     if (!order) return fail(res, '销售订单不存在', 404)
+    const oos = denyOutOfOrgScope(req, res, db, 'order', id)
+    if (oos) return
     if (order.status !== 'draft') return fail(res, `当前状态「${order.status}」不能确认`)
     const items = db.prepare('SELECT * FROM sales_order_items WHERE order_id=?').all(id)
 
@@ -431,12 +496,15 @@ r.post(
 
 r.post(
   '/orders/:id/cancel',
-  requireAuth,
+  ...G,
   requireRole(...W),
   wrap((req, res) => {
     const db = getDb()
     const id = Number(req.params.id)
     const u = currentUser(req)
+    // 范围判定在任何写入之前（ADR-0026）；`cancelOrder` 是 HTTP / MCP 共用的实现，不在里面掺调用者范围
+    const oos = denyOutOfOrgScope(req, res, db, 'order', id)
+    if (oos) return
     // D5：作废订单的**唯一实现**在 lib/sales-order.js —— MCP 的 sales.cancel_order 调同一个函数。
     // 原来两处各写一份，MCP 那份只有一行 UPDATE：库存占用没释放、授信没还，
     // 而单子看起来"已作废"。入口可以有两个，实现只能有一份。
@@ -460,7 +528,7 @@ r.post(
 // 发货出库
 r.post(
   '/orders/:id/deliver',
-  requireAuth,
+  ...G,
   requireRole(...W),
   wrap((req, res) => {
     const db = getDb()
@@ -468,9 +536,14 @@ r.post(
     const id = Number(req.params.id)
     const order = db.prepare('SELECT * FROM sales_orders WHERE id=?').get(id)
     if (!order) return fail(res, '销售订单不存在', 404)
+    const oos = denyOutOfOrgScope(req, res, db, 'order', id)
+    if (oos) return
     if (!['confirmed', 'picking'].includes(order.status)) return fail(res, '只有已确认的订单可以发货')
     const { delivery_date, express_company, express_no, warehouse_id, remark } = req.body || {}
     const whId = warehouse_id || order.warehouse_id
+    // 改仓发货等于动另一个仓的库存：发货仓也必须在范围内（ADR-0026）
+    const oosWh = denyTargetOutOfScope(req, res, db, { warehouseId: whId })
+    if (oosWh) return
     const items = db.prepare('SELECT * FROM sales_order_items WHERE order_id=?').all(id)
     const legacyItems = [] // 走了兼容路径（无预留明细）的 SKU，回执里明示出来
 
@@ -613,11 +686,15 @@ r.post(
 
 r.post(
   '/orders/:id/complete',
-  requireAuth,
+  ...G,
   requireRole(...W),
   wrap((req, res) => {
     const db = getDb()
     const id = Number(req.params.id)
+    if (db.prepare('SELECT 1 FROM sales_orders WHERE id=?').get(id)) {
+      const oos = denyOutOfOrgScope(req, res, db, 'order', id)
+      if (oos) return
+    }
     advanceStatus(db, req, { docType: 'SO', id, action: 'complete', expectFrom: 'shipped', remark: '订单完成' })
     return ok(res, loadOrder(db, id))
   })
@@ -625,13 +702,15 @@ r.post(
 
 r.post(
   '/orders/:id/payment',
-  requireAuth,
+  ...G,
   requireRole(...W, 'finance'),
   wrap((req, res) => {
     const db = getDb()
     const id = Number(req.params.id)
     const order = db.prepare('SELECT * FROM sales_orders WHERE id=?').get(id)
     if (!order) return fail(res, '销售订单不存在', 404)
+    const oos = denyOutOfOrgScope(req, res, db, 'order', id)
+    if (oos) return
     const amount = Number(req.body?.amount || 0)
     if (!(amount > 0)) return fail(res, '回款金额必须大于 0')
     // 回款必须走「收款单 + 核销」：先有应收单才有核销对象。
@@ -698,14 +777,14 @@ r.post(
 // ---------- 发货单 ----------
 r.get(
   '/deliveries',
-  requireAuth,
+  ...G,
   wrap((req, res) => {
     const db = getDb()
     const { page, pageSize, offset } = pageParams(req)
     const FROM = `sales_deliveries sd LEFT JOIN sales_orders so ON so.id=sd.order_id
       LEFT JOIN warehouses w ON w.id=sd.warehouse_id LEFT JOIN dealers d ON d.id=so.dealer_id LEFT JOIN stores s ON s.id=so.store_id`
     // 发货单本身没有 dealer_id/store_id，范围挂在它所属的销售订单上
-    const scope = scopeFilter(req, 'so')
+    const scope = readScope(req, { bindAlias: 'so', kind: 'delivery', docAlias: 'sd' })
     const total = db.prepare(`SELECT COUNT(*) c FROM ${FROM} WHERE 1=1${scope.sql}`).get(...scope.params).c
     const rows = db
       .prepare(
@@ -720,7 +799,7 @@ r.get(
 
 r.get(
   '/deliveries/:id',
-  requireAuth,
+  ...G,
   wrap((req, res) => {
     const db = getDb()
     const head = db
@@ -733,6 +812,8 @@ r.get(
     if (!head) return fail(res, '发货单不存在', 404)
     const d = assertCanRead(req, head)
     if (!d.ok) return fail(res, d.message, d.status)
+    const oos = denyOutOfOrgScope(req, res, db, 'delivery', head.id)
+    if (oos) return
     head.items = db
       .prepare(
         `SELECT i.*, sk.sku_code, sk.name AS sku_name, p.name AS product_name FROM sales_delivery_items i
@@ -765,7 +846,7 @@ r.get(
 //     带业务码 `TRANSITION_NOT_ALLOWED`，不会退化成 500。
 r.post(
   '/deliveries/:id/receive',
-  requireAuth,
+  ...G,
   requireRole(...W),
   wrap((req, res) => {
     const db = getDb()
@@ -782,6 +863,8 @@ r.post(
     if (!head) return fail(res, '发货单不存在', 404)
     const d = assertCanRead(req, head)
     if (!d.ok) return fail(res, d.message, d.status)
+    const oos = denyOutOfOrgScope(req, res, db, 'delivery', id)
+    if (oos) return
 
     const out = advanceStatus(db, req, {
       docType: 'DL',
@@ -799,14 +882,14 @@ r.post(
 // 于是「退多少、按什么成本、应收怎么办」三件事都没有依据 —— 详见 lib/returns.js 的文件头。
 r.get(
   '/returns',
-  requireAuth,
+  ...G,
   wrap((req, res) => {
     const db = getDb()
     const { page, pageSize, offset } = pageParams(req)
     const FROM = `sales_returns t LEFT JOIN dealers d ON d.id=t.dealer_id LEFT JOIN stores s ON s.id=t.store_id
       LEFT JOIN warehouses w ON w.id=t.warehouse_id LEFT JOIN sales_orders so ON so.id=t.order_id`
     // 退货单自带 dealer_id/store_id，范围直接挂在它自己身上
-    const scope = scopeFilter(req, 't')
+    const scope = readScope(req, { bindAlias: 't', kind: 'return' })
     const total = db.prepare(`SELECT COUNT(*) c FROM ${FROM} WHERE 1=1${scope.sql}`).get(...scope.params).c
     const rows = db
       .prepare(
@@ -819,12 +902,28 @@ r.get(
 
 r.post(
   '/returns',
-  requireAuth,
+  ...G,
   requireRole(...W),
   wrap((req, res) => {
     const db = getDb()
     const u = currentUser(req)
     const b = req.body || {}
+    // 写路径范围校验（ADR-0026）：来源订单、入库仓、门店都必须在调用者范围内；
+    // 有来源订单且未指定仓时，入库仓就是订单出货仓，同样要在范围内
+    let srcOrder = null
+    if (b.order_id) {
+      srcOrder = db.prepare('SELECT * FROM sales_orders WHERE id=?').get(Number(b.order_id))
+      if (srcOrder) {
+        const oos = denyOutOfOrgScope(req, res, db, 'order', srcOrder.id)
+        if (oos) return
+      }
+    }
+    const retWh = b.warehouse_id || srcOrder?.warehouse_id || null
+    const retStore = b.store_id || null
+    if (retWh != null || retStore != null) {
+      const oosT = denyTargetOutOfScope(req, res, db, { warehouseId: retWh, storeId: retStore })
+      if (oosT) return
+    }
     try {
       const out = createSalesReturn(db, req, {
         orderId: b.order_id || null,
@@ -865,7 +964,7 @@ r.post(
 //   重复点 ⇒ 409「状态「已完成」已是终态，不能继续流转」。
 r.post(
   '/returns/:id/complete',
-  requireAuth,
+  ...G,
   requireRole(...W),
   wrap((req, res) => {
     const db = getDb()
@@ -875,6 +974,8 @@ r.post(
     if (!row) return fail(res, '退货单不存在', 404)
     const d = assertCanRead(req, row)
     if (!d.ok) return fail(res, d.message, d.status)
+    const oos = denyOutOfOrgScope(req, res, db, 'return', id)
+    if (oos) return
 
     const out = advanceStatus(db, req, {
       docType: 'SR',
@@ -890,15 +991,15 @@ r.post(
 // ---------- 销售分析 ----------
 r.get(
   '/stats',
-  requireAuth,
+  ...G,
   wrap((req, res) => {
     const db = getDb()
     const days = Number(req.query.days || 30)
     const from = `date('now','localtime', '-${days} day')`
     // 统计也是"读"：门店账号不该从汇总里看到别家门店的销售结构。
     // 这里按各自 SQL 里的表别名分别取范围片段，与列表/详情同源。
-    const sOrders = scopeFilter(req, 'sales_orders')
-    const sSo = scopeFilter(req, 'so')
+    const sOrders = readScope(req, { bindAlias: 'sales_orders', kind: 'order' })
+    const sSo = readScope(req, { bindAlias: 'so', kind: 'order' })
     const byChannel = db
       .prepare(
         `SELECT channel, COUNT(*) orders, COALESCE(SUM(receivable_amount),0) amount, COALESCE(SUM(total_qty),0) qty

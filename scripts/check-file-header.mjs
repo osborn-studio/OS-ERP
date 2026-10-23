@@ -81,6 +81,8 @@ const DECLARED = [
   // 采购链读接口范围收口（ADR-0017）
   'tests/purchase-chain-scope.test.mjs',
   'tests/purchase-chain-detail-scope.test.mjs',
+  // 销售域组织范围收口（ADR-0026）
+  'tests/sales-scope.test.mjs',
   // 脚本数据目录卫生与单实例安装验收（ADR-0019）
   'scripts/check-data-paths.mjs',
   'scripts/check-route-authz.mjs',

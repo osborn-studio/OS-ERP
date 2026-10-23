@@ -386,9 +386,9 @@ group('pos.js', 'handler-scope', '门店 POS：storeCtx 要求账号绑定 store
 ], 'unassigned')
 group('requisitions.js', 'handler-scope', '门店要货：storeCtx 要求绑定门店，只读写本店单据', [['GET', '/store/mine'], ['GET', '/store/shipments/mine'], ['GET', '/store/shipments/:id'], ['POST', '/store/shipments/:id/receive']])
 group('demand.js', 'handler-scope', '经销商"我的"要货/计划：dealerCtx 要求绑定经销商，只读本经销商', [['GET', '/dealer/requisitions/mine'], ['GET', '/dealer/plans/mine']])
-group('sales.js', 'handler-scope', '销售读接口：scopeFilter / assertCanRead 只按经销商/门店绑定收口（scopePairs），不按内部账号的组织数据范围过滤；data_scope=org 的内部账号可读他组织订单/发货/退货/统计', [
+group('sales.js', 'handler-scope', '销售读接口（ADR-0026 已收口）：路由器链 requireAuth + attachOrgScope，处理器内两层范围——外部主体按经销商/门店绑定（scopeFilter / assertCanRead），内部账号按组织数据范围（lib/sales-order.js 的 salesScopeSql / assertSalesDocInScope，范围外 404）；列表与统计同一谓词。tests/sales-scope.test.mjs 覆盖', [
   ['GET', '/orders'], ['GET', '/orders/:id'], ['GET', '/deliveries'], ['GET', '/deliveries/:id'], ['GET', '/returns'], ['GET', '/stats']
-], 'unassigned')
+])
 group('quote.js', 'handler-scope', '报价动作：处理器内按动作再选 requirePerm（动态权限码），守卫看不到', [['POST', '/quotes/:id/action']])
 group('order-center.js', 'handler-scope', '订货中心：路由器层 requireAuth + attachOrgScope + 客户主体准入（checkCustomerAccess）只收口经销商/门店自身主体；内部账号即使 data_scope=org 也读到全局（如 /overview 的 customerIds=null、/customers、/customers/tree），组织范围未落实。外部角色是本模块的正常用户，故不要求 perm 码', [
   ['GET', '/overview'], ['GET', '/flow'], ['GET', '/policies'], ['GET', '/customers'], ['GET', '/customers/tree'], ['GET', '/customers/:id'],
