@@ -84,6 +84,8 @@ const DECLARED = [
   // 脚本数据目录卫生与单实例安装验收（ADR-0019）
   'scripts/check-data-paths.mjs',
   'scripts/check-route-authz.mjs',
+  'scripts/upstream-similarity.mjs',
+  'tests/upstream-provenance.test.mjs',
   'tests/route-authz-guard.test.mjs',
   'scripts/db-inventory.mjs',
   'scripts/local-manage.mjs',
