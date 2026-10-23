@@ -443,6 +443,8 @@ function main() {
   for (const [k, list] of Object.entries(pend)) {
     console.log(`  待办 pending=${k}：${list.length} 条`)
   }
+  // 没有任何排期待办时也要明说（而不是整行消失）：「清零」与「报告机制坏了」必须能从输出里分开
+  if (!Object.keys(pend).length) console.log('  待办 pending=none：0 条（已无带排期标记的真实缺口登记）')
   for (const p of problems) console.log(`  ✗ ${p}`)
   console.log(`通过 ${routes.length - problems.length} / 失败 ${problems.length}`)
   process.exit(problems.length ? 1 : 0)
