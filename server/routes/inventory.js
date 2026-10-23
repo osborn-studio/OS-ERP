@@ -792,22 +792,24 @@ r.get(
     }
     if (!sn) return fail(res, '序列号不存在', 404)
     const events = []
+    // 追溯事件同样按仓范围过滤：同单号 / SKU 的流水可能落在别的组织的仓（ADR-0038）
+    const tsc = stockScopeSql(req.orgScope, 't')
     if (sn.entry_doc_no) {
       const entry = db
         .prepare(
           `SELECT t.biz_date, t.doc_type, t.doc_no, t.qty, t.unit_cost, t.counterparty, t.operator, t.remark, w.name AS warehouse_name
-           FROM inventory_transactions t LEFT JOIN warehouses w ON w.id=t.warehouse_id WHERE t.doc_no=? AND t.sku_id=? AND t.direction='in'`
+           FROM inventory_transactions t LEFT JOIN warehouses w ON w.id=t.warehouse_id WHERE t.doc_no=? AND t.sku_id=? AND t.direction='in' AND ${tsc.sql}`
         )
-        .all(sn.entry_doc_no, sn.sku_id)
+        .all(sn.entry_doc_no, sn.sku_id, ...tsc.params)
       for (const e of entry) events.push({ ...e, doc_type_name: DOC_TYPE_LABEL[e.doc_type] || e.doc_type, stage: '入库' })
     }
     if (sn.exit_doc_no) {
       const exit = db
         .prepare(
           `SELECT t.biz_date, t.doc_type, t.doc_no, t.qty, t.unit_cost, t.counterparty, t.operator, t.remark, w.name AS warehouse_name
-           FROM inventory_transactions t LEFT JOIN warehouses w ON w.id=t.warehouse_id WHERE t.doc_no=? AND t.sku_id=? AND t.direction='out'`
+           FROM inventory_transactions t LEFT JOIN warehouses w ON w.id=t.warehouse_id WHERE t.doc_no=? AND t.sku_id=? AND t.direction='out' AND ${tsc.sql}`
         )
-        .all(sn.exit_doc_no, sn.sku_id)
+        .all(sn.exit_doc_no, sn.sku_id, ...tsc.params)
       for (const e of exit) events.push({ ...e, doc_type_name: DOC_TYPE_LABEL[e.doc_type] || e.doc_type, stage: '出库' })
     }
     return ok(res, { serial: sn, events })
