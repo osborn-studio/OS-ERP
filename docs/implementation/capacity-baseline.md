@@ -815,3 +815,8 @@ gh run view <run-id> --log-failed
 - `dmserver` 与生产规模副本；机器空闲时的数字；真实订单时间分布。
 - 受限范围与 topSkus 仍不走 `idx_oms_order_time`：前者要把范围子查询改写成对 `platform_id` 的非等值形式，后者要改连接顺序（浮点求和顺序可能变，不能保证逐位相同）——均未做，见 ADR-0044 补充 4。
 - explain-audit（合成库，见 ADR 补充 4 记录）：`oms.stats_trend`、`oms.stats_total`、`ai.platform_analysis` 声明 `expectIndex` + `expectSearch`；其余六条 `oms.stats_*` 登记只守"无裸 SCAN"，`oms.stats_top_skus*` 的明细表扫描有书面豁免。
+
+## AF6 备份故障矩阵：Linux CI 登记与本机耗时（**Mac mini / 非目标主机；Linux 结果：尚未运行**）
+
+- **Linux CI 上的 `tests/fs-fault.test.mjs`：尚未运行。** 2026-10-24 用 `gh run view` 只读核对 PR #9（`feat/batch-thirteen`）的 CI：run `40111488028` 在“Audit view tests without FTS”步骤失败，其后的 “Focused tests (tests/*.test.mjs)” 步骤被跳过（`-`），所以该文件没有在 ubuntu 上执行；run `40112658832` 当时仍在进行（“Typecheck, build, focused tests” 未完成，日志尚不可读）。PR #10 不存在。因此 AE6 文档里“Linux 由 CI `checks` job 在 ubuntu-latest 上跑同一文件”仍是**待验证**，没有 Linux 通过/失败的证据；目录 fsync、rename 覆盖、`wx` 等 `platform:` 用例的 Linux 行为未被实测。
+- 本机（macOS）：`tests/fs-fault.test.mjs` 在加入 `backup.after-enc-rename-fsync` / `backup.after-manifest-fsync` 与多库 × 4 点用例后全部通过；其中 fsync 顺序用例只断言调用顺序，不是断电实验。

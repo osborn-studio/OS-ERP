@@ -61,6 +61,7 @@ const VERIFY_FAILED = 'BACKUP_VERIFY_FAILED'
 const FREEZE_FAILED = 'BACKUP_FREEZE_FAILED'
 const ENCRYPT_FAILED = 'BACKUP_ENCRYPT_FAILED'
 const MANIFEST_FAILED = 'BACKUP_MANIFEST_FAILED'
+const FINALIZE_FAILED = 'BACKUP_FINALIZE_FAILED'
 const CONSISTENCY_NOTE = '短暂写冻结下的近似一致点：三库在同一窗口内各持有 BEGIN IMMEDIATE 保留锁后依次快照，窗口内无新提交；这不是跨库事务，窗口外的写入顺序不被保证。'
 
 function usageError(message) {
@@ -241,6 +242,21 @@ if (freezeError) {
   }
 }
 
+const fsyncPath = (file) => { const fd = fs.openSync(file, 'r'); try { fs.fsyncSync(fd) } finally { fs.closeSync(fd) } }
+const fsyncDir = (dir) => { if (process.platform !== 'win32') fsyncPath(dir) } // 目录只能只读打开；Windows 不支持
+/** 逐级创建目录并 fsync 每个新目录的父目录，否则首次运行时备份目录本身的目录项断电后可能丢失 */
+function mkdirDurable(dir) {
+  const created = []
+  for (let d = path.resolve(dir); !fs.existsSync(d); d = path.dirname(d)) created.unshift(d)
+  fs.mkdirSync(dir, { recursive: true })
+  for (const d of created) fsyncDir(path.dirname(d))
+}
+/** 新建文件（wx，0600）→ 写入 → fsync → 关闭；先登记再写，失败时调用方才能清理本次创建的文件 */
+function writeFileDurable(file, text, owned) {
+  const fd = fs.openSync(file, 'wx', 0o600)
+  owned.push(file)
+  try { const buf = Buffer.from(text, 'utf8'); for (let off = 0; off < buf.length;) off += fs.writeSync(fd, buf, off, buf.length - off); fs.fsyncSync(fd) } finally { fs.closeSync(fd) }
+}
 // ---- 阶段 2：窗口内只做快照（明文快照；加密在窗口外） ----
 const snaps = []
 // 兜底：任何未捕获异常/提前退出，都在进程退出时擦除仍在登记的明文临时文件
@@ -260,7 +276,7 @@ if (!freezeError) {
       const entry = { code: item.code, label: item.label, status: 'failed', source: { path: item.src, ...describeSource(db) }, kept: cfg.keep, pruned: [] }
       const snap = { entry, cfg, dir, base, out: null, finalOut: null }
       try {
-        fs.mkdirSync(dir, { recursive: true })
+        mkdirDurable(dir)
         const ext = backupKey ? '.db.enc' : '.db'
         let n = 0
         const suffix = () => (n ? `_${n}` : '')
@@ -282,7 +298,7 @@ if (!freezeError) {
       } catch (e) {
         failed++
         entry.error = `${SNAPSHOT_FAILED}: ${e.message}`
-        entry.failed_file = snap.out ? (backupKey ? (shredFile(snap.out), null) : quarantine(snap.out, `${snap.finalOut}.failed`)) : null
+        entry.failed_file = snap.out ? (backupKey ? (shredFile(snap.out), plainTmps.delete(snap.out), null) : quarantine(snap.out, `${snap.finalOut}.failed`)) : null
         snap.dead = true
       } finally {
         db.close()
@@ -298,7 +314,10 @@ const releasedAt = new Date().toISOString()
 const freezeMs = Math.round(performance.now() - freezeStart)
 const consistency = { ...stampOf(), released_at: releasedAt, freeze_ms: freezeMs, databases: plan.filter((p) => !p.skipped).map((p) => p.code) }
 
-// ---- 阶段 3：窗口外 —— 注入故障、校验、（加密）、裁剪 ----
+// ---- 阶段 3a：窗口外 —— 注入故障、校验、（加密）、落终名 + 目录 fsync、擦除明文 ----
+// AF6：**所有库**先走完 3a（明文在此阶段结束时全部擦除），再进入 3b 的清单阶段。这样 3b 的任何中止（含 abort）都不会
+// 在盘上留下任何库的明文；剩下的明文窗口只有 after-db-copy 与冻结窗口本身（kill -9 / 断电）。
+const pending = []
 for (const snap of snaps) {
   if (snap.skipped) {
     results.push({ code: snap.code, label: snap.label, status: 'skipped', reason: '数据库文件不存在', pruned: [] })
@@ -306,8 +325,9 @@ for (const snap of snaps) {
   }
   const { entry, cfg, dir, base, out, finalOut } = snap
   entry.consistency_stamp = consistency.id
-  if (snap.dead) { results.push(entry); continue }
-  const discard = () => (backupKey ? (shredFile(out), null) : quarantine(out, `${finalOut}.failed`)) // 加密模式绝不把明文隔离留盘
+  results.push(entry)
+  if (snap.dead) continue
+  const discard = () => (backupKey ? (shredFile(out), plainTmps.delete(out), null) : quarantine(out, `${finalOut}.failed`)) // 加密模式绝不把明文隔离留盘
 
   // 仅测试模式：模拟"快照文件写坏"，证明校验失败路径真的不裁剪、非零退出
   if (fault && (!fault.only || fault.only === entry.code)) {
@@ -322,7 +342,6 @@ for (const snap of snaps) {
     failed++
     entry.error = `${VERIFY_FAILED}: ${verification.reasons.join('；')}`
     entry.failed_file = discard()
-    results.push(entry)
     continue
   }
 
@@ -342,6 +361,7 @@ for (const snap of snaps) {
     try {
       const enc = encryptFile(out, finalOut, backupKey)
       decryptFile(finalOut, null, backupKey) // 回读认证：确认落盘密文能用当前密钥解开
+      fsyncDir(dir) // 密文改名的目录项先落盘，再擦除明文（AF6）
       entry.encryption = { algorithm: 'AES-256-GCM', format_version: FORMAT_VERSION, kdf: 'HKDF-SHA256(per-file salt)', ms: Math.round(performance.now() - t0) }
       entry.size = enc.size
       entry.sha256 = enc.sha256 // 密文 sha256
@@ -350,28 +370,58 @@ for (const snap of snaps) {
       fs.rmSync(finalOut, { force: true })
       entry.error = `${ENCRYPT_FAILED}: ${e.message}`
       shredFile(out)
-      results.push(entry)
+      plainTmps.delete(out)
       continue
     }
     shredFile(out) // 明文临时文件在此擦除
+    plainTmps.delete(out)
     entry.file = finalOut
   } else {
     // 已通过校验：fsync 后原子改成终名，再 fsync 目录项
-    const pfd = fs.openSync(out, 'r')
-    try { fs.fsyncSync(pfd) } finally { fs.closeSync(pfd) }
-    fs.renameSync(out, finalOut)
-    if (process.platform !== 'win32') { const dfd = fs.openSync(dir, 'r'); try { fs.fsyncSync(dfd) } finally { fs.closeSync(dfd) } }
-    entry.file = finalOut
-    entry.size = fs.statSync(finalOut).size
-    entry.sha256 = sha256File(finalOut)
+    try {
+      fsyncPath(out)
+      fs.renameSync(out, finalOut)
+      fsyncDir(dir)
+      entry.file = finalOut
+      entry.size = fs.statSync(finalOut).size
+      entry.sha256 = sha256File(finalOut)
+    } catch (e) {
+      failed++
+      fs.rmSync(finalOut, { force: true })
+      fs.rmSync(out, { force: true })
+      entry.error = `${FINALIZE_FAILED}: ${e.message}`
+      entry.file = undefined
+      continue
+    }
   }
+  pending.push({ snap, chainSummary })
+}
+// 所有库的终名都已 fsync、明文都已擦除。注入点放在这里（而不是每库一次），保证 abort 时也没有任何库的明文留盘。
+if (pending.length) {
+  try {
+    faultPoint('backup.after-enc-rename-fsync')
+  } catch (e) {
+    // 已改成终名但还没有清单：与清单失败同口径，不留没有清单的新备份
+    for (const { snap } of pending) {
+      failed++
+      fs.rmSync(snap.entry.file, { force: true })
+      snap.entry.status = 'failed'
+      snap.entry.error = `${FINALIZE_FAILED}: ${e.message}`
+      snap.entry.file = undefined
+    }
+    pending.length = 0
+  }
+}
+
+// ---- 阶段 3b：清单（fsync 文件 + 目录）、裁剪 ----
+for (const { snap, chainSummary } of pending) {
+  const { entry, cfg, dir, base } = snap
   const ownedSidecars = [] // 失败清理只删本次创建的文件，不碰别人遗留的同名文件
   try {
     faultPoint('backup.before-sidecar')
     const manifest = buildManifest({ industry: entry.code, backupFile: entry.file, backupSha256: entry.sha256, summary: chainSummary })
     const text = JSON.stringify(manifest, null, 2) + '\n'
-    fs.writeFileSync(`${entry.file}.audit-manifest.json`, text, { mode: 0o600, flag: 'wx' })
-    ownedSidecars.push(`${entry.file}.audit-manifest.json`)
+    writeFileDurable(`${entry.file}.audit-manifest.json`, text, ownedSidecars) // 明文清单：写后 fsync（AF6）
     if (backupKey) {
       const tmpPlain = path.join(dir, `.${path.basename(entry.file)}.manifest.${randomBytes(6).toString('hex')}.plain.tmp`)
       plainTmps.add(tmpPlain)
@@ -384,13 +434,14 @@ for (const snap of snaps) {
         plainTmps.delete(tmpPlain)
       }
     }
+    fsyncDir(dir) // 清单目录项（含 .enc 清单的改名）在报告之前落盘（AF6）
+    faultPoint('backup.after-manifest-fsync')
   } catch (e) {
     failed++
     for (const f of [entry.file, ...ownedSidecars]) fs.rmSync(f, { force: true })
     entry.status = 'failed'
     entry.error = `${MANIFEST_FAILED}: ${e.message}`
     entry.file = undefined
-    results.push(entry)
     continue
   }
   faultPoint('backup.after-sidecar')
@@ -408,7 +459,6 @@ for (const snap of snaps) {
     for (const sfx of ['.audit-manifest.json', '.audit-manifest.enc']) fs.rmSync(`${item.p}${sfx}`, { force: true }) // 清单随备份一起裁剪
     entry.pruned.push(item.f)
   }
-  results.push(entry)
 }
 
 // ---- 报告：写到用到的每个备份目录；只有整次成功才顺带清理旧报告 ----
