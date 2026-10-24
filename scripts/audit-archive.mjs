@@ -13,11 +13,19 @@
  *   4. 同一个 IMMEDIATE 事务内：删除待归档段、在 `audit_chain_anchors` 登记锚点（边界行 id ↔ 段尾 row_hash）、写一条 `AUDIT_ARCHIVE` 严格审计
  *      （不含行内容，只有计数与摘要）。任何一步失败 ⇒ 事务回滚，已写出的导出文件被删除。
  *
+ * 【崩溃窗口与 `--resume`】（AC7，ADR-0049 补充）导出在 `IMMEDIATE` 事务内完成并 fsync，之后才删除。进程在这之间被杀（SIGKILL / 断电）时，SQLite 回滚未提交的删除：
+ *   库原样不动，导出的 JSONL 与摘要完整落盘。此时重跑会因“不覆盖已有文件”报 `OUT_EXISTS`；用 `--resume` 续做：同样先演练取口令、再 `--confirm`，但**不重写导出**，
+ *   而是在写锁内逐项核对——摘要字段与重算的计划一致、JSONL 的 SHA-256 等于摘要、读回链校验通过、**且 JSONL 与库里这一段逐字节相同**（把库里的段按同一序列化重算 SHA-256；
+ *   user_name / module / ip 不进哈希，只有这一步能发现它们在崩溃后被改）、段内锚点与摘要一致——全部通过才删除并登记锚点 / 审计。任何一项不符 ⇒ 退出 1、什么都不动、
+ *   也不删除导出文件（它们是证据）。幂等：已经归档完成（库里有对应 `archive` 锚点）时 `--resume` 报 `already-archived` 并退出 0，不重复删除、不重复写审计。
+ *   只有 JSONL 没有摘要（崩在导出途中）⇒ `RESUME_INCOMPLETE`；根本没有导出 ⇒ `RESUME_NOTHING`（不会悄悄当成新归档）。
+ *   测试钩子：`GML_TEST_ARCHIVE_PAUSE_AFTER_EXPORT=1`（仅 GML_RUNTIME_MODE=test）在导出 fsync 之后、删除之前写 `<out>/.archive-paused` 并等待 `<out>/.archive-continue` 出现。
+ *
  * 【危险操作确认】默认只演练：打印每个行业的计划与确认口令，不写任何东西。口令 = 对"行业 + 行数 + 首末 id + 段尾哈希"的摘要；
  *   `--confirm <口令>` 必须与执行时重新算出的完全一致（演练后数据又变了 ⇒ 口令失效，需重新演练）。
  *   执行期间持写锁（单事务，含导出与读回校验），其它写入等 busy_timeout——请在低峰执行；百万行耗时见 capacity-baseline "AB6"。
  *
- * 【用法】node scripts/audit-archive.mjs --data-dir <绝对路径> --before <YYYY-MM-DD> --out <目录> [--industry <行业>] [--confirm <口令>] [--actor <名字>]
+ * 【用法】node scripts/audit-archive.mjs --data-dir <绝对路径> --before <YYYY-MM-DD> --out <目录> [--industry <行业>] [--confirm <口令>] [--actor <名字>] [--resume]
  *   退出码：0 演练完成 / 归档完成 / 无可归档；1 链校验失败或事务失败；2 参数、口令或环境错误。
  * 【改它要注意什么】锚点语义见 ADR-0049：归档后剩余链的第一行 prev_hash 指向已被搬走的段尾，靠锚点被校验器承认；
  *   导出文件与摘要是**唯一**保留被归档内容的地方，运维必须先把它们转存到带外介质再删本机副本。
@@ -29,13 +37,16 @@ import { createHash } from 'node:crypto'
 import Database from 'better-sqlite3'
 import { createRequire } from 'node:module'
 import { parseArgs, locateDatabases, die } from './lib/audit-chain-cli.mjs'
+import { sha256FileSync } from '../server/lib/audit-anchor-manifest.js'
 
 const { anchorAccepts } = createRequire(import.meta.url)('../server/db/migrations/_audit_chain.cjs')
 
-const args = parseArgs(process.argv.slice(2), { values: ['--data-dir', '--industry', '--before', '--out', '--confirm', '--actor'], flags: [] })
-if (!args['data-dir'] && !process.env.GML_DATA_DIR) die('USAGE', '用法：audit-archive.mjs --data-dir <绝对路径> --before <YYYY-MM-DD> --out <目录> [--industry <行业>] [--confirm <口令>] [--actor <名字>]')
+const args = parseArgs(process.argv.slice(2), { values: ['--data-dir', '--industry', '--before', '--out', '--confirm', '--actor'], flags: ['--resume'] })
+if (!args['data-dir'] && !process.env.GML_DATA_DIR) die('USAGE', '用法：audit-archive.mjs --data-dir <绝对路径> --before <YYYY-MM-DD> --out <目录> [--industry <行业>] [--confirm <口令>] [--actor <名字>] [--resume]')
 if (!/^\d{4}-\d{2}-\d{2}$/.test(args.before || '') || Number.isNaN(Date.parse(args.before))) die('USAGE', '--before 必须是 YYYY-MM-DD')
 if (!args.out) die('USAGE', '--out 必须给出导出目录')
+const pauseHook = process.env.GML_TEST_ARCHIVE_PAUSE_AFTER_EXPORT === '1'
+if (process.env.GML_TEST_ARCHIVE_PAUSE_AFTER_EXPORT && (!pauseHook || process.env.GML_RUNTIME_MODE !== 'test')) die('PAUSE_HOOK_FORBIDDEN', 'GML_TEST_ARCHIVE_PAUSE_AFTER_EXPORT 只允许在 GML_RUNTIME_MODE=test 下取值 1')
 const actor = args.actor || 'audit-archive-script'
 const outDir = path.resolve(args.out)
 
@@ -94,13 +105,81 @@ function mkdirpTracked(dir) {
   return missing
 }
 
+const exportBase = (code, p) => `audit-archive-${code}-${args.before}-${p.firstId}-${p.lastId}`
+
+/** 库里这一段按导出同一序列化（逐行 JSON + 换行）算出的 SHA-256 与段内锚点：续做时与导出文件比对 */
+function dbSegmentFingerprint(db, p) {
+  const hash = createHash('sha256')
+  let cursor = 0
+  for (;;) {
+    const rows = db.prepare(`SELECT ${COLS} FROM audit_logs WHERE id > ? AND id <= ? ORDER BY id LIMIT 20000`).all(cursor, p.lastId)
+    if (!rows.length) break
+    hash.update(rows.map((r) => JSON.stringify(r) + '\n').join(''), 'utf8')
+    cursor = rows[rows.length - 1].id
+  }
+  const anchors = db.prepare('SELECT kind, at_row_id, anchor_hash, prev_id, prev_row_hash, reason, created_at FROM audit_chain_anchors WHERE at_row_id BETWEEN ? AND ? ORDER BY id').all(p.firstId, p.lastId)
+  return { sha256: hash.digest('hex'), anchors }
+}
+
+/**
+ * 续做前的核对（只读）：导出文件 + 摘要必须完整、自洽，并且与库里待归档的这一段逐字节相同。失败抛带 code 的错误（调用方绝不删导出文件）。
+ */
+function checkResume(db, code, p) {
+  const base = exportBase(code, p)
+  const file = path.join(outDir, `${base}.jsonl`)
+  const digestFile = path.join(outDir, `${base}.digest.json`)
+  const fail = (c, m) => { throw Object.assign(new Error(m), { code: c }) }
+  const hasFile = fs.existsSync(file)
+  const hasDigest = fs.existsSync(digestFile)
+  if (!hasFile && !hasDigest) fail('RESUME_NOTHING', `${outDir} 里没有 ${base}.*：没有可续做的导出（去掉 --resume 做一次新归档）`)
+  if (!hasFile || !hasDigest) fail('RESUME_INCOMPLETE', `导出不完整（缺 ${hasFile ? '摘要' : 'JSONL'}）：上次崩在导出途中。人工确认后删除残留文件再做新归档`)
+  let digest
+  try { digest = JSON.parse(fs.readFileSync(digestFile, 'utf8')) } catch (e) { fail('EXPORT_DIGEST_MISMATCH', `摘要无法解析：${e.message}`) }
+  const want = { format: 'os-erp-audit-archive/1', industry: code, before: args.before, rows: p.count, first_id: p.firstId, last_id: p.lastId, first_row_hash: p.firstHash, first_prev_hash: p.firstPrevHash, tip_row_hash: p.tipHash, boundary_id: p.boundaryId, file: path.basename(file) }
+  for (const [k, v] of Object.entries(want)) if (digest[k] !== v) fail('EXPORT_DIGEST_MISMATCH', `摘要字段 ${k} 与当前计划不符（摘要 ${JSON.stringify(digest[k])}，计划 ${JSON.stringify(v)}）`)
+  if (sha256FileSync(file) !== digest.file_sha256) fail('EXPORT_DIGEST_MISMATCH', 'JSONL 的 SHA-256 与摘要不符（文件被改或写坏）')
+  const back = verifyJsonlSegment(file, Array.isArray(digest.anchors) ? digest.anchors : [])
+  if (!back.ok || back.rows !== p.count || back.firstId !== p.firstId || back.lastId !== p.lastId || back.tipHash !== p.tipHash) fail('EXPORT_VERIFY_MISMATCH', `导出文件读回校验失败：${JSON.stringify(back)}`)
+  const fp = dbSegmentFingerprint(db, p)
+  if (fp.sha256 !== digest.file_sha256 || JSON.stringify(fp.anchors) !== JSON.stringify(digest.anchors)) fail('EXPORT_DB_MISMATCH', '导出文件与库里这一段不一致（崩溃之后库里的行 / 锚点被改过？未进哈希的列 user_name / module / ip 只有这一步能发现）')
+  // 续做之后紧接着就是提交删除：导出文件刚被读过不等于已落盘（上次可能崩在 fsync 之前），这里补 fsync 文件与目录项；做不到就上抛，不删
+  for (const f of [file, digestFile]) {
+    const fd = fs.openSync(f, 'r')
+    try { fs.fsyncSync(fd) } finally { fs.closeSync(fd) }
+  }
+  fsyncDir(outDir)
+  fsyncDir(path.dirname(outDir))
+  return { file, digestFile, digest }
+}
+
+/** 已经归档完成？（`--resume` 幂等）：out 目录里有本行业 / 本日期的摘要，且库里有对应的 archive 锚点 */
+function findCompleted(db, code) {
+  if (!fs.existsSync(outDir)) return null
+  for (const f of fs.readdirSync(outDir).sort()) {
+    if (!f.startsWith(`audit-archive-${code}-${args.before}-`) || !f.endsWith('.digest.json')) continue
+    try {
+      const d = JSON.parse(fs.readFileSync(path.join(outDir, f), 'utf8'))
+      if (d.industry === code && d.before === args.before && db.prepare("SELECT 1 FROM audit_chain_anchors WHERE kind='archive' AND at_row_id=? AND anchor_hash=?").get(d.boundary_id, d.tip_row_hash)) return path.join(outDir, f)
+    } catch { /* 不是摘要 */ }
+  }
+  return null
+}
+
+/** 测试钩子：导出已 fsync、删除尚未执行——写标记并等放行（只会被 SIGKILL 或放行文件结束） */
+function pauseAfterExport() {
+  if (!pauseHook) return
+  fs.writeFileSync(path.join(outDir, '.archive-paused'), String(process.pid))
+  const wait = new Int32Array(new SharedArrayBuffer(4))
+  while (!fs.existsSync(path.join(outDir, '.archive-continue'))) Atomics.wait(wait, 0, 0, 50)
+}
+
 /** 导出 + 读回校验 + 落盘（文件与目录项都 fsync）；任何一步失败都删掉本次创建的文件再抛，不挡重试 */
 function exportSegment(db, code, p) {
   const createdDirs = mkdirpTracked(outDir)
-  const base = `audit-archive-${code}-${args.before}-${p.firstId}-${p.lastId}`
+  const base = exportBase(code, p)
   const file = path.join(outDir, `${base}.jsonl`)
   const digestFile = path.join(outDir, `${base}.digest.json`)
-  if (fs.existsSync(file) || fs.existsSync(digestFile)) throw Object.assign(new Error(`导出文件已存在：${file}（不覆盖）`), { code: 'OUT_EXISTS' })
+  if (fs.existsSync(file) || fs.existsSync(digestFile)) throw Object.assign(new Error(`导出文件已存在：${file}（不覆盖）。若上次是在导出后、删除前被中断，用 --resume 续做（会先核对文件与库一致）`), { code: 'OUT_EXISTS' })
   const owned = []
   try {
     const fd = fs.openSync(file, 'wx', 0o600)
@@ -162,8 +241,26 @@ for (const { code, file } of targets) {
     const p = plan(db)
     plans.set(code, p)
     if (p.error) { failed = true; report.industries[code] = { status: 'refused', error: `${p.error}: ${p.message}` } }
-    else if (!p.count) report.industries[code] = { status: 'nothing-to-archive' }
-    else report.industries[code] = { status: 'planned', rows: p.count, first_id: p.firstId, last_id: p.lastId, tip_hash: p.tipHash, token: tokenOf(code, p) }
+    else if (!p.count) {
+      const done = args.resume ? findCompleted(db, code) : null
+      report.industries[code] = done ? { status: 'already-archived', digest_file: done } : { status: 'nothing-to-archive' }
+    } else if (args.resume) {
+      try {
+        checkResume(db, code, p)
+        report.industries[code] = { status: 'resumable', rows: p.count, first_id: p.firstId, last_id: p.lastId, tip_hash: p.tipHash, token: tokenOf(code, p) }
+      } catch (e) {
+        // 全部行都早于 --before 时首轮归档会保留最后一行；归档审计行写入后这一行又成了新的可归档段。此时 --resume 找不到它的导出，
+        // 但对应的原归档已经完成（摘要 + 库里的 archive 锚点）⇒ 幂等地报告 already-archived，而不是 RESUME_NOTHING
+        const done = e.code === 'RESUME_NOTHING' ? findCompleted(db, code) : null
+        if (done) {
+          plans.set(code, { count: 0 })
+          report.industries[code] = { status: 'already-archived', digest_file: done }
+        } else {
+          failed = true
+          report.industries[code] = { status: 'refused', error: `${e.code || 'ERROR'}: ${e.message}` }
+        }
+      }
+    } else report.industries[code] = { status: 'planned', rows: p.count, first_id: p.firstId, last_id: p.lastId, tip_hash: p.tipHash, token: tokenOf(code, p) }
   } finally {
     db.close()
   }
@@ -183,11 +280,12 @@ if (args.confirm && !failed) {
       const db = new Database(file)
       db.pragma('busy_timeout = 5000')
       let made = null
+      let resumed = false
       try {
         const done = db.transaction(() => {
           const p = plan(db) // 锁内重算：与口令绑定的段必须与演练时一致
           if (p.error || tokenOf(code, p) !== tokenOf(code, p0)) throw Object.assign(new Error(p.error ? p.message : '加锁后计划与演练不一致'), { code: p.error || 'PLAN_CHANGED' })
-          made = exportSegment(db, code, p)
+          if (args.resume) { made = checkResume(db, code, p); resumed = true } else { made = exportSegment(db, code, p); pauseAfterExport() }
           const removed = db.prepare('DELETE FROM audit_logs WHERE id <= ?').run(p.lastId).changes
           if (removed !== p.count) throw Object.assign(new Error(`删除行数 ${removed} 与计划 ${p.count} 不一致`), { code: 'DELETE_COUNT_MISMATCH' })
           // 被归档行上的旧锚点已随摘要导出，库里不再有对应行；边界行成为表里第一行（前驱 = 无）
@@ -205,7 +303,7 @@ if (args.confirm && !failed) {
         report.industries[code] = { status: 'archived', ...done }
       } catch (e) {
         failed = true
-        for (const f of [made?.file, made?.digestFile]) if (f) fs.rmSync(f, { force: true }) // 事务回滚（导出之后的步骤失败）时一并删除导出文件
+        for (const f of resumed ? [] : [made?.file, made?.digestFile]) if (f) fs.rmSync(f, { force: true }) // 续做时导出文件是证据，永不删；否则事务回滚（导出之后的步骤失败）时一并删除导出文件
         report.industries[code] = { status: 'failed', error: `${e.code || 'ERROR'}: ${e.message}` }
       } finally {
         db.close()
@@ -216,12 +314,13 @@ if (args.confirm && !failed) {
 
 console.log(args.confirm ? '[执行] 审计归档' : '[演练] 仅计划，未改库、未写文件（带 --confirm <口令> 才执行）')
 for (const [code, r] of Object.entries(report.industries)) {
-  if (r.status === 'planned') console.log(`  ${code}: 将归档 ${r.rows} 行（id ${r.first_id}..${r.last_id}），段尾 ${r.tip_hash}\n    口令：${r.token}`)
+  if (r.status === 'resumable') console.log(`  ${code}: 可续做 ${r.rows} 行（id ${r.first_id}..${r.last_id}），导出文件已核对与库一致，段尾 ${r.tip_hash}\n    口令：${r.token}`)
+  else if (r.status === 'planned') console.log(`  ${code}: 将归档 ${r.rows} 行（id ${r.first_id}..${r.last_id}），段尾 ${r.tip_hash}\n    口令：${r.token}`)
   else console.log(`  ${code}: ${r.status}${r.error ? ' — ' + r.error : ''}${r.file ? `\n    ${r.file}\n    ${r.digest_file}` : ''}`)
 }
-const planned = Object.values(report.industries).filter((r) => r.status === 'planned' || r.status === 'archived')
+const planned = Object.values(report.industries).filter((r) => r.status === 'planned' || r.status === 'resumable' || r.status === 'archived')
 if (!args.confirm && planned.length > 1) {
-  const tokens = Object.values(report.industries).filter((r) => r.status === 'planned').map((r) => r.token)
+  const tokens = Object.values(report.industries).filter((r) => r.status === 'planned' || r.status === 'resumable').map((r) => r.token)
   console.log(`  多个行业：总口令 ${'ARCHIVE-' + createHash('sha256').update(tokens.join(',')).digest('hex').slice(0, 16).toUpperCase()}（或用 --industry 逐个归档，使用各自口令）`)
 }
 if (usageError) process.exit(2)
