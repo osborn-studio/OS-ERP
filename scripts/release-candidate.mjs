@@ -40,6 +40,7 @@ import { hashTestsTree, TESTS_TREE_FILE } from './lib/tests-tree.mjs'
 import { KEY_ENV, SIG_FILE, loadSigningKey, signEvidence } from './lib/evidence-sign.mjs'
 import { createPublicKey } from 'node:crypto'
 import { LOG_FILE, appendEntry, assertAppendable, builtByFor } from './lib/evidence-log.mjs'
+import { assertFsFaultAllowed } from './lib/fs-fault.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const RESULTS = new Set(['passed', 'failed'])
@@ -228,7 +229,7 @@ function main() {
   const evidenceDir = path.join(output, `${name}.evidence`)
   for (const f of [zipFile, evidenceDir]) if (fs.existsSync(f)) throw new Error(`${f} already exists; remove it first`) // 在可清理区之前判断，绝不删除已有候选
   const logFile = opts.log === undefined ? null : path.resolve(opts.log === true ? path.join(ROOT, LOG_FILE) : opts.log)
-  if (logFile) assertAppendable(logFile, name) // 链已坏或同名已入日志 ⇒ 构建前失败，不留产物
+  if (logFile) { assertFsFaultAllowed(); assertAppendable(logFile, name) } // 链已坏或同名已入日志 ⇒ 构建前失败，不留产物
   const work = fs.mkdtempSync(path.join(os.tmpdir(), 'os-erp-rc-'))
   const cleanupOutputs = () => { for (const f of [zipFile, `${zipFile}.sha256`]) fs.rmSync(f, { force: true }); fs.rmSync(evidenceDir, { recursive: true, force: true }) }
   try {
@@ -326,7 +327,8 @@ function main() {
     }
     console.log(JSON.stringify({ candidate: zipFile, sha256: zipHash, evidence: path.join(evidenceDir, 'EVIDENCE.json'), notes: path.join(evidenceDir, 'RELEASE-NOTES.md'), not_a_release: true }, null, 2))
   } catch (error) {
-    cleanupOutputs()
+    if (error.committed) console.error(`[release-candidate] the evidence log line for ${name} is already durable; candidate outputs are kept (commit the log line)`)
+    else cleanupOutputs()
     console.error(`[release-candidate] ${error.message}`)
     process.exitCode = 1
   } finally {

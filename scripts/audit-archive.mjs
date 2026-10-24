@@ -21,6 +21,8 @@
  *   只有 JSONL 没有摘要（崩在导出途中）⇒ `RESUME_INCOMPLETE`；根本没有导出 ⇒ `RESUME_NOTHING`（不会悄悄当成新归档）。
  *   测试钩子：`GML_TEST_ARCHIVE_PAUSE_AFTER_EXPORT=1`（仅 GML_RUNTIME_MODE=test）在导出 fsync 之后、删除之前写 `<out>/.archive-paused` 并等待 `<out>/.archive-continue` 出现。
  *
+ *   故障注入（AD6）：`GML_TEST_FS_FAULT=archive.{after-export-write,after-export-fsync,before-delete,after-delete,after-anchor}`（scripts/lib/fs-fault.mjs，仅 test 模式）；各点之后的状态与恢复见 docs/operations/audit-integrity.md §5b。
+ *
  * 【危险操作确认】默认只演练：打印每个行业的计划与确认口令，不写任何东西。口令 = 对"行业 + 行数 + 首末 id + 段尾哈希"的摘要；
  *   `--confirm <口令>` 必须与执行时重新算出的完全一致（演练后数据又变了 ⇒ 口令失效，需重新演练）。
  *   执行期间持写锁（单事务，含导出与读回校验），其它写入等 busy_timeout——请在低峰执行；百万行耗时见 capacity-baseline "AB6"。
@@ -38,6 +40,7 @@ import Database from 'better-sqlite3'
 import { createRequire } from 'node:module'
 import { parseArgs, locateDatabases, die } from './lib/audit-chain-cli.mjs'
 import { sha256FileSync } from '../server/lib/audit-anchor-manifest.js'
+import { faultPoint, assertFsFaultAllowed } from './lib/fs-fault.mjs'
 
 const { anchorAccepts } = createRequire(import.meta.url)('../server/db/migrations/_audit_chain.cjs')
 
@@ -47,6 +50,7 @@ if (!/^\d{4}-\d{2}-\d{2}$/.test(args.before || '') || Number.isNaN(Date.parse(ar
 if (!args.out) die('USAGE', '--out 必须给出导出目录')
 const pauseHook = process.env.GML_TEST_ARCHIVE_PAUSE_AFTER_EXPORT === '1'
 if (process.env.GML_TEST_ARCHIVE_PAUSE_AFTER_EXPORT && (!pauseHook || process.env.GML_RUNTIME_MODE !== 'test')) die('PAUSE_HOOK_FORBIDDEN', 'GML_TEST_ARCHIVE_PAUSE_AFTER_EXPORT 只允许在 GML_RUNTIME_MODE=test 下取值 1')
+try { assertFsFaultAllowed() } catch (e) { die(e.code, e.message) }
 const actor = args.actor || 'audit-archive-script'
 const outDir = path.resolve(args.out)
 
@@ -195,10 +199,12 @@ function exportSegment(db, code, p) {
         fs.writeSync(fd, chunk)
         cursor = rows[rows.length - 1].id
       }
+      faultPoint('archive.after-export-write')
       fs.fsyncSync(fd)
     } finally {
       fs.closeSync(fd)
     }
+    faultPoint('archive.after-export-fsync')
     // 段内被锚点承认的断口（保留清理 / 隐私抹除留下的）随摘要一起导出，读回校验和以后离线复核都要用
     const anchors = db.prepare('SELECT kind, at_row_id, anchor_hash, prev_id, prev_row_hash, reason, created_at FROM audit_chain_anchors WHERE at_row_id BETWEEN ? AND ? ORDER BY id').all(p.firstId, p.lastId)
     const back = verifyJsonlSegment(file, anchors)
@@ -286,8 +292,10 @@ if (args.confirm && !failed) {
           const p = plan(db) // 锁内重算：与口令绑定的段必须与演练时一致
           if (p.error || tokenOf(code, p) !== tokenOf(code, p0)) throw Object.assign(new Error(p.error ? p.message : '加锁后计划与演练不一致'), { code: p.error || 'PLAN_CHANGED' })
           if (args.resume) { made = checkResume(db, code, p); resumed = true } else { made = exportSegment(db, code, p); pauseAfterExport() }
+          faultPoint('archive.before-delete')
           const removed = db.prepare('DELETE FROM audit_logs WHERE id <= ?').run(p.lastId).changes
           if (removed !== p.count) throw Object.assign(new Error(`删除行数 ${removed} 与计划 ${p.count} 不一致`), { code: 'DELETE_COUNT_MISMATCH' })
+          faultPoint('archive.after-delete')
           // 被归档行上的旧锚点已随摘要导出，库里不再有对应行；边界行成为表里第一行（前驱 = 无）
           db.prepare('DELETE FROM audit_chain_anchors WHERE at_row_id <= ?').run(p.lastId)
           db.prepare('INSERT INTO audit_chain_anchors (kind, at_row_id, anchor_hash, prev_id, prev_row_hash, reason) VALUES (?,?,?,NULL,NULL,?)')
@@ -296,6 +304,7 @@ if (args.confirm && !failed) {
             userName: actor, action: 'AUDIT_ARCHIVE', module: 'audit', entity: 'audit_logs', entityId: code,
             detail: { before: args.before, rows: p.count, first_id: p.firstId, last_id: p.lastId, tip_row_hash: p.tipHash, file_sha256: made.digest.file_sha256, file: made.digest.file }
           })
+          faultPoint('archive.after-anchor')
           const after = verifyChain(db)
           if (!after.ok) throw Object.assign(new Error(`归档后剩余链校验失败：id=${after.brk.id} ${after.brk.kind}`), { code: 'POST_VERIFY_FAILED' })
           return { rows: p.count, file: made.file, digest_file: made.digestFile, tip_hash: p.tipHash }
