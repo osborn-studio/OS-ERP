@@ -383,3 +383,18 @@ test('ssh destination: unknown alias, missing remote directory, a failing scp, a
   assert.deepEqual(readdirSync(path.join(f.remote, 'backups/anchors')), [])
   w.db.close()
 })
+
+test('AF5 docs: the daily procedure shows the full command set (anchor, intent key custody, verify with --require-signed-intents, against-backup) and no longer advertises the removed flag as a way to accept anchors', () => {
+  const doc = readFileSync(new URL('../docs/operations/audit-integrity.md', import.meta.url), 'utf8')
+  const daily = doc.slice(doc.indexOf('## 8. 每日锚点'), doc.indexOf('### 8b.'))
+  for (const needle of ['release-keygen.mjs --out', '--purpose anchor-intent', 'GML_ANCHOR_INTENT_KEY', 'scripts/offbox-anchor.mjs', '--require-signed-intents', '--intent-pubkey', '--against-backup']) {
+    assert.ok(daily.includes(needle) || doc.includes(needle), `audit-integrity.md mentions ${needle}`)
+  }
+  assert.match(daily, /--offbox [^\n]*--require-signed-intents/, 'the daily verify command carries --require-signed-intents')
+  assert.match(daily, /--against-backup [^\n]*--require-signed-intents[^\n]*--intent-pubkey|--against-backup[^\n]*--intent-pubkey[^\n]*--require-signed-intents/, 'and so does the backup comparison')
+  const b = doc.slice(doc.indexOf('### 8b.'))
+  assert.doesNotMatch(b, /只接受“意图齐全，但印证它的审计行已被后来的归档搬出库”/)
+  assert.match(b, /--accept-new-anchors[^\n]*(无效|不再)/)
+  assert.doesNotMatch(b, /仍按 §6 列出/, 'the --against-backup limitation line is gone')
+  assert.match(b, /--purpose anchor-intent/)
+})

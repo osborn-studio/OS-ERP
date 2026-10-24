@@ -70,3 +70,23 @@ Codex 审计（gpt-6.1-sol，只读，针对相对 batch-thirteen 的差异，�
 - 中：`verify()` 不检查 `id` 列，缺 `id` 的表被判健康而运行时 `ORDER BY id` 报错 ⇒ 已修：`id` 纳入 `verify()`；缺 `id` 无法 ALTER 补，`up()` 重建为标准形态。
 - 低：补列修出来的残表没有 `operation` 的 CHECK ⇒ 已修：`verify()` 检查 DDL 含该 CHECK，`up()` 重建表（保留行）。回归 `repairs a populated partial table`。
 - 审计确认：锚点自增水位在删除最高锚点、事务回滚时都正确；数字 / 字符串类型差异不会误匹配；锚定链尾之后的锚点按设计不在对账范围；`key_id` 与提供的公钥不符时跳过验签属于“签名可选”的既定口径（`--require-signed-intents` 下失败）；意图列表比实际锚点多出的元组不授权任何未匹配的实际锚点。未发现三个脚本的原子性缺陷。
+
+## 补充 2（AF5）：`--against-backup` 意图对账、删除“印证行已归档”路径、意图密钥保管
+
+状态：开发实现，尚非产品上线验收｜相关：roadmap-v11 AF5、`docs/operations/audit-integrity.md` §6 / §8 / §8b
+
+### 决定
+1. **`--against-backup` 做同样的意图对账**。备份之后新增、且 `at_row_id` ≤ 备份链尾 id 的库内锚点，逐个要求匹配的 `audit_anchor_intents` 意图 + 操作审计行印证（审计行 id 必须大于备份链尾）；否则 `against_backup.status = rewrite`，`kind` 为 `anchor-without-intent` / `intent-hash-mismatch` / `intent-uncorroborated` / `intent-signature-*`，`intent_problems` 逐条列出，退出 1。备份链尾之后追加区间里的锚点是正常增长，只在 `anchors_added` 里列出。与 `--offbox` 共用同一个 `reconcileInRange`，没有第二套规则。`--strict-anchors` 语义不变。
+   - 签名：`--intent-pubkey` 现在也可与 `--against-backup` 一起用；`--require-signed-intents` 在该模式下必须同时给 `--intent-pubkey`（没有 `--pubkey` 可回落，缺则退出 2）。没给公钥时输出 `notes` 注明“意图签名未验证”。
+   - 备份的 `anchors` 明细已被 `loadBackupManifest` 强制与 `anchors_digest` / `anchors_count` 自洽，所以“新增”清单不能靠换明细清空（AC7 既有检查）；对账不引入新的信任输入。
+2. **删除 `corroboration-archived` / `acceptArchived`**。AE5 的补充留了一条“印证行已被后来的归档搬出库 ⇒ 仅 `--accept-new-anchors` 放行”的路径，并自称“几乎不可达”。AF5 证明它**严格不可达**：被印证的锚点满足 `at_row_id ≤ 基线链尾 < 印证行 id`；印证行要被归档搬走，那次归档的段尾 `lastId ≥` 印证行 id，而 `audit-archive` 在同一事务里 `DELETE FROM audit_chain_anchors WHERE at_row_id <= lastId`，该锚点必然一起被删。其他删行途径也造不成这种组合：保留清理只删 `module ∈ {master, notify}` 的行，操作审计行不在其列。回归 `the "corroborating row was archived" path is unreachable`：真实跑两次归档，印证行与范围内锚点同时消失，校验 ok 且范围内锚点为 0；再补回一条范围内锚点 + 指向已归档行的伪造意图，**无论带不带 `--accept-new-anchors`** 都是 `rewrite/intent-uncorroborated`。删除前，这个伪造在带开关时会通过（红测试证实），所以保留这条路径不只是多余代码，而是一个可用的绕过口。
+   - 行为变化：`--accept-new-anchors` 不再有任何作用；脚本打印一行提示后忽略它（不报用法错误，避免旧运维脚本直接失效；结果只会更严）。
+3. **意图密钥保管**。`release-keygen.mjs --purpose anchor-intent` 写 `anchor-intent.key.pem`（0600、O_EXCL）+ `anchor-intent.pub.pem`；`--purpose release`（缺省）行为不变。拒绝规则共用同一实现（相对路径、仓库 / 任何 git 工作树内含符号链接、非空目录）；未知 / 重复 / 缺值的 `--purpose` 在创建任何东西之前失败。输出多一个 `purpose`，提示把私钥放在执行清理 / 归档 / 抹除的操作机上、与发行密钥分开、不放业务主机。`GML_ANCHOR_INTENT_KEY` 的加载规则（`loadIntentSigner`）不变，测试加了“keygen 出来的钥匙能被它加载、仓库内的路径被拒”。
+4. **每日流程**：`audit-integrity.md` §8 给出完整命令集（两把密钥生成、`GML_ANCHOR_INTENT_KEY`、`offbox-anchor` 两种目的地、`--offbox` 与 `--against-backup` 复核均带 `--intent-pubkey --require-signed-intents`），并说明不带该开关时未签名意图也算通过。`offbox-anchor.mjs` 头注释指向同一流程。文档策略测试断言这些命令仍在。
+5. 同步更新 `docs/本地交付/02_操作手册.md` 里仍写着“`--accept-new-anchors` 人工放行”的一条。
+
+### 诚实边界（更新）
+- 未给 `--intent-pubkey` 时签名不被验证（只在输出里注明）；不带 `--require-signed-intents` 时没有签名的意图仍可通过。能同时写库与审计链的攻击者在不签名的口径下仍可造出自洽的“桥锚点 + 意图 + 引用它的审计行”。推荐口径是日常总带 `--require-signed-intents`。
+- AE5 诚实边界里“`--against-backup` 没有意图对账”一条作废。
+- 备份之前就存在的锚点（早于迁移 072 的清理 / 归档）不会被对账——它们在清单里，不在 `anchors_added`。
+- 备份链尾落在已归档的段里（`--archive-dir` 证明）时，范围内锚点不可能存在（同上不可达论证），对账自然为 0。
