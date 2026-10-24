@@ -27,6 +27,7 @@ import {
   buildWhere,
   countCapped,
   keywordUsesFts,
+  ftsState,
   exportChunks,
   orderOf,
   parseFilters,
@@ -414,7 +415,7 @@ r.get(
     return paged(res, {
       rows, total, page, pageSize, has_more, total_cap: AUDIT_COUNT_CAP,
       totalPages: Math.ceil(Math.min(total, AUDIT_COUNT_CAP) / pageSize) || 1,
-      retention: auditRetention(db), export_max_rows: AUDIT_EXPORT_MAX_ROWS
+      retention: auditRetention(db), export_max_rows: AUDIT_EXPORT_MAX_ROWS, fts: ftsState(db)
     })
   })
 )

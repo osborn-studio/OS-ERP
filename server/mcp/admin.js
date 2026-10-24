@@ -22,6 +22,8 @@ import { createToken, revokeToken, SCOPE_LABEL, listTokensWithStatus, getTokenWi
 import { TOOLS } from './tools.js'
 // 「AI 能力目录」的唯一口径（单据矩阵 + 工具清单 + 安全边界都由它算，页面不自己编）
 import { buildMcpCatalog } from './catalog.js'
+import { mcpRatePolicy, dailyQuotaConfigured } from '../lib/mcp-rate-limit.js'
+import { mcpCodeTotal } from '../lib/process-counters.js'
 
 const r = Router()
 
@@ -51,6 +53,28 @@ r.get(
   requireAuth,
   requirePerm('system.mcp.manage'),
   wrap((_req, res) => ok(res, buildMcpCatalog(getDb())))
+)
+
+/**
+ * 限速读数（AE11，只读）：每分钟总额度 / 写额度、日配额（0 = 关闭）、本进程自启动以来被限流（429）的累计次数。
+ * 与 `/catalog`、`/tokens` 同权限（system.mcp.manage）：额度数字能帮攻击者掐准节奏，不对普通账号披露。
+ * 只含数字，不含令牌 id / 前缀 / 名称；429 计数是进程内计数器（重启归零、多进程各自计数），不是持久统计。
+ */
+r.get(
+  '/limits',
+  requireAuth,
+  requirePerm('system.mcp.manage'),
+  wrap((_req, res) => {
+    const p = mcpRatePolicy()
+    return ok(res, {
+      rpm: p.rpm,
+      write_rpm: p.writeRpm,
+      window_seconds: Math.round(p.windowMs / 1000),
+      daily_quota: dailyQuotaConfigured(getDb()),
+      rate_limited_total: mcpCodeTotal('MCP_RATE_LIMITED'),
+      counter_scope: 'process'
+    })
+  })
 )
 
 r.get(

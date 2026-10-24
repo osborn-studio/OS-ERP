@@ -205,6 +205,39 @@ test('AD11 role-matrix scenario asserts the highlighted column, server-equal cel
   assert.ok(read('src/App.tsx').includes('/system/role-matrix'))
 })
 
+test('AE11 scenarios are registered, assert real outcomes, restore what they change, and the page hooks exist', () => {
+  const declared = driver.match(/const SCENARIOS = \[([^\]]+)\]/)[1].split(',').map((x) => x.trim().replace(/'/g, ''))
+  for (const need of ['audit-fts-state', 'mcp-token-limits', 'metrics-hidden-note']) assert.ok(declared.includes(need), `${need} must be registered in SCENARIOS`)
+  const needles = {
+    'audit-fts-state': ['audit-fts-state', 'audit-fts-maintain-hint', 'data-setting', 'data-index', "'off'", 'expectedState', "'converging_off'", 'originalSetting', 'restoreFailed', 'audit_fts_enabled', '.status(), 403', 'count(), 0', 'externalRequests', 'finally'],
+    'mcp-token-limits': ['/api/mcp/limits', 'mcp-limits', 'rate_limited_total', 'before.rate_limited_total + 1', 'mcpCall', ', 429)', 'mcp_token_daily_quota', 'originalQuota', 'cleanupFailed', '刷新记录', 'DELETE', 'status, 403', 'count(), 0', 'externalRequests', 'includes(created.token), false'],
+    'metrics-hidden-note': ['metrics-hidden-slot', 'metrics-hidden-note', 'hidden_count', 'locator(\'table\').first().waitFor()', 'ctx.route', 'route.fulfill', '3 个指标', 'externalRequests']
+  }
+  for (const [f, list] of Object.entries(needles)) {
+    const src = read(`tests/browser/${f}.mjs`)
+    for (const needle of list) assert.ok(src.includes(needle), `${f} must assert ${needle}`)
+    assert.match(src, /from '\.\/lib\.mjs'/, `${f} uses the shared loopback/Linux helpers`)
+    assert.match(src, /blockedbyclient/, `${f} blocks non-loopback requests`)
+    assert.match(src, /浏览器部分只在 Linux 托管 CI 运行/, `${f} states it is not executed locally`)
+    assert.doesNotMatch(src, /https?:\/\/(?!127\.0\.0\.1|localhost)/, `${f} must not hard-code external origins`)
+    assert.doesNotMatch(src, /console\.log\([^)]*(password|token)/i, `${f} must not print credentials`)
+  }
+  // 页面侧的钩子必须存在，场景才有东西可断言
+  const audit = read('src/pages/system/AuditLogs.tsx')
+  for (const hook of ['audit-fts-state', 'audit-fts-state-text', 'audit-fts-maintain-hint', 'data-state', 'data-setting', 'data-index', 'audit-fts-maintain.mjs']) assert.ok(audit.includes(hook), `AuditLogs.tsx must expose ${hook}`)
+  const mcp = read('src/pages/system/McpCenter.tsx')
+  for (const hook of ['mcp-limits', 'data-rpm', 'data-write-rpm', 'data-daily-quota', 'data-limited', "'/mcp/limits'"]) assert.ok(mcp.includes(hook), `McpCenter.tsx must expose ${hook}`)
+  const note = read('src/pages/system/MetricsHiddenNote.tsx')
+  for (const hook of ['metrics-hidden-slot', 'metrics-hidden-note', 'data-count']) assert.ok(note.includes(hook), `MetricsHiddenNote.tsx must expose ${hook}`)
+  assert.ok(read('src/pages/system/Metrics.tsx').includes('MetricsHiddenNote'), 'Metrics.tsx mounts the AE1 note slot')
+  // AE2 落地了真实的自定义角色分组（RoleMatrixExtras.tsx 的 CustomRolesCard），AE11 的占位槽随之撤掉
+  assert.ok(read('src/pages/system/RoleMatrixExtras.tsx').includes('CustomRolesCard'))
+  assert.ok(read('src/pages/system/RoleMatrix.tsx').includes('CustomRolesCard'), 'RoleMatrix.tsx mounts the AE2 custom-role group')
+  // 限速读数只给持有 system.mcp.manage 的账号：服务端路由与权限点同源
+  const admin = read('server/mcp/admin.js')
+  assert.match(admin, /'\/limits',\s*requireAuth,\s*requirePerm\('system\.mcp\.manage'\)/)
+})
+
 test('driver gives every scenario a 5 minute kill timer and runs them in registration order (AA8 + AB9 included)', () => {
   assert.match(driver, /SCENARIO_TIMEOUT_MS = 5 \* 60 \* 1000/)
   assert.match(driver, /for \(const name of SCENARIOS\)/)

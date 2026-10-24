@@ -23,6 +23,8 @@ import { ACTION_NEEDS_MODULE_HINT, KEYWORD_HINTS, actionNeedsModule, effectiveKe
 
 const AUDIT_COUNT_CAP = 10000 // 与 server/lib/audit-view.js 的 AUDIT_COUNT_CAP 一致
 type Draft = { module: string; action: string; user: string; entity: string; entity_id: string; from: string; to: string; keyword: string }
+type FtsState = { setting_enabled: boolean; index_present: boolean; env_disabled: boolean; active: boolean }
+type AuditMeta = { retention?: any; max?: number; ok?: boolean; fts?: FtsState }
 const EMPTY: Draft = { module: '', action: '', user: '', entity: '', entity_id: '', from: '', to: '', keyword: '' }
 
 export default function AuditLogs() {
@@ -30,7 +32,7 @@ export default function AuditLogs() {
     useList<any>('/meta/audit-logs', { pageSize: 50 })
   const [draft, setDraft] = useState<Draft>(EMPTY)
   const [exporting, setExporting] = useState(false)
-  const [meta, setMeta] = useState<{ retention?: any; max?: number; ok?: boolean }>({})
+  const [meta, setMeta] = useState<AuditMeta>({})
   const set = (k: keyof Draft) => (v: string) => setDraft((d) => ({ ...d, [k]: v }))
 
   // 保留提示与导出上限随列表一起返回；useList 只暴露 list，故单独取一次元信息（pageSize=1，开销可忽略）
@@ -81,6 +83,7 @@ export default function AuditLogs() {
           </div>
         </Card>
       )}
+      {meta.ok && meta.fts && <FtsStateCard fts={meta.fts} />}
       <FilterBar
         onReset={() => {
           setDraft(EMPTY)
@@ -137,12 +140,41 @@ export default function AuditLogs() {
   )
 }
 
-function useMetaOnce(set: (m: { retention?: any; max?: number; ok?: boolean }) => void) {
+/**
+ * 关键词索引（FTS5）状态，只读（AE11）。服务端 `fts` 字段四个布尔值合成一个可读结论：
+ *   env（环境开关强制 LIKE，最优先）/ converging_off（设置关但索引表还在：查询仍可能走索引）/ off（设置关且无索引）/
+ *   drift（设置开但索引表不在：无 FTS5 构建或尚未收敛）/ on（设置开 + 索引在）。
+ * 维护动作只给命令提示，页面不提供开关（改索引要持写锁，须走脚本并写理由）。
+ */
+function ftsVerdict(f: FtsState): { state: 'on' | 'off' | 'converging_off' | 'env' | 'drift'; text: string; hint: string } {
+  const enable = 'node scripts/audit-fts-maintain.mjs --data-dir <绝对路径> --industry <行业> --enable --reason "<原因>"'
+  const disable = 'node scripts/audit-fts-maintain.mjs --data-dir <绝对路径> --industry <行业> --disable --reason "<原因>"'
+  if (f.env_disabled) return { state: 'env', text: '环境变量 GML_AUDIT_FTS=0 强制关键词走普通匹配（LIKE），与库里的设置无关。', hint: '移除该环境变量并重启服务后恢复；这是运维演练开关，不改库里的设置。' }
+  if (!f.setting_enabled && f.index_present) return { state: 'converging_off', text: '设置已关（audit_fts_enabled = 关），但索引表还在：在维护脚本执行或服务重启收敛之前，关键词检索仍可能走索引。', hint: `收敛：${disable}（同事务改设置并删除索引表与触发器）。` }
+  if (!f.setting_enabled) return { state: 'off', text: '已停用（设置 audit_fts_enabled = 关）：关键词一律走普通匹配（LIKE），命中稀少的关键词在大库上会更慢。', hint: `重新启用：${enable}（重建并回填索引，大库上会持写锁，请避开业务高峰）。` }
+  if (!f.index_present) return { state: 'drift', text: '设置为开，但库里没有关键词索引表：当前走普通匹配（LIKE）。常见于不带 FTS5 的构建，或设置刚改尚未收敛。', hint: `收敛：${enable}，或重启让迁移 071 的自愈按设置收敛；构建本身不支持 FTS5 时请保持停用。` }
+  return { state: 'on', text: '已启用：≥3 个字符且命中稀少的关键词走索引，其余走普通匹配（LIKE），两条路径结果一致。', hint: `停用（减少审计写入开销）：${disable}；停用后检索仍可用，只是更慢。` }
+}
+
+function FtsStateCard({ fts }: { fts: FtsState }) {
+  const v = ftsVerdict(fts)
+  const tone = v.state === 'on' ? 'text-emerald-700' : v.state === 'off' ? 'text-slate-600' : 'text-amber-700'
+  return (
+    <Card className="mb-3">
+      <div data-testid="audit-fts-state" data-state={v.state} data-setting={fts.setting_enabled ? '1' : '0'} data-index={fts.index_present ? '1' : '0'} className="text-[13px] leading-relaxed">
+        <div className={tone}><b>关键词索引（FTS5）：</b><span data-testid="audit-fts-state-text">{v.text}</span></div>
+        <div className="mt-1 text-[12px] text-slate-500" data-testid="audit-fts-maintain-hint">维护提示：{v.hint}</div>
+      </div>
+    </Card>
+  )
+}
+
+function useMetaOnce(set: (m: AuditMeta) => void) {
   useEffect(() => {
     let live = true
     api
       .get('/meta/audit-logs', { page: 1, pageSize: 1 })
-      .then((res: any) => live && set({ retention: res.data?.retention, max: res.data?.export_max_rows, ok: true }))
+      .then((res: any) => live && set({ retention: res.data?.retention, max: res.data?.export_max_rows, fts: res.data?.fts, ok: true }))
       .catch(() => {})
     return () => {
       live = false

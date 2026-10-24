@@ -412,18 +412,18 @@
 
 | 处理器 | 方法 | 路径 | 分类 | 中间件链 | 调用的 lib 函数 | 处理器内 SQL 表 | 经 lib 触达的表 |
 |---|---|---|---|---|---|---|---|
-| `meta.js:113` | GET | `/api/meta/health` | NO_AUTH | optionalAuth | lib/ops-status.js: computeOpsStatus | products | login_throttle_meta, settings, users |
-| `meta.js:167` | GET | `/api/meta/metrics` | NO_AUTH | metricsRateLimit → metricsAuth | lib/metrics-export.js: metricsTokenOk, renderPrometheus<br>lib/ops-status.js: computeOpsStatus, opsCounters<br>lib/process-counters.js: counterSnapshot, histogramSnapshot<br>lib/tx.js: writeRetryStats | — | login_throttle_meta, settings, users |
-| `meta.js:186` | GET | `/api/meta/role-matrix` | AUTH_ONLY | requireAuth | lib/role-matrix.js: roleMatrixFor | — | ar_documents, assembly_orders, cost_adjustments, dealer_rebates, dealer_requisitions, dealer_statements, doc_types, material_issues, oc_orders, oc_statements, oms_orders, orgs, outsourcing_materials, outsourcing_orders, outsourcing_receipts, pos_daily_closes, pos_orders, pos_shifts, production_orders, purchase_inspections, purchase_invoices, purchase_orders, purchase_payments, purchase_receipts, purchase_requisitions, purchase_returns, purchase_settlements, qc_defect_handlings, qc_inspections, qc_requests, receipts, refunds, role_permissions, roles, sales_deliveries, sales_invoices, sales_orders, sales_quotes, sales_returns, stock_checks, stock_transfers, store_requisitions, store_shipments, user_roles, users, vouchers |
-| `meta.js:192` | GET | `/api/meta/dict` | NO_AUTH | （无） | — | inv_txn_types | — |
-| `meta.js:254` | GET | `/api/meta/settings` | GATED | requireAuth → requireRole | lib/settings.js: ensureSettings, listSettings | — | setting_audit_log, settings, users |
-| `meta.js:265` | PUT | `/api/meta/settings` | GATED | requireAuth → requireRole | lib/settings.js: ensureSettings, writeSetting | — | audit_logs, setting_audit_log, settings, users |
-| `meta.js:293` | POST | `/api/meta/settings/reset` | GATED | requireAuth → requireRole | lib/settings.js: ensureSettings, resetSetting | — | audit_logs, setting_audit_log, settings, users |
-| `meta.js:317` | GET | `/api/meta/settings/defs` | GATED | requireAuth → requireRole | — | — | users |
-| `meta.js:344` | GET | `/api/meta/settings/audit` | GATED | requireAuth → requireRole | lib/settings.js: listSettingAudit | — | setting_audit_log, users |
-| `meta.js:360` | GET | `/api/meta/settings/audit/check` | GATED | requireAuth → requireRole | lib/settings.js: auditSettingTrail, ensureSettings | — | setting_audit_log, settings, users |
-| `meta.js:394` | GET | `/api/meta/audit-logs` | GATED | requireAuth → requirePerm → requireGlobalData | lib/audit-view.js: buildWhere, countCapped, keywordUsesFts, orderOf, parseFilters, viewRow<br>lib/settings.js: readSetting | audit_logs | orgs, role_permissions, roles, settings, user_roles, users |
-| `meta.js:423` | GET | `/api/meta/audit-logs/export.csv` | GATED | requireAuth → requirePerm → requireGlobalData | lib/audit-view.js: buildWhere, exportChunks, keywordUsesFts, orderOf, parseFilters | audit_logs | orgs, role_permissions, roles, user_roles, users |
+| `meta.js:114` | GET | `/api/meta/health` | NO_AUTH | optionalAuth | lib/ops-status.js: computeOpsStatus | products | login_throttle_meta, settings, users |
+| `meta.js:168` | GET | `/api/meta/metrics` | NO_AUTH | metricsRateLimit → metricsAuth | lib/metrics-export.js: metricsTokenOk, renderPrometheus<br>lib/ops-status.js: computeOpsStatus, opsCounters<br>lib/process-counters.js: counterSnapshot, histogramSnapshot<br>lib/tx.js: writeRetryStats | — | login_throttle_meta, settings, users |
+| `meta.js:187` | GET | `/api/meta/role-matrix` | AUTH_ONLY | requireAuth | lib/role-matrix.js: roleMatrixFor | — | ar_documents, assembly_orders, cost_adjustments, dealer_rebates, dealer_requisitions, dealer_statements, doc_types, material_issues, oc_orders, oc_statements, oms_orders, orgs, outsourcing_materials, outsourcing_orders, outsourcing_receipts, pos_daily_closes, pos_orders, pos_shifts, production_orders, purchase_inspections, purchase_invoices, purchase_orders, purchase_payments, purchase_receipts, purchase_requisitions, purchase_returns, purchase_settlements, qc_defect_handlings, qc_inspections, qc_requests, receipts, refunds, role_permissions, roles, sales_deliveries, sales_invoices, sales_orders, sales_quotes, sales_returns, stock_checks, stock_transfers, store_requisitions, store_shipments, user_roles, users, vouchers |
+| `meta.js:193` | GET | `/api/meta/dict` | NO_AUTH | （无） | — | inv_txn_types | — |
+| `meta.js:255` | GET | `/api/meta/settings` | GATED | requireAuth → requireRole | lib/settings.js: ensureSettings, listSettings | — | setting_audit_log, settings, users |
+| `meta.js:266` | PUT | `/api/meta/settings` | GATED | requireAuth → requireRole | lib/settings.js: ensureSettings, writeSetting | — | audit_logs, setting_audit_log, settings, users |
+| `meta.js:294` | POST | `/api/meta/settings/reset` | GATED | requireAuth → requireRole | lib/settings.js: ensureSettings, resetSetting | — | audit_logs, setting_audit_log, settings, users |
+| `meta.js:318` | GET | `/api/meta/settings/defs` | GATED | requireAuth → requireRole | — | — | users |
+| `meta.js:345` | GET | `/api/meta/settings/audit` | GATED | requireAuth → requireRole | lib/settings.js: listSettingAudit | — | setting_audit_log, users |
+| `meta.js:361` | GET | `/api/meta/settings/audit/check` | GATED | requireAuth → requireRole | lib/settings.js: auditSettingTrail, ensureSettings | — | setting_audit_log, settings, users |
+| `meta.js:395` | GET | `/api/meta/audit-logs` | GATED | requireAuth → requirePerm → requireGlobalData | lib/audit-view.js: buildWhere, countCapped, ftsState, keywordUsesFts, orderOf, parseFilters, viewRow<br>lib/settings.js: readSetting | audit_logs | orgs, role_permissions, roles, settings, user_roles, users |
+| `meta.js:424` | GET | `/api/meta/audit-logs/export.csv` | GATED | requireAuth → requirePerm → requireGlobalData | lib/audit-view.js: buildWhere, exportChunks, keywordUsesFts, orderOf, parseFilters | audit_logs | orgs, role_permissions, roles, user_roles, users |
 
 ## server/routes/metrics.js
 

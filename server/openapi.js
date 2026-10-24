@@ -93,7 +93,7 @@ export function buildOpenApi() {
       get: {
         tags: ['系统'], summary: '审计日志查询（权限 system:audit:view；分页 + 模块/动作/用户/对象/日期/关键字过滤；detail 读取时再脱敏；附保留策略提示）',
         parameters: [q('module', '模块（精确）'), q('action', '动作（精确）'), q('user', '操作人：纯数字按 user_id（走索引），否则按用户名包含'), q('entity', '对象类型（精确）'), q('entity_id', '对象 ID（精确）'), q('from', '起始日期 YYYY-MM-DD（含）'), q('to', '截止日期 YYYY-MM-DD（含）'), q('keyword', '关键字：至少 2 个有效字符，只搜 action / entity / user_name（子串，不搜 detail）；不足返回 400'), q('page', '页码'), q('pageSize', '每页条数，上限 200')],
-        responses: { 200: jsonResp(null, '{ list, total（封顶估算，最多 10001）, has_more（total>10000）, total_cap, page, pageSize, totalPages, retention, export_max_rows }'), 400: { description: '日期格式或区间不合法 / 关键字太短 / 翻页超过 10000 条上限' }, 403: { description: '缺 system:audit:view' } }
+        responses: { 200: jsonResp(null, '{ list, total（封顶估算，最多 10001）, has_more（total>10000）, total_cap, page, pageSize, totalPages, retention, export_max_rows, fts: { setting_enabled（设置 audit_fts_enabled）, index_present（库里有 FTS 索引表）, env_disabled（GML_AUDIT_FTS=0）, active（关键词查询实际可走索引 = index_present 且非 env_disabled，与设置值可能暂时不一致，直到维护脚本或重启收敛）} }'), 400: { description: '日期格式或区间不合法 / 关键字太短 / 翻页超过 10000 条上限' }, 403: { description: '缺 system:audit:view' } }
       }
     },
     '/api/meta/audit-logs/export.csv': {
@@ -1069,6 +1069,7 @@ export function buildOpenApi() {
     // 说明：MCP 业务端点本身走 POST /mcp（JSON-RPC 2.0，非 REST），不在这里登记；
     // 这里登记的是**管理面**的 REST 接口。数据全部由内核三张表推导，页面不写死名单。
     '/api/mcp/catalog': { get: { tags: ['AI 与 MCP'], summary: '**AI 能力目录**：全部单据类型 × 状态机 × 可推进边（含高危标注）× 工具清单 × 安全边界。由 `doc_types`/`doc_states`/`doc_actions` 实时推导', responses: { 200: jsonResp(null), 403: jsonResp(null) } } },
+    '/api/mcp/limits': { get: { tags: ['AI 与 MCP'], summary: 'MCP 限速读数（需 system.mcp.manage，只读）：rpm / write_rpm / window_seconds / daily_quota（0=关闭）/ rate_limited_total（本进程自启动以来的 429 次数，重启归零）/ counter_scope=process。不含令牌信息（AE11）', responses: { 200: jsonResp(null), 403: jsonResp(null) } } },
     '/api/mcp/tools': { get: { tags: ['AI 与 MCP'], summary: 'MCP 工具清单（名称 / 级别 / 用途），供令牌白名单勾选', responses: { 200: jsonResp(null) } } },
     '/api/mcp/tokens': {
       get: { tags: ['AI 与 MCP'], summary: 'Agent Token 列表（需 system.mcp.manage）。每行带 `effective_status`（active / revoked / expired / owner_missing / owner_inactive / revoked_by_owner_change）与 `effective_reason`、`revoked_reason`、`revoked_at`、所有者信息；`status` 是行历史，`effective_status` 是现状（ADR-0015）', responses: { 200: jsonResp(null), 403: jsonResp(null) } },

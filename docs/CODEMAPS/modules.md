@@ -259,6 +259,7 @@
 | `ftsAvailable` | fn | — | — | — |
 | `ftsEnvDisabled` | fn | — | — | — |
 | `ftsPhrase` | fn | — | — | — |
+| `ftsState` | fn | GET /api/meta/audit-logs | — | — |
 | `keywordUsesFts` | fn | GET /api/meta/audit-logs<br>GET /api/meta/audit-logs/export.csv | — | — |
 | `orderOf` | fn | GET /api/meta/audit-logs<br>GET /api/meta/audit-logs/export.csv | — | — |
 | `parseFilters` | fn | GET /api/meta/audit-logs<br>GET /api/meta/audit-logs/export.csv | — | — |
@@ -722,7 +723,9 @@ MCP 按令牌的速率限制与日配额（ADR-0056 / AD9）
 |---|---|---|---|---|
 | `DEFAULT_MCP_RATE` | const | — | — | — |
 | `createMcpRateLimiter` | fn | — | — | mcp/server.js |
+| `dailyQuotaConfigured` | fn | — | — | — |
 | `dailyQuotaState` | fn | — | — | — |
+| `mcpRatePolicy` | fn | — | — | — |
 
 ## `server/lib/member.js`
 
@@ -1055,6 +1058,7 @@ Prometheus 文本指标渲染 + 抓取令牌校验（ADR-0045）
 | `histogramSnapshot` | fn | GET /api/meta/metrics | — | — |
 | `incCounter` | fn | — | — | lib/audit-trail.js, lib/db-ttl-cache.js, lib/login-throttle.js, mcp/server.js |
 | `incMcpToolCall` | fn | — | — | mcp/server.js |
+| `mcpCodeTotal` | fn | — | — | — |
 | `observeHistogram` | fn | — | — | lib/audit-trail.js |
 | `registerMcpTools` | fn | — | — | mcp/server.js |
 | `resetCounters` | fn | — | — | — |
@@ -1498,7 +1502,7 @@ Prometheus 文本指标渲染 + 抓取令牌校验（ADR-0045）
 | `logSettingChange` | fn | — | — | — |
 | `meta` | fn | — | — | — |
 | `normalizeSettingValue` | fn | — | — | lib/mcp-rate-limit.js |
-| `readSetting` | fn | 7 条：docflow.js×5, invoice.js×1, meta.js×1 | — | 15 个：lib/accounting.js, lib/annual.js, lib/approval.js, lib/closing.js, lib/credit.js, lib/funds-review.js … |
+| `readSetting` | fn | 7 条：docflow.js×5, invoice.js×1, meta.js×1 | — | 17 个：lib/accounting.js, lib/annual.js, lib/approval.js, lib/audit-view.js, lib/closing.js, lib/credit.js … |
 | `replaySettings` | fn | — | — | — |
 | `resetSetting` | fn | POST /api/meta/settings/reset | — | — |
 | `settingDef` | fn | — | — | — |

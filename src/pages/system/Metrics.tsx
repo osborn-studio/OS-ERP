@@ -22,6 +22,7 @@ import { useMemo, useState } from 'react'
 import { Card, Field, Modal, SectionTitle, StatCard, Table, Tabs, fmtInt, toast, useFetch } from '../../components/ui'
 import { useAuth } from '../../store/auth'
 import OpsCountersCard from '../../components/OpsCountersCard'
+import MetricsHiddenNote from './MetricsHiddenNote'
 import { RefreshCw, ShieldCheck, ShieldAlert, Calculator, Search, Layers } from 'lucide-react'
 import {
   fmtMetricValue, isMetricError, syncMetricDefs,
@@ -143,6 +144,9 @@ export default function Metrics() {
           sub={errCount > 0 ? '缺表或缺数据，不是「等于 0」' : '全部可计算'}
         />
       </div>
+
+      {/* AE11 SLOT（布局）：AE1 的"因权限未显示 N 个指标"说明。AE1 合入后只替换下面两个 props 的来源，不改槽位本身。 */}
+      <MetricsHiddenNote count={(data as { hidden_count?: number } | null)?.hidden_count} reason={(data as { hidden_reason?: string } | null)?.hidden_reason} />
 
       <Tabs
         tabs={[
