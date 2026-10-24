@@ -19,6 +19,9 @@
  *     不能与 --focused-result 同用）
  *   --ci-run=auto（AA7：`gh run list --commit <HEAD> --workflow ci.yml --json …` 取最新 conclusion=success 的 run id；
  *     无 gh/未登录/无记录则 ci_run_id=null 并在 ci_lookup.reason 写明，绝不编造；OS_ERP_GH 仅为测试替身接缝）
+ *   签名（AB4，ADR-0047）：环境变量 GML_RELEASE_SIGN_KEY=<Ed25519 私钥 PEM 的绝对路径> 时，对 EVIDENCE 的规范化 JSON 做 Ed25519 签名，
+ *     EVIDENCE.sig（base64）写在 EVIDENCE.json 旁；未设置则 `signature: null` 且照常构建。设置了但密钥不可用（缺失、非 Ed25519、
+ *     在 git 工作树内、权限对组/其它可读）⇒ 在构建前失败，绝不静默退回未签名。zip 本身不含证据（证据含 zip 哈希，会自指）。
  *   --focused-result=passed|failed --focused-source=<说明>  --regression-result=… --regression-source=<说明>
  * ============================================================================
  */
@@ -30,6 +33,8 @@ import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { unzipSync } from 'fflate'
 import { hashTestsTree, TESTS_TREE_FILE } from './lib/tests-tree.mjs'
+import { KEY_ENV, SIG_FILE, loadSigningKey, signEvidence } from './lib/evidence-sign.mjs'
+import { createPublicKey } from 'node:crypto'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const RESULTS = new Set(['passed', 'failed'])
@@ -202,6 +207,11 @@ function drillReference() {
 function main() {
   const opts = parseArgs(process.argv.slice(2))
   assertClean('before building')
+  // 签名密钥在任何构建之前加载：配置了就必须可用，否则直接失败（不留产物）。
+  const signKeyPath = process.env[KEY_ENV]
+  if (signKeyPath !== undefined && signKeyPath === '') throw new Error(`${KEY_ENV} is set but empty; unset it to build an unsigned candidate`)
+  let signKey = null
+  if (signKeyPath !== undefined) { try { signKey = loadSigningKey(signKeyPath) } catch (error) { throw new Error(`${KEY_ENV}: ${error.message}`) } }
   const commit = git('rev-parse', 'HEAD')
   const version = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version
   const name = `RC-${version}-${commit.slice(0, 7)}`
@@ -286,12 +296,19 @@ function main() {
       verify_release: { result: 'passed', origin: 'produced' },
       acceptance: { result: smoke.result, origin: 'produced', mode: smoke.mode, checks: smoke.checks.length, reuse_node_modules: Boolean(opts['reuse-node-modules']) },
       secret_scan: secretScan,
-      not_a_release: true
+      not_a_release: true,
+      signature: null
     }
+    // 签名覆盖整份证据（含 signature 元数据）；写出的 JSON 必须与被签对象逐字段一致（验签时按规范化字节，与缩进无关）。
+    const signed = signKey ? signEvidence(evidence, signKey) : null
+    const finalEvidence = signed ? signed.evidence : evidence
     fs.mkdirSync(evidenceDir, { recursive: true })
-    fs.writeFileSync(path.join(evidenceDir, 'EVIDENCE.json'), JSON.stringify(evidence, null, 2) + '\n')
+    fs.writeFileSync(path.join(evidenceDir, 'EVIDENCE.json'), JSON.stringify(finalEvidence, null, 2) + '\n')
+    if (signed) fs.writeFileSync(path.join(evidenceDir, SIG_FILE), `${signed.sigBase64}\n`)
+    const selfPub = signKey ? path.join(work, 'self-verify.pub.pem') : null
+    if (selfPub) fs.writeFileSync(selfPub, createPublicKey(signKey).export({ type: 'spki', format: 'pem' }))
     fs.writeFileSync(path.join(evidenceDir, 'RELEASE-NOTES.md'), extractNotes(fs.readFileSync(path.join(ROOT, 'CHANGELOG.md'), 'utf8'), version, { commit, builtAt }).text)
-    runNode(pkg, ['scripts/verify-release.mjs', `--evidence=${path.join(evidenceDir, 'EVIDENCE.json')}`, `--artifact=${zipFile}`], 'verify-release --evidence')
+    runNode(pkg, ['scripts/verify-release.mjs', `--evidence=${path.join(evidenceDir, 'EVIDENCE.json')}`, `--artifact=${zipFile}`, ...(selfPub ? [`--pubkey=${selfPub}`] : [])], 'verify-release --evidence')
     console.log(JSON.stringify({ candidate: zipFile, sha256: zipHash, evidence: path.join(evidenceDir, 'EVIDENCE.json'), notes: path.join(evidenceDir, 'RELEASE-NOTES.md'), not_a_release: true }, null, 2))
   } catch (error) {
     cleanupOutputs()
