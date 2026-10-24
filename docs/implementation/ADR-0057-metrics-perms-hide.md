@@ -95,3 +95,39 @@
 - **中** 订货中心指标读路径经 `ocScope → selfCustomerId → ensureCustomer`，绑定主体缺订货档案时会在 GET 里建档（active 客户 + 默认地址，且两条 INSERT 无事务）：**已修**。新增 `selfCustomerIdReadOnly`（`order-center.js`，判据与 `selfCustomerId` 同一份），指标侧只读查询，无档案 ⇒ 空范围 ⇒ 0；非绑定的受限内部账号向 `ocScope` 传空 `user`，不会走建档路径。测试断言读完后 `oc_customers` 行数不变。
 - 其余：销售 / OMS / 订货中心谓词与路由一致（退货率的"有来源订单 / 无单退货"两支均覆盖），派生指标（客单价 / 连带率 / 退货率）正确透传 `p`，`keys` 过滤 / 空 `allow` / `/catalog` 无绕过，参数顺序无误，空 / `none` / `dealer` 范围失败关闭：未发现问题。
 - `label` 模式下，持有业务权限的受限账号（含绑定主体）仍可取得 `payable_open` / `approval_pending` / `credit_usage` / `over_credit_dealers` 的全局数并带 `scoped:false`：这是 `label` 的既定语义（ADR-0057 原文），非回归，未改。
+
+## 补充 2：范围声明覆盖率守卫与应付未结接入范围（AG2）
+
+日期：2026-10-24。AF2 之后"哪些指标没有范围语义"靠约定：新指标忘了接范围既不报错也没有测试露出来。本补充把它变成常驻守卫，并对剩下的无范围指标逐个重新评估。
+
+### 守卫
+
+`scripts/check-metrics-scope.mjs`（CI checks job 一步 `Metrics declare their scope semantics`；登记进 `check-file-header`）：字典里每条指标必须**恰有其一**——`scopeAware: true`，或 `scopeless: '<理由，trim 后 ≥ 20 字>'`。未声明、理由过短、两者并存、`scopeAware` 不是严格的 `true`（`'yes'` / `false` 也算错）一律退出 1，并逐条打印原因；`--list` 只打印当前分类表。守卫不打开数据库。
+
+守卫与运行时读**同一个判据**：`isScopeAware(m)`（`m.scopeAware === true`，`server/lib/metrics.js` 导出）。`metricVisibility` 的 hide 过滤与 `metricScopedFlags` 的 `scoped` 都改为调用它（原先是两处各写 `scopeAware !== true` / `=== true`），测试断言 `--list` 的分类与 `metricScopedFlags` 逐条一致。
+
+### 逐指标分类（全部 25 条以 `--list` 为准，下表为本次变动与保留项）
+
+| 指标 | 分类 | 说明 |
+|---|---|---|
+| `payable_open` | **scopeAware（新）**，`bound: 'deny'` | 结算单自带 `org_id`，采购链读接口 / 应付台账本来就用 `purchaseScopeSql(...).org`；指标复用这一份谓词（AF2 当时误判"没有可靠的组织归属列"）。NULL 组织对受限范围不可见，空范围 ⇒ 0，绑定主体失败关闭并不可见 |
+| `credit_usage` | scopeless | 经销商是客户而非本方组织（ADR-0026），`dealers` 与经销商档案路由都没有组织谓词，不另造口径 |
+| `over_credit_dealers` | scopeless | 与 `credit_usage` 同源 |
+| `approval_pending` | scopeless | 审批可见性是"提交人 ∪ 当前审批人 ∪ 管理员全见 ∪ 单据范围"（ADR-0015），不是单一组织维度；按单据类型逐一套范围会得到与列表接口不一致的第二套口径 |
+| 其余 | scopeAware | AD1 / AF2 既有，不变 |
+
+### 契约变化
+
+- 受限范围账号（持有 `finance.payable.view` / `purchase.settle.view` / `purchase.payment.view` 任一）默认多收到 `payable_open`，值为其组织内结算单的未结金额，`scoped: true`，`hidden_count` 相应减 1；`label` 与 `hide` 下该指标数值相同。
+- 绑定了门店 / 经销商的账号：`payable_open` 不可见（此前 `data_scope=all` 的绑定账号在 `label` 下能拿到全局应付数）。
+- `metric_defs` 指纹与 `gen:api` 产物不变（`scopeless` / `scopeAware` / `bound` 不进定义视图）。
+
+### 测试
+
+`tests/metrics-perms.test.mjs`（先红后绿）：守卫脚本退出 0；`--list` 与运行时一致；`classifyMetrics` 对未声明 / 短理由 / 并存 / 非严格 true 全部报错；`payable_open` 受限范围等于独立写出的范围 SQL（作废单、他组织、NULL 组织均不泄漏），空范围 0，绑定账号不可见。`tests/inventory-scope.test.mjs` 里关于 `payable_open` 的 `scoped:false` 断言同步改为 `true`。
+
+### 仍 open / 边界
+
+- 三条 scopeless 指标在受限范围下仍按 `metrics_global_for_restricted` 处理（默认隐藏；`label` 为全局数并带 `scoped:false`）。
+- 守卫只管"是否声明"，不证明 `scopeAware: true` 的谓词正确；那由各指标的受限范围用例负责。
+- 校验在 Mac mini Node 22 上，不等于 Linux / 目标平台验收；未做浏览器验证。

@@ -967,7 +967,8 @@ test('AD1: /api/metrics values / catalog / dictionary follow the warehouse-org s
     for (const k of ['stock_qty', 'available_qty', 'stock_amount', 'below_safe', 'expiring_qty', 'turnover_days', 'purchase_amount', 'purchase_amount_effective', 'closed_order_ratio']) assert.equal(a.scoped[k], true, k)
     // AF2：销售 / OMS 已按范围计算（scoped:true）；应付 / 审批仍是全局口径
     for (const k of ['sales_amount', 'gmv']) assert.equal(a.scoped[k], true, k)
-    for (const k of ['payable_open', 'approval_pending']) assert.equal(a.scoped[k], false, k)
+    assert.equal(a.scoped.payable_open, true, 'AG2: payable_open is scope-aware')
+    assert.equal(a.scoped.approval_pending, false)
     const g = await vals(f.admin)
     assert.ok(Object.values(g.scoped).every((x) => x === true), 'a global caller sees every metric as scoped:true')
   })
@@ -976,7 +977,7 @@ test('AD1: /api/metrics values / catalog / dictionary follow the warehouse-org s
     const n = await vals(N.token)
     assert.equal(n.values.stock_qty, 0)
     assert.equal(n.values.purchase_amount, 0)
-    assert.equal(n.scoped.payable_open, false)
+    assert.equal(n.scoped.payable_open, true)
     assert.equal(n.values.sales_amount, 0, 'AF2: empty scope reads zero for sales too')
   })
 
@@ -985,7 +986,7 @@ test('AD1: /api/metrics values / catalog / dictionary follow the warehouse-org s
     const by = Object.fromEntries(cat.map((x) => [x.key, x]))
     assert.equal(by.stock_qty.scoped, true)
     assert.equal(by.stock_qty.value, sum(`SELECT COALESCE(SUM(qty_on_hand),0) v FROM inventory_stocks WHERE ${inScope}`))
-    assert.equal(by.payable_open.scoped, false)
+    assert.equal(by.payable_open.scoped, true)
     const dict = okData(await api('/api/metrics?days=30', { token: A.token })).groups.flatMap((g) => g.items)
     assert.equal(dict.find((x) => x.key === 'purchase_amount').scoped, true)
     assert.equal(dict.find((x) => x.key === 'gmv').scoped, true)

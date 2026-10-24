@@ -86,6 +86,7 @@ const DECLARED = [
   'scripts/gen-third-party-notices.mjs',
   'scripts/check-file-header.mjs',
   'scripts/check-audit-allowlist.mjs',
+  'scripts/check-metrics-scope.mjs',
   'tests/audit-allowlist.test.mjs',
   'tests/dependency-review-policy.test.mjs',
   'tests/release-candidate-policy.test.mjs',

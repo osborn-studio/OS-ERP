@@ -77,6 +77,9 @@ jobs:
       # AC5: re-runs only the audit view tests with the FTS query path switched off (GML_AUDIT_FTS=0), so the no-FTS5 fallback is exercised for real.
       - name: Audit view tests without FTS (GML_AUDIT_FTS=0)
         run: GML_AUDIT_FTS=0 node --test --test-concurrency=1 tests/audit-logs-view.test.mjs
+      # AG2 (ADR-0057 supplement 2): every metric declares scopeAware or a written scopeless reason.
+      - name: Metrics declare their scope semantics
+        run: node scripts/check-metrics-scope.mjs
       - name: TypeScript
         run: npx tsc --noEmit
       - name: Vite build
