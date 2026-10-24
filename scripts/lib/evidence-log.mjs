@@ -33,7 +33,7 @@ export const evidenceDigest = evidence => sha256(canonicalize(evidence))
 /** EVIDENCE.sig 文本 → 摘要；格式不是 88 字符 base64 签名则抛错。null/undefined → null。 */
 export function signatureDigest(sigText) {
   if (sigText === null || sigText === undefined) return null
-  const text = String(sigText).trim()
+  const text = String(sigText).replace(/\s+$/, '') // 与 verifyEvidenceSignature 相同：只容忍尾部空白
   if (!/^[A-Za-z0-9+/]{86}==$/.test(text)) throw new Error('signature text is not a base64 Ed25519 signature')
   return sha256(text)
 }
@@ -101,16 +101,23 @@ export function assertAppendable(file, name) {
   return v
 }
 
-/** 追加一行；返回写入的条目。任何失败都不改动文件。 */
+/** 追加一行；返回写入的条目。整个"读-校验-追加"在独占锁文件（<log>.lock，O_EXCL）内完成；锁被占用即失败，不等待、不抢锁。任何失败都不改动日志。 */
 export function appendEntry(file, { name, evidence, sigText, builtBy, timestamp = new Date().toISOString() }) {
   if (!BUILT_BY.includes(builtBy)) throw new Error(`built_by must be one of ${BUILT_BY.join(', ')}`)
-  const v = assertAppendable(file, name)
-  const entry = { schema: 1, name, evidence_sha256: evidenceDigest(evidence), signature: signatureDigest(sigText), built_by: builtBy, timestamp, prev: v.tip }
   if (!NAME.test(name)) throw new Error(`bad candidate name ${name}`)
-  const candidate = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : ''
-  const check = verifyLog(candidate + entryLine(entry) + '\n')
-  if (!check.ok) throw new Error(check.reason)
   fs.mkdirSync(path.dirname(file), { recursive: true })
-  fs.appendFileSync(file, entryLine(entry) + '\n')
-  return entry
+  const lock = `${file}.lock`
+  let fd
+  try { fd = fs.openSync(lock, 'wx', 0o600) } catch (error) {
+    throw new Error(error.code === 'EEXIST' ? `evidence log lock ${lock} is held by another process (or left by a crashed one; remove it only after confirming nothing is appending)` : `cannot take evidence log lock ${lock} (${error.code || error.message})`)
+  }
+  try {
+    const v = assertAppendable(file, name)
+    const entry = { schema: 1, name, evidence_sha256: evidenceDigest(evidence), signature: signatureDigest(sigText), built_by: builtBy, timestamp, prev: v.tip }
+    const existing = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : ''
+    const check = verifyLog(existing + entryLine(entry) + '\n')
+    if (!check.ok) throw new Error(check.reason)
+    fs.appendFileSync(file, entryLine(entry) + '\n')
+    return entry
+  } finally { fs.closeSync(fd); fs.rmSync(lock, { force: true }) }
 }

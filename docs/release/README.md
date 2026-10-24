@@ -101,6 +101,7 @@ node scripts/verify-release.mjs --evidence=<EVIDENCE.json> --log[=<file>]   # ch
   records `signature: null`), `key-holder` for a signed local build, `local` for an unsigned local build. It is self-reported
   by the building process and also stored in the signed evidence.
 - The append modifies a tracked file: commit the new line before the next build (the dirty-tree check applies as usual).
+- Appends take an exclusive lock file (`<log>.lock`); a held lock makes the build fail instead of interleaving. A lock left by a crashed process must be removed by hand after checking nothing is appending.
 - A candidate name can appear once. Re-signing a candidate means a new commit, hence a new name.
 - Limits: a hash chain detects edits in the middle, not removal of the newest lines or replacement of the whole file by another
   valid chain; git history and an out-of-band copy of the latest line's hash cover that. The log does not prove the evidence true.
@@ -109,8 +110,9 @@ node scripts/verify-release.mjs --evidence=<EVIDENCE.json> --log[=<file>]   # ch
 
 `verify-release --evidence` prints a prominent `WARNING: UNSIGNED CANDIDATE` banner to stderr when `signature` is `null`; the
 exit code is unchanged. `--require-signature` (needs `--pubkey`) turns it into a failure and also fails a signed candidate whose
-signature was not verified. **A formal release must be re-signed by the key holder on a controlled machine**: rebuild the
-same commit there with `GML_RELEASE_SIGN_KEY` set (and `--log`), distribute the public key out of band, and verify with
+signature was not verified. **A formal release must be re-signed by the key holder on a controlled machine**: build there
+with `GML_RELEASE_SIGN_KEY` set (and `--log`) from a clean checkout; because a candidate name (`RC-<version>-<shortsha>`) can appear in
+the log only once, re-signing a commit that is already logged (for example by hosted CI) requires a new commit, which gets a new name; distribute the public key out of band, and verify with
 `--pubkey --require-signature --log`. Hosted-CI candidates are development candidates only and are never release-grade.
 
 ## RELEASE-NOTES.md

@@ -442,3 +442,23 @@ test('hosted CI candidates record built_by hosted-ci and signature null; a signe
   const sw = spawnSync(process.execPath, ['scripts/verify-release.mjs', `--evidence=${path.join(swapDir, 'EVIDENCE.json')}`, `--log=${log2}`], { cwd: pkg, env: { PATH }, encoding: 'utf8' })
   assert.notEqual(sw.status, 0); assert.match(sw.stderr, /signature/i)
 })
+
+test('evidence log: appends are serialized by a lock file, a held lock refuses (never interleaves), and signature text must be strict', async (t) => {
+  const { appendEntry, signatureDigest } = await logLib()
+  const file = path.join(tempDir(t, 'os-erp-log4-'), 'L.jsonl')
+  const entry = n => ({ name: `RC-1.0.0-${String(n).repeat(7)}`, evidence: fakeEvidence(n), sigText: null, builtBy: 'local', timestamp: `2026-10-24T00:00:0${n}.000Z` })
+  appendEntry(file, entry(1))
+  writeFileSync(`${file}.lock`, 'held')
+  const before = readFileSync(file, 'utf8')
+  assert.throws(() => appendEntry(file, entry(2)), /lock/i)
+  assert.equal(readFileSync(file, 'utf8'), before)
+  rmSync(`${file}.lock`)
+  appendEntry(file, entry(2))
+  assert.ok(!existsSync(`${file}.lock`), 'lock released after a successful append')
+  assert.throws(() => appendEntry(file, entry(2)), /already/)
+  assert.ok(!existsSync(`${file}.lock`), 'lock released after a refused append')
+  // 与验签一致：只允许尾部空白
+  const sig = Buffer.alloc(64, 9).toString('base64')
+  assert.equal(signatureDigest(`${sig}\n`), signatureDigest(sig))
+  assert.throws(() => signatureDigest(` ${sig}`), /signature/i)
+})
