@@ -899,7 +899,7 @@ Prometheus 文本指标渲染 + 抓取令牌校验（ADR-0045）
 
 ## `server/lib/oms-sql.js`
 
-OMS /stats 与 AI 平台分析的 SQL 唯一来源（AE3，ADR-0044 补充 4）
+OMS /stats 与 AI 平台分析的 SQL 唯一来源（AE3，ADR-0044 补充 4；AF3 补充 5）
 
 | 导出 | 类型 | 路由 | MCP 工具 | 被模块调用 |
 |---|---|---|---|---|

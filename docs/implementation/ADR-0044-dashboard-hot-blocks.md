@@ -199,3 +199,47 @@ MCP 的范围依据从 `owner_org_id` 改为仓库所属组织，是 ADR-0038 �
 - **高：无。** 确认：byPlatform 的窗口参数（在 `LEFT JOIN … ON`）排在范围参数之前，绑定顺序正确；受限范围谓词与别名原样保留；无效窗口绑定 NULL；零订单平台仍保留一行；三条全局 `expectIndex` / `expectSearch` 与观测计划一致，两条 top_skus 的 ALLOW 对应真实的明细表扫描；独立重跑审计 0 违规、0 过期豁免。
 - **中（已按文档修正，不改行为）**：区间谓词对 SQLite `date()` 能解析、但文本序低于 `lo` 的非规范值会改变结果（如儒略日数字串 `'2.4613375e6'`）——即补充 3 已登记的残余，AE3 的五条语句继承；`oms-sql.js` 文件头原来写得像无条件等价。→ 文件头与上文"决定 2"改为"对应用自身写入的格式逐行相同，残余同补充 3"。
 - **低（已修）**：bench 脚本只累积 `ae3.results_identical`，不一致时退出码仍为 0 且不指出是哪条。→ 记录 `ae3.mismatches`（`语句.范围.窗口`），不一致时 stderr 报出并以退出码 1 结束。
+
+
+---
+
+# 补充 5（AF3，roadmap-v11）：`/stats` 的平台维度、热销与受限范围语句改走时间索引（迁移 074）
+
+状态：开发实现，尚非产品上线验收｜数字见 `capacity-baseline.md` 的 AF3 一节（Mac mini + 合成 20 万 OMS 单 + 每单一行明细 + 整机负载 12–25，量级为准）
+
+## 背景
+补充 4（AE3）留下三类没走 `idx_oms_order_time` 的 `/stats` 语句：`oms.stats_by_platform`（平台驱动，按 `(platform_id, platform_order_no)` 自动索引读该平台全部历史订单）、`oms.stats_top_skus`（`SCAN oms_order_items`，有书面 ALLOW 豁免）、以及所有"受限组织范围"形态（范围谓词 `platform_id IN (子查询)` 被规划器当成比 `order_time` 区间更有选择性的等值前缀，读该范围内全部历史订单）。读量都随历史订单线性增长。
+
+## 决定
+1. **byPlatform 改写为"窗口先行"**：`platforms LEFT JOIN (SELECT platform_id, … FROM oms_orders WHERE order_time >= ? AND date(order_time) >= ? GROUP BY +platform_id) w`，再在外层套 `ps.sql`。窗口参数仍在 params 最前（子查询先于外层 WHERE）。`GROUP BY +platform_id` 的一元加号是必须的：裸列会让规划器为"按平台分组"改走平台自动索引整表扫描。行序：旧写法同 gmv 时按 `pf.id` 升序（隐含），现把 `pf.id` 写进 `ORDER BY` 成为显式契约。无订单的平台仍出一行（`COALESCE` 成 0）。
+2. **受限范围谓词包 `likely()`**（trend / total / topSkus）：语义恒等，只改规划器的选择，让它走 `idx_oms_order_time` 的范围 SEARCH 而不是 `platform_id` 等值。**未**改 `omsPlatformScopeSql` / `omsOrderScopeSql`（权限语义不动）。
+3. **迁移 074 `idx_oms_items_order ON oms_order_items(oms_order_id)`**：`oms_order_items.oms_order_id` 此前没有任何索引（连外键级联删除都要扫明细表）。topSkus 的 SQL **文本不变**，计划由"SCAN 明细表 + 按主键取订单"变成"订单窗口（覆盖索引范围 SEARCH）→ 按订单号取明细"。`oms.stats_top_skus` 与 `_scoped` 的 ALLOW 豁免已删除。
+4. **explain-audit**：九条 `oms.stats_*` / `ai.platform_analysis` 全部声明 `expectIndex: idx_oms_order_time` + `expectSearch`，没有任何 `oms.*` 豁免。审计器新增一条规则：计划里 `MATERIALIZE x` / `CO-ROUTINE x` 声明的派生表上的"自动索引"不算缺真实索引（派生表就是每次现算的聚合；派生表内部对真实表的读取仍是独立计划行，照常判定——`tests/explain-audit.test.mjs` 有对照用例，真实表上的自动索引仍违规）。
+5. **等价口径变化（诚实边界）**：整数 / 文本 / 行序与旧 SQL 逐项相同；**浮点列的累加顺序随计划变化**（旧：平台自动索引或明细 rowid 顺序；新：order_time 索引顺序），SQLite 虽用补偿求和，仍可能差最后一位。因此测试对浮点列按相对 1e-9 比较，另用"金额均为二进制可精确表示的值"的夹具证明分组 / 过滤 / 行序结构上逐位相同；20 万行基准 `af3.max_rel_diff = 0`（本数据上没有观察到任何差异）。AE3 补充 4 里"改写会改变求和顺序故未做"的理由由此被取代：差异量级远低于金额分位，且已声明。
+
+## 备选评估（20 万合成单，同机轮转计时，ms，p50 / p95，数据时间随 id 递增 + ±6h 抖动、跨 365 天）
+| 语句 | AE3 现状 | (a) 只改写 | (b) 只加 `(platform_id, order_time, status, pay_amount)` | 已发布 = (a) + 074 |
+|---|---|---|---|---|
+| byPlatform 全局 30 / 90 天 | 89 / 219；88 / 113 | 5.2 / 13；19 / 33 | 2.6 / 19；11.6 / 19 | 6.3 / 20；18 / 29 |
+| byPlatform 受限 30 / 90 天 | 33 / 47；39 / 49 | 4.3 / 11；19 / 30 | 1.1 / 4；5.3 / 14 | 7.2 / 10；19 / 38 |
+| topSkus 全局 30 / 90 天 | 31 / 47；37 / 49 | 27 / 56；39 / 53（仍 SCAN 明细表） | 28 / 51；35 / 48（仍 SCAN 明细表） | 13 / 22；39 / 49 |
+| topSkus 受限 30 / 90 天 | 24 / 32；39 / 75 | 23 / 34；41 / 63 | 25 / 35；41 / 77 | 6.7 / 12；24 / 50 |
+| trend / total 受限 30 / 90 天 | 31–44 / 42–99 | 2–10 / 4–34 | 0.8–5.7 / 2–11 | 2–10 / 5–34 |
+
+**选择 (a) + 074，不选 (b)**：
+- (b) 的 p95 在 byPlatform / 受限形态上确实更低（byPlatform 90 天受限 14 vs 30–38 ms），但与 (a) 的差只有个位数到十几毫秒，而 (a) 已把这些语句的 p95 压到 ≤ 40 ms（原 47–219 ms）；(b) 要给热写表 `oms_orders` 再加一棵 9.5 MB 的 B 树，实测每单写入 CPU +23%（99.9 → 122.8 µs/单，约 +23 µs），与 074 叠加合计 +32%（`items_b` 132.3 µs；基线已含 070）。
+- (b) **单独解决不了 topSkus**（上表第三行：仍 `SCAN oms_order_items`），所以无论选 (a) 还是 (b) 都需要 074 的明细索引——(b) 只是在此之上再多一棵。
+- (b) 的真实价值是密集窗口的最坏情形（数据全在近 60 天，受限范围 90 天 byPlatform：(a) 67–75 ms vs (b) 17 ms，AE3 现状 45 ms）。这是已知回退，见下"已知限制"。**取舍是判断题**：若评审更看重受限账号的最坏情形而接受写放大，可改发布 (b)（一个迁移的差别，基准脚本已含 B 状态的完整数据）。
+- 明细索引选单列而非覆盖 `(oms_order_id, title, qty, amount)`：覆盖版读快约 20%（topSkus 90 天 28.8 vs 36.2 ms CPU），索引体积 2.4 → 6.0 MB（合成标题仅 7 字符，真实标题更长则差距更大），写入 CPU 在噪声内相同（+3% vs +7%）；单列版已在 30 天窗口快 2×，选更小的。
+
+## 写放大与体积（独立库、逐单自动提交；一单 = 1 行 `oms_orders` + 2 行 `oms_order_items`；5 轮交替，CPU µs/单，中位数）
+基线（070 only）99.9；+074 单列 106.8（**+7%**，约 +7 µs/单，约 +3.5 µs/明细行）；+074 覆盖 103.0（+3%）；+(b) 122.8（+23%）；+074+(b) 132.3（+32%）。索引体积：074 单列 +2.36 MB（20 万明细行）、覆盖 +5.99 MB、(b) +9.48 MB。`CREATE INDEX` 20 万明细行 29–76 ms（持写锁）。
+
+## 已知限制
+- **密集窗口回退**（数据全在最近 60 天，即窗口覆盖几乎全部行）：topSkus 全局 30 / 90 天由约 55 / 93 ms 升到 89 / 186 ms，受限 90 天 53 → 78 ms；byPlatform 受限 90 天 45 → 67 ms。原因：订单窗口驱动要对窗口内每个订单做一次明细索引探测（随机读），窗口覆盖多数行时比顺序扫描 + 主键查找慢约 2×。换来的是读量随**窗口内订单数**而不是**全部历史订单数**增长：跨 3 年历史的同量级库（随机序，CPU 时间）topSkus 30 天窗口 5.8 vs 19 ms；这与 AD3（070）"覆盖索引在最坏分布与扫描持平，窄窗口快数倍"同类取舍，但本处最坏情形是 ~2× 的回退，不是持平。
+- 基准默认的订单时间与 id 无关（对窗口驱动的索引计划偏不利，局部性差）；`--ordered` 为时间随 id 递增，更接近真实落库。随机序的 365 天分布下 topSkus 全局 90 天为 49 vs 30 ms（回退 1.6×）。
+- 浮点累加顺序见决定 5；`likely()` 与 `GROUP BY +platform_id` 是对无统计信息启发式的依赖，运维手册 `docs/operations/query-planner.md` 第 2a 节已写明；有了统计信息后由 explain-audit 报红。
+- 没有 `dmserver` / 生产规模副本的数字；整机负载 12–25，只看量级。
+
+## 测试（tests/oms-sql.test.mjs 共 11 个，其中 AF3 新增 5 个、改写 1 个；tests/explain-audit.test.mjs 新增 1 个）
+新旧 SQL 等价（5 种范围 × 13 种窗口，浮点列相对 1e-9）；二进制精确金额下逐位相同；4000 单随机两位小数金额下的容差等价；byPlatform 无订单平台 / 平局按 pf.id / 无效窗口；迁移 074 的 up / verify（同名异定义、UNIQUE、局部、表或列缺失）；explain-audit 九条全部带约束 SEARCH、无裸 SCAN、无豁免，topSkus 经 `idx_oms_items_order` 取明细，删 074 / 070 索引后守卫变红（变异）；去掉 `likely()` 或 `+` 后审计用例变红（手工变异，已验证）；受限范围参数绑定顺序与范围外平台不计入；审计器的派生表规则对照用例。
