@@ -1096,3 +1096,31 @@ test('AE5 migration 072: up() is idempotent, verify() matches up() (missing tabl
   assert.equal(mig.verify(db), false)
   assert.equal(INTENT_FORMAT, 'os-erp-audit-anchor-intent/1')
 })
+
+test('AE5 migration 072 repairs a populated partial table (constant defaults only, CHECK restored, rows kept) and refuses to call a table without id healthy', (t) => {
+  const db = mkDb(tmp(t))
+  const mig = createRequire(import.meta.url)(path.join(MIGRATIONS_DIR, '072_audit_anchor_intents.cjs'))
+  db.exec('DROP TABLE audit_anchor_intents; CREATE TABLE audit_anchor_intents (id INTEGER PRIMARY KEY, operation TEXT)')
+  db.prepare("INSERT INTO audit_anchor_intents (operation) VALUES ('archive')").run()
+  assert.equal(mig.verify(db), false)
+  mig.up(db)
+  assert.equal(mig.verify(db), true)
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM audit_anchor_intents').get().n, 1, 'rows survive the rebuild')
+  assert.throws(() => db.prepare("INSERT INTO audit_anchor_intents (operation, range_desc, operator_name, anchors_json, intent_hash) VALUES ('bogus','x','y','[]','h')").run(), /CHECK/)
+  // 没有 id 列的表不能算健康（校验读 id）
+  db.exec('DROP TABLE audit_anchor_intents; CREATE TABLE audit_anchor_intents (operation TEXT)')
+  assert.equal(mig.verify(db), false)
+  mig.up(db)
+  assert.equal(mig.verify(db), true)
+})
+
+test('AE5 an audit row that is missing without any archive evidence is uncorroborated even under --accept-new-anchors (Codex AE5-M1)', (t) => {
+  const w = ae5World(t)
+  const mark = forgeBridge(w.db)
+  const intent = w.db.transaction(() => recordAnchorIntent(w.db, mark, { operation: 'retention', range: 'forged', operatorName: 'mallory' })).immediate()
+  // 指向一个从未存在的审计行 id（库里没有任何 archive 锚点可以解释它的消失）
+  w.db.prepare('UPDATE audit_anchor_intents SET audit_row_id=61 WHERE id=?').run(intent.id)
+  let r = w.verify(['--accept-new-anchors'])
+  assert.deepEqual([r.status, off(r).kind], [1, 'intent-uncorroborated'], 'row 61 does not exist and nothing was archived')
+  w.db.close()
+})

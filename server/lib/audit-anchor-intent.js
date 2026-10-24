@@ -12,7 +12,8 @@
  *       ③ 有签名且持有对应公钥时验签（失败 `intent-signature-invalid`）；`requireSigned` 时无签名 `intent-unsigned`、无法验证 `intent-signature-unverifiable`；
  *       ④ 意图被审计行印证：`audit_row_id` 指向的行存在、id 大于离机锚点的链尾（不能拿锚点之前就有的行冒充）、action 与操作类型对应
  *          （retention→RETENTION_PURGE，archive→AUDIT_ARCHIVE，erase→PRIVACY_ERASE）、明细里 `anchor_intent` 的 id 与哈希与意图一致 —— 否则 `intent-uncorroborated`。
- *          印证行已被后来的归档搬出库时为 `corroboration-archived`，只有 `acceptArchived`（CLI 的 --accept-new-anchors）才放行。
+ *          印证行已被后来的归档搬出库（库里确有边界在它之后的 archive 锚点）时为 `corroboration-archived`，只有 `acceptArchived`（CLI 的 --accept-new-anchors）才放行；
+ *          行不在库里又没有这样的归档证据，就是 `intent-uncorroborated`。
  * 【规范化】intent_hash = sha256(JSON.stringify([格式标识, operation, range_desc, operator_user_id, operator_name, created_at, 锚点元组列表]))，
  *   锚点元组 = [kind, at_row_id, anchor_hash, prev_id, prev_row_hash]；签名 = Ed25519(`${格式标识}:${intent_hash}`)，key_id = 公钥 SPKI DER 的 sha256。
  * 【诚实边界】能同时写库、写审计链并伪造未签名意图的攻击者，仍能造出自洽的“意图 + 审计行”；签名（`GML_ANCHOR_INTENT_KEY`，私钥不在业务主机上）
@@ -95,7 +96,8 @@ function checkIntent(db, it, { publicKey, requireSigned, minAuditRowId, acceptAr
   if (id <= minAuditRowId) return uncorroborated(`审计行 #${id} 不晚于离机锚点的链尾 #${minAuditRowId}`)
   const row = db.prepare('SELECT id, action, detail FROM audit_logs WHERE id=?').get(id)
   if (!row) {
-    if (liveFirstId !== null && id < liveFirstId) {
+    // 审计行不在库里：只有在“确有一次归档把边界推到了它后面”时才可能是被归档搬走的（库里存在 kind=archive 且 at_row_id > id 的锚点），否则就是从没存在过
+    if (liveFirstId !== null && id < liveFirstId && db.prepare("SELECT 1 FROM audit_chain_anchors WHERE kind='archive' AND at_row_id > ? LIMIT 1").get(id)) {
       return acceptArchived ? null : { kind: 'corroboration-archived', message: `意图 #${it.id} 的审计行 #${id} 已被归档搬出库，无法在库内印证；核对归档后可用 --accept-new-anchors 接受` }
     }
     return uncorroborated(`审计行 #${id} 不存在`)

@@ -21,7 +21,7 @@ const { tableExists, hasColumn, addColumn } = require('./_helpers.cjs')
 module.exports.name = '审计锚点操作意图表（audit_anchor_intents）'
 
 const COLUMNS = [
-  ['created_at', "TEXT NOT NULL DEFAULT (datetime('now','localtime'))"],
+  ['created_at', "TEXT NOT NULL DEFAULT ''"], // 仅用于补列（ALTER 不允许非常量默认值）；新建表的 created_at 默认 datetime('now','localtime')
   ['operation', "TEXT NOT NULL DEFAULT 'retention'"],
   ['range_desc', "TEXT NOT NULL DEFAULT ''"],
   ['operator_user_id', 'INTEGER'],
@@ -33,9 +33,7 @@ const COLUMNS = [
   ['audit_row_id', 'INTEGER']
 ]
 
-module.exports.up = (db) => {
-  if (!tableExists(db, 'audit_logs')) return
-  db.exec(`CREATE TABLE IF NOT EXISTS audit_anchor_intents (
+const CREATE = (name) => `CREATE TABLE ${name} (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
     created_at       TEXT NOT NULL DEFAULT (datetime('now','localtime')),
     operation        TEXT NOT NULL CHECK (operation IN ('retention','archive','erase')),
@@ -47,11 +45,34 @@ module.exports.up = (db) => {
     key_id           TEXT,
     signature        TEXT,
     audit_row_id     INTEGER
-  )`)
+  )`
+const NAMES = ['id', ...COLUMNS.map(([c]) => c)]
+
+/** operation 的 CHECK 约束是否在（补列修出来的残表没有它；ALTER 不能加 CHECK，只能重建） */
+const hasOperationCheck = (db) => /CHECK\s*\(\s*operation\s+IN\s*\(/i.test(db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='audit_anchor_intents'").get()?.sql || '')
+
+module.exports.up = (db) => {
+  if (!tableExists(db, 'audit_logs')) return
+  if (!tableExists(db, 'audit_anchor_intents')) {
+    db.exec(CREATE('audit_anchor_intents'))
+    return
+  }
+  // 残表自愈：缺 id 无法修（主键不能 ALTER 加），其余缺列补上；没有 CHECK 的表重建为标准形态并保留行
+  const keepsId = hasColumn(db, 'audit_anchor_intents', 'id')
   for (const [col, decl] of COLUMNS) addColumn(db, 'audit_anchor_intents', col, decl)
+  if (keepsId && hasOperationCheck(db)) return
+  const rebuild = () => {
+    db.exec('ALTER TABLE audit_anchor_intents RENAME TO audit_anchor_intents_old')
+    db.exec(CREATE('audit_anchor_intents'))
+    const cols = (keepsId ? NAMES : COLUMNS.map(([c]) => c)).join(', ')
+    db.exec(`INSERT INTO audit_anchor_intents (${cols}) SELECT ${cols} FROM audit_anchor_intents_old`)
+    db.exec('DROP TABLE audit_anchor_intents_old')
+  }
+  if (db.inTransaction) rebuild()
+  else db.transaction(rebuild)()
 }
 
 module.exports.verify = (db) => {
   if (!tableExists(db, 'audit_logs')) return true
-  return COLUMNS.every(([col]) => hasColumn(db, 'audit_anchor_intents', col))
+  return NAMES.every((col) => hasColumn(db, 'audit_anchor_intents', col)) && hasOperationCheck(db)
 }

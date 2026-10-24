@@ -64,4 +64,9 @@ AD5 的修复让“已锚定范围内新增的库内锚点”默认失败、由�
 - 意图只在锚点比对时参与；`verifyChain` 自身对锚点的承认规则不变。
 
 ### 审计记录（AE5）
-（见下，Codex 审计后补）
+Codex 审计（gpt-6.1-sol，只读，针对相对 batch-thirteen 的差异，聚焦意图伪造 / 事务原子性 / 校验绕过）：无高危；三条中危、一条低危，均已修：
+- 中：`corroboration-archived` 只要求 `audit_row_id < 库内最小审计行 id`，一个从未存在的 id 也能借此通过 `--accept-new-anchors` ⇒ 已修：还要求库里存在 `kind=archive` 且 `at_row_id` 大于该 id 的归档锚点（归档的边界确实越过了它），否则 `intent-uncorroborated`；回归 `missing audit row without archive evidence`。另注：归档会删除 `at_row_id ≤ 段尾` 的全部旧锚点，而印证行必晚于离机锚点的链尾，所以正常流程里这条路径几乎不可达，`--accept-new-anchors` 只是一个收窄后的安全阀。
+- 中：072 `up()` 给残表补 `created_at` 用了非常量默认值，对有数据的表 `ALTER ADD COLUMN` 会失败 ⇒ 已修：补列用常量默认值，新建表仍默认 `datetime('now','localtime')`。
+- 中：`verify()` 不检查 `id` 列，缺 `id` 的表被判健康而运行时 `ORDER BY id` 报错 ⇒ 已修：`id` 纳入 `verify()`；缺 `id` 无法 ALTER 补，`up()` 重建为标准形态。
+- 低：补列修出来的残表没有 `operation` 的 CHECK ⇒ 已修：`verify()` 检查 DDL 含该 CHECK，`up()` 重建表（保留行）。回归 `repairs a populated partial table`。
+- 审计确认：锚点自增水位在删除最高锚点、事务回滚时都正确；数字 / 字符串类型差异不会误匹配；锚定链尾之后的锚点按设计不在对账范围；`key_id` 与提供的公钥不符时跳过验签属于“签名可选”的既定口径（`--require-signed-intents` 下失败）；意图列表比实际锚点多出的元组不授权任何未匹配的实际锚点。未发现三个脚本的原子性缺陷。
