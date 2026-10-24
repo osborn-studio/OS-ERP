@@ -241,6 +241,7 @@
 | `exportChunks` | fn | GET /api/meta/audit-logs/export.csv | — | — |
 | `exportSql` | fn | — | — | — |
 | `ftsAvailable` | fn | — | — | — |
+| `ftsEnvDisabled` | fn | — | — | — |
 | `ftsPhrase` | fn | — | — | — |
 | `keywordUsesFts` | fn | GET /api/meta/audit-logs<br>GET /api/meta/audit-logs/export.csv | — | — |
 | `orderOf` | fn | GET /api/meta/audit-logs<br>GET /api/meta/audit-logs/export.csv | — | — |

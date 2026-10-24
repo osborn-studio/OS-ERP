@@ -65,6 +65,9 @@ jobs:
         run: |
           set -euo pipefail
           node scripts/gen-codemap.mjs --check
+      # AC5: re-runs only the audit view tests with the FTS query path switched off (GML_AUDIT_FTS=0), so the no-FTS5 fallback is exercised for real.
+      - name: Audit view tests without FTS (GML_AUDIT_FTS=0)
+        run: GML_AUDIT_FTS=0 node --test --test-concurrency=1 tests/audit-logs-view.test.mjs
       - name: TypeScript
         run: npx tsc --noEmit
       - name: Vite build
