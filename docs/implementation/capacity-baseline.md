@@ -594,7 +594,7 @@ gh run view <run-id> --log-failed
 ```
 
 ### 结果登记
-下表三列各对应一次规定运行；摘要字段来自 `capacity-summary.json`（含 AC8 新增的 `scale/partial/partial_reason/reached`）。
+下表三列各对应一次规定运行；每格的值必须附 run id；摘要字段来自 `capacity-summary.json`（含 AC8 新增的 `scale/partial/partial_reason/reached`，摘要本身不含 run id，run id 取自 Actions 页面），磁盘余量与升级演练逐迁移耗时不在摘要里，需另从 `Large-ci report` 步骤日志 / 演练日志取并注明来源，取不到就写「不可得」。
 
 | 项 | `rehearsal=true snapshot_upto=58` | `scale=large-ci` | 默认（medium） |
 |---|---|---|---|
@@ -609,5 +609,5 @@ gh run view <run-id> --log-failed
 | 失败 / 异常 | 待填（同左） | 待填（同左） | 待填（同左） |
 
 ### 未验证
-工作流在 GitHub 上从未执行；`large-ci` 的 355 分钟超时、磁盘余量、partial 行为；`snapshot_upto` 输入校验的线上表现；所有托管 runner 数字。
+截至 2026-10-24 本次尝试（`gh run list --workflow nightly-capacity.yml` 与 `gh workflow run` 均返回 HTTP 404，输出未存档）未发现该工作流的任何运行；仅限本次尝试的结论，不证明历史上从未运行。`large-ci` 的 355 分钟超时、磁盘余量、partial 行为；`snapshot_upto` 输入校验的线上表现；所有托管 runner 数字。
 
