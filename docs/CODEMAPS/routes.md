@@ -185,21 +185,21 @@
 
 | 处理器 | 方法 | 路径 | 分类 | 中间件链 | 调用的 lib 函数 | 处理器内 SQL 表 | 经 lib 触达的表 |
 |---|---|---|---|---|---|---|---|
-| `demand.js:94` | POST | `/api/demand/dealer/requisitions` | GATED | requireAuth → requireDealer | lib/dates.js: localDate<br>lib/docno.js: nextDocNo | dealer_requisition_items, dealer_requisitions, dealers, product_skus, products | audit_logs, users |
-| `demand.js:137` | GET | `/api/demand/dealer/requisitions/mine` | AUTH_ONLY | requireAuth | — | dealer_requisition_items, dealer_requisitions, dealers | users |
-| `demand.js:154` | GET | `/api/demand/dealer/plans/mine` | AUTH_ONLY | requireAuth | — | dealer_requisition_plans, dealers, product_skus, products | users |
-| `demand.js:179` | POST | `/api/demand/dealer/plans` | GATED | requireAuth → requireDealer | — | dealer_requisition_plans, dealers, product_skus, products | audit_logs, users |
-| `demand.js:214` | GET | `/api/demand/dealer/requisitions` | GATED | requireAuth → requireRole | — | dealer_requisition_items, dealers | users |
-| `demand.js:258` | GET | `/api/demand/dealer/requisitions/:id` | GATED | requireAuth → requireRole | — | dealer_requisition_items, dealer_requisitions, dealers, product_skus, products | users |
-| `demand.js:270` | POST | `/api/demand/dealer/requisitions/:id/status` | GATED | requireAuth → requireRole | lib/docflow.js: advanceStatus, allowedActions, nowText | dealer_requisition_items, dealer_requisitions, dealers, product_skus, products | audit_logs, doc_actions, doc_events, doc_states, doc_types, users |
-| `demand.js:313` | GET | `/api/demand/dealer/plans` | GATED | requireAuth → requireRole | — | dealer_requisition_plans, dealers, product_skus, products | users |
-| `demand.js:353` | POST | `/api/demand/dealer/summary` | GATED | requireAuth → requireRole | — | dealer_requisition_items, dealer_requisition_plans, dealer_requisitions, dealers, inventory_stocks, product_skus, products, purchase_order_items, purchase_orders, warehouses | users |
-| `demand.js:491` | POST | `/api/demand/dealer/summary/to-orders` | GATED | requireAuth → requireRole | lib/dates.js: localDate<br>lib/docflow.js: advanceStatus<br>lib/docno.js: nextDocNo | dealer_requisitions, demand_plan_runs, outsourcing_order_items, outsourcing_orders, product_skus, production_order_items, production_orders, products, purchase_order_items, purchase_orders, warehouses | audit_logs, doc_actions, doc_events, doc_states, doc_types, users |
-| `demand.js:626` | GET | `/api/demand/dealer/summary/runs` | GATED | requireAuth → requireRole | — | demand_plan_runs | users |
-| `demand.js:638` | GET | `/api/demand/production/orders` | GATED | requireAuth → requireRole | — | product_skus, products, warehouses | users |
-| `demand.js:668` | GET | `/api/demand/production/orders/:id` | GATED | requireAuth → requireRole | — | product_skus, production_order_items, production_orders, products, warehouses | users |
-| `demand.js:691` | POST | `/api/demand/production/orders` | GATED | requireAuth → requireRole | lib/docno.js: nextDocNo | production_order_items, production_orders | audit_logs, users |
-| `demand.js:725` | POST | `/api/demand/production/orders/:id/status` | GATED | requireAuth → requireRole | lib/docflow.js: tryTransition | production_orders | audit_logs, doc_actions, doc_events, doc_states, doc_types, users |
+| `demand.js:98` | POST | `/api/demand/dealer/requisitions` | GATED | requireAuth → requireDealer | lib/dates.js: localDate<br>lib/docno.js: nextDocNo | dealer_requisition_items, dealer_requisitions, dealers, product_skus, products | audit_logs, users |
+| `demand.js:141` | GET | `/api/demand/dealer/requisitions/mine` | AUTH_ONLY | requireAuth | — | dealer_requisition_items, dealer_requisitions, dealers | users |
+| `demand.js:158` | GET | `/api/demand/dealer/plans/mine` | AUTH_ONLY | requireAuth | — | dealer_requisition_plans, dealers, product_skus, products | users |
+| `demand.js:183` | POST | `/api/demand/dealer/plans` | GATED | requireAuth → requireDealer | — | dealer_requisition_plans, dealers, product_skus, products | audit_logs, users |
+| `demand.js:218` | GET | `/api/demand/dealer/requisitions` | GATED | requireAuth → requireRole | — | dealer_requisition_items, dealers | users |
+| `demand.js:262` | GET | `/api/demand/dealer/requisitions/:id` | GATED | requireAuth → requireRole | — | dealer_requisition_items, dealer_requisitions, dealers, product_skus, products | users |
+| `demand.js:274` | POST | `/api/demand/dealer/requisitions/:id/status` | GATED | requireAuth → requireRole | lib/docflow.js: advanceStatus, allowedActions, nowText | dealer_requisition_items, dealer_requisitions, dealers, product_skus, products | audit_logs, doc_actions, doc_events, doc_states, doc_types, users |
+| `demand.js:317` | GET | `/api/demand/dealer/plans` | GATED | requireAuth → requireRole | — | dealer_requisition_plans, dealers, product_skus, products | users |
+| `demand.js:357` | POST | `/api/demand/dealer/summary` | GATED | requireAuth → requireRole → attachOrgScope | lib/purchase.js: purchaseOrderScopeSql<br>lib/stock.js: assertWarehouseInScope, stockScopeSql | dealer_requisition_items, dealer_requisition_plans, dealer_requisitions, dealers, inventory_stocks, product_skus, products, purchase_order_items, purchase_orders, warehouses | orgs, roles, users |
+| `demand.js:501` | POST | `/api/demand/dealer/summary/to-orders` | GATED | requireAuth → requireRole → attachOrgScope | lib/dates.js: localDate<br>lib/docflow.js: advanceStatus<br>lib/docno.js: nextDocNo<br>lib/stock.js: assertWarehouseInScope, stockScopeSql | dealer_requisitions, demand_plan_runs, outsourcing_order_items, outsourcing_orders, product_skus, production_order_items, production_orders, products, purchase_order_items, purchase_orders, warehouses | audit_logs, doc_actions, doc_events, doc_states, doc_types, orgs, roles, users |
+| `demand.js:639` | GET | `/api/demand/dealer/summary/runs` | GATED | requireAuth → requireRole | — | demand_plan_runs | users |
+| `demand.js:651` | GET | `/api/demand/production/orders` | GATED | requireAuth → requireRole | — | product_skus, products, warehouses | users |
+| `demand.js:681` | GET | `/api/demand/production/orders/:id` | GATED | requireAuth → requireRole | — | product_skus, production_order_items, production_orders, products, warehouses | users |
+| `demand.js:704` | POST | `/api/demand/production/orders` | GATED | requireAuth → requireRole | lib/docno.js: nextDocNo | production_order_items, production_orders | audit_logs, users |
+| `demand.js:738` | POST | `/api/demand/production/orders/:id/status` | GATED | requireAuth → requireRole | lib/docflow.js: tryTransition | production_orders | audit_logs, doc_actions, doc_events, doc_states, doc_types, users |
 
 ## server/routes/dms.js
 
@@ -382,31 +382,31 @@
 
 | 处理器 | 方法 | 路径 | 分类 | 中间件链 | 调用的 lib 函数 | 处理器内 SQL 表 | 经 lib 触达的表 |
 |---|---|---|---|---|---|---|---|
-| `master.js:42` | GET | `/api/master/products` | GATED | requireAuth → requireInternal → requireAuth | — | brands, categories, inventory_stocks, product_skus | users |
-| `master.js:76` | GET | `/api/master/products/:id` | GATED | requireAuth → requireInternal → requireAuth | — | brands, categories, inventory_stocks, product_skus | users |
-| `master.js:88` | POST | `/api/master/products` | GATED | requireAuth → requireInternal → requireAuth → requireRole | — | brands, categories, inventory_stocks, product_skus, products | audit_logs, users |
-| `master.js:139` | PUT | `/api/master/products/:id` | GATED | requireAuth → requireInternal → requireAuth → requireRole | — | brands, categories, inventory_stocks, product_skus, products | audit_logs, users |
-| `master.js:165` | DELETE | `/api/master/products/:id` | GATED | requireAuth → requireInternal → requireAuth → requireRole | — | product_skus, products, sales_order_items | audit_logs, users |
-| `master.js:182` | GET | `/api/master/skus` | GATED | requireAuth → requireInternal → requireAuth | — | brands, inventory_stocks, products | users |
-| `master.js:218` | POST | `/api/master/skus` | GATED | requireAuth → requireInternal → requireAuth → requireRole | — | product_skus | audit_logs, users |
-| `master.js:239` | PUT | `/api/master/skus/:id` | GATED | requireAuth → requireInternal → requireAuth → requireRole | — | product_skus | audit_logs, users |
-| `master.js:264` | USE | `/api/master/brands` | GATED | requireAuth → requireInternal | lib/crud.js: crudRouter | brands | audit_logs, users |
-| `master.js:265` | USE | `/api/master/categories` | GATED | requireAuth → requireInternal | lib/crud.js: crudRouter | categories | audit_logs, users |
-| `master.js:268` | USE | `/api/master/warehouses` | GATED | requireAuth → requireInternal | — | — | — |
-| `master.js:269` | USE | `/api/master/stores` | GATED | requireAuth → requireInternal | lib/crud.js: crudRouter | stores | audit_logs, users |
-| `master.js:270` | USE | `/api/master/suppliers` | GATED | requireAuth → requireInternal | lib/crud.js: crudRouter | suppliers | audit_logs, users |
-| `master.js:271` | USE | `/api/master/dealers` | GATED | requireAuth → requireInternal | lib/crud.js: crudRouter | dealers | audit_logs, users |
-| `master.js:273` | USE | `/api/master/platforms` | GATED | requireAuth → requireInternal | lib/crud.js: crudRouter | platforms | audit_logs, users |
-| `master.js:276` | GET | `/api/master/scan` | GATED | requireAuth → requireInternal → requireAuth | — | brands, inventory_stocks, product_skus, products, serial_numbers, warehouses | users |
-| `master.js:312` | GET | `/api/master/bundles` | GATED | requireAuth → requireInternal → requireAuth | — | bundle_components, inventory_stocks, product_skus | users |
-| `master.js:345` | GET | `/api/master/bundles/:id` | GATED | requireAuth → requireInternal → requireAuth | — | assembly_orders, bundle_components, bundles, product_skus, products | users |
-| `master.js:370` | POST | `/api/master/bundles` | GATED | requireAuth → requireInternal → requireAuth → requireRole | — | bundle_components, bundles | audit_logs, users |
-| `master.js:403` | PUT | `/api/master/bundles/:id` | GATED | requireAuth → requireInternal → requireAuth → requireRole | — | bundle_components, bundles | audit_logs, users |
-| `master.js:435` | GET | `/api/master/locations` | GATED | requireAuth → requireInternal → requireAuth → attachOrgScope | lib/stock.js: stockScopeSql | inventory_stocks, warehouse_locations, warehouses | orgs, roles, users |
-| `master.js:461` | POST | `/api/master/locations` | GATED | requireAuth → requireInternal → requireAuth → requireRole → attachOrgScope | lib/stock.js: assertWarehouseInScope | warehouse_locations | audit_logs, orgs, roles, users, warehouses |
-| `master.js:483` | GET | `/api/master/options` | GATED | requireAuth → requireInternal → requireAuth → attachOrgScope | lib/stock.js: stockScopeSql | brands, bundles, categories, dealers, platforms, product_skus, products, stores, suppliers, warehouses | orgs, roles, users |
-| `master.js:533` | GET | `/api/master/overview` | GATED | requireAuth → requireInternal → requireAuth | — | dealers, platforms, product_skus, products, stores, suppliers, warehouses | users |
-| `master.js:555` | USE | `/api/master/inv-txn-types` | GATED | requireAuth → requireInternal | — | — | — |
+| `master.js:44` | GET | `/api/master/products` | GATED | requireAuth → requireInternal → requireAuth → attachOrgScope | lib/stock.js: stockScopeSql | brands, categories, inventory_stocks, product_skus | orgs, roles, users, warehouses |
+| `master.js:80` | GET | `/api/master/products/:id` | GATED | requireAuth → requireInternal → requireAuth → attachOrgScope | lib/stock.js: stockScopeSql | brands, categories, inventory_stocks, product_skus | orgs, roles, users, warehouses |
+| `master.js:94` | POST | `/api/master/products` | GATED | requireAuth → requireInternal → requireAuth → requireRole → attachOrgScope | lib/stock.js: stockScopeSql | brands, categories, inventory_stocks, product_skus, products | audit_logs, orgs, roles, users, warehouses |
+| `master.js:146` | PUT | `/api/master/products/:id` | GATED | requireAuth → requireInternal → requireAuth → requireRole → attachOrgScope | lib/stock.js: stockScopeSql | brands, categories, inventory_stocks, product_skus, products | audit_logs, orgs, roles, users, warehouses |
+| `master.js:173` | DELETE | `/api/master/products/:id` | GATED | requireAuth → requireInternal → requireAuth → requireRole | — | product_skus, products, sales_order_items | audit_logs, users |
+| `master.js:190` | GET | `/api/master/skus` | GATED | requireAuth → requireInternal → requireAuth → attachOrgScope | lib/stock.js: stockScopeSql | brands, inventory_stocks, products | orgs, roles, users, warehouses |
+| `master.js:228` | POST | `/api/master/skus` | GATED | requireAuth → requireInternal → requireAuth → requireRole | — | product_skus | audit_logs, users |
+| `master.js:249` | PUT | `/api/master/skus/:id` | GATED | requireAuth → requireInternal → requireAuth → requireRole | — | product_skus | audit_logs, users |
+| `master.js:274` | USE | `/api/master/brands` | GATED | requireAuth → requireInternal | lib/crud.js: crudRouter | brands | audit_logs, users |
+| `master.js:275` | USE | `/api/master/categories` | GATED | requireAuth → requireInternal | lib/crud.js: crudRouter | categories | audit_logs, users |
+| `master.js:278` | USE | `/api/master/warehouses` | GATED | requireAuth → requireInternal | — | — | — |
+| `master.js:279` | USE | `/api/master/stores` | GATED | requireAuth → requireInternal | lib/crud.js: crudRouter | stores | audit_logs, users |
+| `master.js:280` | USE | `/api/master/suppliers` | GATED | requireAuth → requireInternal | lib/crud.js: crudRouter | suppliers | audit_logs, users |
+| `master.js:281` | USE | `/api/master/dealers` | GATED | requireAuth → requireInternal | lib/crud.js: crudRouter | dealers | audit_logs, users |
+| `master.js:283` | USE | `/api/master/platforms` | GATED | requireAuth → requireInternal | lib/crud.js: crudRouter | platforms | audit_logs, users |
+| `master.js:286` | GET | `/api/master/scan` | GATED | requireAuth → requireInternal → requireAuth → attachOrgScope | lib/stock.js: stockScopeSql | brands, inventory_stocks, product_skus, products, serial_numbers, warehouses | orgs, roles, users |
+| `master.js:324` | GET | `/api/master/bundles` | GATED | requireAuth → requireInternal → requireAuth → attachOrgScope | lib/stock.js: stockScopeSql | bundle_components, inventory_stocks, product_skus | orgs, roles, users, warehouses |
+| `master.js:359` | GET | `/api/master/bundles/:id` | GATED | requireAuth → requireInternal → requireAuth | — | assembly_orders, bundle_components, bundles, product_skus, products | users |
+| `master.js:384` | POST | `/api/master/bundles` | GATED | requireAuth → requireInternal → requireAuth → requireRole | — | bundle_components, bundles | audit_logs, users |
+| `master.js:417` | PUT | `/api/master/bundles/:id` | GATED | requireAuth → requireInternal → requireAuth → requireRole | — | bundle_components, bundles | audit_logs, users |
+| `master.js:449` | GET | `/api/master/locations` | GATED | requireAuth → requireInternal → requireAuth → attachOrgScope | lib/stock.js: stockScopeSql | inventory_stocks, warehouse_locations, warehouses | orgs, roles, users |
+| `master.js:475` | POST | `/api/master/locations` | GATED | requireAuth → requireInternal → requireAuth → requireRole → attachOrgScope | lib/stock.js: assertWarehouseInScope | warehouse_locations | audit_logs, orgs, roles, users, warehouses |
+| `master.js:497` | GET | `/api/master/options` | GATED | requireAuth → requireInternal → requireAuth → attachOrgScope | lib/stock.js: stockScopeSql | brands, bundles, categories, dealers, platforms, product_skus, products, stores, suppliers, warehouses | orgs, roles, users |
+| `master.js:547` | GET | `/api/master/overview` | GATED | requireAuth → requireInternal → requireAuth → attachOrgScope | lib/stock.js: stockScopeSql | dealers, platforms, product_skus, products, stores, suppliers, warehouses | orgs, roles, users |
+| `master.js:571` | USE | `/api/master/inv-txn-types` | GATED | requireAuth → requireInternal | — | — | — |
 
 ## server/routes/meta.js
 
@@ -658,7 +658,7 @@
 
 | 处理器 | 方法 | 路径 | 分类 | 中间件链 | 调用的 lib 函数 | 处理器内 SQL 表 | 经 lib 触达的表 |
 |---|---|---|---|---|---|---|---|
-| `purchase.js:76` | GET | `/api/purchase/orders` | GATED | requireAuth → requirePerm → attachOrgScope | lib/purchase.js: purchaseScopeSql | — | orgs, purchase_order_items, role_permissions, roles, suppliers, user_roles, users, warehouses |
+| `purchase.js:76` | GET | `/api/purchase/orders` | GATED | requireAuth → requirePerm → attachOrgScope | lib/purchase.js: purchaseOrderScopeSql | — | orgs, purchase_order_items, role_permissions, roles, suppliers, user_roles, users, warehouses |
 | `purchase.js:117` | GET | `/api/purchase/orders/:id` | GATED | requireAuth → requirePerm → attachOrgScope | lib/purchase.js: assertPurchaseDocInScope, getPurchaseOrder | — | brands, orgs, product_skus, products, purchase_order_items, purchase_receipts, role_permissions, roles, suppliers, user_roles, users, warehouses |
 | `purchase.js:132` | POST | `/api/purchase/orders` | GATED | requireAuth → requireRole → attachOrgScope | lib/purchase.js: createPurchaseOrder<br>lib/stock.js: assertWarehouseInScope<br>lib/tx.js: withWriteRetry | — | audit_logs, brands, doc_no_counters, doc_no_rules, doc_types, orgs, product_skus, products, purchase_order_items, purchase_orders, purchase_receipts, roles, settings, suppliers, users, warehouses |
 | `purchase.js:168` | PUT | `/api/purchase/orders/:id` | GATED | requireAuth → requireRole → attachOrgScope | lib/purchase.js: assertPurchaseDocInScope, getPurchaseOrder, normalizePurchaseOrderLines, recalcOrder<br>lib/stock.js: assertWarehouseInScope | purchase_order_items, purchase_orders | brands, orgs, product_skus, products, purchase_receipts, roles, suppliers, users, warehouses |
@@ -671,7 +671,7 @@
 | `purchase.js:379` | POST | `/api/purchase/returns` | GATED | requireAuth → requireRole → attachOrgScope | lib/purchase.js: createPurchaseReturn<br>lib/stock.js: assertWarehouseInScope | — | audit_logs, cost_periods, doc_actions, doc_events, doc_no_counters, doc_no_rules, doc_states, doc_types, inv_params, inv_txn_types, inventory_batches, inventory_stocks, inventory_transactions, orgs, product_skus, products, purchase_order_items, purchase_orders, purchase_receipt_items, purchase_receipts, purchase_return_items, purchase_returns, roles, settings, stock_cost_ledger, users, warehouses |
 | `purchase.js:415` | POST | `/api/purchase/returns/:id/cancel` | GATED | requireAuth → requireRole → attachOrgScope | lib/docflow.js: advanceStatus<br>lib/purchase.js: assertPurchaseDocInScope | purchase_returns | audit_logs, doc_actions, doc_events, doc_states, doc_types, orgs, roles, users, warehouses |
 | `purchase.js:440` | POST | `/api/purchase/returns/:id/complete` | GATED | requireAuth → requireRole → attachOrgScope | lib/docflow.js: advanceStatus<br>lib/purchase.js: assertPurchaseDocInScope | purchase_returns | audit_logs, doc_actions, doc_events, doc_states, doc_types, orgs, roles, users, warehouses |
-| `purchase.js:463` | GET | `/api/purchase/stats` | GATED | requireAuth → requirePerm → attachOrgScope | lib/purchase.js: purchaseScopeSql | purchase_orders, suppliers | orgs, role_permissions, roles, user_roles, users, warehouses |
+| `purchase.js:463` | GET | `/api/purchase/stats` | GATED | requireAuth → requirePerm → attachOrgScope | lib/purchase.js: purchaseOrderScopeSql | purchase_orders, suppliers | orgs, role_permissions, roles, user_roles, users, warehouses |
 | `purchase.js:496` | GET | `/api/purchase/orders/:id/receive-suggest` | GATED | requireAuth → requirePerm → attachOrgScope | lib/dates.js: addDays, localDate<br>lib/purchase.js: assertPurchaseDocInScope | product_skus, products, purchase_order_items | orgs, role_permissions, roles, user_roles, users, warehouses |
 
 ## server/routes/qc.js

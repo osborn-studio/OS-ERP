@@ -8,6 +8,10 @@
 
 <!-- generated -->
 
+## 第十二批（进行中）：见 roadmap-v8
+
+- [ADR-0050：MCP 采购订单读工具与剩余聚合读口和 HTTP 范围对齐（AC1）](docs/implementation/ADR-0050-mcp-purchase-scope-parity.md) — 单一谓词：`server/lib/purchase.js` 新增 `purchaseOrderScopeSql(orgScope, alias)`，返回 `{ sql, params, empty }`，判据就是既有 `purchaseScopeSql(...).wh`（入库仓 `warehouses.org_id`；全局 `1=1`；`dealer` / `none` / 空集合 `1=0`；仓无组织对受限范围不可见）。HTTP 订单列表、`/stats`、`assertP…
+
 ## 第十一批（进行中）：见 roadmap-v7
 
 - [ADR-0046：主数据下拉仓库项、采购订单读与 QC 聚合按仓库组织范围收口](docs/implementation/ADR-0046-master-options-qc-scope.md) — 判据唯一化：全部复用既有谓词，不新写 SQL 口径——仓库按 `stockScopeSql(orgScope, '', 'id')`，采购订单按 `purchaseScopeSql(orgScope,'po').wh` 与详情的 `assertPurchaseDocInScope(db,'PO',…)`，QC 聚合按 `stockScopeSql(orgScope,'')`（`warehouse_id`，与 `listRequests / listInspections / …
