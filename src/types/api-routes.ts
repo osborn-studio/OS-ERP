@@ -1,7 +1,7 @@
 // ⚠️ 本文件由 scripts/gen-api-types.mjs 自动生成，请勿手改。
 // 改接口请改 server/openapi.js，然后执行：npm run gen:api
 //
-// 生成源：server/openapi.js ｜ OpenAPI 3.0.3 ｜ 契约版本 1.42.0
+// 生成源：server/openapi.js ｜ OpenAPI 3.0.3 ｜ 契约版本 1.43.0
 //
 // ============================================================================
 // 文件标识：src/types/api-routes.ts ｜ 【自动生成，勿手改】接口路径与标签的类型定义
@@ -17,7 +17,7 @@
 //   import { typedGet, typedPost } from '../api/typed'
 //   typedGet('/api/purchase/chain/overview')   // 路径写错编译期就报
 
-export const OPENAPI_VERSION = '1.42.0'
+export const OPENAPI_VERSION = '1.43.0'
 export const API_ROUTE_COUNT = 525
 
 /** 全部已登记的接口路径 */
