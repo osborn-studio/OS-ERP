@@ -50,7 +50,7 @@ os-erp@0.2.0-alpha.1
 | `fast-glob` | 3.3.3 | `micromatch ^4.0.8` | `true` |
 | `tailwindcss` | 3.4.19 | `micromatch`、`chokidar`、`fast-glob` | `true` |
 
-唯一的入口是 `devDependencies` 里的 `tailwindcss`（`^3.4.15`，锁定 3.4.19）。`dependencies` 中的 8 个运行依赖（bcryptjs、better-sqlite3、cors、dayjs、express、jsonwebtoken、nanoid、zod）都不依赖 braces、micromatch、chokidar 或 fast-glob。
+唯一的入口是 `devDependencies` 里的 `tailwindcss`（`^3.4.15`，锁定 3.4.19）。`dependencies` 中的运行依赖（bcryptjs、better-sqlite3、cors、dayjs、express、jsonwebtoken、nanoid；AD7 之前还有未使用的 zod，已移除，见第 9 节）都不依赖 braces、micromatch、chokidar 或 fast-glob。
 
 附：全依赖的 `npm audit` 会把 braces 及 chokidar、fast-glob、micromatch、tailwindcss 共 5 个包列为受影响，它们来自**同一条**公告，不是 5 个独立漏洞（`06_依赖安全说明.md` 第三节）。
 
@@ -105,3 +105,10 @@ os-erp@0.2.0-alpha.1
 - **新发现的 zod 告警**：`zod` 3.25.76 在 `package.json` 声明，但仓库内没有任何文件 import 它（`git grep -i zod` 仅命中 `package.json` 与 `server/lib/xlsx.js` 的一行注释），因此该公告所述的数组校验内存耗尽当前不可达。修复版本是 4.x 主版本。处置：登记到 `docs/security/audit-allowlist.json`，到期日 2026-12-15；后续应移除未使用的依赖（会同步改变运行依赖清单、SBOM 与 THIRD_PARTY_NOTICES.md，需单独安排）。
 - **CI 门禁**：`ci.yml` checks job 的 `node scripts/check-audit-allowlist.mjs` 运行 `npm audit --omit=dev --audit-level=high --json`，每条 high/critical 公告必须在白名单里且有 `reason`、未过期的 `expires`（不超过 180 天）；审计接口出错、输出异常、白名单格式不合法都判失败。白名单是限期豁免，不是"已修复"。该步骤需要访问 npm 官方 registry。
 - 未验证：本机没有重跑 CI 上的该步骤；没有对 zod 做利用复现。
+
+## 9. 移除未使用的 zod（AD7，2026-10-24）
+
+- **确认无引用**：`git grep -i zod` 在移除前只命中 `package.json`、锁文件、`THIRD_PARTY_NOTICES.md`、`server/lib/xlsx.js` 的一行注释、测试夹具与文档；没有任何 `import`/`require`，构建与脚本也不引用。
+- **改动**：从 `package.json` 的 `dependencies` 删除 `zod`；`package-lock.json` 仅删去根包声明与 `node_modules/zod` 条目（无其他包变化，没有升级任何依赖）；重新生成 `THIRD_PARTY_NOTICES.md`；`docs/security/audit-allowlist.json` 的 `allow` 清空为 `[]`，GHSA-mrhx-c7xc-m3w5 不再需要豁免；运行时依赖清单现为 7 个。`release/sbom.cdx.json` 在打包时由锁文件现场生成，仓库内没有提交的 SBOM 文件。
+- `.npmrc` 仍指向镜像 `registry.npmmirror.com`，该镜像不实现审计接口，`npm audit` 仍须用 `--registry=https://registry.npmjs.org`（CI 步骤的做法不变）。
+- 第 8 节中关于 zod 白名单的描述保留为历史记录，已被本节取代。

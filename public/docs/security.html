@@ -121,7 +121,7 @@
 <tr><td>braces</td><td>3.0.3</td><td>3.0.3</td><td>公告已撤回（2026-10-24），仍限制使用场景</td></tr></tbody></table></div>
 <p>Vite开发服务器显式监听127.0.0.1。没有升级业务数据库和业务规则，没有更换现有Tailwind 3样式体系。React Router涉及主版本升级，因此需额外验证真实页面登录、跳转及角色入口，不能只看编译通过。</p>
 <h2 id="二-剩余高危告警">二 剩余高危告警</h2>
-<p><strong>更新（2026年10月24日）</strong>：下述braces公告GHSA-vfj7-8cjw-p6xm已被GitHub撤回（Withdrawn Advisory，理由是不属于实际可利用的漏洞），官方审计不再列出braces及其上游链。以下内容保留为历史记录，其中&quot;保留告警&quot;&quot;暂无官方补丁&quot;的表述不再适用；暂行限制作为良好做法仍可沿用。当前运行依赖审计的唯一高危条目是zod（GHSA-mrhx-c7xc-m3w5）：项目声明了该依赖但代码中没有任何引用，判断为不可达，已登记到限期白名单（至2026年12月15日），并由持续集成的审计门禁检查，详见<code>docs/security/dependency-notes.md</code>第8节。白名单是限期豁免，不等于已修复。</p>
+<p><strong>更新（2026年10月24日）</strong>：下述braces公告GHSA-vfj7-8cjw-p6xm已被GitHub撤回（Withdrawn Advisory，理由是不属于实际可利用的漏洞），官方审计不再列出braces及其上游链。以下内容保留为历史记录，其中&quot;保留告警&quot;&quot;暂无官方补丁&quot;的表述不再适用；暂行限制作为良好做法仍可沿用。此前运行依赖审计唯一的高危条目是zod（GHSA-mrhx-c7xc-m3w5）：该依赖在代码中没有任何引用，现已从依赖中移除，限期白名单随之清空，持续集成的审计门禁仍然保留，详见<code>docs/security/dependency-notes.md</code>第9节。</p>
 <p>公告：GHSA-vfj7-8cjw-p6xm，CVE-2026-93687。GitHub公告将braces 3.0.3及以下版本列为受影响，修复版本为None。特制的深层嵌套花括号匹配模式可能耗尽调用栈，使Node进程退出，属于拒绝服务风险。</p>
 <p>本项目由Tailwind的文件匹配及监听依赖间接引入braces。现有文件匹配模式写在受维护者控制的tailwind.config.js中，普通业务表单没有被设计为接收并执行任意构建glob。基于当前调用方式，主要暴露在开发和构建链，而不是普通业务API；这是对当前代码路径的风险判断，不是漏洞已经修复的结论。</p>
 <p>暂行限制：</p>
