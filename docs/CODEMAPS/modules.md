@@ -828,6 +828,7 @@ Prometheus 文本指标渲染 + 抓取令牌校验（ADR-0045）
 | `METRIC_BY_KEY` | const | — | — | — |
 | `METRIC_DEFS_FINGERPRINT_ID` | const | — | — | — |
 | `boundAllows` | fn | — | — | — |
+| `isScopeAware` | fn | — | — | — |
 | `isScopeRestricted` | fn | — | — | — |
 | `metricCatalog` | fn | GET /api/metrics/catalog | — | — |
 | `metricDefinitions` | fn | GET /api/ai/metrics<br>GET /api/metrics/defs<br>GET /api/metrics/stale | — | — |
@@ -1180,7 +1181,7 @@ OMS /stats 与 AI 平台分析的 SQL 唯一来源（AE3，ADR-0044 补充 4；A
 | `purchaseOrderScopeSql` | fn | POST /api/demand/dealer/summary<br>GET /api/purchase/orders<br>GET /api/purchase/stats | purchase.list_orders, report.dashboard_kpi | lib/metrics.js, mcp/tools.js |
 | `purchaseOverview` | fn | GET /api/purchase/chain/overview | — | — |
 | `purchaseReturnSource` | fn | — | — | — |
-| `purchaseScopeSql` | fn | 9 条：purchase-chain.js×7, purchase.js×2 | — | lib/approval.js |
+| `purchaseScopeSql` | fn | 9 条：purchase-chain.js×7, purchase.js×2 | — | lib/approval.js, lib/metrics.js |
 | `purchaseTodos` | fn | GET /api/purchase/chain/todos | — | — |
 | `recalcOrder` | fn | PUT /api/purchase/orders/:id | — | — |
 | `receivePurchaseOrder` | fn | POST /api/purchase/orders/:id/receive | purchase.receive_order | mcp/tools.js |

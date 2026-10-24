@@ -12,7 +12,7 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { once } from 'node:events'
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -22,7 +22,8 @@ import net from 'node:net'
 import { fileURLToPath } from 'node:url'
 import { setTimeout as delay } from 'node:timers/promises'
 import Database from 'better-sqlite3'
-import { METRICS, METRIC_BY_KEY } from '../server/lib/metrics.js'
+import { METRICS, METRIC_BY_KEY, metricScopedFlags, isScopeAware } from '../server/lib/metrics.js'
+import { classifyMetrics } from '../scripts/check-metrics-scope.mjs'
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url))
 const secret = () => randomBytes(24).toString('base64url')
@@ -183,7 +184,8 @@ test('AE1: metrics_global_for_restricted hides scope-less metrics from restricte
     assert.equal(v.hidden_count, GLOBAL_ONLY.length)
     // AF2：销售 / OMS / 订货中心 / POS 不再被 hide 摘掉
     for (const k of ['sales_amount', 'gmv', 'oc_order_amount', 'pos_sales']) assert.ok(k in v.values, `${k} is scope-aware now`)
-    for (const k of ['payable_open', 'approval_pending', 'credit_usage', 'over_credit_dealers']) assert.ok(!(k in v.values), `${k} stays hidden`)
+    for (const k of ['approval_pending', 'credit_usage', 'over_credit_dealers']) assert.ok(!(k in v.values), `${k} stays hidden`)
+    assert.ok('payable_open' in v.values, 'AG2: payable_open is scope-aware now')
     const cat = okData(await api('/api/metrics/catalog', { token: A.token }))
     assert.deepEqual(cat.items.map((x) => x.key).sort(), [...SCOPE_AWARE].sort())
     assert.equal(cat.hidden_count, GLOBAL_ONLY.length)
@@ -252,7 +254,7 @@ const AF2_GROUPS = {
   oc: ['oc_order_amount', 'oc_fill_rate'],
   pos: ['pos_sales']
 }
-const AF2_SCOPELESS = ['payable_open', 'approval_pending', 'credit_usage', 'over_credit_dealers']
+const AF2_SCOPELESS = ['approval_pending', 'credit_usage', 'over_credit_dealers'] // AG2: payable_open moved to scope-aware
 
 test('AF2: sales / OMS / order-centre / POS metrics are scope-aware; credit / payable / approval stay scope-less', () => {
   for (const k of Object.values(AF2_GROUPS).flat()) assert.equal(METRIC_BY_KEY[k].scopeAware, true, k)
@@ -421,4 +423,78 @@ test('AF2: restricted callers get values computed over their scope (sales / OMS 
     assert.equal(x.values.oc_fill_rate, 0)
     assert.equal(one('SELECT COUNT(*) v FROM oc_customers'), before, 'a metrics read must not provision a customer')
   })
+})
+
+// ---------------------------------------------------------------------------
+// AG2（ADR-0057 补充 2）：范围声明覆盖率守卫 + 应付未结按范围计算
+// ---------------------------------------------------------------------------
+test('AG2: every metric declares scopeAware:true xor scopeless:<reason>; remaining scope-less ones carry a written reason', () => {
+  assert.deepEqual(classifyMetrics(METRICS).problems, [])
+  const scopeless = METRICS.filter((m) => !isScopeAware(m)).map((m) => m.key).sort()
+  assert.deepEqual(scopeless, ['approval_pending', 'credit_usage', 'over_credit_dealers'])
+  for (const k of scopeless) assert.ok(String(METRIC_BY_KEY[k].scopeless).length >= 20, k)
+  assert.equal(METRIC_BY_KEY.payable_open.scopeAware, true)
+  assert.equal(METRIC_BY_KEY.payable_open.bound, 'deny')
+  assert.equal(METRIC_BY_KEY.payable_open.scopeless, undefined)
+})
+
+test('AG2: classifyMetrics rejects undeclared, short-reason, double-declared and non-true scopeAware', () => {
+  const base = { key: 'x', perms: ['a'] }
+  const bad = (m) => classifyMetrics([{ ...base, ...m }]).problems.map((x) => x.key)
+  assert.deepEqual(bad({}), ['x'], 'undeclared')
+  assert.deepEqual(bad({ scopeless: 'too short' }), ['x'], 'reason < 20 chars')
+  assert.deepEqual(bad({ scopeless: '   ' + 'x'.repeat(10) }), ['x'], 'trimmed length counts')
+  assert.deepEqual(bad({ scopeAware: true, scopeless: 'a long enough written reason' }), ['x'], 'both')
+  assert.deepEqual(bad({ scopeAware: 'yes' }), ['x'], 'truthy is not true')
+  assert.deepEqual(bad({ scopeAware: false }), ['x'], 'false is not a declaration')
+  assert.deepEqual(bad({ scopeAware: true }), [])
+  assert.deepEqual(bad({ scopeless: 'a long enough written reason' }), [])
+})
+
+test('AG2: the guard script exits 0, --list agrees with the runtime visibility flag', () => {
+  const run = (...args) => spawnSync(process.execPath, ['scripts/check-metrics-scope.mjs', ...args], { cwd: ROOT, encoding: 'utf8' })
+  const ok = run()
+  assert.equal(ok.status, 0, ok.stdout + ok.stderr)
+  const list = run('--list')
+  assert.equal(list.status, 0)
+  const flags = metricScopedFlags({ scope: 'org', orgIds: [1] })
+  const rows = Object.fromEntries(list.stdout.split('\n').map((l) => l.trim().split(/\s+/)).filter((c) => METRIC_BY_KEY[c[0]]).map((c) => [c[0], c[1]]))
+  assert.equal(Object.keys(rows).length, METRICS.length, 'every metric listed')
+  for (const m of METRICS) assert.equal(rows[m.key], flags[m.key] ? 'scopeAware' : 'scopeless', `${m.key} guard == runtime`)
+})
+
+test('AG2: payable_open follows the purchase-settlement org predicate for restricted callers', { timeout: 300000 }, async (t) => {
+  const f = await server(t)
+  const { db, api } = f
+  const whA = db.prepare("SELECT id, org_id FROM warehouses WHERE code='WH01'").get()
+  const whB = db.prepare("SELECT id, org_id FROM warehouses WHERE code='WH03'").get()
+  assert.notEqual(whA.org_id, whB.org_id)
+  const sup = db.prepare('SELECT id FROM suppliers ORDER BY id LIMIT 1').get().id
+  const ins = db.prepare("INSERT INTO purchase_settlements (doc_no, org_id, supplier_id, settle_date, settle_amount, paid_amount, status) VALUES (?,?,?,date('now','localtime'),?,?,?)")
+  ins.run('AG2-ST-A', whA.org_id, sup, 100, 30, 'audited')
+  ins.run('AG2-ST-A-V', whA.org_id, sup, 9999, 0, 'voided')
+  ins.run('AG2-ST-B', whB.org_id, sup, 1000, 0, 'audited')
+  ins.run('AG2-ST-N', null, sup, 50000, 0, 'audited')
+  const grant = db.prepare('INSERT OR IGNORE INTO role_permissions (role_code, perm_code) VALUES (?,?)')
+  for (const p of METRIC_BY_KEY.payable_open.perms) grant.run('warehouse', p)
+  grant.run('warehouse', 'system:metrics:view')
+  const vals = async (token) => okData(await api('/api/metrics/values?keys=payable_open', { token }))
+  const one = (sql, ...a) => db.prepare(sql).get(...a).v
+  const A = await f.account('ag2_wh_a', 'warehouse', { org_id: whA.org_id, data_scope: 'org' })
+  const a = await vals(A.token)
+  const g = await vals(f.admin)
+  const expect = Math.round(one("SELECT COALESCE(SUM(settle_amount-paid_amount),0) v FROM purchase_settlements WHERE status<>'voided' AND org_id=?", whA.org_id) * 100) / 100
+  assert.equal(a.values.payable_open, expect)
+  assert.ok(a.values.payable_open >= 70)
+  assert.equal(a.scoped.payable_open, true)
+  assert.ok(g.values.payable_open >= 51070 && g.values.payable_open > a.values.payable_open, 'org B and NULL-org rows only in the global number')
+  // 空范围失败关闭
+  const N = await f.account('ag2_none', 'warehouse', { data_scope: 'org' })
+  db.prepare('UPDATE users SET org_id=NULL WHERE id=?').run(N.id)
+  assert.equal((await vals(await f.login(N.username, N.password))).values.payable_open, 0)
+  // 绑定门店账号（data_scope=all）：bound:deny，不可见
+  const store = db.prepare('SELECT id FROM stores ORDER BY id LIMIT 1').get()
+  const B = await f.account('ag2_bound', 'warehouse', { data_scope: 'all' })
+  db.prepare('UPDATE users SET data_scope=?, store_id=? WHERE id=?').run('all', store.id, B.id)
+  assert.ok(!('payable_open' in (await vals(await f.login(B.username, B.password))).values))
 })
