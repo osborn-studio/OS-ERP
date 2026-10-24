@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url'
 import { loadPublicKey, verifyEvidenceSignature, SIG_FILE } from './lib/evidence-sign.mjs'
 import { LOG_FILE, evidenceDigest, readLog, signatureDigest } from './lib/evidence-log.mjs'
 import { loadAnchor, checkLogDescent } from './lib/offbox-anchor.mjs'
+import { diffSboms, loadSbomFile, renderTable } from './lib/sbom-diff.mjs'
 import { hashEntries, listTestsTree, TESTS_TREE_FILE } from './lib/tests-tree.mjs'
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const manifest = JSON.parse(fs.readFileSync(path.join(root, 'MANIFEST.json'), 'utf8'))
@@ -247,6 +248,21 @@ if (offboxArg && !offboxArg.startsWith('--') && pubkeyArg && logArg !== undefine
       else console.log(`[verify] offbox anchor verified (key_id ${loaded.key_id.slice(0, 16)}…, made ${loaded.anchor.created_at}); ${d.note ?? `evidence log descends from the anchored tail (${loaded.anchor.log.lines} line(s) anchored, ${d.advanced} added since)`}`)
     }
   } catch (error) { bad(error.message) }
+}
+// AF7：--sbom-diff <prev.cdx.json> | --sbom-diff=<prev.cdx.json>：把本包的 SBOM 与上一份比较，打印组件增 / 删 / 变表格与一行 JSON。
+// 只是信息：有差异不失败；只有 prev 缺失 / 畸形（或参数用法错误）才记为错误。prev 按不可信数据处理（见 scripts/lib/sbom-diff.mjs）。
+if (process.argv.filter(a => a === '--sbom-diff' || a.startsWith('--sbom-diff=')).length > 1) fail('--sbom-diff given more than once')
+const sdIdx = process.argv.findIndex(a => a === '--sbom-diff' || a.startsWith('--sbom-diff='))
+if (sdIdx >= 0) {
+  const prevArg = process.argv[sdIdx].startsWith('--sbom-diff=') ? process.argv[sdIdx].slice(12) : process.argv[sdIdx + 1]
+  if (!prevArg || prevArg.startsWith('--')) fail('--sbom-diff needs the previous SBOM path (<prev.cdx.json>)')
+  else {
+    try {
+      const diff = diffSboms(loadSbomFile(path.resolve(prevArg)), loadSbomFile(path.join(root, 'release/sbom.cdx.json')))
+      process.stdout.write(renderTable(diff))
+      console.log(`[verify] sbom-diff-json ${JSON.stringify(diff)}`)
+    } catch (error) { fail(`SBOM-DIFF: ${error.message}`) }
+  }
 }
 console.log(`[verify] ${Object.keys(manifest.files).length} files; ${failed} errors`)
 process.exitCode = failed ? 1 : 0

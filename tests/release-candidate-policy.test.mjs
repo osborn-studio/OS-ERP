@@ -64,7 +64,8 @@ test('candidate job builds with the documented flags, writes outside the checkou
   assert.match(code, /verify-release\.mjs --evidence="[^"]+" --artifact="\$zip" --log="\$CAND_LOG"/)
   assert.ok(code.indexOf('release-candidate.mjs') < code.indexOf('verify-release.mjs'))
   assert.doesNotMatch(code, /GML_RELEASE_SIGN_KEY|secrets\./, 'hosted CI must not hold the signing key or secrets')
-  assert.ok((code.match(/GH_TOKEN/g) ?? []).length === 1, 'the token is passed to exactly one step')
+  // AF7 adds the SBOM-diff step as the second (and only other) holder of the read-only token
+  assert.ok((code.match(/GH_TOKEN/g) ?? []).length === 2, 'the token is passed to exactly two steps (build + SBOM diff)')
 })
 
 test('candidate job uploads only the whitelisted files with 14-day retention', () => {
@@ -74,7 +75,11 @@ test('candidate job uploads only the whitelisted files with 14-day retention', (
   assert.deepEqual(paths, [
     '${{ runner.temp }}/candidate-upload/RC-*.zip',
     '${{ runner.temp }}/candidate-upload/EVIDENCE.json',
-    '${{ runner.temp }}/candidate-upload/evidence-log-line.jsonl'
+    '${{ runner.temp }}/candidate-upload/evidence-log-line.jsonl',
+    '${{ runner.temp }}/candidate-upload/sbom.cdx.json',
+    '${{ runner.temp }}/candidate-upload/sbom-diff.json',
+    '${{ runner.temp }}/candidate-upload/sbom-diff.txt',
+    '${{ runner.temp }}/candidate-upload/audit-signatures.txt'
   ])
   assert.match(ups[0], /retention-days:\s*14\b/)
   assert.match(ups[0], /if-no-files-found:\s*error/)
