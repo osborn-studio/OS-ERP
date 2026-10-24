@@ -56,7 +56,7 @@ const subjectBoundOf = (req) => {
 
 const visibilityOf = (db, req, keys = null) => {
   const ctx = permContext(db, req.user)
-  return metricVisibility(db, { canPerm: (c) => hasPerm(ctx, c), orgScope: req.orgScope, keys, subjectBound: subjectBoundOf(req) })
+  return metricVisibility(db, { canPerm: (c) => hasPerm(ctx, c), orgScope: req.orgScope, keys, subjectBound: subjectBoundOf(req), user: req.user })
 }
 
 const daysOf = (req) => {
@@ -85,7 +85,7 @@ r.get(
     const days = daysOf(req)
     const withValues = String(req.query.with_values ?? '1') !== '0'
     const vis = visibilityOf(db, req)
-    const groups = metricGroups(db, { days, withValues, orgScope: req.orgScope, allow: vis.allow, subjectBound: subjectBoundOf(req) })
+    const groups = metricGroups(db, { days, withValues, orgScope: req.orgScope, allow: vis.allow, subjectBound: subjectBoundOf(req), user: req.user })
     return ok(res, {
       days,
       groups,
@@ -115,7 +115,7 @@ r.get(
     const days = daysOf(req)
     const keys = keysOf(req)
     const vis = visibilityOf(db, req, keys)
-    const values = metricValues(db, { keys, days, orgScope: req.orgScope, allow: vis.allow })
+    const values = metricValues(db, { keys, days, orgScope: req.orgScope, allow: vis.allow, user: req.user, subjectBound: subjectBoundOf(req) })
     // unknown = 请求了但字典里没有的 key —— 显式回一个列表，别让人对着空值猜
     const unknown = keys ? keys.filter((k) => !METRIC_BY_KEY[k]) : []
     // scoped：该值是否按调用者范围算（false = 全局口径，前端据此标注）；见 ADR-0053
@@ -133,7 +133,7 @@ r.get(
     const db = getDb()
     const vis = visibilityOf(db, req)
     return ok(res, {
-      items: metricCatalog(db, { days: daysOf(req), withValues: true, orgScope: req.orgScope, allow: vis.allow, subjectBound: subjectBoundOf(req) }),
+      items: metricCatalog(db, { days: daysOf(req), withValues: true, orgScope: req.orgScope, allow: vis.allow, subjectBound: subjectBoundOf(req), user: req.user }),
       hidden_count: vis.hidden
     })
   })

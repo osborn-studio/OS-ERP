@@ -827,6 +827,7 @@ Prometheus 文本指标渲染 + 抓取令牌校验（ADR-0045）
 | `METRICS_GLOBAL_MODE_KEY` | const | — | — | — |
 | `METRIC_BY_KEY` | const | — | — | — |
 | `METRIC_DEFS_FINGERPRINT_ID` | const | — | — | — |
+| `boundAllows` | fn | — | — | — |
 | `isScopeRestricted` | fn | — | — | — |
 | `metricCatalog` | fn | GET /api/metrics/catalog | — | — |
 | `metricDefinitions` | fn | GET /api/ai/metrics<br>GET /api/metrics/defs<br>GET /api/metrics/stale | — | — |
@@ -956,11 +957,12 @@ OMS /stats 与 AI 平台分析的 SQL 唯一来源（AE3，ADR-0044 补充 4）
 | `getOrder` | fn | GET /api/order-center/orders/:id<br>GET /api/order-center/orders/:id/repeat<br>GET /api/order-center/orders/:id/actions<br>POST /api/order-center/orders/:id/:action | — | — |
 | `getStatement` | fn | GET /api/order-center/statements/:id<br>POST /api/order-center/statements/:id/confirm | — | — |
 | `ocAccessCheck` | fn | POST /api/order-center/orders/:id/:action | — | — |
-| `ocScope` | fn | 6 条：order-center.js×6 | — | lib/approval.js |
+| `ocScope` | fn | 6 条：order-center.js×6 | — | lib/approval.js, lib/metrics.js |
 | `overview` | fn | — | — | — |
 | `pickWarehouse` | fn | POST /api/order-center/quote | — | — |
 | `quoteItems` | fn | POST /api/order-center/quote | — | — |
 | `selfCustomerId` | fn | 6 条：order-center.js×6 | — | — |
+| `selfCustomerIdReadOnly` | fn | — | — | lib/metrics.js |
 | `settleStatement` | fn | POST /api/order-center/statements/:id/settle | — | — |
 | `statementBalance` | fn | — | — | — |
 | `transitionOrder` | fn | POST /api/order-center/orders/:id/:action | — | — |
@@ -1500,10 +1502,10 @@ OMS /stats 与 AI 平台分析的 SQL 唯一来源（AE3，ADR-0044 补充 4）
 | `assertSalesDocInScope` | fn | 11 条：sales.js×11 | — | lib/quote.js |
 | `assertSalesTargetInScope` | fn | 9 条：oms.js×3, sales.js×6 | — | — |
 | `cancelOrder` | fn | POST /api/sales/orders/:id/cancel | sales.cancel_order | mcp/tools.js |
-| `omsOrderScopeSql` | fn | 7 条：oms.js×7 | — | — |
+| `omsOrderScopeSql` | fn | 7 条：oms.js×7 | — | lib/metrics.js |
 | `omsPlatformScopeSql` | fn | GET /api/oms/platforms<br>POST /api/oms/stock-push<br>GET /api/oms/sync-logs<br>GET /api/oms/stats<br>GET /api/oms/qimen-stock-message/:platformId | — | — |
 | `quoteScopeSql` | fn | — | — | lib/quote.js |
-| `salesScopeSql` | fn | GET /api/sales/orders<br>GET /api/sales/deliveries<br>GET /api/sales/returns<br>GET /api/sales/stats | sales.list_orders | lib/approval.js, mcp/tools.js |
+| `salesScopeSql` | fn | GET /api/sales/orders<br>GET /api/sales/deliveries<br>GET /api/sales/returns<br>GET /api/sales/stats | sales.list_orders | lib/approval.js, lib/metrics.js, mcp/tools.js |
 
 ## `server/lib/secret-box.js`
 
@@ -1591,8 +1593,8 @@ OMS /stats 与 AI 平台分析的 SQL 唯一来源（AE3，ADR-0044 补充 4）
 | 导出 | 类型 | 路由 | MCP 工具 | 被模块调用 |
 |---|---|---|---|---|
 | `boundDealerId` | fn | GET /api/metrics<br>GET /api/metrics/values<br>GET /api/metrics/catalog | — | lib/approval.js, lib/docflow.js |
-| `boundStoreId` | fn | 39 条：metrics.js×3, pos.js×31, requisitions.js×5 | — | lib/approval.js, lib/docflow.js |
-| `isExternalSubject` | fn | GET /api/metrics<br>GET /api/metrics/values<br>GET /api/metrics/catalog | — | lib/approval.js, lib/docflow.js |
+| `boundStoreId` | fn | 39 条：metrics.js×3, pos.js×31, requisitions.js×5 | — | lib/approval.js, lib/docflow.js, lib/metrics.js |
+| `isExternalSubject` | fn | GET /api/metrics<br>GET /api/metrics/values<br>GET /api/metrics/catalog | — | lib/approval.js, lib/docflow.js, lib/metrics.js |
 | `storeBindingExempt` | fn | GET /api/metrics<br>GET /api/metrics/values<br>GET /api/metrics/catalog | — | lib/approval.js, lib/docflow.js |
 
 ## `server/lib/test-pause.js`

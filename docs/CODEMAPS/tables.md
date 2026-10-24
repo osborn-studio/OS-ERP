@@ -201,7 +201,7 @@
 | `store_requisitions` | schema.sql | — | lib/docflow.js | routes/requisitions.js |
 | `store_shipment_items` | schema.sql | — | — | routes/requisitions.js |
 | `store_shipments` | schema.sql | — | lib/docflow.js | routes/requisitions.js |
-| `stores` | schema.sql | 001 | lib/accounting.js, lib/credit.js, lib/dashboard-sql.js, lib/docflow.js, lib/invoice.js, lib/order-center.js, lib/pos2.js, lib/quote.js, lib/refund.js, lib/sales-order.js, mcp/tools.js | routes/ai.js, routes/ar.js, routes/auth.js, routes/dashboard.js, routes/master.js, routes/pos.js, routes/requisitions.js, routes/sales.js |
+| `stores` | schema.sql | 001 | lib/accounting.js, lib/credit.js, lib/dashboard-sql.js, lib/docflow.js, lib/invoice.js, lib/metrics.js, lib/order-center.js, lib/pos2.js, lib/quote.js, lib/refund.js, lib/sales-order.js, mcp/tools.js | routes/ai.js, routes/ar.js, routes/auth.js, routes/dashboard.js, routes/master.js, routes/pos.js, routes/requisitions.js, routes/sales.js |
 | `supplier_price_logs` | 011 | 011·idx | lib/purchase.js | — |
 | `supplier_products` | 011 | 011·idx | lib/purchase.js | routes/purchase-chain.js |
 | `suppliers` | schema.sql | 005 | lib/accounting.js, lib/approval.js, lib/costing.js, lib/dashboard-sql.js, lib/purchase.js, lib/qc.js, lib/qc2.js, mcp/tools.js | routes/ai.js, routes/dashboard.js, routes/inventory.js, routes/master.js, routes/outsourcing.js, routes/purchase-chain.js, routes/purchase.js |
