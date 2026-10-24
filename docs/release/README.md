@@ -127,7 +127,7 @@ append). It creates no tag, no GitHub Release, and does not commit the log line 
 
 On a `v*` tag push the other `ci.yml` jobs (`checks`, `docker`, `browser`, `regression`) are skipped (`if: !startsWith(github.ref, 'refs/tags/')`);
 the candidate job runs the focused suite and the guards itself. Pull requests (`refs/pull/N/merge`) and pushes to `main` are unaffected,
-so the checks that branch protection requires still run for them; tags are not PR heads. Because no successful `ci.yml` run
+so the checks that branch protection requires still run for them; tags are not PR heads. Caveat: GitHub treats a skipped job as a passing status context for the same commit SHA, so **tag only commits that have already passed `ci.yml` on `main`**; never tag an unreviewed PR head, or the tag run's skipped contexts could stand in for checks that did not run on that SHA. `--ci-run=auto` excludes `v*` tag-push runs when looking up a successful `ci.yml` run for the same reason. Because no successful `ci.yml` run
 exists for a tagged commit in that case, `--ci-run=auto` falls back (hosted CI only, `GITHUB_ACTIONS=true` and a numeric `GITHUB_RUN_ID`
 for this commit) to recording the current run with `ci_lookup.ci_run_origin: "hosted-ci-self"` and a `SELF-REFERENTIAL` note. That run
 was still in progress when recorded: it is a pointer to the build itself, **not** evidence that the `ci.yml` checks passed, carries no

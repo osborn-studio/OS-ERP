@@ -191,16 +191,17 @@ function runFocused(cwd) {
 /** `--ci-run=auto`：用 gh 查 HEAD 对应 ci.yml 的最新成功 run。拿不到就 id=null 并写明原因。 */
 export function resolveCiRun(commit, { gh = process.env.OS_ERP_GH || 'gh', cwd = ROOT } = {}) {
   const none = reason => ({ id: null, lookup: { mode: 'auto', source: 'gh run list', reason } })
-  const r = spawnSync(gh, ['run', 'list', '--commit', commit, '--workflow', 'ci.yml', '--json', 'databaseId,conclusion,status,headSha,createdAt', '--limit', '30'], { cwd, encoding: 'utf8', timeout: 60000 })
+  const r = spawnSync(gh, ['run', 'list', '--commit', commit, '--workflow', 'ci.yml', '--json', 'databaseId,conclusion,status,headSha,createdAt,event,headBranch', '--limit', '30'], { cwd, encoding: 'utf8', timeout: 60000 })
   if (r.error) return none(`gh unavailable: ${r.error.code || r.error.message}`)
   if (r.status !== 0) return none(`gh run list failed (exit ${r.status}): ${String(r.stderr).trim().slice(0, 300)}`)
   let runs
   try { runs = JSON.parse(r.stdout) } catch { return none('gh run list returned unparseable output') }
   if (!Array.isArray(runs)) return none('gh run list returned unexpected output')
   if (!runs.length) return none(`no ci.yml run recorded for commit ${commit.slice(0, 7)}`)
-  const ok = runs.filter(x => x && x.conclusion === 'success' && Number.isInteger(x.databaseId) && x.headSha === commit)
+  const ok = runs.filter(x => x && x.conclusion === 'success' && Number.isInteger(x.databaseId) && x.headSha === commit && !(x.event === 'push' && /^v\d/.test(String(x.headBranch ?? ''))))
+    // AE10：v* 标签推送的 run 只跑候选 job（其余 job 被跳过），它的 success 不是 ci.yml 检查通过的证据，查询时排除
     .sort((a, b) => String(b.createdAt ?? '').localeCompare(String(a.createdAt ?? '')) || b.databaseId - a.databaseId)
-  if (!ok.length) return none(`${runs.length} ci.yml run(s) for ${commit.slice(0, 7)}, none with conclusion success (${[...new Set(runs.map(x => x?.conclusion || x?.status || 'unknown'))].join(', ')})`)
+  if (!ok.length) return none(`${runs.length} ci.yml run(s) for ${commit.slice(0, 7)}, none with conclusion success, v* tag-push runs excluded (${[...new Set(runs.map(x => x?.conclusion || x?.status || 'unknown'))].join(', ')})`)
   return { id: String(ok[0].databaseId), lookup: { mode: 'auto', source: 'gh run list', conclusion: 'success', head_sha: commit, run_created_at: ok[0].createdAt ?? null, ...(process.env.OS_ERP_GH ? { gh_override: true } : {}) } }
 }
 

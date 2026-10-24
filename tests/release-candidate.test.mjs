@@ -458,6 +458,16 @@ test('--ci-run=auto on hosted CI without a successful ci.yml run records the cur
   }
 })
 
+test('resolveCiRun ignores successful runs of v* tag pushes (candidate-only runs are not ci.yml check evidence)', async (t) => {
+  const { resolveCiRun } = await import(pathToFileURL(path.join(ROOT, 'scripts/release-candidate.mjs')).href)
+  const run = (id, event, headBranch) => ({ databaseId: id, conclusion: 'success', status: 'completed', headSha: HEAD40, createdAt: `2026-01-0${id - 200}T00:00:00Z`, event, headBranch })
+  const r = resolveCiRun(HEAD40, { gh: fakeGh(t, { stdout: JSON.stringify([run(204, 'push', 'v1.2.3'), run(203, 'push', 'main'), run(202, 'pull_request', 'feat/x')]) }).file })
+  assert.equal(r.id, '203')
+  const only = resolveCiRun(HEAD40, { gh: fakeGh(t, { stdout: JSON.stringify([run(204, 'push', 'v1.2.3')]) }).file })
+  assert.equal(only.id, null)
+  assert.match(only.lookup.reason, /none with conclusion success/)
+})
+
 test('outside hosted CI a missing successful run stays null (no self record is invented locally)', { timeout: 290000 }, (t) => {
   const src = minimalSource(t)
   const out = path.join(tempDir(t, 'os-erp-rc-out-'), 'release')
