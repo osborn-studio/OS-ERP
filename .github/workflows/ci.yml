@@ -309,9 +309,10 @@ jobs:
         run: |
           set -euo pipefail
           umask 077
-          export GML_JWT_SECRET="$(node -e "process.stdout.write(require('node:crypto').randomBytes(32).toString('hex'))")"
           [ -f docs/release/EVIDENCE-LOG.jsonl ] && cp docs/release/EVIDENCE-LOG.jsonl "$CAND_LOG"
-          node scripts/release-candidate.mjs --run-tests --ci-run=auto --log="$CAND_LOG" --output="$CAND_OUT"
+          # The workflow-level GML_RUNTIME_MODE=test / GML_DB='' are for the source-level jobs; the production acceptance step inside
+          # the script must start the packaged server in production mode, so they are removed for this command (as for a local run).
+          env -u GML_RUNTIME_MODE -u GML_DB node scripts/release-candidate.mjs --run-tests --ci-run=auto --log="$CAND_LOG" --output="$CAND_OUT"
       - name: Self-verify the candidate (extracted package, evidence, archive hash, log chain)
         run: |
           set -euo pipefail

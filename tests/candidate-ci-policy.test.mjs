@@ -56,7 +56,7 @@ test('candidate job pins every action by SHA and does not persist checkout crede
 })
 
 test('candidate job builds with the documented flags, writes outside the checkout, and verifies the result', () => {
-  assert.match(code, /node scripts\/release-candidate\.mjs --run-tests --ci-run=auto --log="\$CAND_LOG" --output="\$CAND_OUT"/)
+  assert.match(code, /env -u GML_RUNTIME_MODE -u GML_DB node scripts\/release-candidate\.mjs --run-tests --ci-run=auto --log="\$CAND_LOG" --output="\$CAND_OUT"/)
   assert.match(code, /CAND_OUT=\$RUNNER_TEMP\//)
   assert.match(code, /CAND_LOG=\$RUNNER_TEMP\//)
   assert.match(code, /verify-release\.mjs --evidence="[^"]+" --artifact="\$zip" --log="\$CAND_LOG"/)
