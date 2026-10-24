@@ -117,9 +117,16 @@ MCP 的范围依据从 `owner_org_id` 改为仓库所属组织，是 ADR-0038 �
 见 `docs/operations/monitoring.md`「缓存命中率告警阈值怎么来的」。要点：20% 与样本量条件是按模型选的，**不是生产标定**；模型用真实 `cachedForDb` + 注入时钟，并在测试里核对 AB10 计数器；命中率上限是 `floor(ttl/poll)/(floor(ttl/poll)+1)`，写入平均间隔短于一个轮询周期时降到 20% 以下。
 
 ## 测试
-`tests/dashboard-perf.test.mjs` 的 AC4 用例（6 个）：登记语句与模块导出逐字相同且路由不内联、`expectIndex`/豁免齐全；已迁移结构上登记语句 0 违规、`/top` 计划顺序、`expectIndex` 守卫真会检查；`/channel` 逐字对照原 SQL、`?days` 分键、写入失效、块计时齐全、响应无 cache / profile 字段；`/recent` 剖析且 `cache=off`、写入后立即可见；默认静默、受限账号 403 且不预热；命中率模型（单调、上限、20% 线位置、计数器核对、`ttl=0` 不计数）。
+`tests/dashboard-perf.test.mjs` 的 AC4 用例（初版 6 个，Codex 审计后补到 9 个）：登记语句与模块导出逐字相同且路由不内联、`expectIndex`/豁免齐全；已迁移结构上登记语句 0 违规、`/top` 计划顺序、`expectIndex` 守卫真会检查；`/channel` 逐字对照原 SQL、`?days` 分键、写入失效、块计时齐全、响应无 cache / profile 字段；`/recent` 剖析且 `cache=off`、写入后立即可见；默认静默、受限账号 403 且不预热；命中率模型（单调、上限、20% 线位置、计数器核对、`ttl=0` 不计数）。
 
 ## 已知限制
 - 数字来自 Mac mini + 合成库（OMS 单为叠加灌入），整机负载 27–35，不是 `dmserver` 结果；`/channel` 随 OMS 订单量越过 50 ms 的点是外推。
 - `oms_orders.order_time` 无可用索引（`/channel` 线上与 `/trend` 线上共有的残余），根治需新迁移（给 `order_time` 建索引并把谓词改成区间），不在 AC4 范围。`dash.trend_*` 的登记仍是人工镜像且缺 `trend.online`。
 - 压测副本上 `oc.overview_credit_used` 因演示种子叠加越过行数阈值而报违规，在 `batch-eleven` 上同样存在，与本补充无关，未处理。
+
+## Codex 审计（AC4，`gpt-6.1-sol`，只读）
+范围：`git diff batch-eleven...HEAD`；关注缓存正确性、explain-audit 语句保真、跨范围泄漏、新测试与命中率推导的弱点。
+- **高：无。** 确认：范围闸门（`requireAuth, requireInternal, requireGlobalData`）在缓存之前；`channel` 的缓存值不含与调用者相关的内容；键含规范化的 `days`；登记的 SQL 与路由调用一致；`expectIndex` / ALLOW 条目有查询与结构支撑。
+- **中 1（已修，文档 + 测试）**：命中率推导只看单键与写入，没有说明计数器是所有端点 / 键的合计，且命中率取决于每个键的读取间隔与 TTL——5 个键各 1 分钟读一次，30 分钟 150 次全未命中、零写入，会满足样本条件让告警一直亮；上限公式的 `floor(30/r)` 有边界效应（15 s → 2/3，16 s → 1/2）。→ `monitoring.md` 写明"命中率低不一定是写入密"、触发后的两步排查与处置、样本条件按聚合查找次数解释；新增测试 `AC4 hit ratio can be zero with no writes at all` 固定这些事实（含 150 次全未命中的多键用例）。
+- **低 1（已修）**：保真测试只比较文本与导入，路由若调错构建函数 / 窗口仍绿。→ 新增 `AC4 route responses equal the results of the registered explain-audit statements`：HTTP 响应与登记语句在同一库上的执行结果逐项相等（`/top` 四条、`/channel` 两条、`/recent` 四条，默认窗口与登记一致）。仍不是"抓取路由实际 prepare 的 SQL"（路由在独立进程，没有注入点）——按行为而非文本比对。
+- **低 2（已修）**：受限账号"不预热"只在已预热的键上测过。→ 新增 `AC4 a rejected caller on a cold /channel key …`：未用过的 `days=45` 被 403 / 401 后日志无处理器行，管理员第一次读该键仍是 `miss`。

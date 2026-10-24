@@ -803,3 +803,53 @@ test('AC4 cache hit-ratio model (real cachedForDb, injected clock): ratio is mon
   assert.deepEqual(counterSnapshot().dashboard_cache_total, { hit: 0, miss: 0 })
   db.close()
 })
+
+// ---- Codex 审计（AC4）补强 ----
+test('AC4 route responses equal the results of the registered explain-audit statements (audited SQL = executed SQL, by behaviour not just text)', { timeout: 300000 }, async (t) => {
+  const f = await server(t)
+  const st = (id) => STATEMENTS.find((s) => s.id === id).sql
+  const top = (await f.api('/api/dashboard/top')).body.data // 默认窗口 30 天，与登记一致
+  assert.deepEqual(top.products, f.db.prepare(st('dash.top_products')).all())
+  assert.deepEqual(top.brands, f.db.prepare(st('dash.top_brands')).all())
+  assert.deepEqual(top.dealers, f.db.prepare(st('dash.top_dealers')).all())
+  assert.deepEqual(top.stores, f.db.prepare(st('dash.top_stores')).all())
+  assert.ok(top.products.length > 0 && top.dealers.length > 0, 'the demo seed gives the comparison something to compare')
+  const ch = (await f.api('/api/dashboard/channel')).body.data // 默认窗口 90 天
+  assert.deepEqual(ch.online, f.db.prepare(st('dash.channel_online')).all())
+  assert.deepEqual(ch.offline.map(({ name, ...x }) => x), f.db.prepare(st('dash.channel_offline')).all())
+  const rec = (await f.api('/api/dashboard/recent')).body.data
+  assert.deepEqual(rec.salesOrders, f.db.prepare(st('dash.recent_sales')).all())
+  assert.deepEqual(rec.purchaseOrders, f.db.prepare(st('dash.recent_purchase')).all())
+  assert.deepEqual(rec.omsOrders, f.db.prepare(st('dash.recent_oms')).all())
+  assert.deepEqual(rec.transactions, f.db.prepare(st('dash.recent_txn')).all())
+})
+
+test('AC4 a rejected caller on a cold /channel key neither runs the handler nor warms the key: the first authorized read of that key is still a miss', { timeout: 300000 }, async (t) => {
+  const f = await server(t, { GML_PROFILE: '1' })
+  const orgId = f.db.prepare("SELECT org_id FROM warehouses WHERE code='WH01'").get().org_id
+  const restricted = await f.scopedUser('ac4_cold', orgId)
+  const cold = `${AC4_ROUTES.channel}?days=45`
+  assert.equal((await f.apiAs(restricted, cold)).status, 403)
+  assert.equal((await f.apiAs(null, cold)).status, 401)
+  await delay(500)
+  assert.equal(profileLines(f.output, 'dashboard.channel').length, 0, 'no handler run for rejected callers')
+  assert.equal((await f.api(cold)).status, 200)
+  await waitProfile(f.output, 'dashboard.channel', 1)
+  assert.equal(profileCache(profileLines(f.output, 'dashboard.channel')[0]), 'miss')
+})
+
+test('AC4 hit ratio can be zero with no writes at all: the per-key read interval vs TTL matters, not only writes (alert description)', () => {
+  const quiet = (readEvery) => simulateHitRatio({ readEvery, writeMean: 1e9, horizonS: 3600 })
+  assert.ok(Math.abs(quiet(10) - 0.75) < 0.01, 'every 10 s: 3 hits per miss')
+  assert.ok(Math.abs(quiet(15) - 2 / 3) < 0.01, 'every 15 s: boundary read at exactly TTL still hits')
+  assert.ok(Math.abs(quiet(16) - 0.5) < 0.01, 'every 16 s: one hit per miss (floor(30/16)=1)')
+  assert.equal(quiet(31), 0, 'a key read less often than the TTL never hits, even with zero writes')
+  // 多个键（端点 × days）各自慢速读取：聚合计数 > 60 次 / 30 分钟（告警的样本量条件）而命中率为 0
+  const db = new Database(':memory:')
+  try {
+    resetCounters()
+    for (let s = 60; s <= 1800; s += 60) for (const key of ['summary', 'trend:30', 'top:30', 'todos', 'channel:90']) cachedForDb(db, () => 1, { ttlMs: 30000, now: () => s * 1000, key })
+    const c = counterSnapshot().dashboard_cache_total
+    assert.deepEqual(c, { hit: 0, miss: 150 })
+  } finally { db.close() }
+})
