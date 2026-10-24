@@ -194,7 +194,10 @@ test('candidate builds RC-<version>-<sha>.zip with sha256, EVIDENCE.json and not
   assert.match(notes, new RegExp(version.replace(/\./g, '\\.')))
   assert.match(notes, /not a published release/i)
   // 版本号在 CHANGELOG 中没有专属小节时，发布说明展示最新批次小节（BATCHES 末项；随批次推进，不写死批次名）
-  assert.ok(notes.includes(BATCHES[BATCHES.length - 1].title), 'notes show the newest batch section')
+  // 最新批次 = 已有 ADR 落入其区间的最后一个批次（BATCHES 末项可能是尚无 ADR 的预留区间，CHANGELOG 不会为它生成小节）
+  const maxAdr = Math.max(...readdirSync(path.join(ROOT, 'docs/implementation')).map(f => /^ADR-(\d{4})-/.exec(f)).filter(Boolean).map(m => Number(m[1])))
+  const newest = [...BATCHES].reverse().find(b => b.from <= maxAdr) || BATCHES[BATCHES.length - 1]
+  assert.ok(notes.includes(newest.title), `notes show the newest batch section (${newest.title})`)
 
   // 默认（无 --ci-run / 人工声明）时同样的证据字段是 null / not run
   // verify-release --evidence 接受真证据，拒绝篡改
