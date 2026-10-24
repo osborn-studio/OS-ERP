@@ -116,6 +116,19 @@ with `GML_RELEASE_SIGN_KEY` set (and `--log`) from a clean checkout; because a c
 the log only once, re-signing a commit that is already logged (for example by hosted CI) requires a new commit, which gets a new name; distribute the public key out of band, and verify with
 `--pubkey --require-signature --log`. Hosted-CI candidates are development candidates only and are never release-grade.
 
+### Hosted CI candidate (AD10)
+
+The `candidate` job in `.github/workflows/ci.yml` builds a candidate on a GitHub-hosted runner. It runs only for
+`workflow_dispatch` and for pushes of tags matching `v*` (never for pull requests or pushes to `main`), at most one at a time,
+within 90 minutes. It runs `release-candidate --run-tests --ci-run=auto --log=<runner temp> --output=<runner temp>`, then
+`verify-release --evidence --artifact --log` on the extracted package, and uploads exactly three files as a workflow artifact
+kept for 14 days: `RC-<version>-<shortsha>.zip`, `EVIDENCE.json` and `evidence-log-line.jsonl` (the log line this build would
+append). It creates no tag, no GitHub Release, and does not commit the log line back: a maintainer who wants it in
+`docs/release/EVIDENCE-LOG.jsonl` commits it by hand.
+
+**托管候选未签名，正式发行须持钥者在受控机器重签** (hosted candidates are unsigned: `built_by: hosted-ci`, `signature: null`;
+the job never holds `GML_RELEASE_SIGN_KEY`). The artifact is a development candidate, not release or production acceptance.
+
 ## RELEASE-NOTES.md
 
 The `CHANGELOG.md` section whose heading contains the version, else the newest batch section (stated in the notes),
