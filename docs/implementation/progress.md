@@ -4,7 +4,7 @@
 
 ## 第十批当前状态（2026-10-23）
 
-按 [roadmap-v6](roadmap-v6.md) 的 AA1–AA12，12 路 Sonnet 5.5 subagent 并行实现并各自经 Codex（gpt-6.1-sol）审计后集成到 `batch-ten`（将作为 PR #6）：AA1 MCP `order.trace_document`/`doc.query` 改走 `DOC_SCOPE_RESOLVERS`（ADR-0041）；AA2 OMS 写路由与 MCP 库存工具按仓库组织范围（ADR-0042）；AA3 审批模板维护权限 `system:approval:template`（ADR-0043，迁移 063）；AA4 质检处置/仓库主数据/采购收货退货/POS 门店库存接入仓库范围（ADR-0038 补充）；AA5 低库存口径统一为 `listBelowSafe`、看板剖析与 30 s 缓存（ADR-0044；缓存命中 p95 约 42 ms，未命中约 400 ms）；AA6 审计日志索引与封顶计数（迁移 065）；AA7 发行候选 `--run-tests`/`--ci-run auto` 与证据校验；AA8 浏览器场景 my-scope/audit-logs/inventory-paging；AA9 POS 作废与差异结算权限码（迁移 066）；AA10 Prometheus 指标导出（ADR-0045）；AA11 迁移升级演练脚本与夜间可选步骤；AA12 安装/操作手册补第七至九批功能。集成时合并 AA1/AA2/AA5 在 `mcp/tools.js` 的改动（`stock_alert` 低库存走 `listBelowSafe`，临期行保留 AA2 仓库过滤）。OpenAPI 版本 1.38.0。验证以托管 CI 为准。
+按 [roadmap-v6](roadmap-v6.md) 的 AA1–AA12，12 路 Sonnet 5.5 subagent 并行实现并各自经 Codex（gpt-6.1-sol）审计后集成到 `batch-ten`（将作为 PR #6）：AA1 MCP `order.trace_document`/`doc.query` 改走 `DOC_SCOPE_RESOLVERS`（ADR-0041）；AA2 OMS 写路由与 MCP 库存工具按仓库组织范围（ADR-0042）；AA3 审批模板维护权限 `system:approval:template`（ADR-0037 补充，迁移 063；0043 编号未使用）；AA4 质检处置/仓库主数据/采购收货退货/POS 门店库存接入仓库范围（ADR-0038 补充）；AA5 低库存口径统一为 `listBelowSafe`、看板剖析与 30 s 缓存（ADR-0044；缓存命中 p95 约 42 ms，未命中约 400 ms）；AA6 审计日志索引与封顶计数（迁移 065）；AA7 发行候选 `--run-tests`/`--ci-run auto` 与证据校验；AA8 浏览器场景 my-scope/audit-logs/inventory-paging；AA9 POS 作废与差异结算权限码（迁移 066）；AA10 Prometheus 指标导出（ADR-0045）；AA11 迁移升级演练脚本与夜间可选步骤；AA12 安装/操作手册补第七至九批功能。集成时合并 AA1/AA2/AA5 在 `mcp/tools.js` 的改动（`stock_alert` 低库存走 `listBelowSafe`，临期行保留 AA2 仓库过滤）。OpenAPI 版本 1.38.0。验证以托管 CI 为准。
 
 ## 第九批当前状态（2026-10-23）
 
