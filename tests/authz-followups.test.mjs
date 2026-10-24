@@ -411,6 +411,102 @@ test('AF10: permContext ignores inactive roles (primary included); login disclos
   })
 })
 
+// ---------------------------------------------------------------------------
+// AG10（ADR-0051 补充 4）：my-scope 的说明按生效（active）角色生成，并标明每个范围要素由哪个角色贡献
+// ---------------------------------------------------------------------------
+
+test('AG10: my-scope explanations come from active roles only; inactive primary is called out; caller-only disclosure', { timeout: 300000 }, async (t) => {
+  const f = await server(t)
+  const { db, api } = f
+  const setStatus = (code, status) => db.prepare('UPDATE roles SET status=? WHERE code=?').run(status, code)
+  const addRole = (id, code) => db.prepare('INSERT OR IGNORE INTO user_roles (user_id, role_code) VALUES (?, ?)').run(id, code)
+  const scopeOf = async (token) => okData(await api('/api/auth/my-scope', { token }))
+  const line = (d, re) => d.explanations.filter((s) => re.test(s))
+
+  const secondary = await f.account('ag10_sec', 'sales', { data_scope: 'all' })
+  addRole(secondary.id, 'purchase')
+  const primaryOff = await f.account('ag10_prim', 'purchase')
+  addRole(primaryOff.id, 'viewer')
+  const lone = await f.account('ag10_lone', 'purchase')
+  const plain = await f.account('ag10_plain', 'sales')
+
+  await t.test('baseline (all active): effective roles listed, no inactive line', async () => {
+    const d = await scopeOf(secondary.token)
+    assert.deepEqual([...d.roles_effective].sort(), ['purchase', 'sales'])
+    assert.deepEqual(d.roles_inactive, [])
+    assert.equal(line(d, /已停用/).length, 0)
+    assert.equal(line(d, /生效角色/).length, 1)
+    assert.match(line(d, /生效角色/)[0], /销售主管/)
+    assert.match(line(d, /生效角色/)[0], /采购主管/)
+  })
+
+  setStatus('purchase', 'inactive')
+
+  await t.test('inactive SECONDARY role: dropped from the effective-role line, named in a separate inactive line', async () => {
+    const d = await scopeOf(secondary.token)
+    assert.deepEqual(d.roles_effective, ['sales'])
+    assert.deepEqual(d.roles_inactive, ['purchase'])
+    const eff = line(d, /生效角色/)
+    assert.equal(eff.length, 1)
+    assert.match(eff[0], /销售主管/)
+    assert.doesNotMatch(eff[0], /采购主管/, 'an inactive role must not be listed as contributing')
+    const off = line(d, /已停用/)
+    assert.equal(off.length, 1)
+    assert.match(off[0], /采购主管/)
+    assert.match(d.explanations.join('\n'), /生效（启用）角色|启用的角色|生效角色/)
+  })
+
+  await t.test('inactive PRIMARY role with an active secondary: said explicitly, role default no longer contributes the scope', async () => {
+    const d = await scopeOf(primaryOff.token)
+    assert.equal(d.role, 'purchase', 'the primary role field still reports the account\'s primary role')
+    assert.deepEqual(d.roles_effective, ['viewer'])
+    assert.deepEqual(d.roles_inactive, ['purchase'])
+    assert.equal(line(d, /主角色「采购主管」已停用/).length, 1)
+    assert.equal(d.role_default_scope, null, 'an inactive primary role has no default scope to report')
+    assert.notEqual(d.data_scope_source, 'role_default')
+    assert.equal(line(d, /来自角色默认/).length, 0)
+  })
+
+  await t.test('only role inactive: nothing is effective and the explanation says so', async () => {
+    const d = await scopeOf(lone.token)
+    assert.deepEqual(d.roles_effective, [])
+    assert.deepEqual(d.roles_inactive, ['purchase'])
+    assert.equal(line(d, /主角色「采购主管」已停用/).length, 1)
+    assert.match(line(d, /生效角色/)[0], /没有|无/)
+  })
+
+  await t.test('enforcement agrees with the explanation: an inactive primary role no longer lends its default scope', async () => {
+    const { resolveOrgScope } = await import('../server/middleware/auth.js')
+    const purchaseDefault = db.prepare("SELECT data_scope FROM roles WHERE code='purchase'").get().data_scope
+    const org = db.prepare('SELECT id FROM orgs WHERE id<>0 ORDER BY id LIMIT 1').get().id
+    db.prepare('UPDATE users SET org_id=?, data_scope=? WHERE id=?').run(org, '', lone.id)
+    const inactive = resolveOrgScope(db, { uid: lone.id, role: 'purchase' })
+    setStatus('purchase', 'active')
+    const active = resolveOrgScope(db, { uid: lone.id, role: 'purchase' })
+    setStatus('purchase', 'inactive')
+    assert.equal(active.scope, purchaseDefault)
+    assert.equal(inactive.scope, 'self', 'inactive primary role: fall back to the narrowest scope, never widen')
+    const d = await scopeOf(lone.token)
+    assert.equal(d.data_scope_effective, 'self')
+  })
+
+  await t.test('account without inactive roles: no inactive line, no notice', async () => {
+    const d = await scopeOf(plain.token)
+    assert.deepEqual(d.roles_effective, ['sales'])
+    assert.equal(d.notice_code, null)
+    assert.equal(line(d, /已停用/).length, 0)
+  })
+
+  await t.test('disclosure is the caller\'s own roles only', async () => {
+    const d = await scopeOf(plain.token)
+    const text = JSON.stringify(d)
+    for (const other of ['ag10_sec', 'ag10_prim', 'ag10_lone', '采购主管']) assert.ok(!text.includes(other), `${other} must not leak into another account's explanation`)
+    assert.equal((await api('/api/auth/my-scope', {})).status, 401)
+  })
+
+  setStatus('purchase', 'active')
+})
+
 test('role matrix cells match real /api/docflow/events behaviour (10 sampled role x type cells)', { timeout: 300000 }, async (t) => {
   // 期望值写死在这里：生成器若画错，光靠"矩阵 = 路由"的自证循环抓不到；这里同时钉住字面结论
   const SAMPLES = [

@@ -620,7 +620,8 @@ export function resolveOrgScope(db, user) {
   if (row?.is_super || u.role === 'admin') return { scope: 'all', orgIds: null, orgId: row?.org_id ?? null }
 
   // 用户级 data_scope 优先，其次角色默认
-  const roleScope = db.prepare('SELECT data_scope FROM roles WHERE code=?').get(u.role)?.data_scope
+  // AG10（ADR-0051 补充 4）：停用的主角色不再提供默认范围（只会收窄到 'self'，不会放宽）；与 my-scope 的说明同口径
+  const roleScope = db.prepare("SELECT data_scope FROM roles WHERE code=? AND status='active'").get(u.role)?.data_scope
   const scope = row?.data_scope && row.data_scope !== '' ? row.data_scope : roleScope || 'self'
   const orgId = row?.org_id ?? u.org_id ?? null
 

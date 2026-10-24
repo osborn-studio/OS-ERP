@@ -147,3 +147,24 @@ ADR-0011 AB7 补充登记过一条既有的高危发现：`/api/docflow/*` 的�
 - 无 medium / low：`permContext` / `userPermissions` / `canApproveStep` 只会收窄不会放宽；没有服务端权限缓存（MCP 重放结果在返回前复核所有者的当前权限）；`roles_inactive` / `notice_code` 仅在凭据校验成功后、且只含调用者自己的角色，无跨账号披露与枚举面。
 - 记载的剩余边界：其它直接用 `req.user.role` 做业务分支（非闸）的代码（如数据范围解释、外部主体判定）仍按主角色字段，不随角色停用改变；前端暂不展示 `notice_message`。
 
+
+## AG10 补充 4：停用角色的前端提示与数据范围说明随状态（第十六批）
+
+### 决定
+
+- **说明按生效角色生成**：`GET /api/auth/my-scope` 的 `explanations` 由 active 角色计算（`splitRolesByStatus`），响应新增 `roles_effective`（调用者自己的生效角色码）；`roles_inactive` / `notice_*` 沿用 AF10。说明里逐项写出贡献者：一行"你当前的生效角色：…"（没有生效角色时明说）、一行"已停用的角色：…"、数据范围的角色默认只来自**主角色**（附加角色只贡献功能权限，不改变数据范围）。
+- **主角色停用要明说**：说明里有"你的主角色「X」已停用…"；`role_default_scope` 为 `null`，`data_scope_source` 新增取值 `role_inactive`。`role` / `role_name` 仍是账号的主角色字段，不改语义。
+- **执行与说明同口径**：`resolveOrgScope` 的角色默认范围只取 `roles.status='active'` 的主角色；主角色停用且账号没有单独设置范围时落到最窄的 `self`。这是**只收窄不放宽**的改动（补充 3 记载的"数据范围仍按主角色字段"边界由此收口）；管理员 / 超管不受影响，账号级 `data_scope` 仍优先。
+- **前端**：登录后（`Layout`）当 `notice_code === 'ROLE_INACTIVE_NOTICE'` 显示可关闭的横幅（文字取服务端 `notice_message`，登录响应的提示并入会话用户对象，随后 `/auth/me` 以同样字段刷新；按停用角色集合记住关闭，集合变化会重新出现）。"我的数据范围"页显示停用角色码和"以下说明由生效（启用）的角色生成"的说明。
+- **浏览器场景** `tests/browser/inactive-role-notice.mjs`（已登记到 `browser-ci.mjs`，策略测试覆盖）：服务端没有"启停角色 / 加附加角色"的 HTTP 路由，所以场景只能经驱动传入的一次性 `GML_TEST_DATA_DIR`（驱动自己创建的临时数据目录，仅此一个新增环境变量）直接改库：加附加角色、置 inactive，`finally` 里恢复 active。没有新增管理接口，避免为了测试扩大攻击面。
+
+### 诚实边界
+
+- 浏览器场景本机未执行（Linux 托管 CI 才跑）；本机只做 `tsc`、`vite build`、`node --check`、策略测试与服务端测试。
+- 附加角色不提供数据范围默认（现状如此），所以主角色停用后不会改由附加角色补默认范围。
+- 横幅的"关闭"只在当前页面生命周期内有效，刷新后若仍有停用角色会再次出现（有意：提示不应静默消失）。
+
+### 验收
+
+- `tests/authz-followups.test.mjs`（红先，已确认回退服务端改动后失败）：附加角色停用 -> 不在生效角色行、单独的停用行点名；主角色停用 -> 明说、`role_default_scope=null`、来源不再是 `role_default`；唯一角色停用 -> 无生效角色；`resolveOrgScope` 与说明一致且只收窄；无停用角色账号无提示；不泄漏其它账号 / 角色名。
+- `tests/my-scope.test.mjs`：精确键集合加入 `roles_effective`。
