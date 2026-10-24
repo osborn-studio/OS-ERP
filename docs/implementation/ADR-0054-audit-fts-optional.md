@@ -10,7 +10,7 @@
 
 ### 1. 危险设置键 `audit_fts_enabled`（默认开）
 - 登记在 `server/lib/settings.js`（bool、`is_danger`、改值必须写理由、留痕到 `setting_audit_log`）；危险键数 19 → 20（`scripts/test-setting-audit.mjs`）。
-- 语义：库里存的值恰为 `"0"` 才算关；没有 settings 表 / 没有这一行 / 其它值都按默认（开）。
+- 语义：库里存的值恰为规范串 `"0"`（不裁剪、不认 false/off/空串）才算关；没有 settings 表 / 没有这一行 / 其它值都按默认（开）。删除是破坏性的，所以对手工改库得到的非规范值保守地保持开启（`writeSetting` 总写规范值）。
 
 ### 2. 迁移 071 `071_audit_fts_optional.cjs`：不新增结构，只负责"按设置收敛"
 - 067 不改（ADR-0009：改已执行迁移 = 生产启动校验和失败）。但 067 的 `verify()` 把"表缺失"当作脱节并重建；设置为关时这会在**每次启动重建整张索引**。因此运行器新增一个通用声明：迁移可写 `supersedesVerifyOf = ['<旧迁移 id>']`，运行器此后不再单独自检旧迁移，由声明者的 `verify()`/`up()` 负责。071 声明接管 `067_audit_fts`。
@@ -40,3 +40,10 @@
 ## 后果
 
 - 新文件：`server/db/migrations/071_audit_fts_optional.cjs`。改动：`server/db/migrations/runner.js`（`supersedesVerifyOf`）、`server/lib/settings.js`、`scripts/audit-fts-maintain.mjs`、`scripts/test-setting-audit.mjs`、`.github/workflows/ci.yml`、`tests/audit-logs-view.test.mjs`、`tests/audit-fts-maintain.test.mjs`、`docs/operations/audit-search.md`。
+
+## 审计记录
+
+Codex 审计（gpt-6.1-sol，只读，针对相对 batch-twelve 的差异）：无高危；确认 DROP 在事务内回滚正确、全新库 / 关闭后重启 / 再开启 / 缺触发器自愈路径、被接管的 067 校验和仍受检（`MIGRATION_CHECKSUM_MISMATCH`），CI 命令与已安装的 better-sqlite3 构建配置一致。
+- 中：071 用 `trim()` 判关，`" 0 "` 会删除索引，与"恰为 0"的约定不符 ⇒ 已修：只认规范串 `"0"`，测试覆盖 `" 0 "`/false/off/空串/junk。
+- 中：脚本的 `ensureSettings` 在 `BEGIN IMMEDIATE` 之前提交，之后失败会留下新播种的设置行与基线日志 ⇒ 已修：移入同一事务，新增失败回滚测试（触发器注入失败，对象、设置行、基线日志均回滚）。
+- 未执行：Linux runner 上的无 FTS5 重编译 job（本地 macOS 试验在复制的 `better-sqlite3` 上通过并跑完两个测试文件：45 个用例，21 通过、23 跳过、1 失败；该失败是 `AA6 explain-audit` 断言 FTS 语句存在，已对无 FTS5 构建改为跳过并复跑通过）。

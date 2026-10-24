@@ -127,12 +127,13 @@ try {
       report.status = 'unsupported'
       report.error = '本构建没有 FTS5 / trigram：无法建索引，设置未改动'
     } else {
-      ensureSettings(db, { actor: { id: null, name: 'audit-fts-maintain', source: 'script' } })
       probe = await startLockProbe(file)
       const t0 = performance.now()
       try {
         db.exec('BEGIN IMMEDIATE')
         try {
+          // 补键 + 基线放在同一个事务里：后面任何一步失败都整体回滚，不留下半截设置行
+          ensureSettings(db, { actor: { id: null, name: 'audit-fts-maintain', source: 'script' } })
           if (action === 'disable') report.changed_objects = m071.dropFts(db)
           else { const had = exists(db, 'table', FTS); m071.enableFts(db); report.changed_objects = !had }
           const w = writeSetting(db, { key: 'audit_fts_enabled', value: action === 'enable' ? '1' : '0', reason: args.reason.trim(), actor: { id: null, name: 'audit-fts-maintain', source: 'script' }, source: 'script' })

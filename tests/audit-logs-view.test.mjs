@@ -745,6 +745,14 @@ test('AD4 setting back on: startup healing rebuilds and backfills rows written w
   assert.equal(ftsAvailable(db), true)
 })
 
+test('AD4 only the canonical stored "0" switches the index off (" 0 ", false, off, empty and junk keep it)', (t) => {
+  const db = migrated(t)
+  ensureSettings(db)
+  const put = (v) => db.prepare("UPDATE settings SET value=? WHERE key='audit_fts_enabled'").run(v)
+  for (const v of [' 0 ', 'false', 'off', '', 'junk', '1']) { put(v); assert.equal(m071.settingEnabled(db), true, JSON.stringify(v)) }
+  put('0'); assert.equal(m071.settingEnabled(db), false)
+})
+
 test('AD4 dropFts / enableFts are reversible and idempotent; an unsupported build is never touched', needsFts5Build, (t) => {
   const db = migrated(t)
   const id = auditRow(db, { action: 'ROUNDTRIP' })

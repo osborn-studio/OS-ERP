@@ -30,12 +30,12 @@ function load067() {
 
 const has = (db, type, name) => !!db.prepare('SELECT 1 FROM sqlite_master WHERE type=? AND name=?').get(type, name)
 
-/** 设置是否允许 FTS：只有库里存的值恰为 "0" 才算关；没有 settings 表 / 没有这一行 / 其它值都按默认（开） */
+/** 设置是否允许 FTS：只有库里存的值恰为规范串 "0"（不裁剪、不认 false/off）才算关；没有 settings 表 / 没有这一行 / 其它值都按默认（开） */
 function settingEnabled(db) {
   try {
     if (!has(db, 'table', 'settings')) return true
     const row = db.prepare('SELECT value FROM settings WHERE key=?').get(SETTING_KEY)
-    return !(row && String(row.value).trim() === '0')
+    return !(row && String(row.value) === '0') // 删除是破坏性的：只认规范值 "0"（writeSetting 总写规范值）；" 0 " / false / off / 空串都不删
   } catch { return true }
 }
 module.exports.settingEnabled = settingEnabled

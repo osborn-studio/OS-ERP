@@ -250,3 +250,16 @@ test('AD4 on a SQLite build WITHOUT FTS5 (CI audit-no-fts5): integrity-check is 
   const dis = run(['--data-dir', dir, '--industry', 'cosmetic', '--disable', '--reason', 'x', '--out', o('dis')], dir)
   assert.equal(dis.status, 0, dis.stderr + dis.stdout); assert.equal(reportOf(dir, o('dis')).setting_after, '0')
 })
+
+test('AD4 a failed toggle rolls back everything, including a freshly seeded setting row and its baseline', needsFts5, (t) => {
+  const { dir, db } = fixture(t, 10)
+  db.exec("DELETE FROM settings WHERE key='audit_fts_enabled'; DELETE FROM setting_audit_log WHERE key='audit_fts_enabled'")
+  // 触发器上挂一个会失败的东西：让删除 FTS 对象之后的 writeSetting 写日志失败
+  db.exec("CREATE TRIGGER ad4_fail BEFORE INSERT ON setting_audit_log WHEN new.action='set' AND new.key='audit_fts_enabled' BEGIN SELECT RAISE(ABORT,'ad4 injected'); END")
+  const r = run(['--data-dir', dir, '--industry', 'cosmetic', '--disable', '--reason', 'x', '--out', path.join(dir, 'f.json')], dir)
+  assert.equal(r.status, 1)
+  assert.equal(reportOf(dir, path.join(dir, 'f.json')).status, 'error')
+  assert.equal(ftsNames(db).length, 4, 'objects restored by the rollback')
+  assert.equal(settingRow(db), undefined, 'no half-seeded setting row')
+  assert.equal(db.prepare("SELECT COUNT(*) c FROM setting_audit_log WHERE key='audit_fts_enabled'").get().c, 0, 'no stray baseline')
+})
