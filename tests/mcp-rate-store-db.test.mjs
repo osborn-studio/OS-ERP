@@ -264,3 +264,46 @@ test('purge timer is registered only for db mode, unref()ed, and outside the req
   const srv = readFileSync(path.join(ROOT, 'server/mcp/server.js'), 'utf8')
   assert.equal((srv.match(/\.purge\(/g) || []).length, 1, 'only the exported wrapper references purge; no call on the request path')
 })
+
+test('Codex high: time/window are read inside the write lock on every attempt (a window rollover while waiting for the lock cannot over-admit)', () => {
+  const db = memDb()
+  let t = 60_000 - 1 // 窗口 0 的最后一毫秒
+  const l = createMcpRateLimiter({ env: { GML_MCP_RATE_STORE: 'db', GML_MCP_TOKEN_RPM: '1' }, now: () => t })
+  const real = db.transaction.bind(db)
+  db.transaction = (fn) => {
+    const tx = real(fn)
+    // 模拟"等写锁期间跨过了分钟边界，且别的进程已把新窗口记满"
+    return { immediate: () => { t = 60_001; db.prepare("INSERT INTO mcp_rate_buckets VALUES ('s|1',60000,'all',1)").run(); return tx.immediate() } }
+  }
+  const r = l.consume(1, 'read', 's', db)
+  assert.deepEqual([r.allowed, r.reason], [false, 'rpm'])
+  assert.deepEqual(db.prepare('SELECT window_start w, count c FROM mcp_rate_buckets').all(), [{ w: 60000, c: 1 }], 'nothing recorded against the stale window')
+  db.close()
+})
+
+test('Codex medium: purge never waits long for a held write lock, restores busy_timeout, and takes no lock when nothing is expired', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'os-erp-rate-purge-'))
+  try {
+    const file = path.join(dir, 'p.db')
+    const a = new Database(file); const b = new Database(file)
+    for (const d of [a, b]) { d.pragma('journal_mode=WAL'); d.pragma('busy_timeout=5000') }
+    M073.up(a)
+    const now = 9_000_000_000
+    const ws = now - (now % W)
+    const l = createMcpRateLimiter({ env: { GML_MCP_RATE_STORE: 'db' }, now: () => now })
+    a.prepare('INSERT INTO mcp_rate_buckets VALUES (?,?,?,1)').run('k', ws, 'all')
+    b.exec('BEGIN IMMEDIATE') // 另一连接占着写锁
+    const t0 = Date.now()
+    assert.deepEqual(l.purge(a), { deleted: 0 }, 'nothing expired: no write lock needed even while another connection holds it')
+    b.exec('ROLLBACK')
+    a.prepare('INSERT INTO mcp_rate_buckets VALUES (?,?,?,1)').run('old', ws - 9 * W, 'all')
+    b.exec('BEGIN IMMEDIATE')
+    const r = l.purge(a)
+    assert.equal(r.failed, true)
+    assert.ok(Date.now() - t0 < 2500, `gave up fast (took ${Date.now() - t0} ms)`)
+    assert.equal(a.pragma('busy_timeout', { simple: true }), 5000, 'busy_timeout restored')
+    b.exec('ROLLBACK')
+    assert.deepEqual(l.purge(a), { deleted: 1 }, 'next tick succeeds')
+    a.close(); b.close()
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+})

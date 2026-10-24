@@ -78,6 +78,7 @@ export function rateStoreFromEnv(env = process.env) {
 
 const PURGE_CHUNK = 5000
 const PURGE_MAX_CHUNKS = 20
+const PURGE_BUSY_MS = 250 // 后台清理最多等这么久的写锁
 const stmts = new WeakMap() // db → 预编译语句（连接关闭后随连接回收）
 function dbStatements(db) {
   let s = stmts.get(db)
@@ -86,6 +87,7 @@ function dbStatements(db) {
       sel: db.prepare('SELECT window_start AS ws, kind, count FROM mcp_rate_buckets WHERE token_key=? AND window_start IN (?,?)'),
       up: db.prepare(`INSERT INTO mcp_rate_buckets (token_key, window_start, kind, count) VALUES (?,?,?,1)
                       ON CONFLICT(token_key, window_start, kind) DO UPDATE SET count=count+1`),
+      expired: db.prepare('SELECT 1 FROM mcp_rate_buckets WHERE window_start < ? LIMIT 1'),
       purge: db.prepare(`DELETE FROM mcp_rate_buckets WHERE rowid IN (SELECT rowid FROM mcp_rate_buckets WHERE window_start < ? LIMIT ${PURGE_CHUNK})`)
     }
     stmts.set(db, s)
@@ -110,23 +112,25 @@ export function createMcpRateLimiter({ env = process.env, now = Date.now, ...ove
   /** db 模式的一次额度申请（见文件头）。→ 与内存模式同形；存储失败 ⇒ reason 'store_unavailable' */
   function consumeDb(tokenId, level, scope, db) {
     const key = `${scope}|${tokenId}`
-    const t = now()
-    const ws = t - (t % W)
-    const f = (t % W) / W
-    const retryAfter = Math.min(60, Math.max(1, Math.ceil((W - (t % W)) / 1000)))
     try {
       if (!db || typeof db.prepare !== 'function') throw new Error('no database handle')
       const s = dbStatements(db)
-      const out = withWriteRetry(db, () => {
+      // 时刻与窗口必须在拿到写锁**之后**、每次尝试里重新取（Codex 审计 high）：若在事务外取一次并跨重试沿用，
+      // 争用跨过分钟边界时会按旧窗口判定与记账，无视新窗口已满，造成超发。
+      const { out, retryAfter } = withWriteRetry(db, () => {
+        const t = now()
+        const ws = t - (t % W)
+        const f = (t % W) / W
+        const retryAfter = Math.min(60, Math.max(1, Math.ceil((W - (t % W)) / 1000)))
         const cnt = { all: { cur: 0, prev: 0 }, write: { cur: 0, prev: 0 } }
         for (const r of s.sel.all(key, ws, ws - W)) cnt[r.kind][r.ws === ws ? 'cur' : 'prev'] = r.count
         const over = (c, limit) => c.prev * (1 - f) + c.cur + 1 > limit
         const isWrite = level === 'write'
-        if (over(cnt.all, policy.rpm)) return 'rpm'
-        if (isWrite && over(cnt.write, policy.writeRpm)) return 'write_rpm'
+        if (over(cnt.all, policy.rpm)) return { out: 'rpm', retryAfter }
+        if (isWrite && over(cnt.write, policy.writeRpm)) return { out: 'write_rpm', retryAfter }
         s.up.run(key, ws, 'all')
         if (isWrite) s.up.run(key, ws, 'write')
-        return null
+        return { out: null, retryAfter }
       }, { label: 'mcp_rate' })
       return out ? { allowed: false, reason: out, retryAfter } : { allowed: true }
     } catch (e) {
@@ -147,10 +151,16 @@ export function createMcpRateLimiter({ env = process.env, now = Date.now, ...ove
       const t = now()
       const cutoff = t - (t % W) - 2 * W
       let deleted = 0
+      let prevBusy = null
       try {
         const s = dbStatements(db)
+        // 没有过期行就不拿写锁（只读探测，WAL 下不阻塞也不被阻塞）
+        if (!s.expired.get(cutoff)) return { deleted: 0 }
+        // 清理跑在事件循环上（同步 better-sqlite3）：只等短暂的 busy_timeout、不重试，锁被占着就放弃本轮、下一分钟再来（Codex 审计 medium）。
+        prevBusy = db.pragma('busy_timeout', { simple: true })
+        db.pragma(`busy_timeout = ${PURGE_BUSY_MS}`)
         for (let i = 0; i < PURGE_MAX_CHUNKS; i++) {
-          const n = withWriteRetry(db, () => s.purge.run(cutoff).changes, { label: 'mcp_rate_purge' })
+          const n = withWriteRetry(db, () => s.purge.run(cutoff).changes, { label: 'mcp_rate_purge', maxAttempts: 1 })
           deleted += n
           if (n < PURGE_CHUNK) break
         }
@@ -159,6 +169,8 @@ export function createMcpRateLimiter({ env = process.env, now = Date.now, ...ove
         incCounter('mcp_rate_store_failures_total', 'purge_failed')
         logger.error('mcp rate bucket purge failed', { component: 'mcp', err_code: e?.code ?? '-', err_message: e?.message })
         return { deleted, failed: true }
+      } finally {
+        if (prevBusy !== null) { try { db.pragma(`busy_timeout = ${Number(prevBusy) || 0}`) } catch { /* 连接已不可用 */ } }
       }
     },
     /** 一次工具调用的额度申请。→ { allowed: true } | { allowed: false, reason: 'rpm'|'write_rpm'|'unavailable'|'store_unavailable', retryAfter } */
