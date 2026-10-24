@@ -208,7 +208,7 @@ if (evidenceArg) {
         }
       } catch (error) { bad('signature', error.message) }
     }
-    if (ev.signature === null) {
+    if (ev.signature === null && ev.dry_run !== true) { // 演练已有自己的醒目警告
       const banner = '!'.repeat(78)
       console.error(`${banner}\n[verify] WARNING: UNSIGNED CANDIDATE (built_by: ${ev.built_by ?? 'unrecorded'}). EVIDENCE.json carries no signature, so nothing\n[verify] proves who approved this evidence. It is a development candidate only: a formal release must be re-signed by the\n[verify] key holder on a controlled machine (docs/release/README.md). Use --pubkey with --require-signature to enforce.\n${banner}`)
       if (requireSignature) bad('signature', '--require-signature: the candidate is unsigned')
