@@ -626,7 +626,7 @@ test('AC7 --against-backup: whole-chain recompute after an edit is a rewrite eve
   b.db.close()
 })
 
-test('AC7 --against-backup: forged anchors are listed, and fail the run under --strict-anchors', (t) => {
+test('AC7 --against-backup: forged anchors are listed (and, since AF5, an in-range one without an intent fails the run; --strict-anchors fails it too)', (t) => {
   const { db, V } = backedUp(t)
   // 攻击者改第 3 行内容、重算它，再给第 4 行伪造一个锚点把断口"登记"掉
   const before = db.prepare('SELECT * FROM audit_logs WHERE id IN (3,4) ORDER BY id').all()
@@ -637,7 +637,8 @@ test('AC7 --against-backup: forged anchors are listed, and fail the run under --
   })()
   assert.equal(verifyChain(db).ok, true)
   const ok = V()
-  assert.equal(ok.status, 0)
+  assert.equal(ok.status, 1, 'AF5: the forged anchor is inside the backed-up range and has no intent')
+  assert.equal(cos(ok).against_backup.kind, 'anchor-without-intent')
   assert.equal(cos(ok).against_backup.anchors_added.length, 1)
   assert.equal(cos(ok).against_backup.anchors_added[0].reason, 'forged')
   assert.equal(V(['--strict-anchors']).status, 1)
@@ -916,13 +917,15 @@ function ae5World(t) {
   const anchored = cli(OFFBOX, ['--data-dir', f.dir, '--dest', dest, '--key', k.priv], f.dir) // 不带 --log：用仓库内默认日志路径
   assert.equal(anchored.status, 0, anchored.stderr)
   const file = path.join(dest, readdirSync(dest).find((n) => /^anchor-.*\.json$/.test(n)))
-  const verify = (extra = [], env = {}) => cli(VERIFY, ['--data-dir', f.dir, '--industry', 'cosmetic', '--offbox', file, '--pubkey', k.pub, '--json', ...extra], f.dir, env)
+  // AF5：基线之后做过归档时，对账需要归档摘要目录，所以默认带 --archive-dir；`blind` 是不带的版本
+  const verify = (extra = [], env = {}) => cli(VERIFY, ['--data-dir', f.dir, '--industry', 'cosmetic', '--offbox', file, '--pubkey', k.pub, '--json', ...(extra.includes('--archive-dir') ? [] : ['--archive-dir', f.out]), ...extra], f.dir, env)
+  const blind = (extra = [], env = {}) => cli(VERIFY, ['--data-dir', f.dir, '--industry', 'cosmetic', '--offbox', file, '--pubkey', k.pub, '--json', ...extra], f.dir, env)
   const archive = (env = {}) => {
     const A = (extra = []) => cli(ARCHIVE, ['--data-dir', f.dir, '--industry', 'cosmetic', '--before', '2025-01-01', '--out', f.out, ...extra], f.dir, env)
     const token = A().stdout.match(/口令：(ARCHIVE-[0-9A-F]{16})/)[1]
     return A(['--confirm', token])
   }
-  return { ...f, dest, k, file, verify, archive }
+  return { ...f, dest, k, file, verify, blind, archive }
 }
 const off = (r) => cos(r).offbox
 /** 攻击者：改第 1 行并重算它，再登记一条把新哈希接回第 2 行原 prev_hash 的桥锚点；返回锚点前的 mark */
@@ -1122,5 +1125,253 @@ test('AE5 an audit row that is missing without any archive evidence is uncorrobo
   w.db.prepare('UPDATE audit_anchor_intents SET audit_row_id=61 WHERE id=?').run(intent.id)
   let r = w.verify(['--accept-new-anchors'])
   assert.deepEqual([r.status, off(r).kind], [1, 'intent-uncorroborated'], 'row 61 does not exist and nothing was archived')
+  w.db.close()
+})
+
+
+// ============================================================================
+// AF5（ADR-0055 补充 2）：`--against-backup` 同样做锚点意图对账；"印证行被归档"路径不可达 ⇒ 删除，旧开关变成无效果；密钥保管见 release-signing 测试
+// ============================================================================
+/** 60 行（前 40 行是 2024 年）+ 一份刚做的备份；备份链尾 = id 60 */
+function af5World(t, { env = {} } = {}) {
+  const f = archiveReady(t)
+  const b = cli(BACKUP, ['cosmetic'], f.dir)
+  assert.equal(b.status, 0, b.stdout + b.stderr)
+  const set = path.join(backupDirOf(f.dir), newestBackup(f.dir))
+  const verify = (extra = [], e = {}) => cli(VERIFY, ['--data-dir', f.dir, '--against-backup', set, '--json', ...(extra.includes('--archive-dir') ? [] : ['--archive-dir', f.out]), ...extra], f.dir, { ...env, ...e })
+  const blind = (extra = [], e = {}) => cli(VERIFY, ['--data-dir', f.dir, '--against-backup', set, '--json', ...extra], f.dir, { ...env, ...e })
+  const archive = (e = {}) => {
+    const A = (extra = []) => cli(ARCHIVE, ['--data-dir', f.dir, '--industry', 'cosmetic', '--before', '2025-01-01', '--out', f.out, ...extra], f.dir, e)
+    const token = A().stdout.match(/口令：(ARCHIVE-[0-9A-F]{16})/)[1]
+    return A(['--confirm', token])
+  }
+  return { ...f, set, verify, blind, archive }
+}
+const ab = (r) => cos(r).against_backup
+
+test('AF5 --against-backup: a forged bridge anchor inside the backed-up range without an intent is a rewrite, even though it is only "listed" by --strict-anchors', (t) => {
+  const w = af5World(t)
+  assert.equal(w.verify().status, 0, 'baseline')
+  forgeBridge(w.db)
+  for (const extra of [[], ['--accept-new-anchors'], ['--strict-anchors']]) {
+    const r = w.verify(extra)
+    assert.equal(r.status, 1, r.stdout)
+    assert.deepEqual([ab(r).status, ab(r).kind], ['rewrite', 'anchor-without-intent'])
+    assert.equal(ab(r).anchors_added.length, 1, 'still listed')
+    assert.equal(ab(r).intent_problems[0].anchor, 'retention@2')
+  }
+  w.db.close()
+})
+
+test('AF5 --against-backup: a legitimate archive after the backup passes through its intent without any flag, and signatures are checked with --intent-pubkey', (t) => {
+  const k = ae5Keys(t)
+  const w = af5World(t)
+  const r = w.archive({ GML_ANCHOR_INTENT_KEY: k.priv })
+  assert.equal(r.status, 0, r.stdout + r.stderr)
+  const v = w.verify()
+  assert.equal(v.status, 0, v.stdout)
+  assert.equal(ab(v).anchors_added_in_range, 1)
+  assert.equal(ab(v).intents_checked, 1)
+  const signed = w.verify(['--require-signed-intents', '--intent-pubkey', k.pub])
+  assert.equal(signed.status, 0, signed.stdout)
+  // 另一把公钥：签名密钥对不上 ⇒ 要求签名时失败
+  const other = ae5Keys(t)
+  const wrongKey = w.verify(['--require-signed-intents', '--intent-pubkey', other.pub])
+  assert.deepEqual([wrongKey.status, ab(wrongKey).kind], [1, 'intent-signature-unverifiable'])
+  // 篡改签名
+  const it = w.db.prepare('SELECT * FROM audit_anchor_intents').get()
+  w.db.prepare('UPDATE audit_anchor_intents SET signature=? WHERE id=?').run(it.signature.slice(0, 80) + 'AAAAAA==', it.id)
+  const bad = w.verify(['--intent-pubkey', k.pub])
+  assert.deepEqual([bad.status, ab(bad).kind], [1, 'intent-signature-invalid'])
+  w.db.close()
+})
+
+test('AF5 --against-backup: --require-signed-intents needs --intent-pubkey, and an unsigned intent fails under it', (t) => {
+  const k = ae5Keys(t)
+  const w = af5World(t)
+  assert.equal(w.archive().status, 0)
+  const noKey = w.verify(['--require-signed-intents'])
+  assert.equal(noKey.status, 2, 'there is no --pubkey to fall back to in this mode')
+  assert.match(noKey.stderr, /--intent-pubkey/)
+  const unsigned = w.verify(['--require-signed-intents', '--intent-pubkey', k.pub])
+  assert.deepEqual([unsigned.status, ab(unsigned).kind], [1, 'intent-unsigned'])
+  const plain = w.verify()
+  assert.equal(plain.status, 0)
+  assert.ok(ab(plain).notes.some((n) => /签名未验证|未验证签名/.test(n)), 'says that signatures were not verified when no public key was given')
+  w.db.close()
+})
+
+test('AF5 --against-backup: an intent whose audit row predates the backup tip cannot corroborate (and a forged one with a later row but wrong action fails)', (t) => {
+  const w = af5World(t)
+  const mark = forgeBridge(w.db)
+  const intent = w.db.transaction(() => recordAnchorIntent(w.db, mark, { operation: 'erase', range: 'forged', operatorName: 'mallory' })).immediate()
+  w.db.prepare('UPDATE audit_anchor_intents SET audit_row_id=5 WHERE id=?').run(intent.id)
+  let r = w.verify()
+  assert.deepEqual([r.status, ab(r).kind], [1, 'intent-uncorroborated'])
+  insertAuditRow(w.db, { userName: 'mallory', action: 'UPDATE', module: 'audit', entity: 'audit_logs', entityId: 'cosmetic', detail: { anchor_intent: { id: intent.id, hash: intent.hash } } })
+  w.db.prepare('UPDATE audit_anchor_intents SET audit_row_id=(SELECT MAX(id) FROM audit_logs) WHERE id=?').run(intent.id)
+  r = w.verify()
+  assert.deepEqual([r.status, ab(r).kind], [1, 'intent-uncorroborated'], 'wrong action')
+  w.db.close()
+})
+
+test('AF5 anchors appended after the backup tip are normal growth and are not reconciled (same range rule as --offbox)', (t) => {
+  const w = af5World(t)
+  // 备份之后追加一行，再在其上做一次"保留清理式"受控删除：锚点落在备份链尾之后
+  fill(w.db, 3, 500)
+  const mark = anchorMark(w.db)
+  w.db.transaction(() => deleteAuditRowsAnchored(w.db, 'id = ?', [62], { kind: 'retention', reason: 'retention test' }))()
+  assert.ok(anchorMark(w.db) > mark)
+  const v = w.verify()
+  assert.equal(v.status, 0, v.stdout)
+  assert.equal(ab(v).anchors_added_in_range, 0)
+  assert.equal(ab(v).anchors_added.length, 1)
+  w.db.close()
+})
+
+test('AF5 the "corroborating row was archived" path is unreachable, so it is gone: --accept-new-anchors is inert, a later archive deletes the in-range anchor together with the row', (t) => {
+  const w = ae5World(t)
+  assert.equal(w.archive().status, 0)
+  const a1 = w.db.prepare("SELECT id, at_row_id FROM audit_chain_anchors WHERE kind='archive'").get()
+  const corroborating = w.db.prepare("SELECT id FROM audit_logs WHERE action='AUDIT_ARCHIVE'").get().id
+  assert.ok(a1.at_row_id <= 60 && corroborating > 60, 'anchor is in the anchored range, its corroborating row is after the offbox tip')
+  // 第二次归档把印证行也搬出库（需要它后面还有一行）：同一事务里 at_row_id <= 段尾 的全部旧锚点（含上面这条）一起删除
+  fill(w.db, 1, 1000)
+  const A2 = (extra = []) => cli(ARCHIVE, ['--data-dir', w.dir, '--industry', 'cosmetic', '--before', '2099-01-01', '--out', w.out, ...extra], w.dir)
+  const token = A2().stdout.match(/口令：(ARCHIVE-[0-9A-F]{16})/)[1]
+  const r2 = A2(['--confirm', token])
+  assert.equal(r2.status, 0, r2.stdout + r2.stderr)
+  assert.equal(w.db.prepare('SELECT COUNT(*) n FROM audit_logs WHERE id=?').get(corroborating).n, 0, 'corroborating row is archived')
+  assert.equal(w.db.prepare('SELECT COUNT(*) n FROM audit_chain_anchors WHERE id=?').get(a1.id).n, 0, 'and the in-range anchor went with it: the two never coexist')
+  const ok = w.verify()
+  assert.equal(ok.status, 0, ok.stdout + ok.stderr)
+  // 库内已没有范围内的锚点；第一次归档的锚点现在只存在于第二次归档的摘要里，由摘要 + 归档 JSONL 里的印证行对账（通过）
+  assert.equal(off(ok).anchors_added_in_range, 1)
+  assert.equal(off(ok).archived_anchors_in_range, 1)
+  assert.equal(off(ok).intents_checked, 1)
+  // 攻击者补回一条在范围内的锚点 + 指向已归档行的意图：以前 --accept-new-anchors 会放行它
+  const mark = anchorMark(w.db)
+  const intent = w.db.transaction(() => {
+    w.db.prepare("INSERT INTO audit_chain_anchors (kind, at_row_id, anchor_hash, prev_id, prev_row_hash, reason) VALUES ('retention', 5, ?, 4, ?, 'forged')").run('a'.repeat(64), 'b'.repeat(64))
+    return recordAnchorIntent(w.db, mark, { operation: 'archive', range: 'forged', operatorName: 'mallory' })
+  }).immediate()
+  w.db.prepare('UPDATE audit_anchor_intents SET audit_row_id=? WHERE id=?').run(corroborating, intent.id)
+  for (const extra of [[], ['--accept-new-anchors']]) {
+    const r = w.verify([...extra])
+    assert.equal(r.status, 1, r.stdout)
+    assert.deepEqual([off(r).status, off(r).kind], ['rewrite', 'intent-uncorroborated'])
+  }
+  const flagged = w.verify(['--accept-new-anchors'])
+  assert.match(flagged.stderr, /accept-new-anchors.*(无效|不再)/, 'the removed flag says so instead of silently doing nothing')
+  assert.doesNotMatch(readFileSync(path.join(ROOT, 'server/lib/audit-anchor-intent.js'), 'utf8'), /corroboration-archived|acceptArchived/)
+  w.db.close()
+})
+
+/** 攻击者先伪造桥锚点（备份 / 离机锚点之后），再跑一次合法归档把它连同被改写的行搬进摘要，库里只剩 archive 锚点 */
+function launderThroughArchive(w) {
+  forgeBridge(w.db)
+  const r = w.archive()
+  assert.equal(r.status, 0, r.stdout + r.stderr)
+  assert.equal(w.db.prepare("SELECT COUNT(*) n FROM audit_chain_anchors WHERE kind='retention'").get().n, 0, 'the forged bridge is gone from the live table')
+  const digest = JSON.parse(readFileSync(path.join(w.out, readdirSync(w.out).find((n) => n.endsWith('.digest.json'))), 'utf8'))
+  assert.ok(digest.anchors.some((a) => a.kind === 'retention' && a.at_row_id === 2), 'but the digest still carries it')
+}
+
+test('AF5 --against-backup: a forged bridge laundered out of the live table by a later archive is still reconciled from the archive digest (Codex AF5-H1)', (t) => {
+  const w = af5World(t)
+  launderThroughArchive(w)
+  const r = w.verify()
+  assert.equal(r.status, 1, r.stdout)
+  assert.deepEqual([ab(r).status, ab(r).kind], ['rewrite', 'anchor-without-intent'])
+  assert.equal(ab(r).archived_anchors_in_range, 1)
+  assert.equal(ab(r).intent_problems[0].anchor, 'retention@2')
+  // 没给 --archive-dir：看不到摘要，不能假装对账过——失败闭合（unverifiable），不是静默通过
+  const blind = w.blind()
+  assert.equal(blind.status, 1)
+  assert.deepEqual([ab(blind).status, ab(blind).kind], ['unverifiable', 'archive-evidence-missing'])
+  // 给了目录但里面没有验证通过的摘要（JSONL 被损坏）也一样
+  const damaged = tmp(t, 'os-af5-damaged-')
+  for (const n of readdirSync(w.out)) copyFileSync(path.join(w.out, n), path.join(damaged, n))
+  const jsonl = readdirSync(damaged).find((n) => n.endsWith('.jsonl'))
+  writeFileSync(path.join(damaged, jsonl), readFileSync(path.join(damaged, jsonl), 'utf8').replace('"forged', '"forgeD'))
+  const bad = w.blind(['--archive-dir', damaged])
+  assert.deepEqual([bad.status, ab(bad).kind], [1, 'archive-evidence-missing'])
+  const empty = w.blind(['--archive-dir', tmp(t, 'os-af5-empty-')])
+  assert.deepEqual([empty.status, ab(empty).kind], [1, 'archive-evidence-missing'])
+  w.db.close()
+})
+
+test('AF5 --offbox: the same laundering is caught from the archive digest', (t) => {
+  const w = ae5World(t)
+  launderThroughArchive(w)
+  const r = w.verify()
+  assert.equal(r.status, 1, r.stdout)
+  assert.deepEqual([off(r).status, off(r).kind], ['rewrite', 'anchor-without-intent'])
+  assert.equal(off(r).archived_anchors_in_range, 1)
+  w.db.close()
+})
+
+test('AF5 a legitimate retention-style anchor that was later archived verifies via the archived corroborating row, and archives from before the baseline are not mistaken for new anchors', (t) => {
+  const w = af5World(t)
+  // 基线之前的归档：做过一次，再做备份——它的锚点在摘要里、不在备份清单里，但行号早于备份的 first_id
+  assert.equal(w.archive().status, 0)
+  const b = cli(BACKUP, ['cosmetic'], w.dir)
+  assert.equal(b.status, 0, b.stdout)
+  const set2 = path.join(backupDirOf(w.dir), newestBackup(w.dir))
+  const V2 = (extra = []) => cli(VERIFY, ['--data-dir', w.dir, '--against-backup', set2, '--archive-dir', w.out, '--json', ...extra], w.dir)
+  const v = V2()
+  assert.equal(v.status, 0, v.stdout + v.stderr)
+  assert.equal(ab(v).anchors_added_in_range ?? 0, 0, 'the pre-baseline archive is baseline, not growth')
+  w.db.close()
+})
+
+test('AF5 --against-backup --strict-anchors: an empty-chain baseline still reports added anchors (Codex AF5-M1)', (t) => {
+  const dir = tmp(t)
+  const db = mkDb(dir)
+  const b = cli(BACKUP, ['cosmetic'], dir)
+  assert.equal(b.status, 0, b.stdout + b.stderr)
+  const set = path.join(backupDirOf(dir), newestBackup(dir))
+  fill(db, 4)
+  db.transaction(() => deleteAuditRowsAnchored(db, 'id = ?', [2], { kind: 'retention', reason: 'x' }))()
+  const V = (extra = []) => cli(VERIFY, ['--data-dir', dir, '--against-backup', set, '--json', ...extra], dir)
+  const plain = V()
+  assert.equal(plain.status, 0, plain.stdout)
+  assert.equal(ab(plain).anchors_added.length, 1, 'listed even for an empty baseline')
+  const strict = V(['--strict-anchors'])
+  assert.equal(strict.status, 1)
+  assert.equal(ab(strict).status, 'anchors-changed')
+  db.close()
+})
+
+/** 往归档目录里放一份自洽但不属于本库的单行摘要 + JSONL（Codex AF5 二轮：不连在用库的摘要不能提供锚点清单或印证行） */
+function plantSegment(dir, { id = 9999, action = 'RETENTION_PURGE', detail = '{}', anchors = [] } = {}) {
+  const prev = 'f'.repeat(64)
+  const r = { id, user_id: null, user_name: 'x', action, module: 'audit', entity: 'audit_logs', entity_id: 'c', detail, ip: null, created_at: '2026-10-24 10:00:00', prev_hash: prev }
+  r.row_hash = spec(r, prev)
+  const text = JSON.stringify(r) + '\n'
+  const file = `audit-archive-cosmetic-planted-${id}-${id}.jsonl`
+  writeFileSync(path.join(dir, file), text)
+  writeFileSync(path.join(dir, file.replace(/\.jsonl$/, '.digest.json')), JSON.stringify({ format: 'os-erp-audit-archive/1', industry: 'cosmetic', before: 'planted', rows: 1, first_id: id, last_id: id, first_row_hash: r.row_hash, first_prev_hash: prev, tip_row_hash: r.row_hash, boundary_id: id + 1, file, file_sha256: sha(text), anchors }, null, 2))
+}
+
+test('AF5 a planted, self-consistent archive segment that does not connect to the live database cannot corroborate a forged intent (Codex AF5 round 2)', (t) => {
+  const w = af5World(t)
+  const mark = forgeBridge(w.db)
+  const intent = w.db.transaction(() => recordAnchorIntent(w.db, mark, { operation: 'retention', range: 'forged', operatorName: 'mallory' })).immediate()
+  w.db.prepare('UPDATE audit_anchor_intents SET audit_row_id=9999 WHERE id=?').run(intent.id)
+  plantSegment(w.out, { detail: JSON.stringify({ anchor_intent: { id: intent.id, hash: intent.hash } }) })
+  const r = w.verify()
+  assert.equal(r.status, 1, r.stdout)
+  assert.deepEqual([ab(r).status, ab(r).kind], ['rewrite', 'intent-uncorroborated'])
+  w.db.close()
+})
+
+test('AF5 a planted digest carrying an unrelated anchor does not make a legitimate archive fail (only digests connected to the live database count)', (t) => {
+  const w = af5World(t)
+  assert.equal(w.archive().status, 0)
+  plantSegment(w.out, { anchors: [{ kind: 'retention', at_row_id: 5, anchor_hash: 'a'.repeat(64), prev_id: 4, prev_row_hash: 'b'.repeat(64), reason: 'noise', created_at: '2026-01-01 00:00:00' }] })
+  const r = w.verify()
+  assert.equal(r.status, 0, r.stdout)
+  assert.equal(ab(r).anchors_added_in_range, 1, 'only the real archive anchor')
   w.db.close()
 })

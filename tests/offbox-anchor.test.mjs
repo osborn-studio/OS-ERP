@@ -80,7 +80,7 @@ function keys(t) {
 function fixturePackage(t) {
   const pkg = tmp(t, 'os-ad5-pkg-')
   const put = (rel, content) => { mkdirSync(path.dirname(path.join(pkg, rel)), { recursive: true }); writeFileSync(path.join(pkg, rel), content) }
-  for (const f of ['scripts/verify-release.mjs', ...readdirSync(path.join(ROOT, 'scripts/lib')).filter((x) => /^(evidence-sign|evidence-log|fs-fault|safe-path|tests-tree|offbox-anchor)\.mjs$/.test(x)).map((x) => `scripts/lib/${x}`)]) put(f, readFileSync(path.join(ROOT, f)))
+  for (const f of ['scripts/verify-release.mjs', ...readdirSync(path.join(ROOT, 'scripts/lib')).filter((x) => /^(evidence-sign|evidence-log|fs-fault|safe-path|tests-tree|offbox-anchor|sbom-diff)\.mjs$/.test(x)).map((x) => `scripts/lib/${x}`)]) put(f, readFileSync(path.join(ROOT, f)))
   put('THIRD_PARTY_NOTICES.md', 'notices\n'); put('CHANGELOG.md', '<!-- generated -->\n')
   put('release/sbom.cdx.json', JSON.stringify({ bomFormat: 'CycloneDX', specVersion: '1.5', components: [{ name: 'x', version: '1', 'bom-ref': 'x@1' }] }))
   const files = {}
@@ -382,4 +382,19 @@ test('ssh destination: unknown alias, missing remote directory, a failing scp, a
   assert.notEqual(go('ssh://backup-box/backups/anchors', { ...f.env, OS_ERP_SCP: broken }).status, 0)
   assert.deepEqual(readdirSync(path.join(f.remote, 'backups/anchors')), [])
   w.db.close()
+})
+
+test('AF5 docs: the daily procedure shows the full command set (anchor, intent key custody, verify with --require-signed-intents, against-backup) and no longer advertises the removed flag as a way to accept anchors', () => {
+  const doc = readFileSync(new URL('../docs/operations/audit-integrity.md', import.meta.url), 'utf8')
+  const daily = doc.slice(doc.indexOf('## 8. 每日锚点'), doc.indexOf('### 8b.'))
+  for (const needle of ['release-keygen.mjs --out', '--purpose anchor-intent', 'GML_ANCHOR_INTENT_KEY', 'scripts/offbox-anchor.mjs', '--require-signed-intents', '--intent-pubkey', '--against-backup']) {
+    assert.ok(daily.includes(needle) || doc.includes(needle), `audit-integrity.md mentions ${needle}`)
+  }
+  assert.match(daily, /--offbox [^\n]*--require-signed-intents/, 'the daily verify command carries --require-signed-intents')
+  assert.match(daily, /--against-backup [^\n]*--require-signed-intents[^\n]*--intent-pubkey|--against-backup[^\n]*--intent-pubkey[^\n]*--require-signed-intents/, 'and so does the backup comparison')
+  const b = doc.slice(doc.indexOf('### 8b.'))
+  assert.doesNotMatch(b, /只接受“意图齐全，但印证它的审计行已被后来的归档搬出库”/)
+  assert.match(b, /--accept-new-anchors[^\n]*(无效|不再)/)
+  assert.doesNotMatch(b, /仍按 §6 列出/, 'the --against-backup limitation line is gone')
+  assert.match(b, /--purpose anchor-intent/)
 })

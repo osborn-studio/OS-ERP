@@ -15,6 +15,8 @@
  *   · 审计链：对每个存在的行业库只读取 verifyChain；链已断 ⇒ 拒绝出锚点（不给坏链背书）。
  *   · 测试接缝：OS_ERP_SSH / OS_ERP_SCP 指向替身；只设 OS_ERP_SSH 而不设 OS_ERP_SCP ⇒ 拒绝（不让真 scp 经替身 ssh 出网）。
  *   退出码：0 成功；1 拒绝（链/日志无效、写入失败）；2 用法错误。
+ * 【每日流程（AF5）】锚点之后，复核方用 `audit-verify-chain --offbox <文件> --pubkey <公钥> --intent-pubkey <意图公钥> --require-signed-intents`（推荐总带后两项）；
+ *   意图签名密钥用 `release-keygen.mjs --purpose anchor-intent` 生成、放在执行清理 / 归档 / 抹除的操作机上。完整命令集见 docs/operations/audit-integrity.md §8。
  * 【验证】audit-verify-chain --offbox <文件> --pubkey <公钥>；verify-release --log --offbox <文件> --pubkey <公钥>。
  * ============================================================================
  */

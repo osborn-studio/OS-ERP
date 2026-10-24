@@ -214,10 +214,15 @@
 |---|---|---|---|---|
 | `MANIFEST_FORMAT` | const | — | — | — |
 | `anchorsDigest` | fn | — | — | — |
+| `archiveEvidence` | fn | — | — | — |
+| `archivedAnchorsSince` | fn | — | — | — |
+| `archivedRowLookup` | fn | — | — | — |
 | `buildManifest` | fn | — | — | — |
 | `compareLiveToBackup` | fn | — | — | — |
+| `connectedArchive` | fn | — | — | — |
 | `forEachJsonlRow` | fn | — | — | — |
 | `loadBackupManifest` | fn | — | — | — |
+| `openArchiveIndex` | fn | — | — | — |
 | `sha256FileSync` | fn | — | — | — |
 | `summarizeAuditChain` | fn | — | — | — |
 | `withoutAnchorList` | fn | — | — | — |

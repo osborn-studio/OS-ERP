@@ -155,11 +155,13 @@ export function loadBackupManifest(set, key) {
   return { ok: true, manifest, source, notes }
 }
 
-/** 在 archiveDir 里找摘要，证明"备份尾行 T 在被归档的段里、行哈希相同，且该段一路接到在用库的 archive 锚点" */
-function proveViaArchive(live, T, tipHash, archiveDir, industry, liveFirstId) {
-  if (!archiveDir) return { status: 'unverifiable', message: '备份尾行已被归档搬出库；请用 --archive-dir 指向归档摘要目录' }
+/**
+ * 打开 archiveDir 的归档摘要索引：只收本行业、格式正确的摘要；`fileOk(d)` 对 JSONL 逐行重算哈希并核对摘要的行数 / 端点 / 首行 prev_hash / 段尾（带缓存）。
+ * 摘要和 JSONL 都在可被改的介质上，所以除 sha256 外必须逐行验链；验不过的摘要不被任何用途采信。
+ */
+export function openArchiveIndex(archiveDir, industry) {
   const digests = []
-  for (const f of fs.existsSync(archiveDir) ? fs.readdirSync(archiveDir) : []) {
+  for (const f of archiveDir && fs.existsSync(archiveDir) ? fs.readdirSync(archiveDir) : []) {
     if (!f.endsWith('.digest.json')) continue
     try {
       const d = JSON.parse(fs.readFileSync(path.join(archiveDir, f), 'utf8'))
@@ -167,7 +169,6 @@ function proveViaArchive(live, T, tipHash, archiveDir, industry, liveFirstId) {
     } catch { /* 无法解析的文件忽略 */ }
   }
   const okFiles = new Map()
-  // 摘要和 JSONL 都在可被改的介质上：除了 sha256，还要逐行重算哈希、核对链衔接与摘要的行数 / 端点 / 首行 prev_hash / 段尾
   const fileOk = (d) => {
     if (!okFiles.has(d)) {
       const p = path.join(archiveDir, path.basename(d.file))
@@ -180,6 +181,84 @@ function proveViaArchive(live, T, tipHash, archiveDir, industry, liveFirstId) {
     }
     return okFiles.get(d)
   }
+  return { digests, fileOk }
+}
+
+/**
+ * 与在用库**连得上**的归档摘要链（AF5）：从在用库第一行的 `archive` 锚点（at_row_id = 在用库最小审计行 id，anchor_hash = 摘要段尾）往回，
+ * 沿 `boundary_id` / `first_prev_hash` / `tip_row_hash` 一段一段接上去，每段 JSONL 都必须验证通过。不在这条链上的摘要（目录里被人放进来的、
+ * 自洽但不属于本库的文件）既不能提供锚点清单也不能提供印证行。返回 [最新段, …, 最旧段]；在用库第一行不是 archive 边界 ⇒ []。
+ */
+export function connectedArchive(live, index) {
+  const first = live.prepare('SELECT MIN(id) AS id FROM audit_logs').get().id
+  if (first == null) return []
+  const hashes = new Set(live.prepare("SELECT anchor_hash FROM audit_chain_anchors WHERE kind='archive' AND at_row_id=?").all(first).map((r) => r.anchor_hash))
+  const chain = []
+  let cur = index.digests.find((d) => d.boundary_id === first && hashes.has(d.tip_row_hash) && index.fileOk(d))
+  while (cur && !chain.includes(cur)) {
+    chain.push(cur)
+    cur = index.digests.find((d) => d.boundary_id === chain.at(-1).first_id && d.tip_row_hash === chain.at(-1).first_prev_hash && index.fileOk(d))
+  }
+  return chain
+}
+
+/**
+ * 基线（备份清单 / 离机锚点条目 `base` = { first_id, last_id, anchors }）之后，基线时存活的行是否被归档搬出过库、因而需要归档证据（AF5）：
+ * 在用库第一行是 `archive` 锚点的边界、且 id 大于基线 first_id。需要时 `connectedArchive` 必须一路接到覆盖 `base.first_id` 的那一段，否则对账是盲的。
+ * 返回 { needed, ok, chain }。
+ */
+export function archiveEvidence(live, index, base) {
+  const first = live.prepare('SELECT MIN(id) AS id FROM audit_logs').get().id
+  if (base.first_id == null || base.last_id == null || first == null || first <= base.first_id) return { needed: false, ok: true, chain: [] }
+  const boundary = live.prepare("SELECT 1 FROM audit_chain_anchors WHERE kind='archive' AND at_row_id=? LIMIT 1").get(first)
+  const chain = connectedArchive(live, index)
+  if (!boundary) return { needed: false, ok: true, chain }
+  return { needed: true, ok: chain.length > 0 && chain.at(-1).first_id <= base.first_id, chain }
+}
+
+/**
+ * 基线之后被归档搬出库的锚点（AF5）：在**连得上、验证通过的**摘要（`connectedArchive`）里、`first_id ≤ at_row_id ≤ last_id`（基线时存活行上的锚点）
+ * 且不在基线锚点清单里的锚点。早于基线的归档只涉及 `< first_id` 的行，不在此列；基线之后的追加区间（`> last_id`）是正常增长。
+ * 这些锚点已不在库里，却仍被摘要用来承认 JSONL 里的断口——伪造的桥锚点可以借一次归档洗出库，所以也要做意图对账。
+ * `chain` = connectedArchive 的结果。
+ */
+export function archivedAnchorsSince(chain, { first_id: firstId, last_id: lastId, anchors }) {
+  if (firstId == null || lastId == null || !Array.isArray(anchors)) return []
+  const had = new Set(anchors.map(anchorKey))
+  const out = []
+  const seen = new Set()
+  for (const d of chain) {
+    if (!Array.isArray(d.anchors)) continue
+    for (const a of d.anchors) {
+      if (!a || typeof a !== 'object' || !Number.isSafeInteger(a.at_row_id) || a.at_row_id < firstId || a.at_row_id > lastId) continue
+      const k = anchorKey(a)
+      if (had.has(k) || seen.has(k)) continue
+      seen.add(k)
+      out.push(a)
+    }
+  }
+  return out
+}
+
+/** 在连得上的归档链的 JSONL 里按 id 找审计行（{ id, action, detail }）；没有 ⇒ null */
+export function archivedRowLookup(chain, index) {
+  return (id) => {
+    for (const d of chain) {
+      if (!(d.first_id <= id && id <= d.last_id)) continue
+      const file = index.fileOk(d)
+      if (!file) continue
+      let found = null
+      forEachJsonlRow(file, (r) => { if (r.id === id) { found = { id: r.id, action: r.action, detail: r.detail }; return false } return true })
+      if (found) return found
+    }
+    return null
+  }
+}
+
+/** 在 archiveDir 里找摘要，证明"备份尾行 T 在被归档的段里、行哈希相同，且该段一路接到在用库的 archive 锚点" */
+function proveViaArchive(live, T, tipHash, archiveDir, industry, liveFirstId) {
+  if (!archiveDir) return { status: 'unverifiable', message: '备份尾行已被归档搬出库；请用 --archive-dir 指向归档摘要目录' }
+  const { digests, fileOk } = openArchiveIndex(archiveDir, industry)
   let cur = digests.find((d) => d.first_id <= T && T <= d.last_id && fileOk(d))
   if (!cur) return { status: 'unverifiable', message: `${archiveDir} 里没有覆盖 id=${T} 且 JSONL 校验通过的归档摘要` }
   let rowHash = null
@@ -202,11 +281,13 @@ export function compareLiveToBackup(live, manifest, { archiveDir = null } = {}) 
   const out = { backup_tip_id: B.last_id ?? null, backup_tip_hash: B.tip_hash ?? null, backup_verified: !!B.verified }
   if (!B.present) return { ...out, status: 'unverifiable', message: '备份时库里没有审计哈希链（迁移 068 之前），没有可比对的链尾' }
   if (B.verified !== true) return { ...out, status: 'unverifiable', kind: 'backup-chain-broken', message: `备份时链校验就未通过（${JSON.stringify(B.break ?? null)}）：不能把它当作基线` }
-  if (!B.tip_hash) return { ...out, status: 'ok', note: '备份时审计链为空（已校验），无可比对的链尾' }
   const span = live.prepare('SELECT MAX(id) AS last, MIN(id) AS first FROM audit_logs').get()
-  const at = live.prepare('SELECT row_hash FROM audit_logs WHERE id=?').get(B.last_id)
+  const at = B.tip_hash ? live.prepare('SELECT row_hash FROM audit_logs WHERE id=?').get(B.last_id) : null
   let verdict
-  if (at) {
+  // 空链基线没有可比对的链尾，但仍要做下面的锚点增删清单（--strict-anchors 不能因为基线为空就失效，Codex AF5）
+  if (!B.tip_hash) {
+    verdict = { status: 'ok', note: '备份时审计链为空（已校验），无可比对的链尾' }
+  } else if (at) {
     verdict = at.row_hash === B.tip_hash
       ? { status: 'ok', via: 'live' }
       : { status: 'rewrite', kind: 'tip-row-differs', message: `在用库 id=${B.last_id} 的 row_hash 与备份记录不同（链被改写并重算？也可能是备份之后做过隐私抹除，需对照操作记录）`, live_row_hash: at.row_hash }
@@ -218,7 +299,7 @@ export function compareLiveToBackup(live, manifest, { archiveDir = null } = {}) 
     verdict = { status: 'unverifiable', message: `备份链尾 id=${B.last_id} 在在用库的 id 范围内但已不存在（被保留清理删除？）；无法证明后代关系` }
   }
   const result = { ...out, ...verdict }
-  if (verdict.status === 'ok') result.advanced_rows = live.prepare('SELECT COUNT(*) AS n FROM audit_logs WHERE id > ?').get(B.last_id).n
+  if (verdict.status === 'ok' && B.tip_hash) result.advanced_rows = live.prepare('SELECT COUNT(*) AS n FROM audit_logs WHERE id > ?').get(B.last_id).n
   if (Array.isArray(B.anchors)) {
     const liveAnchors = live.prepare(`SELECT ${ANCHOR_COLS} FROM audit_chain_anchors ORDER BY id`).all()
     const had = new Set(B.anchors.map(anchorKey))
