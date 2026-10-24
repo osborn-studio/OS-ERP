@@ -921,3 +921,82 @@ test('AC1: MCP purchase tools, dealer summary and master aggregates follow the w
     assert.equal((await api('/api/master/scan?code=AC1-SN-B', { token: f.admin })).status, 200)
   })
 })
+
+// AD1（ADR-0053）：指标接口按范围收口；没有范围语义的指标对受限调用者标 scoped:false；dealer summary 要采购查看权限。
+test('AD1: /api/metrics values / catalog / dictionary follow the warehouse-org scope and flag global-only metrics (ADR-0053)', { timeout: 300000 }, async (t) => {
+  const f = await server(t)
+  const { db, api } = f
+  const whA = db.prepare("SELECT id, org_id FROM warehouses WHERE code='WH01'").get()
+  const whB = db.prepare("SELECT id, org_id FROM warehouses WHERE code='WH03'").get()
+  assert.notEqual(whA.org_id, whB.org_id)
+  const supplierId = db.prepare('SELECT id FROM suppliers ORDER BY id LIMIT 1').get().id
+  const sku = db.prepare('SELECT id FROM product_skus ORDER BY id LIMIT 1').get().id
+  const adj = async (wh, qty, batch) => okData(await api('/api/inventory/adjust', { token: f.admin, body: { warehouse_id: wh, sku_id: sku, batch_no: batch, qty, direction: 'in', reason: 'ad1' } }))
+  await adj(whA.id, 4, 'AD1-A'); await adj(whB.id, 9, 'AD1-B')
+  const insPo = db.prepare("INSERT INTO purchase_orders (doc_no, supplier_id, warehouse_id, order_date, status, total_amount) VALUES (?,?,?,date('now','localtime'),?,?)")
+  insPo.run('AD1-PO-A', supplierId, whA.id, 'approved', 100)
+  insPo.run('AD1-PO-A-D', supplierId, whA.id, 'draft', 10)
+  insPo.run('AD1-PO-B', supplierId, whB.id, 'approved', 1000)
+  const A = await f.account('ad1_wh_a', 'warehouse', { org_id: whA.org_id, data_scope: 'org' })
+  const N = await f.account('ad1_wh_none', 'warehouse', { data_scope: 'org' })
+  const inScope = `warehouse_id IN (SELECT id FROM warehouses WHERE org_id=${whA.org_id})`
+  const sum = (sql) => db.prepare(sql).get().v
+  const keys = 'stock_qty,available_qty,stock_amount,below_safe,expiring_qty,turnover_days,purchase_amount,purchase_amount_effective,closed_order_ratio,sales_amount,gmv,payable_open,approval_pending'
+  const vals = async (token) => okData(await api(`/api/metrics/values?keys=${keys}`, { token }))
+
+  await t.test('restricted stock / purchase metrics equal the in-scope sums; global caller unchanged', async () => {
+    const a = await vals(A.token)
+    assert.equal(a.values.stock_qty, sum(`SELECT COALESCE(SUM(qty_on_hand),0) v FROM inventory_stocks WHERE ${inScope}`))
+    assert.equal(a.values.available_qty, sum(`SELECT COALESCE(SUM(qty_on_hand-qty_reserved),0) v FROM inventory_stocks WHERE ${inScope}`))
+    assert.equal(a.values.stock_amount, Math.round(sum(`SELECT COALESCE(SUM(cost_amount),0) v FROM inventory_stocks WHERE ${inScope}`) * 100) / 100)
+    assert.equal(a.values.purchase_amount, sum(`SELECT COALESCE(SUM(total_amount),0) v FROM purchase_orders WHERE status<>'cancelled' AND ${inScope}`))
+    assert.equal(a.values.purchase_amount_effective, sum(`SELECT COALESCE(SUM(total_amount),0) v FROM purchase_orders WHERE status NOT IN ('draft','cancelled') AND ${inScope}`))
+    const g = await vals(f.admin)
+    assert.equal(g.values.stock_qty, sum('SELECT COALESCE(SUM(qty_on_hand),0) v FROM inventory_stocks'))
+    assert.equal(g.values.purchase_amount, sum("SELECT COALESCE(SUM(total_amount),0) v FROM purchase_orders WHERE status<>'cancelled'"))
+    assert.ok(g.values.stock_qty > a.values.stock_qty && g.values.purchase_amount > a.values.purchase_amount)
+  })
+
+  await t.test('scoped flags: scope-aware metrics true, global-only finance / sales false for restricted callers, all true for global', async () => {
+    const a = await vals(A.token)
+    for (const k of ['stock_qty', 'available_qty', 'stock_amount', 'below_safe', 'expiring_qty', 'turnover_days', 'purchase_amount', 'purchase_amount_effective', 'closed_order_ratio']) assert.equal(a.scoped[k], true, k)
+    for (const k of ['sales_amount', 'gmv', 'payable_open', 'approval_pending']) assert.equal(a.scoped[k], false, k)
+    const g = await vals(f.admin)
+    assert.ok(Object.values(g.scoped).every((x) => x === true), 'a global caller sees every metric as scoped:true')
+  })
+
+  await t.test('empty scope reads zero for scope-aware metrics, never the global number', async () => {
+    const n = await vals(N.token)
+    assert.equal(n.values.stock_qty, 0)
+    assert.equal(n.values.purchase_amount, 0)
+    assert.equal(n.scoped.sales_amount, false)
+  })
+
+  await t.test('catalog and dictionary expose the same scoped flag per item', async () => {
+    const cat = okData(await api('/api/metrics/catalog', { token: A.token })).items
+    const by = Object.fromEntries(cat.map((x) => [x.key, x]))
+    assert.equal(by.stock_qty.scoped, true)
+    assert.equal(by.stock_qty.value, sum(`SELECT COALESCE(SUM(qty_on_hand),0) v FROM inventory_stocks WHERE ${inScope}`))
+    assert.equal(by.sales_amount.scoped, false)
+    const dict = okData(await api('/api/metrics?days=30', { token: A.token })).groups.flatMap((g) => g.items)
+    assert.equal(dict.find((x) => x.key === 'purchase_amount').scoped, true)
+    assert.equal(dict.find((x) => x.key === 'gmv').scoped, false)
+    const adm = okData(await api('/api/metrics/catalog', { token: f.admin })).items
+    assert.ok(adm.every((x) => x.scoped === true))
+  })
+
+  await t.test('dealer summary needs a purchase view permission (PO_READ_PERMS)', async () => {
+    const perms = ['purchase.order.view', 'purchase.inbound', 'purchase.return']
+    const had = db.prepare(`SELECT perm_code FROM role_permissions WHERE role_code='warehouse' AND perm_code IN (${perms.map(() => '?').join(',')})`).all(...perms).map((r) => r.perm_code)
+    db.prepare(`DELETE FROM role_permissions WHERE role_code='warehouse' AND perm_code IN (${perms.map(() => '?').join(',')})`).run(...perms)
+    try {
+      const body = { startDate: '2099-01-01', endDate: '2099-01-31', include_requests: false, warehouse_id: whA.id }
+      expectStatus(await api('/api/demand/dealer/summary', { token: A.token, body }), 403, 'no purchase view perm')
+      db.prepare('INSERT OR IGNORE INTO role_permissions (role_code, perm_code) VALUES (?,?)').run('warehouse', 'purchase.order.view')
+      expectStatus(await api('/api/demand/dealer/summary', { token: A.token, body }), 200, 'with purchase.order.view')
+      assert.equal((await api('/api/demand/dealer/summary', { token: f.admin, body })).status, 200)
+    } finally {
+      for (const p of had) db.prepare('INSERT OR IGNORE INTO role_permissions (role_code, perm_code) VALUES (?,?)').run('warehouse', p)
+    }
+  })
+})

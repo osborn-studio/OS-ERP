@@ -42,7 +42,8 @@ import {
   // （`POST /orders/:id/status {"action":"receive"}` 一路 200、账却不动）。
   // 现在 HTTP / MCP / 通用流转入口三条路调**同一份**，被拒时的码与文案逐字相同。
   assertNotParamOnly,
-  purchaseOrderScopeSql
+  purchaseOrderScopeSql,
+  PO_READ_PERMS
 } from '../lib/purchase.js'
 import {
   DocFlowError, getDocType, assertEdgePermitted, dispatchTransition, docInScope, docScopeOf
@@ -1028,23 +1029,29 @@ export const TOOLS = [
     inputSchema: { type: 'object', properties: { currency: S.str('币种，默认 CNY') } },
     handler({ db, args, ctx }) {
       const cur = args.currency || 'CNY'
-      const f = invFilter(ctx, 's', 'owner_org_id') // ADR-0050（Codex）：库存价值同样叠加仓库组织范围
-      const stockValue = db.prepare(`SELECT ROUND(SUM(cost_amount),2) v, COUNT(*) c FROM inventory_stocks s WHERE s.currency=? ${f.sql}`).get(cur, ...f.params)
-      const skuCount = db.prepare('SELECT COUNT(*) c FROM product_skus').get().c
-      const entities = scopeEntityIds(ctx, db)
-      const salesScope = entityScopeClause(entities, { stores: ['store_id'], dealers: ['dealer_id'], warehouses: ['warehouse_id'] }, { alias: 'so' })
-      const poScope = purchaseOrderScopeSql(ctx.scope, 'po')
-      const purchaseScope = { sql: ` AND ${poScope.sql} `, params: poScope.params }
-      const pendingShip = db.prepare(`SELECT COUNT(*) c FROM sales_orders so WHERE status IN ('confirmed','pending','approved') ${salesScope.sql}`).get(...salesScope.params).c
-      const purchaseInTransit = db.prepare(`SELECT COUNT(*) c FROM purchase_orders po WHERE status IN ('approved','partial') ${purchaseScope.sql}`).get(...purchaseScope.params).c
-      return ok({
-        currency: cur,
-        stock_value: stockValue.v || 0,
-        stock_rows: stockValue.c,
-        sku_count: skuCount,
-        pending_shipment_orders: pendingShip,
-        purchase_in_transit: purchaseInTransit
-      }, `库存总值 ${stockValue.v || 0} ${cur}`)
+      // ADR-0053：子项按所有者此刻的查看权限取舍，缺权限的子项省略（不是 403）；无主令牌不做功能权限判断（与其他工具一致）
+      const owner = ownerPermCtx(db, ctx)
+      const may = (...codes) => !owner || codes.some((c) => hasPerm(owner, c))
+      const out = { currency: cur }
+      let summary = ''
+      if (may('inventory.stock.view')) {
+        const f = invFilter(ctx, 's', 'owner_org_id') // ADR-0050（Codex）：库存价值同样叠加仓库组织范围
+        const stockValue = db.prepare(`SELECT ROUND(SUM(cost_amount),2) v, COUNT(*) c FROM inventory_stocks s WHERE s.currency=? ${f.sql}`).get(cur, ...f.params)
+        out.stock_value = stockValue.v || 0
+        out.stock_rows = stockValue.c
+        summary = `库存总值 ${out.stock_value} ${cur}`
+      }
+      out.sku_count = db.prepare('SELECT COUNT(*) c FROM product_skus').get().c
+      if (may('sales.order.view')) {
+        const entities = scopeEntityIds(ctx, db)
+        const salesScope = entityScopeClause(entities, { stores: ['store_id'], dealers: ['dealer_id'], warehouses: ['warehouse_id'] }, { alias: 'so' })
+        out.pending_shipment_orders = db.prepare(`SELECT COUNT(*) c FROM sales_orders so WHERE status IN ('confirmed','pending','approved') ${salesScope.sql}`).get(...salesScope.params).c
+      }
+      if (may(...PO_READ_PERMS)) {
+        const poScope = purchaseOrderScopeSql(ctx.scope, 'po')
+        out.purchase_in_transit = db.prepare(`SELECT COUNT(*) c FROM purchase_orders po WHERE status IN ('approved','partial') AND ${poScope.sql}`).get(...poScope.params).c
+      }
+      return ok(out, summary || '经营看板（部分子项因权限省略）')
     }
   },
   {
