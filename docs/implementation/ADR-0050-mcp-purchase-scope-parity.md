@@ -33,7 +33,13 @@
 
 ## Codex 审计
 
-（见下，审计后补写。）
+`codex exec -m gpt-6.1-sol --sandbox read-only`，静态审查（未跑测试）。确认：`purchase.list_orders` 谓词与 HTTP 一致，商品 / SKU 汇总与仓库计数 SQL 无新缺陷。发现与处理：
+
+- **高** `master.get_product_360` 的库存与流水只按货主过滤（A 货主、B 仓的货可见）：**已修**（改 `invFilter`，叠加仓库组织范围；新增断言）。
+- **高** `report.dashboard_kpi` 的 `stock_value` / `stock_rows` 同样只按货主：**已修**（`invFilter`；新增断言）。
+- 中 `GET /api/master/scan` 序列号分支未按仓库范围：**已修**（`stockScopeSql(req.orgScope,'sn')`；仓库为空的序列号〔如已出库〕对受限范围不可见，宁可看不到）。新增断言。
+- **高** `GET /api/metrics`、`/metrics/values`、`/catalog` 的 `stock_qty` / `purchase_amount*` 为全局口径，受限的仓管 / 门店 / 经销商角色默认持有 `system:metrics:view`：**未修，open**——指标计算函数全局无 `orgScope` 形参，改法（给指标加范围参数，或对取值端点加 `requireGlobalData`）会改变前端指标页对受限角色的行为，需单独设计，不在 AC1 文件清单内。
+- 中 `report.dashboard_kpi` 的 `perms: []`，所有者无采购查看权限仍可取 `purchase_in_transit`；`POST /dealer/summary` 同样不要求 `PO_READ_PERMS` 就返回在途采购量：**未修，open**（功能权限而非数据范围问题；需拆分复合工具 / 字段级权限，涉及 `check-mcp-coverage` 与矩阵的 PERM_FREE_READS 约定）。
 
 ## 验证入口
 

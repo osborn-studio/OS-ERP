@@ -903,4 +903,21 @@ test('AC1: MCP purchase tools, dealer summary and master aggregates follow the w
     assert.equal(ov.warehouses, db.prepare("SELECT COUNT(*) c FROM warehouses WHERE status='active' AND org_id=?").get(whA.org_id).c)
     assert.equal(okData(await api('/api/master/overview', { token: f.admin })).warehouses, db.prepare("SELECT COUNT(*) c FROM warehouses WHERE status='active'").get().c)
   })
+
+  await t.test('Codex follow-ups: A-owned stock in a foreign warehouse stays out of KPI / product 360, and foreign serials do not scan', async () => {
+    const putStock = (wh, batch) => engine.applyStockIn(db, { bizDate: new Date().toISOString().slice(0, 10), docType: 'ADJ_IN', docNo: `AC1-${batch}`, warehouseId: wh, ownerOrgId: whA.org_id, skuId: sku, batchNo: batch, qty: 6, unitCost: 2, expireAt: '2099-01-01 00:00:00', source: 'test', operator: 'ac1' })
+    putStock(whA.id, 'AC1-OWN-A')
+    putStock(whB.id, 'AC1-OWN-A-IN-B')
+    const scopeOwn = { scope: 'restricted', orgIds: [whA.org_id] }
+    const productId = db.prepare('SELECT product_id FROM product_skus WHERE id=?').get(sku).product_id
+    const batches = call('master.get_product_360', { product_id: productId }, scopeOwn).data.stocks.map((x) => x.batch_no)
+    assert.ok(batches.includes('AC1-OWN-A') && !batches.includes('AC1-OWN-A-IN-B'), `product 360: ${batches}`)
+    const expect = db.prepare('SELECT ROUND(SUM(cost_amount),2) v FROM inventory_stocks s WHERE s.currency=? AND s.owner_org_id IN (?) AND s.warehouse_id IN (SELECT id FROM warehouses WHERE org_id=?)').get('CNY', whA.org_id, whA.org_id).v || 0
+    assert.equal(call('report.dashboard_kpi', {}, scopeOwn).data.stock_value, expect)
+    db.prepare("INSERT INTO serial_numbers (serial_no, sku_id, warehouse_id, status) VALUES ('AC1-SN-B', ?, ?, 'in_stock')").run(sku, whB.id)
+    db.prepare("INSERT INTO serial_numbers (serial_no, sku_id, warehouse_id, status) VALUES ('AC1-SN-A', ?, ?, 'in_stock')").run(sku, whA.id)
+    assert.equal((await api('/api/master/scan?code=AC1-SN-A', { token: A.token })).status, 200)
+    expectStatus(await api('/api/master/scan?code=AC1-SN-B', { token: A.token }), 404, 'foreign serial')
+    assert.equal((await api('/api/master/scan?code=AC1-SN-B', { token: f.admin })).status, 200)
+  })
 })

@@ -398,15 +398,15 @@
 | `master.js:281` | USE | `/api/master/dealers` | GATED | requireAuth → requireInternal | lib/crud.js: crudRouter | dealers | audit_logs, users |
 | `master.js:283` | USE | `/api/master/platforms` | GATED | requireAuth → requireInternal | lib/crud.js: crudRouter | platforms | audit_logs, users |
 | `master.js:286` | GET | `/api/master/scan` | GATED | requireAuth → requireInternal → requireAuth → attachOrgScope | lib/stock.js: stockScopeSql | brands, inventory_stocks, product_skus, products, serial_numbers, warehouses | orgs, roles, users |
-| `master.js:324` | GET | `/api/master/bundles` | GATED | requireAuth → requireInternal → requireAuth → attachOrgScope | lib/stock.js: stockScopeSql | bundle_components, inventory_stocks, product_skus | orgs, roles, users, warehouses |
-| `master.js:359` | GET | `/api/master/bundles/:id` | GATED | requireAuth → requireInternal → requireAuth | — | assembly_orders, bundle_components, bundles, product_skus, products | users |
-| `master.js:384` | POST | `/api/master/bundles` | GATED | requireAuth → requireInternal → requireAuth → requireRole | — | bundle_components, bundles | audit_logs, users |
-| `master.js:417` | PUT | `/api/master/bundles/:id` | GATED | requireAuth → requireInternal → requireAuth → requireRole | — | bundle_components, bundles | audit_logs, users |
-| `master.js:449` | GET | `/api/master/locations` | GATED | requireAuth → requireInternal → requireAuth → attachOrgScope | lib/stock.js: stockScopeSql | inventory_stocks, warehouse_locations, warehouses | orgs, roles, users |
-| `master.js:475` | POST | `/api/master/locations` | GATED | requireAuth → requireInternal → requireAuth → requireRole → attachOrgScope | lib/stock.js: assertWarehouseInScope | warehouse_locations | audit_logs, orgs, roles, users, warehouses |
-| `master.js:497` | GET | `/api/master/options` | GATED | requireAuth → requireInternal → requireAuth → attachOrgScope | lib/stock.js: stockScopeSql | brands, bundles, categories, dealers, platforms, product_skus, products, stores, suppliers, warehouses | orgs, roles, users |
-| `master.js:547` | GET | `/api/master/overview` | GATED | requireAuth → requireInternal → requireAuth → attachOrgScope | lib/stock.js: stockScopeSql | dealers, platforms, product_skus, products, stores, suppliers, warehouses | orgs, roles, users |
-| `master.js:571` | USE | `/api/master/inv-txn-types` | GATED | requireAuth → requireInternal | — | — | — |
+| `master.js:325` | GET | `/api/master/bundles` | GATED | requireAuth → requireInternal → requireAuth → attachOrgScope | lib/stock.js: stockScopeSql | bundle_components, inventory_stocks, product_skus | orgs, roles, users, warehouses |
+| `master.js:360` | GET | `/api/master/bundles/:id` | GATED | requireAuth → requireInternal → requireAuth | — | assembly_orders, bundle_components, bundles, product_skus, products | users |
+| `master.js:385` | POST | `/api/master/bundles` | GATED | requireAuth → requireInternal → requireAuth → requireRole | — | bundle_components, bundles | audit_logs, users |
+| `master.js:418` | PUT | `/api/master/bundles/:id` | GATED | requireAuth → requireInternal → requireAuth → requireRole | — | bundle_components, bundles | audit_logs, users |
+| `master.js:450` | GET | `/api/master/locations` | GATED | requireAuth → requireInternal → requireAuth → attachOrgScope | lib/stock.js: stockScopeSql | inventory_stocks, warehouse_locations, warehouses | orgs, roles, users |
+| `master.js:476` | POST | `/api/master/locations` | GATED | requireAuth → requireInternal → requireAuth → requireRole → attachOrgScope | lib/stock.js: assertWarehouseInScope | warehouse_locations | audit_logs, orgs, roles, users, warehouses |
+| `master.js:498` | GET | `/api/master/options` | GATED | requireAuth → requireInternal → requireAuth → attachOrgScope | lib/stock.js: stockScopeSql | brands, bundles, categories, dealers, platforms, product_skus, products, stores, suppliers, warehouses | orgs, roles, users |
+| `master.js:548` | GET | `/api/master/overview` | GATED | requireAuth → requireInternal → requireAuth → attachOrgScope | lib/stock.js: stockScopeSql | dealers, platforms, product_skus, products, stores, suppliers, warehouses | orgs, roles, users |
+| `master.js:572` | USE | `/api/master/inv-txn-types` | GATED | requireAuth → requireInternal | — | — | — |
 
 ## server/routes/meta.js
 

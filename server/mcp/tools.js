@@ -600,7 +600,7 @@ export const TOOLS = [
       }
       const skus = db.prepare('SELECT * FROM product_skus WHERE product_id=?').all(product.id)
       const skuIds = skus.map((s) => s.id)
-      const f = orgFilter(ctx, 's', 'owner_org_id')
+      const f = invFilter(ctx, 's', 'owner_org_id') // ADR-0050（Codex）：货主过滤叠加仓库组织范围
       const stocks = skuIds.length
         ? db.prepare(`
             SELECT s.sku_id, s.warehouse_id, w.name AS warehouse_name, s.batch_no, s.owner_org_id,
@@ -1028,7 +1028,7 @@ export const TOOLS = [
     inputSchema: { type: 'object', properties: { currency: S.str('币种，默认 CNY') } },
     handler({ db, args, ctx }) {
       const cur = args.currency || 'CNY'
-      const f = orgFilter(ctx, 's', 'owner_org_id')
+      const f = invFilter(ctx, 's', 'owner_org_id') // ADR-0050（Codex）：库存价值同样叠加仓库组织范围
       const stockValue = db.prepare(`SELECT ROUND(SUM(cost_amount),2) v, COUNT(*) c FROM inventory_stocks s WHERE s.currency=? ${f.sql}`).get(cur, ...f.params)
       const skuCount = db.prepare('SELECT COUNT(*) c FROM product_skus').get().c
       const entities = scopeEntityIds(ctx, db)

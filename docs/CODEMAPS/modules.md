@@ -1463,7 +1463,7 @@ Prometheus 文本指标渲染 + 抓取令牌校验（ADR-0045）
 | `resolveCurrency` | fn | — | — | — |
 | `resolveOwnerOrg` | fn | — | inventory.adjust, inventory.get_cost, inventory.ownership_transfer, inventory.pick_suggestion, inventory.stock_in, inventory.stock_out, inventory.transfer | mcp/tools.js |
 | `setStockNowProvider` | fn | — | — | — |
-| `stockScopeSql` | fn | 28 条：demand.js×2, inventory.js×14, master.js×10, oms.js×1, warehouses.js×1 | inventory.list_batches, inventory.list_transactions, inventory.query_stock, inventory.stock_alert | lib/qc.js, lib/qc2.js, lib/transfer.js, mcp/tools.js |
+| `stockScopeSql` | fn | 28 条：demand.js×2, inventory.js×14, master.js×10, oms.js×1, warehouses.js×1 | inventory.list_batches, inventory.list_transactions, inventory.query_stock, inventory.stock_alert, master.get_product_360, report.dashboard_kpi | lib/qc.js, lib/qc2.js, lib/transfer.js, mcp/tools.js |
 | `warehouseInScope` | fn | 35 条：inventory.js×1, pos.js×31, qc2.js×2, warehouses.js×1 | inventory.adjust, inventory.get_cost, inventory.ownership_transfer, inventory.pick_suggestion, inventory.stock_in, inventory.stock_out, inventory.transfer | lib/qc2.js, mcp/tools.js |
 
 ## `server/lib/store-binding.js`
@@ -1671,7 +1671,7 @@ MCP 工具入参校验（唯一实现）。
 | 工具 | 级别 | 权限点 | 调用的 lib 函数 | 工具内 SQL 表 | 经 lib 触达的表 |
 |---|---|---|---|---|---|
 | `master.search_products` | read | master.product.view | — | brands, categories, product_skus, products | — |
-| `master.get_product_360` | read | master.product.view | — | inventory_stocks, inventory_transactions, orgs, product_skus, products, warehouses | — |
+| `master.get_product_360` | read | master.product.view | lib/stock.js: stockScopeSql | inventory_stocks, inventory_transactions, orgs, product_skus, products, warehouses | — |
 | `master.list_partners` | read | master.partner.view | — | dealers, stores, suppliers | — |
 | `inventory.query_stock` | read | inventory.stock.view | lib/stock.js: stockScopeSql | inventory_stocks, orgs, product_skus, products, warehouses | — |
 | `inventory.list_batches` | read | inventory.batch.view | lib/dates.js: localNow<br>lib/stock.js: stockScopeSql | inventory_batches, inventory_stocks, product_skus | warehouses |
@@ -1683,7 +1683,7 @@ MCP 工具入参校验（唯一实现）。
 | `sales.list_orders` | read | sales.order.view | lib/sales-order.js: salesScopeSql | sales_order_items, sales_orders | stores, warehouses |
 | `order.trace_document` | read | sales.order.view, purchase.order.view, inventory.stock.view | lib/docflow.js: docInScope<br>mcp/doc-perms.js: canViewDocType, rowInBinding | dealers, doc_types, inventory_transactions, stores, users, warehouses | ar_documents, assembly_orders, cost_adjustments, dealer_rebates, dealer_requisitions, dealer_statements, material_issues, oc_customers, oc_orders, oc_statements, oms_orders, outsourcing_materials, outsourcing_orders, outsourcing_receipts, pos_daily_closes, pos_orders, pos_shifts, production_orders, purchase_inspections, purchase_invoices, purchase_orders, purchase_payments, purchase_receipts, purchase_requisitions, purchase_returns, purchase_settlements, qc_defect_handlings, qc_inspections, qc_requests, receipts, refunds, role_permissions, sales_deliveries, sales_invoices, sales_orders, sales_quotes, sales_returns, stock_checks, stock_transfers, store_requisitions, store_shipments, user_roles, vouchers |
 | `report.sales_summary` | read | sales.order.view | lib/dates.js: localDate | dealers, sales_orders, stores, warehouses | — |
-| `report.dashboard_kpi` | read | — | lib/purchase.js: purchaseOrderScopeSql | dealers, inventory_stocks, product_skus, purchase_orders, sales_orders, stores, warehouses | — |
+| `report.dashboard_kpi` | read | — | lib/purchase.js: purchaseOrderScopeSql<br>lib/stock.js: stockScopeSql | dealers, inventory_stocks, product_skus, purchase_orders, sales_orders, stores, warehouses | — |
 | `org.tree` | read | — | — | orgs | — |
 | `inventory.stock_in` | write | purchase.inbound | lib/dates.js: localDate<br>lib/stock.js: resolveOwnerOrg, warehouseInScope | warehouses | — |
 | `inventory.stock_out` | write | sales.outbound | lib/dates.js: localDate<br>lib/stock.js: pickBatches, resolveOwnerOrg, warehouseInScope | warehouses | inv_params, inventory_batches, inventory_stocks, product_skus, products |

@@ -290,6 +290,7 @@ r.get(
   wrap((req, res) => {
     const db = getDb()
     const stSc = stockScopeSql(req.orgScope, 'st')
+    const snSc = stockScopeSql(req.orgScope, 'sn') // ADR-0050（Codex）：序列号命中也按仓库范围
     const code = String(req.query.code || '').trim()
     if (!code) return fail(res, '请输入条码 / 序列号 / SKU 编码')
     // 1) 序列号
@@ -297,9 +298,9 @@ r.get(
       .prepare(
         `SELECT sn.*, sk.sku_code, sk.name AS sku_name, sk.spec, p.name AS product_name, w.name AS warehouse_name
          FROM serial_numbers sn JOIN product_skus sk ON sk.id=sn.sku_id JOIN products p ON p.id=sk.product_id
-         LEFT JOIN warehouses w ON w.id=sn.warehouse_id WHERE sn.serial_no=?`
+         LEFT JOIN warehouses w ON w.id=sn.warehouse_id WHERE sn.serial_no=? AND ${snSc.sql}`
       )
-      .get(code)
+      .get(code, ...snSc.params)
     if (sn) {
       return ok(res, { type: 'serial', data: sn, msg: `序列号命中：${sn.product_name}（${sn.status === 'in_stock' ? '在库' : sn.status === 'shipped' ? '已出库' : sn.status}）` })
     }
