@@ -8,6 +8,16 @@ on:
   push:
     tags: ['v*']
   workflow_dispatch:
+    inputs:
+      # AG1: first-run rehearsal. 'true' skips the focused suite (guards + production acceptance still run), uploads under a
+      # '-dry-run' artifact name, and never touches the evidence log. A tag push has no inputs, so it is always a full run.
+      dry_run:
+        description: "Dry run: skip the focused suite, upload as -dry-run, never log-eligible (not a candidate)"
+        type: choice
+        default: 'false'
+        options:
+          - 'false'
+          - 'true'
 
 permissions:
   contents: read
@@ -37,6 +47,7 @@ jobs:
       cancel-in-progress: false
     env:
       GML_VERIFY_PLATFORM: linux
+      DRY_RUN: ${{ inputs.dry_run }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -65,16 +76,22 @@ jobs:
           npm ci --ignore-scripts --no-audit --no-fund
           npm rebuild better-sqlite3 esbuild --no-audit --no-fund
       # The log lives in $RUNNER_TEMP, so the checkout stays clean; a seed copy (if the repo has one) lets the chain continue.
-      - name: Build candidate (focused suite + guards + acceptance run by the script; unsigned)
+      - name: Build candidate (focused suite + guards + acceptance run by the script; unsigned; dry run skips the focused suite)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           umask 077
-          [ -f docs/release/EVIDENCE-LOG.jsonl ] && cp docs/release/EVIDENCE-LOG.jsonl "$CAND_LOG"
           # The workflow-level GML_RUNTIME_MODE=test / GML_DB='' are for the source-level jobs; the production acceptance step inside
           # the script must start the packaged server in production mode, so they are removed for this command (as for a local run).
-          env -u GML_RUNTIME_MODE -u GML_DB node scripts/release-candidate.mjs --run-tests --ci-run=auto --log="$CAND_LOG" --output="$CAND_OUT"
+          # AG1: DRY_RUN is compared only against the literal "true" (the input is a choice, never interpolated into shell text).
+          # The dry-run command has no --log: a dry run never reads or appends the evidence log (the script also refuses the combination).
+          if [ "${DRY_RUN:-false}" = "true" ]; then
+            env -u GML_RUNTIME_MODE -u GML_DB node scripts/release-candidate.mjs --skip-focused --run-guards --ci-run=auto --output="$CAND_OUT"
+          else
+            [ -f docs/release/EVIDENCE-LOG.jsonl ] && cp docs/release/EVIDENCE-LOG.jsonl "$CAND_LOG"
+            env -u GML_RUNTIME_MODE -u GML_DB node scripts/release-candidate.mjs --run-tests --ci-run=auto --log="$CAND_LOG" --output="$CAND_OUT"
+          fi
       - name: Self-verify the candidate (extracted package, evidence, archive hash, log chain)
         run: |
           set -euo pipefail
@@ -83,11 +100,18 @@ jobs:
           mkdir -p "$RUNNER_TEMP/pkg-x"
           unzip -q "$zip" -d "$RUNNER_TEMP/pkg-x"
           pkg="$(ls -d "$RUNNER_TEMP"/pkg-x/*/)"
-          (cd "$pkg" && node scripts/verify-release.mjs --evidence="$CAND_OUT/$name.evidence/EVIDENCE.json" --artifact="$zip" --log="$CAND_LOG")
           mkdir -p "$CAND_UPLOAD"
-          cp "$zip" "$CAND_UPLOAD/"
-          cp "$CAND_OUT/$name.evidence/EVIDENCE.json" "$CAND_UPLOAD/EVIDENCE.json"
-          tail -n 1 "$CAND_LOG" > "$CAND_UPLOAD/evidence-log-line.jsonl"
+          # AG1: a dry run has no evidence log (no --log, no evidence-log-line.jsonl in its artifact).
+          if [ "${DRY_RUN:-false}" = "true" ]; then
+            (cd "$pkg" && node scripts/verify-release.mjs --evidence="$CAND_OUT/$name.evidence/EVIDENCE.json" --artifact="$zip")
+            cp "$zip" "$CAND_UPLOAD/"
+            cp "$CAND_OUT/$name.evidence/EVIDENCE.json" "$CAND_UPLOAD/EVIDENCE.json"
+          else
+            (cd "$pkg" && node scripts/verify-release.mjs --evidence="$CAND_OUT/$name.evidence/EVIDENCE.json" --artifact="$zip" --log="$CAND_LOG")
+            cp "$zip" "$CAND_UPLOAD/"
+            cp "$CAND_OUT/$name.evidence/EVIDENCE.json" "$CAND_UPLOAD/EVIDENCE.json"
+            tail -n 1 "$CAND_LOG" > "$CAND_UPLOAD/evidence-log-line.jsonl"
+          fi
       # AF7 supply-chain self-checks (self-contained block: 2 steps + the extra artifact files in the upload step below).
       # Re-apply as-is after the "Self-verify the candidate" step in any workflow that has the same CAND_*/pkg-x conventions.
       # Both steps are read-only toward the repository; they need network access (registry.npmjs.org, the GitHub API).
@@ -132,6 +156,8 @@ jobs:
             case "$id" in ''|*[!0-9]*) continue ;; esac
             d="$prev_root/$id"; mkdir -p "$d"
             gh run download "$id" --repo "$GITHUB_REPOSITORY" --pattern 'os-erp-candidate-*' --dir "$d" >/dev/null 2>&1 || continue
+            # AG1: a dry-run artifact is never a "previous candidate" (name suffix -dry-run, or evidence saying dry_run true).
+            if [ -n "$(find "$d" -maxdepth 1 -name '*-dry-run' | head -n 1)" ] || find "$d" -maxdepth 3 -type f -name EVIDENCE.json -exec grep -l '"dry_run": true' {} + >/dev/null 2>&1; then continue; fi
             f="$(find "$d" -maxdepth 3 -type f -name sbom.cdx.json | head -n 1)"
             if [ -z "$f" ]; then
               z="$(find "$d" -maxdepth 3 -type f -name 'RC-*.zip' | head -n 1)"
@@ -156,7 +182,7 @@ jobs:
           fi
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: os-erp-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          name: os-erp-candidate-${{ github.run_id }}-${{ github.run_attempt }}${{ inputs.dry_run == 'true' && '-dry-run' || '' }}
           path: |
             ${{ runner.temp }}/candidate-upload/RC-*.zip
             ${{ runner.temp }}/candidate-upload/EVIDENCE.json
