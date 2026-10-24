@@ -3,7 +3,7 @@
 <!-- generated -->
 <!-- 由 `node scripts/gen-codemap.mjs` 生成，勿手改；CI 校验不漂移 -->
 
-共 46 个 ADR 文件。批次来自 `scripts/gen-changelog.mjs` 的 BATCHES（编号区间）；状态是 ADR 原文“状态：”一句的摘录（没有就如实标注），**不代表验收**；“守卫 / 测试”是 ADR 正文里提到的文件路径（静态正则提取，路径不存在时标注“（不存在）”），不证明该测试覆盖了 ADR 的全部决定。
+共 47 个 ADR 文件。批次来自 `scripts/gen-changelog.mjs` 的 BATCHES（编号区间）；状态是 ADR 原文“状态：”一句的摘录（没有就如实标注），**不代表验收**；“守卫 / 测试”是 ADR 正文里提到的文件路径（静态正则提取，路径不存在时标注“（不存在）”），不证明该测试覆盖了 ADR 的全部决定。
 
 | 编号 | 标题 | 批次 | 状态（原文摘录） | 守卫（scripts/） | 测试（tests/） |
 |---|---|---|---|---|---|
@@ -53,3 +53,4 @@
 | 0045 | [ADR-0045 Prometheus 指标导出与抓取令牌（AA10）](ADR-0045-metrics-export.md) | 第十批（进行中） | 开发实现，尚非产品上线验收 | — | — |
 | 0046 | [ADR-0046：主数据下拉仓库项、采购订单读与 QC 聚合按仓库组织范围收口](ADR-0046-master-options-qc-scope.md) | 第十批（进行中） | 开发实现，尚非产品上线验收 | `check-route-authz.mjs` | — |
 | 0047 | [ADR-0047：发行候选证据 Ed25519 签名（AB4）](ADR-0047-evidence-signing.md) | 第十批（进行中） | 开发实现，尚非产品上线验收 | `lib/evidence-sign.mjs`<br>`release-keygen.mjs` | — |
+| 0049 | [ADR-0049 审计日志防篡改哈希链与归档（AB6）](ADR-0049-audit-hash-chain.md) | 第十批（进行中） | 开发实现，尚非产品上线验收 | `audit-archive.mjs`<br>`audit-verify-chain.mjs`<br>`lib/audit-chain-cli.mjs`<br>`lib/privacy-common.mjs`<br>`retention.mjs` | — |
