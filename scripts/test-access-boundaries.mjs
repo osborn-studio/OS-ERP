@@ -64,6 +64,9 @@ try {
     assert(sample && otherOrg)
     db.exec('BEGIN')
     try {
+      // ADR-0042：MCP 库存读工具按「货主 ∧ 仓库组织」收口；演示库里没有任何库存行的仓库组织等于货主组织，
+      // 所以把样本仓库临时划归货主组织（事务内，结束回滚），否则 org 范围令牌对自家货也一无所见属预期而非泄露。
+      db.prepare('UPDATE warehouses SET org_id=? WHERE id=?').run(sample.owner_org_id, sample.warehouse_id)
       const batchNo = `ACCESS-SCOPE-${industry}`
       for (const [ownerOrgId, qty] of [[sample.owner_org_id, 2], [otherOrg.id, 7]]) {
         engine.applyStockIn(db, { warehouseId: sample.warehouse_id, ownerOrgId, skuId: sample.sku_id,

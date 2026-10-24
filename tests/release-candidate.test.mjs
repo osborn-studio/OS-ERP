@@ -34,6 +34,27 @@ function put(dir, rel, content) {
   writeFileSync(file, content)
 }
 const git = (cwd, ...argv) => spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.invalid', '-c', 'commit.gpgsign=false', ...argv], { cwd, encoding: 'utf8' })
+/**
+ * 仓库源文件清单：有 git 时取 `git ls-files`；在隔离回归副本（只复制了跟踪文件、没有 .git）里改为遍历目录，
+ * 跳过 .git / node_modules / data / dist / release / coverage 与除 .env.example 外的 .env*（与 regress-isolated 的复制规则一致）。
+ */
+function repoSourceFiles() {
+  const r = spawnSync('git', ['ls-files', '-z'], { cwd: ROOT, encoding: 'utf8' })
+  if (r.status === 0 && r.stdout) return r.stdout.split('\0')
+  const SKIP = new Set(['.git', 'node_modules', 'data', 'dist', 'release', 'coverage'])
+  const out = []
+  const walk = (rel) => {
+    for (const ent of readdirSync(path.join(ROOT, rel), { withFileTypes: true })) {
+      const next = rel ? `${rel}/${ent.name}` : ent.name
+      if (ent.isDirectory()) { if (!SKIP.has(ent.name)) walk(next); continue }
+      if (ent.name.startsWith('.env') && ent.name !== '.env.example') continue
+      if (ent.isFile()) out.push(next)
+    }
+  }
+  walk('')
+  return out
+}
+
 function minimalSource(t) {
   const src = tempDir(t, 'os-erp-rc-src-')
   for (const name of ['server', 'scripts']) cpSync(path.join(ROOT, name), path.join(src, name), { recursive: true })
@@ -226,7 +247,7 @@ const HEAD40 = 'b'.repeat(40)
 /** 五个守卫检查真实仓库形状，所以守卫用例的桩树要带上全部受版本控制的源码（tests/ 与 dist/ 除外），再放自己的桩测试。 */
 function guardedSource(t, stubTests) {
   const src = minimalSource(t)
-  const tracked = spawnSync('git', ['ls-files', '-z'], { cwd: ROOT, encoding: 'utf8' }).stdout.split('\0').filter(f => f && !/^(tests|dist)\//.test(f) && f !== '.gitignore' && existsSync(path.join(ROOT, f)))
+  const tracked = repoSourceFiles().filter(f => f && !/^(tests|dist)\//.test(f) && f !== '.gitignore' && existsSync(path.join(ROOT, f)))
   for (const f of tracked) { mkdirSync(path.dirname(path.join(src, f)), { recursive: true }); cpSync(path.join(ROOT, f), path.join(src, f)) }
   // 文件标识守卫登记了若干测试文件：用只含标识块的桩满足它，不重复运行真实用例（也避免递归运行本文件）。
   const header = f => `/**\n * ============================================================================\n * 文件标识：${f} ｜ 桩（只满足文件标识守卫）\n * ============================================================================\n */\n`
