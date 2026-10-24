@@ -88,6 +88,9 @@ const DECLARED = [
   'scripts/upgrade-rehearsal.mjs',
   'scripts/lib/lock-probe.mjs',
   'tests/upgrade-rehearsal.test.mjs',
+  // 审计 FTS 维护（AC5）
+  'scripts/audit-fts-maintain.mjs',
+  'tests/audit-fts-maintain.test.mjs',
   // 旧结构快照备份集（AB5 / ADR-0048）
   'scripts/schema-snapshot.mjs',
   'tests/schema-snapshot.test.mjs',

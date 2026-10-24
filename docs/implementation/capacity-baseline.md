@@ -347,6 +347,26 @@ node scripts/synth-pipeline.mjs --dir /tmp/synth-large --skus 20000 --txns 25000
 ### 未覆盖
 进程内计时（不含 HTTP / 鉴权）；单机单连接；合成数据（关键词分布不代表生产）；FTS 的 `integrity-check` 与长期碎片（`optimize`）未测；无 FTS5 构建的回退路径只在测试里模拟（`setFtsOverride(false)` 与 DROP 掉 FTS 对象），没有真正的无 FTS5 二进制可跑。
 
+## AC5 审计 FTS 索引维护：`audit-fts-maintain.mjs` 在合成 100 万行库上的持写锁时间（**Mac mini / 合成 100 万行 / 非目标主机 / 单次墙钟 / 整机高负载**）
+
+脚本：`node scripts/audit-fts-maintain.mjs --data-dir <临时目录> --industry cosmetic --rebuild|--optimize|--integrity-check`（用法与口径见 `docs/operations/audit-search.md`）。库：临时目录里 schema + 全部迁移，用 `bench-audit-logs.mjs` 导出的 `seed()`（唯一 INSERT 点 `insertAuditRow`，含 AB6 哈希链与 067 触发器）写入 100 万行合成审计（种子 20261024，写入 188 s），随后 `wal_checkpoint(TRUNCATE)`；库文件 451 MB（含 FTS 索引）；测完临时目录已删除（脚本自带 `rm -rf` 并打印确认）。
+**机器有负载**（测量期间 1 分钟负载约 29–30，同机并行其它工作流）：**只看量级**。每个动作各跑一次（`rebuild` 跑两次）；`elapsed_ms` = 本进程 BEGIN→COMMIT 墙钟；`lock_probe` = 另一线程用自己的连接每约 1 ms 试 `BEGIN IMMEDIATE`（`busy_timeout=0`），`max_busy_span_ms` 为被挡窗口的下界、`max_blocked_ms` 为近似上界（见 `scripts/lib/lock-probe.mjs`）。
+
+| 动作 | elapsed_ms | 写入者被挡（下界 / 上界，ms）| 探针撞上次数 / 窗口数 | 库文件（含 WAL）| 
+|---|---|---|---|---|
+| `--integrity-check` | 1142 | 1141 / 1144 | 680 / 1 | 451 → 451 MB（不变）|
+| `--optimize` | 1314 | 966 / 969 | 524 / 1 | 451 → 508 MB（WAL 里待检查点的新页）|
+| `--rebuild`（第 1 次）| **3335** | **3025 / 3028** | 1745 / 1 | 460 → 521 MB |
+| `--rebuild`（第 2 次）| **4099** | **3727 / 3730** | 2201 / 1 | 460 → 521 MB |
+| `--integrity-check`（重建后）| 1496 | 1494 / 1502 | 847 / 1 | 460 → 460 MB |
+
+读法（诚实边界）：
+- **100 万行重建约 3–4 s 持写锁**，与 AB3 记录的迁移 067 回填（2.7–3.9 s）同量级；全程一个被挡窗口，说明重建确实是单次写事务。这段时间内其它写入（每条审计写入、每次业务写）等待 `busy_timeout`（默认 5 s）：本次未超；目标主机更慢或库更大时可能超过 5 s，届时并发写入收到 `SQLITE_BUSY`——所以 `--rebuild` 应在低峰执行。读者不受影响（WAL，探针只量写入者）。
+- `--integrity-check` 也持写锁（FTS5 的 `integrity-check` 是 INSERT 形式的命令），100 万行约 1.1–1.5 s；夜间可选步骤跑在合成库副本上，不影响在用库。
+- 两次重建相差 0.8 s，主要是机器负载抖动，不是系统性差别；不要把任何一格当作承诺值。
+- 合成数据的 detail 很短，真实库的 `action / entity / user_name` 三列更长时三元组更多，重建会更慢；这里没有测。
+- `GML_AUDIT_FTS=0` 开关只影响查询路径，不影响上述任何数字。
+
 ## AA11 迁移升级演练：059–062 在合成 medium 库上的逐迁移耗时（**Mac mini / 合成数据 / 非目标主机 / 单次墙钟**）
 
 脚本：`scripts/upgrade-rehearsal.mjs`（库：`scripts/lib/lock-probe.mjs`；测试：`tests/upgrade-rehearsal.test.mjs`）。它在备份集（或合成库目录，经 `db-backup.mjs` 备份成备份集）的**隔离恢复副本**上，从 `--from N` 基线起把编号 > N 的迁移**逐个**交给真实运行器（生产模式、暂存迁移目录里是仓库文件的字节级复制），每步记录耗时与写锁阻塞，升级后核对校验和 / 空操作重跑 / integrity / 外键 / 业务探针 / verify-seed 风格不变量，任一失败即回退（进程内重新恢复并比对 + 调用 ADR-0016 的 `upgrade-rollback-drill.mjs`）。可选夜间步骤见 `nightly-capacity.yml` 的 `rehearsal` 输入（默认 `false`，定时任务永不运行）。

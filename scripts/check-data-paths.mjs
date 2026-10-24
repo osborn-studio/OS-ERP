@@ -64,6 +64,8 @@ const PATTERNS = [
 const ALLOW = {
   // (a) 闸门：需要仓库 data/ 的路径来拒绝它
   'scripts/regress-all.mjs': '闸门：拒绝对仓库 data/ 跑回归；DICT 快照取自显式 GML_DATA_DIR',
+  'scripts/audit-fts-maintain.mjs': '闸门：--out 报告路径不许落在仓库 data/ 下（库文件本身走 requireExplicitDataDir() + dbPathFor()）',
+  'tests/audit-fts-maintain.test.mjs': '闸门测试：证明 audit-fts-maintain.mjs 拒绝仓库 data/ 作 --data-dir，且忽略环境 GML_DB（只传路径，不读写）',
   'scripts/inject-mfg-guards.mjs': '闸门：子进程 GML_DATA_DIR 不许落在仓库 data/ 下',
   'scripts/accept/selfcheck.mjs': '闸门：自检"数据目录不是开发库"，需要知道仓库 data/ 在哪',
   'scripts/test-flows.mjs': 'isDevDataDir 告警判据（自证开发库目录会被认出来）',

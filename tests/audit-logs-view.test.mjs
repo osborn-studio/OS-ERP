@@ -18,15 +18,18 @@ import { setTimeout as delay } from 'node:timers/promises'
 import Database from 'better-sqlite3'
 import bcrypt from 'bcryptjs'
 import { readFileSync, mkdtempSync as mkd, cpSync, rmSync as rm } from 'node:fs'
-import { csvCell, AUDIT_EXPORT_MAX_ROWS, AUDIT_COUNT_CAP, buildWhere, parseFilters, orderOf, AuditViewError, ftsAvailable, keywordUsesFts, FTS_RARE_MAX, setFtsOverride, AUDIT_ACTION_NEEDS_MODULE } from '../server/lib/audit-view.js'
+import { csvCell, AUDIT_EXPORT_MAX_ROWS, AUDIT_COUNT_CAP, buildWhere, parseFilters, orderOf, AuditViewError, ftsAvailable, ftsEnvDisabled, keywordUsesFts, FTS_RARE_MAX, setFtsOverride, AUDIT_ACTION_NEEDS_MODULE } from '../server/lib/audit-view.js'
 import { runMigrations, MIGRATIONS_DIR } from '../server/db/migrations/runner.js'
 import { auditStatements, STATEMENTS, ALLOW } from '../scripts/explain-audit.mjs'
 import * as m065 from '../server/db/migrations/065_audit_log_indexes.cjs'
 import * as m067 from '../server/db/migrations/067_audit_fts.cjs'
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url))
+// AC5：CI 以 GML_AUDIT_FTS=0 再跑一遍本文件（真实的无 FTS 路径）。此时依赖"FTS 路径可用"的用例跳过（原因写明），其余用例照跑
+const NOFTS = process.env.GML_AUDIT_FTS === '0'
+const needsFts = NOFTS ? { skip: 'GML_AUDIT_FTS=0: this case asserts the FTS path is available' } : {}
 
-async function fixture(t) {
+async function fixture(t, extraEnv = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), 'os-erp-auditview-'))
   const probe = net.createServer()
   probe.listen(0, '127.0.0.1')
@@ -35,7 +38,8 @@ async function fixture(t) {
   await new Promise(resolve => probe.close(resolve))
   const env = {
     PATH: process.env.PATH, HOME: dir, TMPDIR: dir, HOST: '127.0.0.1', PORT: String(port), NODE_ENV: 'production',
-    GML_RUNTIME_MODE: 'test', GML_DATA_DIR: dir, GML_DB: '', GML_JWT_SECRET: randomBytes(32).toString('hex')
+    GML_RUNTIME_MODE: 'test', GML_DATA_DIR: dir, GML_DB: '', GML_JWT_SECRET: randomBytes(32).toString('hex'),
+    ...(process.env.GML_AUDIT_FTS === undefined ? {} : { GML_AUDIT_FTS: process.env.GML_AUDIT_FTS }), ...extraEnv
   }
   const child = spawn(process.execPath, ['server/index.js'], { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] })
   let ready = false
@@ -486,7 +490,7 @@ test('AB3 buildWhere: FTS only for >=3-char keywords when available; phrase-quot
   assert.equal(buildWhere({ keyword: 'abc', module: 'x' }, { fts: true }).args.length, 5)
 })
 
-test('AB3 FTS and LIKE paths return identical rows (injection-shaped, wildcard, CJK, mixed-case keywords)', (t) => {
+test('AB3 FTS and LIKE paths return identical rows (injection-shaped, wildcard, CJK, mixed-case keywords)', needsFts, (t) => {
   const db = migrated(t)
   assert.equal(ftsAvailable(db), true)
   const corpus = [['ÄBC', 'École', 'Straße'], ['CREATE', 'sales_orders', 'alice'], ['DEL100%_done', 'order', 'alice'], ['approve OR reject', 'po', 'bob'], ['审批通过', '销售订单', '张三'],
@@ -506,7 +510,7 @@ test('AB3 FTS and LIKE paths return identical rows (injection-shaped, wildcard, 
   assert.ok(db.prepare('SELECT COUNT(*) c FROM audit_logs').get().c >= corpus.length, 'table survived the DROP TABLE probe')
 })
 
-test('AB3 setFtsOverride(false) simulates a build without FTS5', (t) => {
+test('AB3 setFtsOverride(false) simulates a build without FTS5', needsFts, (t) => {
   const db = migrated(t)
   assert.equal(ftsAvailable(db), true)
   setFtsOverride(false)
@@ -518,7 +522,7 @@ test('AB3 setFtsOverride(false) simulates a build without FTS5', (t) => {
   assert.equal(ftsAvailable(bare), false, 'no audit_logs_fts table: fallback')
 })
 
-test('AB3 keywordUsesFts: FTS only for rare hits; common keywords, short keywords and no-FTS builds use LIKE', (t) => {
+test('AB3 keywordUsesFts: FTS only for rare hits; common keywords, short keywords and no-FTS builds use LIKE', needsFts, (t) => {
   const db = migrated(t)
   db.transaction(() => { for (let i = 0; i < FTS_RARE_MAX + 100; i++) auditRow(db, { action: 'COMMONACT', user: `u${i}` }) })()
   auditRow(db, { action: 'RAREACT' })
@@ -560,7 +564,7 @@ test('AB3 action-only filter needs a module: unit + bizcode over HTTP (list and 
 test('AB3 over HTTP: FTS path answers keyword searches (3+ and 2 chars); dropping the FTS objects falls back to LIKE with identical answers', { timeout: 90000 }, async t => {
   const f = await fixture(t)
   const admin = await f.login('ab3_http', 'admin', { isSuper: 1 })
-  assert.equal(ftsAvailable(f.db), true, 'server migrated to 067')
+  assert.equal(ftsAvailable(f.db), !NOFTS, 'server migrated to 067 (the FTS path is switched off by GML_AUDIT_FTS=0)')
   f.db.exec('DELETE FROM audit_logs')
   ins(f.db, { user: 'alice', action: 'CREATE', module: 'sales', entity: '销售订单', eid: 'zzeid', detail: '{"note":"zzdetail"}' })
   ins(f.db, { user: '张三丰', action: 'DEL100%_done', module: 'sales', entity: 'order' })
@@ -611,4 +615,50 @@ test('AB3 explain-audit: FTS keyword statements are green and use the FTS table;
   assert.ok(fallbacks.length >= 3)
   for (const a of fallbacks) assert.ok(a.reason.length > 20, a.statement)
   assert.ok(allow.some(a => a.statement === 'audit.count_keyword_nofts' && /FTS5/.test(a.reason)))
+})
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// AC5：GML_AUDIT_FTS=0 环境开关（真实无 FTS 路径；CI 的 checks job 以该开关再跑一遍本文件）
+// ---------------------------------------------------------------------------------------------------------------------------
+test('AC5 GML_AUDIT_FTS=0 forces the LIKE path: only the exact string "0" switches FTS off, read on every call', (t) => {
+  const prev = process.env.GML_AUDIT_FTS
+  t.after(() => { if (prev === undefined) delete process.env.GML_AUDIT_FTS; else process.env.GML_AUDIT_FTS = prev })
+  const db = migrated(t)
+  auditRow(db, { action: 'RAREACT' })
+  const set = (v) => { if (v === undefined) delete process.env.GML_AUDIT_FTS; else process.env.GML_AUDIT_FTS = v }
+  for (const v of [undefined, '', '1', 'false', 'off', ' 0', '00']) {
+    set(v)
+    assert.equal(ftsEnvDisabled(), false, `${JSON.stringify(v)} does not switch FTS off`)
+    assert.equal(ftsAvailable(db), true, JSON.stringify(v))
+    assert.equal(keywordUsesFts(db, 'RAREACT'), true, JSON.stringify(v))
+  }
+  set('0')
+  assert.equal(ftsEnvDisabled(), true)
+  assert.equal(ftsAvailable(db), false, 'the table exists, but the switch forces the fallback')
+  assert.equal(keywordUsesFts(db, 'RAREACT'), false); assert.equal(keywordUsesFts(db, 'zzabsent'), false)
+  assert.equal(db.prepare("SELECT COUNT(*) c FROM sqlite_master WHERE name='audit_logs_fts'").get().c, 1, 'the switch changes the query path only; the index is untouched')
+  // 开关随时可撤销，且不依赖 setFtsOverride 的状态
+  set(undefined)
+  assert.equal(keywordUsesFts(db, 'RAREACT'), true)
+  setFtsOverride(false); t.after(() => setFtsOverride(null))
+  assert.equal(ftsAvailable(db), false); setFtsOverride(null)
+  assert.equal(ftsAvailable(db), true)
+})
+
+test('AC5 over HTTP: a server started with GML_AUDIT_FTS=0 answers from the base table, not the FTS index (a row the index never saw is found)', { timeout: 90000 }, async t => {
+  const prev = process.env.GML_AUDIT_FTS
+  t.after(() => { if (prev === undefined) delete process.env.GML_AUDIT_FTS; else process.env.GML_AUDIT_FTS = prev })
+  delete process.env.GML_AUDIT_FTS // 本进程里 FTS 可用；子进程显式带 0
+  const f = await fixture(t, { GML_AUDIT_FTS: '0' })
+  const admin = await f.login('ac5_http', 'admin', { isSuper: 1 })
+  f.db.exec('DELETE FROM audit_logs')
+  f.db.exec('DROP TRIGGER audit_logs_fts_ai') // 之后写入的行不进索引：只有 LIKE 路径看得见
+  ins(f.db, { user: 'alice', action: 'GHOSTACTION', module: 'sales' })
+  assert.equal(ftsAvailable(f.db), true)
+  const viaIndex = buildWhere(parseFilters({ keyword: 'GHOSTACTION' }), { fts: true })
+  assert.equal(f.db.prepare(`SELECT COUNT(*) c FROM audit_logs ${viaIndex.where}`).get(...viaIndex.args).c, 0, 'control: the FTS index really misses the row')
+  const r = await f.request('/api/meta/audit-logs?keyword=GHOSTACTION', admin)
+  assert.equal(r.body.data.total, 1, 'server with GML_AUDIT_FTS=0 uses LIKE')
+  const csv = await (await f.raw('/api/meta/audit-logs/export.csv?keyword=GHOSTACTION', admin)).text()
+  assert.equal(csv.trim().split('\r\n').length - 1, 1, 'export uses LIKE too')
 })
