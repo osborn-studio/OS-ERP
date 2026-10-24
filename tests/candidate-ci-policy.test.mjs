@@ -42,8 +42,14 @@ test('candidate job is time-boxed (<= 90 min), read-only, and serialised by its 
   assert.match(code, /concurrency:\s*\n\s+group:\s*candidate-\$\{\{ github\.repository \}\}\s*\n\s+cancel-in-progress:\s*false/)
 })
 
+test('workflow-level concurrency never cancels dispatch or tag runs', () => {
+  const top = workflow.match(/^concurrency:\n((?:  .+\n)+)/m)?.[1] ?? ''
+  assert.match(top, /group:.*github\.event_name/)
+  assert.match(top, /cancel-in-progress:\s*\$\{\{ github\.event_name != 'workflow_dispatch' && github\.ref_type != 'tag' \}\}/)
+})
+
 test('candidate job pins every action by SHA and does not persist checkout credentials', () => {
-  const uses = [...code.matchAll(/^\s+- uses:\s*(\S+)/gm)].map((x) => x[1])
+  const uses = [...code.matchAll(/^\s+(?:- )?uses:\s*(\S+)/gm)].map((x) => x[1])
   assert.ok(uses.length >= 4)
   for (const u of uses) assert.match(u, /^[\w.-]+\/[\w.-]+@[0-9a-f]{40}$/, `${u} must be pinned to a full commit SHA`)
   assert.match(code, /persist-credentials:\s*false/)
@@ -60,7 +66,7 @@ test('candidate job builds with the documented flags, writes outside the checkou
 })
 
 test('candidate job uploads only the whitelisted files with 14-day retention', () => {
-  const ups = code.split(/^\s+- uses: actions\/upload-artifact@/m).slice(1)
+  const ups = code.split(/^\s+(?:- )?uses: actions\/upload-artifact@/m).slice(1)
   assert.equal(ups.length, 1)
   const paths = ups[0].match(/path: \|\n((?:\s+\$\{\{.*\n)+)/)?.[1].trim().split('\n').map((s) => s.trim()) ?? []
   assert.deepEqual(paths, [
