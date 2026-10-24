@@ -381,7 +381,8 @@ export function auditStatements(db, statements, { threshold = DEFAULT_THRESHOLD,
     // SQLite 在运行时为连接临时造的"自动索引"= 它认为这里缺索引；每次查询都重建一遍
     for (const detail of plan) {
       const m = /^SEARCH (\S+) USING AUTOMATIC (?:PARTIAL )?(?:COVERING )?INDEX/.exec(detail)
-      if (!m || derived.has(m[1])) continue
+      // 同名保护（Codex 审计）：别名若在 SQL 里同时是某真实表的别名（如另一分支的 `LEFT JOIN fact w`），就不能因为别处有 `MATERIALIZE w` 而放过
+      if (!m || (derived.has(m[1]) && !tables.has(aliases.get(m[1]) ?? ''))) continue
       const table = aliases.get(m[1]) ?? m[1]
       const hit = allow.find(a => a.statement === s.id && a.table === table)
       const entry = { detail, table, kind: 'automatic_index', rows: tables.has(table) ? rowsOf(table) : null }
@@ -395,10 +396,12 @@ export function auditStatements(db, statements, { threshold = DEFAULT_THRESHOLD,
     }
     // expectSearch（AD3，Codex 审计）：除了"用了这个索引"，还必须是带范围 / 等值约束的 SEARCH（`SEARCH … USING [COVERING] INDEX <idx> (col>?)`），
     // 而不是对该索引的整条 SCAN——否则去掉区间谓词后计划退化成"覆盖索引全扫"，expectIndex 仍然绿
+    // Codex 审计：另一处不相干的 SEARCH 不能替主聚合"担保"——计划里只要还有对该索引的整条 SCAN（`SCAN x USING [COVERING] INDEX <idx>`），就不算满足
+    const fullIndexScan = s.expectSearch && s.expectIndex && plan.some(d => d.startsWith('SCAN ') && d.includes(` INDEX ${s.expectIndex}`))
     if (s.expectSearch && s.expectIndex && plan.some(d => d.includes(s.expectIndex)) &&
-        !plan.some(d => d.startsWith('SEARCH ') && d.includes(` INDEX ${s.expectIndex} (`))) {
+        (fullIndexScan || !plan.some(d => d.startsWith('SEARCH ') && d.includes(` INDEX ${s.expectIndex} (`)))) {
       const table = [...aliasMap(s.sql).values()][0] ?? '?'
-      violations.push({ statement: s.id, table, detail: plan.join(' | '), reason: `计划用了 ${s.expectIndex} 但不是带约束的 SEARCH（索引全扫，区间谓词失效）` })
+      violations.push({ statement: s.id, table, detail: plan.join(' | '), reason: `计划用了 ${s.expectIndex} 但不是带约束的 SEARCH，或同一索引另有整条索引扫描（索引全扫，区间谓词失效）` })
     }
     out.push({ id: s.id, mirrors: s.mirrors, bench: s.bench ?? null, plan, scans })
   }

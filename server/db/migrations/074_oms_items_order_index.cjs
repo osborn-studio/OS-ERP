@@ -15,7 +15,7 @@
  *   另一个被评估并**否决**的方案是 oms_orders(platform_id, order_time, …)：见 ADR-0044 补充 5 与 capacity-baseline（受限范围语句改用 SQL 提示即可走时间索引，不值得给热写表再加一棵 B 树）。
  *
  * 【写放大（诚实边界）】每个订单行多维护一棵 B 树（键 = oms_order_id + rowid），实测见 capacity-baseline。已执行迁移不改（ADR-0009）。
- * 【迁移安全】只加非 UNIQUE 索引、IF NOT EXISTS、表或列缺失则跳过；同名但定义不对（手工建过）则删掉重建（名字归本迁移所有）。大库上 CREATE INDEX 持写锁，耗时见 capacity-baseline。
+ * 【迁移安全】只加非 UNIQUE 索引、IF NOT EXISTS、表或列缺失则跳过；同名但定义不对（手工建在本表上）则删掉重建（名字归本迁移所有）；同名索引挂在**别的表**上则报错而不删（Codex 审计：070 的 up 对此仍会删，已执行迁移不改）。大库上 CREATE INDEX 持写锁，耗时见 capacity-baseline。
  * 【改它要注意什么】INDEXES 是 up 与 verify 的唯一来源；改动后同步 scripts/explain-audit.mjs（`oms.stats_top_skus*` 无豁免）并保持 tests/oms-sql.test.mjs 绿。
  * ============================================================================
  */
@@ -38,9 +38,16 @@ function definitionOk(db, ix) {
   return keys.join(',') === ix.cols.split(',').map((c) => c.trim()).join(',')
 }
 
+/** 同名索引挂在别的表上：不是"本迁移的索引定义漂移"，删它可能悄悄丢掉别处的唯一约束（Codex 审计）——直接报错，交给人处理 */
+function assertNameNotForeign(db, ix) {
+  const row = db.prepare("SELECT tbl_name FROM sqlite_master WHERE type='index' AND name=?").get(ix.name)
+  if (row && row.tbl_name !== ix.table) throw new Error(`索引名 ${ix.name} 已被表 ${row.tbl_name} 占用，迁移 074 不会删除它；请先人工改名或迁移该索引`)
+}
+
 module.exports.up = (db) => {
   for (const ix of INDEXES) {
     if (!applicable(db, ix)) continue
+    assertNameNotForeign(db, ix)
     if (hasIndex(db, ix.name) && !definitionOk(db, ix)) db.exec(`DROP INDEX ${ix.name}`)
     db.exec(`CREATE INDEX IF NOT EXISTS ${ix.name} ON ${ix.table}(${ix.cols})`)
   }

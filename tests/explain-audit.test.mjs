@@ -174,3 +174,23 @@ test('AF3 an automatic index on a MATERIALIZEd derived table is not a missing re
   const real = auditStatements(db, [{ id: 'real', mirrors: 'test', sql: 'SELECT d.id FROM dim_t d LEFT JOIN fact_t f ON f.amt = d.id' }], { threshold: 200, allow: [] })
   assert.ok(real.violations.some((v) => /AUTOMATIC/.test(v.detail) && v.table === 'fact_t'), JSON.stringify(real.statements[0].plan))
 })
+
+test('AF3 (Codex) derived-table exemption is per alias: a same-named real-table alias in another UNION branch is still flagged', (t) => {
+  const db = new Database(':memory:')
+  t.after(() => db.close())
+  db.exec('CREATE TABLE dim (id INTEGER PRIMARY KEY); CREATE TABLE source (id INTEGER PRIMARY KEY); CREATE TABLE fact (id INTEGER PRIMARY KEY, dim_id INTEGER)')
+  db.exec('INSERT INTO dim (id) VALUES (1),(2),(3)')
+  const ins = db.prepare('INSERT INTO fact (dim_id) VALUES (?)')
+  db.transaction(() => { for (let i = 0; i < 400; i++) ins.run(i % 3) })()
+  const sql = 'SELECT d.id FROM dim d LEFT JOIN (SELECT id FROM source GROUP BY id) w ON w.id = d.id UNION ALL SELECT d.id FROM dim d LEFT JOIN fact w ON w.dim_id = d.id'
+  const r = auditStatements(db, [{ id: 'collide', mirrors: 'test', sql }], { threshold: 200, allow: [] })
+  assert.ok(r.violations.some((v) => /AUTOMATIC/.test(v.detail) && v.table === 'fact'), JSON.stringify(r.statements[0].plan))
+})
+
+test('AF3 (Codex) expectSearch: an unrelated constrained SEARCH of the same index does not excuse a full scan of that index elsewhere in the statement', (t) => {
+  const db = migrated(t)
+  const sql = "SELECT SUM(main.pay_amount), (SELECT COUNT(*) FROM oms_orders probe WHERE probe.order_time >= ?) FROM oms_orders main WHERE date(main.order_time) >= ?"
+  const r = auditStatements(db, [{ id: 'probe', mirrors: 'test', sql, params: ['2026-01-01', '2026-01-01'], expectIndex: 'idx_oms_order_time', expectSearch: true }], { threshold: 1, allow: [] })
+  assert.equal(r.ok, false, JSON.stringify(r.statements[0].plan))
+  assert.ok(r.violations.some((v) => /整条索引扫描|索引全扫|不是带约束/.test(v.reason || '')), JSON.stringify(r.violations))
+})

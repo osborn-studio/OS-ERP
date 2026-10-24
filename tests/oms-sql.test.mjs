@@ -235,6 +235,12 @@ test('AF3 migration 074: creates idx_oms_items_order(oms_order_id), idempotent, 
   assert.equal(mig.verify(db), false, 'partial variant rejected')
   mig.up(db)
   assert.equal(mig.verify(db), true)
+  // Codex 审计：同名索引挂在别的表上——报错，不删（否则会悄悄丢掉别处的唯一约束）
+  db.exec('DROP INDEX idx_oms_items_order; CREATE TABLE af3_other (ref TEXT); CREATE UNIQUE INDEX idx_oms_items_order ON af3_other(ref)')
+  assert.throws(() => mig.up(db), /已被表 af3_other 占用/)
+  assert.ok(db.prepare("SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_oms_items_order' AND tbl_name='af3_other'").get(), 'the foreign unique index is still there')
+  db.exec('DROP INDEX idx_oms_items_order'); mig.up(db)
+  assert.equal(mig.verify(db), true)
   const bare = new Database(':memory:'); t.after(() => bare.close())
   mig.up(bare)
   assert.equal(mig.verify(bare), true, 'table missing: skipped')
@@ -283,14 +289,15 @@ test('AF3 explain-audit: all nine oms.stats_* / ai.platform_analysis statements 
   }
   // 变异：删掉迁移 074 的索引，top_skus 立刻变红（明细表整表扫描 / 自动索引，且没有豁免）
   db.exec('DROP INDEX idx_oms_items_order')
-  const noItems = auditStatements(db, ['oms.stats_top_skus', 'oms.stats_top_skus_scoped'].map((i) => byId.get(i)), { allow: [] })
+  const noItems = auditStatements(db, ids.map((i) => byId.get(i)), { allow: [] })
   assert.equal(noItems.ok, false)
+  assert.deepEqual([...new Set(noItems.violations.map((v) => v.statement))].sort(), ['oms.stats_top_skus', 'oms.stats_top_skus_scoped'], 'only the two topSkus statements go red without 074')
   db.exec('CREATE INDEX idx_oms_items_order ON oms_order_items(oms_order_id)')
   // 变异：删掉迁移 070 的索引，九条全部变红
   db.exec('DROP INDEX idx_oms_order_time')
   const bad = auditStatements(db, ids.map((i) => byId.get(i)), { allow: [] })
   assert.equal(bad.ok, false)
-  assert.ok(new Set(bad.violations.map((v) => v.statement)).size >= 8)
+  assert.deepEqual([...new Set(bad.violations.map((v) => v.statement))].sort(), [...ids].sort(), 'every one of the nine statements goes red without idx_oms_order_time')
 })
 
 test('AF3 scope predicate stays inside the statement: restricted scopes still bind their ids after the window and a stray platform is never counted', (t) => {
