@@ -348,6 +348,11 @@ const AB2_ROUTES = {
   'inventory-dist': '/api/dashboard/inventory-dist'
 }
 const profileLines = (out, label) => out().split('\n').filter((l) => l.includes('profile_blocks') && l.includes(`label=${label}`))
+/** 等到某个接口的 profile 行达到 n 条（子进程 stdout 与 HTTP 响应没有先后保证），最多 5 s */
+async function waitProfile(out, label, n) {
+  for (let i = 0; i < 100 && profileLines(out, label).length < n; i++) await delay(50)
+  assert.ok(profileLines(out, label).length >= n, `expected ${n} profile lines for ${label}, got ${profileLines(out, label).length}`)
+}
 const profileCache = (line) => /cache=(hit|miss)/.exec(line)?.[1]
 
 test('AB2 db-ttl-cache: keyed entries are independent, any write drops all keys, the key set is bounded', (t) => {
@@ -397,7 +402,7 @@ test('AB2 trend/top/todos/inventory-dist: profile line per endpoint (log only), 
     base[name] = a.body
     assert.ok(!/cache|profile/i.test(JSON.stringify(a.body.data)), `${name}: no cache or profile fields in the body`)
   }
-  await delay(300)
+  for (const name of Object.keys(AB2_ROUTES)) await waitProfile(f.output, `dashboard.${name}`, 2)
   for (const name of Object.keys(AB2_ROUTES)) {
     const lines = profileLines(f.output, `dashboard.${name}`)
     assert.equal(lines.length, 2, `${name}: one profile line per request`)
@@ -417,13 +422,14 @@ test('AB2 trend/top/todos/inventory-dist: profile line per endpoint (log only), 
   const d30 = await f.api('/api/dashboard/trend?days=30')
   assert.deepEqual(d7b.body, d7.body)
   assert.deepEqual(d30.body, base.trend)
-  await delay(300)
+  await waitProfile(f.output, 'dashboard.trend', 5)
   const tl = profileLines(f.output, 'dashboard.trend').map(profileCache)
   assert.deepEqual(tl, ['miss', 'hit', 'miss', 'hit', 'hit'])
   // top 同样按 days
   const t7 = await f.api('/api/dashboard/top?days=7')
   const t7b = await f.api('/api/dashboard/top?days=7')
   assert.deepEqual(t7b.body, t7.body)
+  await waitProfile(f.output, 'dashboard.top', 4)
   assert.deepEqual(profileLines(f.output, 'dashboard.top').map(profileCache), ['miss', 'hit', 'miss', 'hit'])
 })
 
@@ -439,7 +445,7 @@ test('AB2 cache never serves a global payload to a scope-restricted caller (rout
   const restricted = await f.scopedUser('ab2_scoped', orgId)
   // 先让管理员把四个接口的缓存全部预热
   for (const route of Object.values(AB2_ROUTES)) { await f.api(route); assert.equal((await f.api(route)).status, 200) }
-  await delay(300)
+  for (const n of Object.keys(AB2_ROUTES)) await waitProfile(f.output, `dashboard.${n}`, 2)
   const before = Object.keys(AB2_ROUTES).map((n) => profileLines(f.output, `dashboard.${n}`).length)
   for (const route of Object.values(AB2_ROUTES)) {
     const denied = await f.apiAs(restricted, route)
@@ -449,7 +455,7 @@ test('AB2 cache never serves a global payload to a scope-restricted caller (rout
     const anon = await f.apiAs(null, route)
     assert.equal(anon.status, 401, route)
   }
-  await delay(300)
+  await delay(500) // 负向断言：给（不应出现的）日志留出到达时间
   const after = Object.keys(AB2_ROUTES).map((n) => profileLines(f.output, `dashboard.${n}`).length)
   assert.deepEqual(after, before, 'rejected requests never reach the handler or the cache')
 })
@@ -486,7 +492,7 @@ test('AB2 two processes on one DB file: another process\'s commit drops this pro
   }
   const countHits = () => Object.keys(AB2_ROUTES).map((n) => profileLines(A.output, `dashboard.${n}`).map(profileCache))
   const w0 = await warm()
-  await delay(300)
+  for (const n of Object.keys(AB2_ROUTES)) await waitProfile(A.output, `dashboard.${n}`, 2)
   for (const seq of countHits()) assert.deepEqual(seq, ['miss', 'hit'])
 
   // ① 进程 B 经 HTTP 新建仓库 → A 的 inventory-dist（及其余三个）立即失效并反映
@@ -496,7 +502,7 @@ test('AB2 two processes on one DB file: another process\'s commit drops this pro
   assert.ok(dist.body.data.byWarehouse.some((w) => w.warehouse_name === 'ab2 两进程仓'), 'process A must see the warehouse committed by process B')
   assert.equal(w0['inventory-dist'].byWarehouse.some((w) => w.warehouse_name === 'ab2 两进程仓'), false)
   for (const route of [AB2_ROUTES.trend, AB2_ROUTES.top, AB2_ROUTES.todos]) await A.api(route)
-  await delay(300)
+  for (const n of Object.keys(AB2_ROUTES)) await waitProfile(A.output, `dashboard.${n}`, 3)
   for (const seq of countHits()) assert.equal(seq[2], 'miss', 'every cached endpoint of A recomputes after B committed')
 
   // ② 独立 node 进程直接写 SQL（单据 + 明细）→ trend / top / todos 的内容立即变化
@@ -515,7 +521,7 @@ test('AB2 two processes on one DB file: another process\'s commit drops this pro
   assert.equal(top.body.data.dealers[0].amount >= 99999999, true)
   // 写入之后重复读重新命中（说明失效来自写入，不是缓存坏了）
   assert.deepEqual((await A.api('/api/dashboard/top')).body, top.body)
-  await delay(300)
+  await waitProfile(A.output, 'dashboard.top', 7)
   assert.equal(profileCache(profileLines(A.output, 'dashboard.top').at(-1)), 'hit')
 })
 
@@ -547,6 +553,8 @@ test('AB2 /top and /inventory-dist rewrites return the same rows as the original
   const f = await server(t)
   const db = f.db
   db.pragma('foreign_keys=OFF')
+  // 受控夹具：清掉演示种子的销售单，保证 LIMIT 10 的榜单里只有下面这些行（边界用例不会被种子数据挤出榜外）
+  db.exec('DELETE FROM sales_order_items; DELETE FROM sales_orders')
   const today = db.prepare("SELECT date('now','localtime') d").get().d
   const old = db.prepare("SELECT date('now','localtime','-90 day') d").get().d
   const dealers = db.prepare('SELECT id FROM dealers ORDER BY id LIMIT 3').all().map((x) => x.id)
@@ -583,7 +591,10 @@ test('AB2 /top and /inventory-dist rewrites return the same rows as the original
     const want = db.prepare(OLD_TOP[k]).all()
     assert.deepEqual(norm(top[k]), norm(want), k)
   }
-  assert.ok(top.products.length >= 4 && top.brands.length >= 2, 'fixture must exercise several groups')
+  assert.equal(top.products.length, 4, 'branded, unbranded and the two tied products')
+  assert.deepEqual(top.brands.map((b) => b.brand_name).sort(), ['AB2品牌', '未标品牌'].sort())
+  assert.ok(top.products.some((p) => p.brand_name === null), 'the unbranded product is in the ranking')
+  assert.equal(top.dealers.length, 2); assert.equal(top.stores.length, 1)
   assert.ok(!top.products.some((p) => p.qty === 99), 'cancelled / draft / out-of-window rows excluded')
   const dist = (await f.api('/api/dashboard/inventory-dist')).body.data
   for (const k of ['byWarehouse', 'byCategory']) {
