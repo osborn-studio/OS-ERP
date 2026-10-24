@@ -53,6 +53,8 @@ const section = (t) => console.log(`\n\x1b[36m${t}\x1b[0m`)
 
 const { TOOLS } = await import('../server/mcp/tools.js')
 const { GENERIC_DOC_TOOLS, ownershipColumns } = await import('../server/mcp/catalog.js')
+const { DOC_VIEW_PERMS, viewPermsOf } = await import('../server/mcp/doc-perms.js')
+const { DOC_SCOPE_RESOLVERS } = await import('../server/lib/docflow.js')
 
 const db = new Database(DB_PATH, { readonly: true })
 
@@ -138,6 +140,50 @@ ok(
   `新增了没有归属列的单据（受限令牌会静默看不到它）：${unexpected.join(' / ')}`
 )
 ok('扫描面自证：读到 ≥ 30 种单据（否则是路径/行业写错了）', types.length >= 30, `实得 ${types.length}`)
+
+// ---------------------------------------------------------------- ②b 每种单据都要有查看权限点（X5）
+section('②b 每一种单据都必须登记查看权限点（否则 doc.query / doc.get 默认拒绝）')
+const typeCodes = types.map((t) => t.code)
+const unmappedTypes = typeCodes.filter((c) => !viewPermsOf(c))
+ok('所有在用单据类型都在 DOC_VIEW_PERMS 里有查看权限点', unmappedTypes.length === 0, `未映射（读工具将默认拒绝）：${unmappedTypes.join(' / ')}`)
+const knownPerms = new Set(db.prepare('SELECT code FROM permissions').all().map((r) => r.code))
+const badPerms = []
+for (const [code, e] of Object.entries(DOC_VIEW_PERMS)) for (const p of e.perms) if (!knownPerms.has(p)) badPerms.push(`${code}:${p}`)
+ok('映射里的权限点都是 permissions 表里真实存在的码', badPerms.length === 0, badPerms.join(' / '))
+const staleMap = Object.keys(DOC_VIEW_PERMS).filter((c) => !typeCodes.includes(c))
+ok('映射里没有已不存在的单据类型', staleMap.length === 0, staleMap.join(' / '))
+ok('映射里没有空权限列表（空 = 无人可看）', Object.entries(DOC_VIEW_PERMS).every(([, e]) => e.perms.length > 0), '有类型映射到 []')
+const genericSrc = ['doc.query', 'doc.get'].map((n) => String(toolMap.get(n)?.handler || ''))
+ok('`doc.query` / `doc.get` 走了类型级查看权限闸门（assertCanViewDocType）', genericSrc.every((x) => x.includes('assertCanViewDocType')), '读工具没有按类型校验所有者权限')
+ok('`doc.list_types` 按类型过滤（canViewDocType）', String(toolMap.get('doc.list_types')?.handler || '').includes('canViewDocType'), '字典会列出无权查看的类型')
+ok('`doc.query` / `doc.get` 对绑定类型过滤到所有者的门店 / 经销商（bindingWhere / rowInBinding，Y6）',
+  String(toolMap.get('doc.query')?.handler || '').includes('bindingWhere') && String(toolMap.get('doc.get')?.handler || '').includes('rowInBinding'),
+  '绑定类型的读工具没有按所有者绑定收窄')
+const badBind = []
+for (const [code, e] of Object.entries(DOC_VIEW_PERMS)) {
+  if (!e.binding) continue
+  const t = types.find((x) => x.code === code)
+  const cols = t ? db.prepare(`PRAGMA table_info(${t.table_name})`).all().map((c) => c.name) : []
+  if (!['store', 'dealer', 'subject'].includes(e.binding) || !cols.includes(e.bindCol)) badBind.push(`${code}:${e.binding}/${e.bindCol}`)
+}
+ok('DOC_VIEW_PERMS 的绑定声明合法且归属列真实存在（Y6）', badBind.length === 0, badBind.join(' / '))
+// AB7 / AC3：DOC_VIEW_PERMS 里**每个**绑定类型（store / dealer / subject）都必须在 DOC_SCOPE_RESOLVERS 声明同一个 binding，
+// 反向亦然（无残留白名单）；DS / RB 这类总部专属、没有自视图的经销商往来类型在注册表声明 `binding: 'hq'`（任何门店 / 经销商绑定的账号整类不可见）。
+const bindMissing = Object.entries(DOC_VIEW_PERMS).filter(([c, e]) => e.binding && DOC_SCOPE_RESOLVERS[c]?.binding !== e.binding).map(([c, e]) => `${c}(应为 ${e.binding}，实为 ${DOC_SCOPE_RESOLVERS[c]?.binding ?? '无'})`)
+ok('DOC_VIEW_PERMS 的每个绑定类型在 DOC_SCOPE_RESOLVERS 都有同一个 binding 规则（AC3，无残留白名单）', bindMissing.length === 0, bindMissing.join(' / '))
+const bindExtra = Object.entries(DOC_SCOPE_RESOLVERS)
+  .filter(([c, sp]) => sp.binding && sp.binding !== 'hq' && DOC_VIEW_PERMS[c]?.binding !== sp.binding)
+  .map(([c, sp]) => `${c}(注册表 ${sp.binding}，DOC_VIEW_PERMS ${DOC_VIEW_PERMS[c]?.binding ?? '无'})`)
+ok('注册表里的 store / dealer / subject 绑定在 DOC_VIEW_PERMS 里同样声明（两处不漂移）', bindExtra.length === 0, bindExtra.join(' / '))
+const hqBad = Object.entries(DOC_SCOPE_RESOLVERS)
+  .filter(([c, sp]) => (sp.binding === 'hq') !== (sp.builder === 'dealer' && !DOC_VIEW_PERMS[c]?.binding))
+  .map(([c]) => c)
+ok('经销商往来类型要么按经销商绑定（DR）、要么声明 hq（DS / RB）；hq 只用于未绑定的经销商往来类型', hqBad.length === 0, hqBad.join(' / '))
+const colDrift = Object.entries(DOC_VIEW_PERMS)
+  .filter(([c, e]) => (e.binding === 'store' || e.binding === 'dealer') && DOC_SCOPE_RESOLVERS[c]?.cols?.[0] !== e.bindCol)
+  .map(([c]) => c)
+ok('store / dealer 绑定的归属列在两处一致（resolver cols[0] == bindCol）', colDrift.length === 0, colDrift.join(' / '))
+ok('读工具的范围上下文启用 strictBinding（docScopeCtx，AB7）', /strictBinding:\s*true/.test((await import('node:fs')).readFileSync(new URL('../server/mcp/tools.js', import.meta.url), 'utf8')), 'docScopeCtx 没有 strictBinding')
 
 // ---------------------------------------------------------------- ③ 覆盖结论
 section('③ 覆盖结论（打印给人看，可复算）')

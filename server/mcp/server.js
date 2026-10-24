@@ -33,11 +33,14 @@ import { localNow } from '../lib/dates.js'
 import { TOOLS, TOOL_MAP, toolToMcp } from './tools.js'
 import { validateToolArgs } from './validate.js'
 import { extractToken, verifyToken, tokenScopes, tokenAllow, tokenDeny, touchToken, SCOPE_LABEL } from './tokens.js'
-import { resolveDelegation, effectiveScope, ownerToolDenied } from './delegation.js'
+import { resolveDelegation, effectiveScope, ownerToolDenied, scopeCovers, scopeSnapshot, permSnapshot, permsCovered } from './delegation.js'
 import { requireAuth, requirePerm } from '../middleware/auth.js'
 import * as engine from '../lib/stock.js'
 import { versionInfo } from '../version.js'
 import { logger } from '../lib/logger.js'
+import { incCounter, incMcpToolCall, registerMcpTools } from '../lib/process-counters.js'
+import { bizFail } from '../lib/http.js'
+import { createMcpRateLimiter } from '../lib/mcp-rate-limit.js'
 
 const r = Router()
 
@@ -94,6 +97,7 @@ const VIRTUAL_TOOLS = {
     handler: ({ db }) => ({ data: db.prepare('SELECT param_key, param_value, remark FROM inv_params ORDER BY id').all() })
   }
 }
+registerMcpTools([...TOOLS.map((t) => t.name), ...Object.keys(VIRTUAL_TOOLS)])
 function resolveTool(name) {
   return TOOL_MAP.get(name) || VIRTUAL_TOOLS[name] || null
 }
@@ -124,6 +128,51 @@ function argsFingerprint(args) {
 // ============================================================
 // 工具执行
 // ============================================================
+
+// ---- 速率限制与日配额（ADR-0056 / AD9）----
+// 键 = 验签后的令牌行 id（不读请求体 / 头 / IP）。超限 ⇒ HTTP 429 + `Retry-After`，业务码 `MCP_RATE_LIMITED` 由 `bizFail` 构造（唯一构造点），
+// 同时保留 JSON-RPC 外壳（jsonrpc / id）与工具级错误的 `result.isError` 形态，MCP 客户端仍能把原因交给模型。
+// 被限流的调用不写审计行（否则洪泛会变成对 SQLite 的写放大），只进进程内计数器 `os_erp_mcp_tool_calls_total{code="MCP_RATE_LIMITED"}`。
+const mcpLimiter = createMcpRateLimiter()
+/** 后台定时器入口（server/index.js）：清理某个行业库里的过期限速桶（memory 模式为空操作） */
+export function purgeMcpRateBuckets(db) { return mcpLimiter.purge(db) }
+export const mcpRateStore = mcpLimiter.policy.store
+const RATE_TEXT = {
+  rpm: (d) => `该 Token 每分钟调用已达上限（${mcpLimiter.policy.rpm} 次），请 ${d.retryAfter} 秒后重试`,
+  write_rpm: (d) => `该 Token 每分钟写型调用已达上限（${mcpLimiter.policy.writeRpm} 次），请 ${d.retryAfter} 秒后重试`,
+  daily_quota: (d) => `该 Token 今日调用已达配额（${d.quota} 次），请次日再试或联系管理员调整`,
+  store_unavailable: () => '限流存储（mcp_rate_buckets）写入失败，为安全起见拒绝本次调用，请稍后重试或联系管理员',
+  unavailable: () => '限流状态暂不可用，为安全起见拒绝本次调用，请稍后重试'
+}
+
+function rateLimited(res, id, tool, d) {
+  incMcpToolCall(tool?.name, 'MCP_RATE_LIMITED')
+  const reason = ['daily_quota', 'rpm', 'write_rpm', 'store_unavailable'].includes(d.reason) ? d.reason : 'unavailable'
+  const retryAfter = Math.max(1, Math.floor(d.retryAfter || 1))
+  const err = Object.assign(new Error(RATE_TEXT[reason]({ ...d, retryAfter })), {
+    code: 'MCP_RATE_LIMITED', status: 429, detail: { reason, retry_after: retryAfter }
+  })
+  const cap = { status: 429, body: null }
+  bizFail({ status(s) { cap.status = s; return this }, json(b) { cap.body = b; return this } }, err)
+  res.set('Retry-After', String(retryAfter))
+  // JSON-RPC 要求 `error` 与 `result` 二选一，所以这里**不带**顶层 `error` 字符串：业务码在 `detail.code`（bizFail 约定）与 result 文本里。
+  const { error: _code, ...biz } = cap.body
+  return res.status(cap.status).json({
+    jsonrpc: '2.0',
+    id,
+    ...biz,
+    result: { content: [{ type: 'text', text: JSON.stringify({ error: 'MCP_RATE_LIMITED', message: cap.body.message, detail: cap.body.detail }, null, 2) }], isError: true }
+  })
+}
+
+/** 速率 + 日配额的一次判定；通过返回 null，否则返回拒绝详情 */
+function mcpBudget(db, tokenId, level) {
+  const scope = getCurrentIndustry() ?? '' // 令牌 id 在各行业库里各自编号，限流键必须带库标识
+  const rate = mcpLimiter.consume(tokenId, level, scope, db)
+  if (!rate.allowed) return rate
+  const q = mcpLimiter.daily(db, tokenId, scope)
+  return q.allowed ? null : q
+}
 
 // 凭据 / 协议层错误。`data.code` 是给客户端程序判定用的**稳定业务码**（ADR-0011），
 // `message` 是给人看的；只给 message 的话客户端只能靠字符串匹配中文。
@@ -183,14 +232,17 @@ function insertCallLog(db, { token, tool, ok, errorCode, errorMessage, args, sum
     const err = new Error(`调用审计暂不可用，操作未提交：${e?.message ?? e}`)
     err.code = 'AUDIT_UNAVAILABLE'
     err.status = 503
+    incCounter('audit_strict_write_failures_total', 'mcp_call_log')
     throw err
   }
   if (inserted.changes !== 1) {
     const err = new Error('调用审计未落行，操作未提交')
     err.code = 'AUDIT_UNAVAILABLE'
     err.status = 503
+    incCounter('audit_strict_write_failures_total', 'mcp_call_log')
     throw err
   }
+  incMcpToolCall(tool?.name, ok ? null : errorCode ?? 'other') // AB10：仅审计行落地的调用计数；label 在计数器内折成封闭集合
 }
 
 /**
@@ -208,6 +260,47 @@ function logCall(db, entry) {
 /** 严格审计：写型 / 高危工具的成功路径用它，**与业务过账同一事务**，写不进去就一起回滚。 */
 function auditOrThrow(db, entry) {
   insertCallLog(db, entry)
+}
+
+// ---- Z8：缓存 / 确认单命中前重验（ADR-0011 Z8 补充）----
+// 闸门（凭据 → 令牌级别/白黑名单 → 所有者权限点 → 入参）在幂等缓存与确认单查询**之前**就已全部重跑；
+// 它们拒绝时本来就返回"当前错误"，这里只补一件事：**让审计看得出这次拒绝挡住了一份本可回放的缓存**。
+export const CACHE_DENIED = 'cache_denied'
+function cacheDeniedMark(db, row, tool, args) {
+  try {
+    if (tool?.level === 'write' && args?.idempotency_key) {
+      const hit = db
+        .prepare('SELECT 1 AS x FROM mcp_idempotency WHERE idempotency_key=? AND token_id=? AND tool_name=?')
+        .get(String(args.idempotency_key), row.id, tool.name)
+      if (hit) return `${CACHE_DENIED}：幂等缓存未被回放`
+    } else if (tool?.level === 'danger' && args?.confirm_token) {
+      const hit = db
+        .prepare("SELECT 1 AS x FROM mcp_confirmations WHERE confirm_token=? AND token_id=? AND tool_name=? AND status='confirmed'")
+        .get(String(args.confirm_token), row.id, tool.name)
+      if (hit) return `${CACHE_DENIED}：已确认的二次确认单未被消费`
+    }
+  } catch {
+    // 标记只是审计的附加信息，查不到不影响拒绝本身
+  }
+  return undefined
+}
+
+/** 缓存行 = `{__replay, scope, data}`；Z8 之前写入的旧行是裸 data，范围未知（scope=null ⇒ 受限范围下不回放）。 */
+function parseCachedResult(json) {
+  let v
+  try {
+    v = JSON.parse(json || '{}')
+  } catch {
+    v = {}
+  }
+  if (v && typeof v === 'object' && v.__replay === 1 && 'data' in v) return { scope: v.scope ?? null, perms: v.perms ?? null, data: v.data }
+  return { scope: null, perms: null, data: v }
+}
+
+function cacheDeniedFields(db, row, tool, args) {
+  const summary = cacheDeniedMark(db, row, tool, args)
+  if (!summary) return {}
+  return { summary, ...(tool.level === 'write' ? { idemKey: String(args.idempotency_key) } : {}) }
 }
 
 function buildContext(db, row, delegation) {
@@ -320,6 +413,8 @@ r.post('/', (req, res) => {
       const toolName = RESOURCE_TOOL[uri]
       if (!toolName) return rpcError(res, id, -32602, `未知资源：${uri}`)
       const tool = resolveTool(toolName)
+      const limited = mcpBudget(db, row.id, 'read')
+      if (limited) return rateLimited(res, id, tool, limited)
       const denied = checkToolAccess(tool, gate)
       if (denied) {
         logCall(db, { token: row, tool, ok: false, errorCode: denied.code, args: { uri }, ip: req.ip })
@@ -389,6 +484,9 @@ r.post('/', (req, res) => {
     const ip = req.ip
 
     const tool = TOOL_MAP.get(toolName)
+    // 限流在一切工具判定之前：未知工具、无权限、参数非法的调用同样占额度（猜工具名 / 撞权限也受限）
+    const limited = mcpBudget(db, row.id, tool?.level)
+    if (limited) return rateLimited(res, id, tool, limited)
     if (!tool) {
       logCall(db, { token: row, tool: { name: toolName }, ok: false, errorCode: 'TOOL_NOT_FOUND', args, ip })
       return toolError(res, id, 'TOOL_NOT_FOUND', `未知工具：${toolName}`)
@@ -397,7 +495,7 @@ r.post('/', (req, res) => {
     // 权限范围校验（与 resources/read 同一份判定；含所有者当前权限点）
     const access = checkToolAccess(tool, gate)
     if (access) {
-      logCall(db, { token: row, tool, ok: false, errorCode: access.code, args, ip })
+      logCall(db, { token: row, tool, ok: false, errorCode: access.code, args, ip, ...cacheDeniedFields(db, row, tool, args) })
       return toolError(res, id, access.code, access.message)
     }
 
@@ -406,7 +504,7 @@ r.post('/', (req, res) => {
     // 在 SQL 或算术里变成一个静默的默认值 —— AI 以为点了、系统没收到。
     const check = validateToolArgs(tool, args)
     if (!check.ok) {
-      logCall(db, { token: row, tool, ok: false, errorCode: check.code, args, ip })
+      logCall(db, { token: row, tool, ok: false, errorCode: check.code, args, ip, ...cacheDeniedFields(db, row, tool, args) })
       return toolError(res, id, check.code, check.error, check.missing ? { required: check.missing } : undefined)
     }
 
@@ -439,7 +537,23 @@ r.post('/', (req, res) => {
             { level: 'write' }
           )
         }
-        const data = JSON.parse(cached.result_json || '{}')
+        // Z8：命中前重验**数据范围**。凭据 / 级别 / 所有者权限点的闸门在上面已对本次调用重跑过；
+        // 剩下的是工具自己在 handler 里做的领域范围判定 —— 命中缓存不会进 handler，所以改用
+        // "首次执行时记下的有效范围"对照"当前有效范围"（不重跑 handler，因此不可能重复过账）。
+        const stored = parseCachedResult(cached.result_json)
+        if (!scopeCovers(ctx.scope, stored.scope)) {
+          // 注意：首次调用已经提交。这里**不**建议"换新幂等键重试"——那会把已提交的写再执行一遍。
+          const msg = '令牌所有者当前的数据范围已不覆盖该幂等键首次执行时的范围，缓存结果不再回放。该键对应的操作此前已提交，请先用查询工具核对结果，不要重复提交'
+          logCall(db, { token: row, tool, ok: false, errorCode: 'ORG_OUT_OF_SCOPE', errorMessage: msg, args, ip, idemKey, summary: `${CACHE_DENIED}：数据范围缩小，幂等缓存未被回放` })
+          return toolError(res, id, 'ORG_OUT_OF_SCOPE', msg, { level: 'write' })
+        }
+        // 无声明权限点的工具（权限在 handler 内按边判）：所有者权限集合不得少于首次执行时
+        if (!(tool.perms || []).length && !permsCovered(delegation, stored.perms)) {
+          const msg = '令牌所有者当前的权限已少于该幂等键首次执行时，缓存结果不再回放。该键对应的操作此前已提交，请先用查询工具核对结果，不要重复提交'
+          logCall(db, { token: row, tool, ok: false, errorCode: 'TOKEN_OWNER_PERM_DENIED', errorMessage: msg, args, ip, idemKey, summary: `${CACHE_DENIED}：所有者权限减少，幂等缓存未被回放` })
+          return toolError(res, id, 'TOKEN_OWNER_PERM_DENIED', msg, { level: 'write' })
+        }
+        const data = stored.data
         logCall(db, { token: row, tool, ok: true, args, summary: '幂等命中，返回首次结果', durationMs: Date.now() - started, ip, idemKey })
         return res.json({ jsonrpc: '2.0', id, result: { ...textResult(data, '幂等命中：该幂等键此前已执行，返回首次执行结果'), isError: false, _idempotent_replay: true } })
       }
@@ -553,7 +667,7 @@ r.post('/', (req, res) => {
       if (idemKey) {
         db.prepare(
           'INSERT OR IGNORE INTO mcp_idempotency (idempotency_key, tool_name, token_id, result_json, args_hash) VALUES (?,?,?,?,?)'
-        ).run(String(idemKey), tool.name, row.id, JSON.stringify(out.data), argsHash)
+        ).run(String(idemKey), tool.name, row.id, JSON.stringify({ __replay: 1, scope: scopeSnapshot(ctx.scope), perms: permSnapshot(delegation), data: out.data }), argsHash)
       }
       touchToken(db, row.id)
       // F13：写型 / 高危工具的审计与业务过账**同生共死** —— 审计写不进去，上面的过账、幂等缓存、
@@ -578,7 +692,9 @@ r.post('/', (req, res) => {
       // 这里**没有**"退回到 confirmed"的补救代码，因为不再需要：
       // 占用是同一事务里做的，执行失败 ⇒ 整个事务回滚 ⇒ 确认单自然回到 `confirmed`（可再次执行）。
       // 结果一样，但性质完全不同：一个是"回滚的自然结果"，一个是"必须记得写的补丁"。
-      logCall(db, { token: row, tool, ok: false, errorCode: e.code || 'EXEC_ERROR', errorMessage: e.message, args: execArgs, durationMs: took, ip, idemKey })
+      // 已确认的二次确认单在使用时被所有者当前权限 / 范围挡下：事务已回滚、确认单仍是 confirmed，审计标出来
+      const denial = claimedToken && (e.status === 403 || e.status === 404 || String(e.code || '').startsWith('TOKEN_OWNER_'))
+      logCall(db, { token: row, tool, ok: false, errorCode: e.code || 'EXEC_ERROR', errorMessage: e.message, args: execArgs, durationMs: took, ip, idemKey, summary: denial ? `${CACHE_DENIED}：已确认的二次确认单未被消费` : undefined })
       return res.json({
         jsonrpc: '2.0',
         id,

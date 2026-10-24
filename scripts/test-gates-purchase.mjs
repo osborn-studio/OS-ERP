@@ -274,7 +274,9 @@ function assertNoSideEffect(label, kind, docTable, id, beforeSnap, beforeTable) 
   const afterSnap = snapAll()
   const changed = diffTables(beforeSnap, afterSnap).filter((t) => beforeSnap[t] !== afterSnap[t])
   const rule = ALLOW[kind]
-  const extra = changed.filter((t) => !rule.allow.includes(t))
+  // audit_logs 的 FTS5 影子表（迁移 067：audit_logs_fts / _data / _idx / _docsize / _config）由触发器随 audit_logs 一起变，视作 audit_logs 的一部分
+  const derived = (t) => t.startsWith('audit_logs_fts')
+  const extra = changed.filter((t) => !rule.allow.includes(t) && !derived(t))
   ok(`${label}：变更的表 ⊆ 白名单〔${rule.allow.join(' / ')}〕`, extra.length === 0,
     extra.length ? `多动了 ${extra.length} 张：${extra.join(' / ')}` : `实测变更 ${changed.length} 张：${changed.join(' / ') || '（无）'}`)
 

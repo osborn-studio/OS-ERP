@@ -20,7 +20,7 @@
 
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Sparkles, PlayCircle, BookOpen } from 'lucide-react'
+import { Sparkles, PlayCircle, BookOpen, RefreshCw } from 'lucide-react'
 import {
   ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid,
   PieChart, Pie, Cell, BarChart, Bar
@@ -29,6 +29,7 @@ import { useFetch, Card, StatCard, SectionTitle, Status, fmtMoney, fmtInt, fmtPc
 import { useAuth } from '../store/auth'
 import { useRuntimeCapabilities } from '../store/runtime-capabilities'
 import { hasDealer } from '../constants/capabilities'
+import { selectCacheStamp } from '../utils/cache-stamp'
 
 const PIE_COLORS = ['#2568a6', '#1d9e75', '#7f77dd', '#d85a30', '#ba7517', '#d4537e', '#5f5e5a']
 
@@ -37,12 +38,19 @@ export default function Dashboard() {
   const { industry } = useAuth()
   const { isDemo } = useRuntimeCapabilities()
   const showDealer = hasDealer(industry)
-  const { data: s } = useFetch<any>('/dashboard/summary')
-  const { data: trend } = useFetch<any[]>('/dashboard/trend', { days: 30 })
-  const { data: channel } = useFetch<any>('/dashboard/channel', { days: 90 })
-  const { data: top } = useFetch<any>('/dashboard/top', { days: 30 })
-  const { data: todos } = useFetch<any>('/dashboard/todos')
-  const { data: recent } = useFetch<any>('/dashboard/recent')
+  const { data: s, stamp: sStamp, reload: reloadSummary, loading: sLoading, error: sErr, errorStatus: sStatus } = useFetch<any>('/dashboard/summary')
+  const { data: trend, stamp: trendStamp, reload: reloadTrend, loading: trendLoading, error: trendErr } = useFetch<any[]>('/dashboard/trend', { days: 30 })
+  const { data: channel, reload: reloadChannel } = useFetch<any>('/dashboard/channel', { days: 90 })
+  const { data: top, stamp: topStamp, reload: reloadTop, loading: topLoading, error: topErr } = useFetch<any>('/dashboard/top', { days: 30 })
+  const { data: todos, stamp: todosStamp, reload: reloadTodos, loading: todosLoading, error: todosErr } = useFetch<any>('/dashboard/todos')
+  const { data: recent, reload: reloadRecent } = useFetch<any>('/dashboard/recent')
+  // AC11：四个缓存接口（summary / trend / top / todos）的“数据截至”戳——取最早的一个；有任何一个没戳就不显示（见 utils/cache-stamp.ts）
+  const stampView = selectCacheStamp([sStamp, trendStamp, topStamp, todosStamp])
+  const refreshing = sLoading || trendLoading || topLoading || todosLoading
+  // 取数失败时页面保留上一次成功的数据与戳（戳仍然诚实：那就是这些数据的时间），但必须明说“刷新失败”，并且仍给重试入口；401/403 不画重试（无权限不是重试能解决的）
+  const failed = !refreshing && !!(sErr || trendErr || topErr || todosErr)
+  const denied = sStatus === 401 || sStatus === 403
+  const refreshAll = () => { reloadSummary(); reloadTrend(); reloadChannel(); reloadTop(); reloadTodos(); reloadRecent() }
 
   const channelData = [
     ...(channel?.offline || []).map((x: any) => ({ name: x.name, value: Number(x.amount || 0) })),
@@ -59,6 +67,17 @@ export default function Dashboard() {
       {/* 演示环境声明：放在**第一屏最上面**，因为演示时客户第一个问题往往是
           "这是真实数据吗"。含糊其辞比不写更糟 —— 一旦被追问出一张真实单号，信任就没了。 */}
       {isDemo && <DemoBanner industry={industry} />}
+
+      {/* AC11：缓存戳 + 刷新。刷新只是重新取数：缓存未过期且库无写入时服务端仍返回同一份（戳不变），这正是戳存在的原因 */}
+      {(stampView || (failed && !denied)) && (
+        <div className="flex items-center justify-end gap-2 text-[12px] text-slate-500">
+          {failed && <span role="alert" data-testid="dashboard-refresh-failed" className="text-red-600">刷新失败，下方显示的是上一次成功取到的数据</span>}
+          {stampView && <span data-testid="dashboard-cache-stamp" data-cached-at={stampView.cachedAt} data-ttl-ms={stampView.ttlMs}>{stampView.text}</span>}
+          <button type="button" className="btn-ghost btn-sm" data-testid="dashboard-refresh" disabled={refreshing} onClick={refreshAll}>
+            <RefreshCw size={13} className={refreshing ? 'animate-spin' : ''} /> {refreshing ? '刷新中…' : '刷新'}
+          </button>
+        </div>
+      )}
 
       {/* KPI */}
       <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3">

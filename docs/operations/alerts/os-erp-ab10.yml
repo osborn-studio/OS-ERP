@@ -1,0 +1,56 @@
+groups:
+  - name: os-erp-ab10
+    rules:
+      - alert: OsErpDashboardCacheIneffective
+        # 看板请求持续、但命中率低于 20%：库写入频繁使缓存不断失效，或 TTL 被配得过短。命中率低本身不是故障，仅提示
+        expr: |
+          sum(increase(os_erp_dashboard_cache_total{result="hit"}[30m]))
+            / clamp_min(sum(increase(os_erp_dashboard_cache_total[30m])), 1) < 0.2
+          and sum(increase(os_erp_dashboard_cache_total[30m])) > 60
+        for: 30m
+        labels: { severity: info }
+        annotations:
+          summary: "总部看板缓存命中率低"
+          description: "检查 GML_DASHBOARD_CACHE_MS 是否为 0/过小，或写入是否过于频繁（ADR-0044：任何写入都会让缓存失效）。"
+
+      - alert: OsErpAuditWriteSlow
+        # 审计写入 p95 超过 100 ms：磁盘或锁争用，会拖慢所有受审计的写请求
+        expr: histogram_quantile(0.95, sum by (le) (rate(os_erp_audit_write_duration_seconds_bucket[10m]))) > 0.1
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "审计写入 p95 延迟超过 100ms"
+          description: "检查磁盘 IO、WAL 检查点、备份是否与写入重叠；与 OsErpWriteContention 一起看。"
+
+      - alert: OsErpMcpDeniedSpike
+        # 权限/范围类拒绝突增：令牌被滥用或配置错误的 Agent 在反复撞墙
+        expr: sum(increase(os_erp_mcp_tool_calls_total{code=~"PERM_DENIED|SCOPE_DENIED|TOOL_DENIED|TOOL_NOT_ALLOWED|TOKEN_OWNER_PERM_DENIED|ORG_OUT_OF_SCOPE"}[10m])) > 50
+        labels: { severity: warning }
+        annotations:
+          summary: "MCP 工具调用被拒绝次数突增"
+          description: "到 MCP 调用日志（mcp_call_logs）按 token_name 看是谁；必要时吊销该令牌。"
+
+      - alert: OsErpMcpAuditUnavailable
+        # 调用审计写不进去的同时仍有工具调用失败：与 OsErpAuditStrictWriteFailing 互补（后者按失败计数，这里看 AUDIT_UNAVAILABLE 结果码）
+        expr: increase(os_erp_mcp_tool_calls_total{code="AUDIT_UNAVAILABLE"}[10m]) > 0
+        labels: { severity: critical }
+        annotations:
+          summary: "MCP 写型工具因调用审计不可用而被拒"
+          description: "检查 mcp_call_logs 表与磁盘；见 ADR-0011。"
+
+      - alert: OsErpMcpRateLimited
+        # 持续被限流：令牌被滥用、Agent 死循环重试，或默认额度（600/分、写 60/分）对该用法太小（ADR-0056）
+        expr: sum(increase(os_erp_mcp_tool_calls_total{code="MCP_RATE_LIMITED"}[10m])) > 20
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "MCP 调用持续被速率限制或日配额拒绝（429）"
+          description: "到 MCP 调用日志按 token_name 找调用量最大的令牌（被限流的调用不写审计行，看放行的那部分即可）；确认是滥用则吊销令牌，是合理用量则调 GML_MCP_TOKEN_RPM / GML_MCP_WRITE_RPM 或设置键 mcp_token_daily_quota。"
+
+      - alert: OsErpMcpRateStoreUnavailable
+        # AE9：GML_MCP_RATE_STORE=db 时限速桶写入失败。fail closed —— 失败期间对应的 MCP 调用全部被拒（429，detail.reason=store_unavailable），所以不等 for
+        expr: sum(increase(os_erp_mcp_rate_store_failures_total{reason="write_failed"}[5m])) > 0
+        labels: { severity: critical }
+        annotations:
+          summary: "MCP 限速存储（mcp_rate_buckets）写入失败，调用被安全拒绝"
+          description: "检查数据库文件所在磁盘 / 权限 / 写锁争用（日志里 mcp rate store write failed 一行含 err_code）与迁移 073 是否已执行；purge_failed 则是后台清理过期桶失败（不影响放行，但表会变大）。见 ADR-0056 补充。"

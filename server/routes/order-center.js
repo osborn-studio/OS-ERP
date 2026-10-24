@@ -35,7 +35,7 @@ import {
   buildStatement, getStatement, settleStatement, confirmStatement,
   closeStatement, voidStatement,
   overview, pickWarehouse, customerWarehouseIds,
-  selfCustomerId as ocSelfCustomerId, ocAccessCheck
+  selfCustomerId as ocSelfCustomerId, ocAccessCheck, ocScope, customerInScope
 } from '../lib/order-center.js'
 
 const r = Router()
@@ -56,9 +56,21 @@ function handleCenterError(res, e) {
  */
 const selfCustomerId = (db, req) => ocSelfCustomerId(db, (req && req.user) || {})
 
+// 范围判据只有 `lib/order-center.js` 的 ocScope / ocAccessCheck 一份（ADR-0027）：
+// 内部账号范围外 ⇒ 404（与不存在同形，措辞同 OrderCenterError）；外部主体看别人的 ⇒ 403（自视图口径不变）。
+const NOT_FOUND = {
+  customers: (id) => `订货主体 #${id} 不存在`,
+  orders: (id) => `订货单 #${id} 不存在`,
+  statements: (id) => `对账单 #${id} 不存在`
+}
+function deny(res, access, kind, id) {
+  if (access.notFound) return fail(res, NOT_FOUND[kind](id), 404)
+  return fail(res, access.message, access.status)
+}
+
 function checkCustomerAccess(db, req, id) {
   const customer = getCustomer(db, Number(id))
-  return ocAccessCheck(db, req, { customer_id: customer.id, org_id: customer.org_id })
+  return ocAccessCheck(db, req, { customer_id: customer.id })
 }
 
 // 列表、详情、试算与写入共用领域层的主体判据，避免只过滤列表却能按ID跨主体访问。
@@ -68,7 +80,7 @@ r.use(requireAuth, attachOrgScope, wrap((req, res, next) => {
     for (const id of [req.query.customer_id, req.body?.customer_id]) {
       if (id == null || id === '') continue
       const access = checkCustomerAccess(db, req, id)
-      if (!access.ok) return fail(res, access.message, access.status)
+      if (!access.ok) return deny(res, access, 'customers', id)
     }
     return next()
   } catch (e) { return handleCenterError(res, e) }
@@ -82,7 +94,7 @@ r.param('id', (req, res, next, id) => {
     if (kind === 'customers') access = checkCustomerAccess(db, req, id)
     else if (kind === 'orders') access = ocAccessCheck(db, req, getOrder(db, Number(id)))
     else if (kind === 'statements') access = ocAccessCheck(db, req, getStatement(db, Number(id)))
-    if (access && !access.ok) return fail(res, access.message, access.status)
+    if (access && !access.ok) return deny(res, access, kind, id)
     return next()
   } catch (e) { return handleCenterError(res, e) }
 })
@@ -90,20 +102,9 @@ r.param('id', (req, res, next, id) => {
 r.param('customerId', (req, res, next, id) => {
   try {
     const access = checkCustomerAccess(getDb(), req, id)
-    return access.ok ? next() : fail(res, access.message, access.status)
+    return access.ok ? next() : deny(res, access, 'customers', id)
   } catch (e) { return handleCenterError(res, e) }
 })
-
-/** 组织数据范围条件（订货单冗余了 org_id，可直接过滤） */
-function scopeCond(db, req) {
-  const self = selfCustomerId(db, req)
-  if (self) return { sql: ' AND o.customer_id=? ', params: [self], self }
-  const s = req.orgScope || { scope: 'all', orgIds: null }
-  if (s.scope === 'all') return { sql: '', params: [], self: null }
-  if (s.scope === 'none' || !s.orgIds || !s.orgIds.length) return { sql: ' AND 1=0 ', params: [], self: null }
-  const ph = s.orgIds.map(() => '?').join(',')
-  return { sql: ` AND (o.org_id IN (${ph}) OR o.org_id IS NULL) `, params: [...s.orgIds], self: null }
-}
 
 // ---------------------------------------------------------------------------
 // 一、看板与业务流
@@ -118,7 +119,7 @@ r.get(
       const db = getDb()
       const self = selfCustomerId(db, req)
       return ok(res, {
-        ...overview(db, { customerIds: self ? [self] : null }),
+        ...overview(db, { scopeFor: (col) => ocScope(db, req, col) }),
         self: self ? getCustomer(db, self) : null,
         viewer: { role: req.user.role, name: req.user.name }
       })
@@ -165,6 +166,7 @@ r.get(
 r.get(
   '/customers',
   requireAuth,
+  attachOrgScope,
   wrap((req, res) => {
     const db = getDb()
     const { page, pageSize, offset } = pageParams(req)
@@ -183,11 +185,10 @@ r.get(
       conds.push('c.admit_status=?')
       args.push(req.query.admit_status)
     }
-    const self = selfCustomerId(db, req)
-    if (self) {
-      conds.push('c.id=?')
-      args.push(self)
-    }
+    const sc = ocScope(db, req, 'c.id')
+    conds.push(sc.sql)
+    args.push(...sc.params)
+    const pScope = sc.self ? { sql: '1=1', params: [] } : ocScope(db, req, 'p.id')
     const where = conds.length ? `WHERE ${conds.join(' AND ')}` : ''
     const total = db.prepare(`SELECT COUNT(*) c FROM oc_customers c ${where}`).get(...args).c
     const rows = db
@@ -199,10 +200,10 @@ r.get(
                 p.name AS parent_name
          FROM oc_customers c
          LEFT JOIN dealers d ON d.id=c.source_id AND c.source_type='dealer'
-         LEFT JOIN oc_customers p ON p.id=c.parent_customer_id
+         LEFT JOIN oc_customers p ON p.id=c.parent_customer_id AND ${pScope.sql}
          ${where} ORDER BY c.id LIMIT ? OFFSET ?`
       )
-      .all(...args, pageSize, offset)
+      .all(...pScope.params, ...args, pageSize, offset)
       .map((c) => ({
         ...c,
         credit_available: Number((Number(c.limit_amount) - Number(c.used_amount)).toFixed(2)),
@@ -215,18 +216,27 @@ r.get(
 r.get(
   '/customers/tree',
   requireAuth,
+  attachOrgScope,
   wrap((req, res) => {
-    const db = getDb()
-    const self = selfCustomerId(db, req)
-    if (self && req.query.root && Number(req.query.root) !== self) return fail(res, '无权查看其他订货方的客户树', 403)
-    if (self) return ok(res, { ...getCustomer(db, self), children: [] })
-    return ok(res, customerTree(db, req.query.root ? Number(req.query.root) : null))
+    try {
+      const db = getDb()
+      const self = selfCustomerId(db, req)
+      if (self && req.query.root && Number(req.query.root) !== self) return fail(res, '无权查看其他订货方的客户树', 403)
+      if (self) return ok(res, { ...getCustomer(db, self), children: [] })
+      const root = req.query.root ? Number(req.query.root) : null
+      // 根节点不在范围内 ⇒ 与不存在同形的 404；子树只含范围内的节点
+      if (root && !customerInScope(db, req, root)) return fail(res, NOT_FOUND.customers(root), 404)
+      return ok(res, customerTree(db, root, { scope: ocScope(db, req, 'c.id') }))
+    } catch (e) {
+      return handleCenterError(res, e)
+    }
   })
 )
 
 r.get(
   '/customers/:id',
   requireAuth,
+  attachOrgScope,
   wrap((req, res) => {
     try {
       const db = getDb()
@@ -239,7 +249,11 @@ r.get(
         creditLedger: db
           .prepare('SELECT * FROM oc_credit_ledger WHERE customer_id=? ORDER BY id DESC LIMIT 50')
           .all(c.id),
-        children: db.prepare('SELECT id,code,name,level,channel,admit_status FROM oc_customers WHERE parent_customer_id=?').all(c.id),
+        children: (() => {
+          // 外部主体自视图：自己的下级照旧全部可见（口径不变）；内部账号只见范围内的下级
+          const sc = selfCustomerId(db, req) ? { sql: '1=1', params: [] } : ocScope(db, req, 'c.id')
+          return db.prepare(`SELECT c.id,c.code,c.name,c.level,c.channel,c.admit_status FROM oc_customers c WHERE c.parent_customer_id=? AND ${sc.sql}`).all(c.id, ...sc.params)
+        })(),
         orders: db
           .prepare('SELECT id,doc_no,order_date,status,total_amount FROM oc_orders WHERE customer_id=? ORDER BY id DESC LIMIT 20')
           .all(c.id)
@@ -371,8 +385,8 @@ r.get(
   wrap((req, res) => {
     const db = getDb()
     const { page, pageSize, offset } = pageParams(req)
-    const s = scopeCond(db, req)
-    const conds = [`1=1${s.sql}`]
+    const s = ocScope(db, req, 'o.customer_id')
+    const conds = [s.sql]
     const args = [...s.params]
     if (req.query.status) {
       conds.push('o.status=?')
@@ -498,11 +512,11 @@ r.post(
       const action = String(req.params.action)
 
       // 越权与权限两道门（A01：这条路由原来只有 requireAuth）
-      //   ① 单据级：这张单是不是"我的"（订货中心域自己的口径，与列表 scopeCond 同源）
+      //   ① 单据级：这张单是不是"我的"（订货中心域自己的口径，与列表同一份 ocScope（ADR-0027））
       //   ② 功能权限：这一次动作的 perm_code（唯一判据 assertEdgePermitted，与通用入口共用）
       const row = db.prepare('SELECT * FROM oc_orders WHERE id=?').get(id)
       const access = ocAccessCheck(db, req, row)
-      if (!access.ok) return fail(res, access.message, access.status)
+      if (!access.ok) return deny(res, access, 'orders', id)
       assertEdgePermitted({
         db,
         docType: 'OC',
@@ -567,13 +581,9 @@ r.get(
   wrap((req, res) => {
     const db = getDb()
     const { page, pageSize, offset } = pageParams(req)
-    const self = selfCustomerId(db, req)
-    const conds = ['1=1']
-    const args = []
-    if (self) {
-      conds.push('s.customer_id=?')
-      args.push(self)
-    }
+    const sc = ocScope(db, req, 's.customer_id')
+    const conds = [sc.sql]
+    const args = [...sc.params]
     if (req.query.customer_id) {
       conds.push('s.customer_id=?')
       args.push(Number(req.query.customer_id))

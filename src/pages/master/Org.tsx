@@ -67,6 +67,7 @@ function WarehouseTable() {
       // 删除被后端明确拒绝（WAREHOUSE_NO_DELETE），所以这里也不给按钮 ——
       // 留着它只会让人点一下、吃一个错，然后去问"为什么不能删"。
       allowDelete={false}
+      emptyScopeText="当前账号的数据范围内没有仓库：仓库列表和各单据里的仓库下拉都按您账号所属组织的数据范围裁剪（不是系统里没有仓库）。请到「我的数据范围」核对，或联系管理员调整组织 / 数据范围。"
       excelName="仓库"
     />
   )

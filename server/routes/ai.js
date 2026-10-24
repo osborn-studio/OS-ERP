@@ -17,8 +17,9 @@ import { Router } from 'express'
 import { getDb } from '../db/index.js'
 import { ok, fail, wrap, pageParams, paged } from '../lib/http.js'
 import { requireAuth, requirePerm, requireGlobalData } from '../middleware/auth.js'
-import { DOC_TYPE_LABEL } from '../lib/stock.js'
+import { DOC_TYPE_LABEL, listBelowSafe } from '../lib/stock.js'
 import { metricDefinitions } from '../lib/metrics.js'
+import { aiPlatformAnalysisStmt } from '../lib/oms-sql.js'
 import { versionInfo } from '../version.js'
 
 const r = Router()
@@ -144,12 +145,8 @@ r.post(
              WHERE so.status NOT IN ('cancelled','draft') AND so.order_date >= ${from} GROUP BY so.channel`
           )
           .all()
-        const online = db
-          .prepare(
-            `SELECT pf.name AS platform_name, COUNT(o.id) orders, COALESCE(SUM(o.pay_amount),0) amount FROM oms_orders o
-             JOIN platforms pf ON pf.id=o.platform_id WHERE date(o.order_time) >= ${from} GROUP BY pf.id ORDER BY amount DESC`
-          )
-          .all()
+        const onlineStmt = aiPlatformAnalysisStmt(days)
+        const online = db.prepare(onlineStmt.sql).all(...onlineStmt.params)
         result = { offline, online }
         break
       }
@@ -177,16 +174,9 @@ r.post(
         break
       }
       case 'stock_alert': {
-        result = db
-          .prepare(
-            `SELECT sk.sku_code, sk.name AS sku_name, p.name AS product_name, sk.safe_stock,
-                    COALESCE(SUM(st.qty_on_hand),0) qty_on_hand,
-                    sk.safe_stock - COALESCE(SUM(st.qty_on_hand),0) AS shortage
-             FROM product_skus sk JOIN products p ON p.id=sk.product_id LEFT JOIN inventory_stocks st ON st.sku_id=sk.id
-             WHERE sk.status='active' AND sk.safe_stock>0 GROUP BY sk.id
-             HAVING COALESCE(SUM(st.qty_on_hand),0) < sk.safe_stock ORDER BY shortage DESC`
-          )
-          .all()
+        // AA5：与看板 / 预警页同一口径（lib/stock.js listBelowSafe）；本路由要求全局数据范围，故不传 orgScope；
+        // 原写法无 LIMIT，这里用 -1（SQLite 不限）保持"全部低库存 SKU"，输出字段与原来逐字一致。
+        result = listBelowSafe(db, -1).map(({ sku_id, ...row }) => row)
         break
       }
       case 'expiring_stock': {

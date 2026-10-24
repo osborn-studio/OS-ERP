@@ -315,12 +315,36 @@ export function declareShift(db, req, { shiftId, payments = [], remark = null })
 }
 
 /**
+ * 核款 / 退回的"第二人"判据（ADR-0025，沿用 ADR-0018 的自审拒绝思路）：
+ * 开班人（cashier_id）、历次报数人（doc_events 里 open / declare 的 actor）都算"做账的人"，
+ * 他们不能自己核款或退回自己的班 → 409 `POS_SELF_APPROVE`。
+ * 历史班次只有名字没有 id（cashier_id 与事件 actor_id 皆空）时按名字兜底。
+ * 只有路由传 `separateChecker: true` 才启用：种子数据与 `scripts/test-pos2.mjs` 直接调库函数、
+ * 用同一个 req 走完全程，不属于"一个人批自己的班"的授权问题。
+ */
+export function assertShiftChecker(db, req, shift) {
+  const uid = req?.user?.uid ?? null
+  const names = new Set([req?.user?.name, req?.user?.username].filter((n) => n && String(n).trim()))
+  const makers = db
+    .prepare("SELECT actor_id, actor_name FROM doc_events WHERE doc_type='PSF' AND doc_id=? AND action IN ('open','declare')")
+    .all(Number(shift.id))
+  makers.push({ actor_id: shift.cashier_id ?? null, actor_name: shift.cashier_name ?? null })
+  const hit = makers.some((m) =>
+    m.actor_id != null ? uid != null && Number(m.actor_id) === Number(uid) : m.actor_name != null && names.has(m.actor_name)
+  )
+  if (hit) {
+    throw bad(`班次 ${shift.doc_no || '#' + shift.id} 由你开班或报数，不能由你自己核款 / 退回`, 'POS_SELF_APPROVE', 409)
+  }
+}
+
+/**
  * 退回重报（declared → open）。
  * 店长数出来与报表差太多（比如差一整个数量级）时用 —— 先退回收银员自己再数一遍，
  * 比当场批一张「长短款 XXX 元」合理得多。
  */
-export function rejectShift(db, req, { shiftId, remark = null }) {
+export function rejectShift(db, req, { shiftId, remark = null, separateChecker = false }) {
   const s = loadShift(db, shiftId)
+  if (separateChecker) assertShiftChecker(db, req, s)
   if (s.status !== 'declared') throw bad(`班次 ${s.doc_no || '#' + s.id} 当前状态为「${s.status}」，只有已报数的班次可以退回`, 'SHIFT_NOT_DECLARED', 409)
   if (!String(remark || '').trim()) throw bad('退回必须写明原因（否则收银员不知道该重数什么）', 'REMARK_REQUIRED', 400)
   db.transaction(() => {
@@ -342,8 +366,9 @@ export function rejectShift(db, req, { shiftId, remark = null }) {
  * `countedCash` 是店长自己数出来的现金，**必填** —— 允许不填就等于允许
  * 「用收银员报的数当实点核过去」，长短款永远是 0，核款就成了走形式。
  */
-export function approveShift(db, req, { shiftId, countedCash, varianceNote = null, varianceHandled = null, floatReturned = true, remark = null }) {
+export function approveShift(db, req, { shiftId, countedCash, varianceNote = null, varianceHandled = null, floatReturned = true, remark = null, separateChecker = false }) {
   const s = loadShift(db, shiftId)
+  if (separateChecker) assertShiftChecker(db, req, s)
   if (s.status !== 'declared') throw bad(`班次 ${s.doc_no || '#' + s.id} 当前状态为「${s.status}」，只有已报数的班次可以核款`, 'SHIFT_NOT_DECLARED', 409)
   if (countedCash === undefined || countedCash === null || String(countedCash).trim() === '') {
     throw bad('核款必须填写店长实点现金（不能直接沿用收银员的报数）', 'COUNTED_REQUIRED', 400)

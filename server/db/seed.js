@@ -170,7 +170,8 @@ export const TABLES = [
   'outsourcing_receipt_items', 'outsourcing_receipts', 'outsourcing_material_items', 'outsourcing_materials',
   'outsourcing_order_items', 'outsourcing_orders',
   'store_requisition_items', 'store_requisitions',
-  'ai_query_logs', 'audit_logs', 'oms_sync_logs', 'oms_order_items', 'oms_orders', 'platforms',
+  // qimen_nonces（060）按 platform_id 记已接受的 nonce；重建后平台 id 会被复用，旧 nonce 会让新一代平台的合法请求被判重放，所以必须清
+  'ai_query_logs', 'audit_logs', 'audit_chain_anchors', 'audit_anchor_intents', 'oms_sync_logs', 'oms_order_items', 'oms_orders', 'qimen_nonces', 'platforms',
   'mall_cart_items', 'mall_customers', 'pos_daily_closes', 'pos_shifts', 'pos_order_items', 'pos_orders',
   // 模块 17 交班缴款（024）：三张新表必须登记 —— 缴款明细引用班次 id、班次差异行引用班次 id，
   // 而重建后 `pos_shifts` 的 id 会被**复用**，旧明细看起来仍然「指向一个存在的班次」，
@@ -333,6 +334,8 @@ export const TABLES = [
   // 待确认单（`mcp_confirmations`）与调用日志（`mcp_call_logs`）同属运行痕迹，
   // 重建后没有保留价值（`audit_logs` / `ai_query_logs` 早就在这份清单里，口径一致）。
   'mcp_idempotency', 'mcp_confirmations', 'mcp_call_logs',
+  // AE9：MCP 限速桶（GML_MCP_RATE_STORE=db 时的窗口计数）。没有跨重建的保留价值，随运行痕迹一起清。
+  'mcp_rate_buckets',
   // ---- IM（钉钉/飞书）同步痕迹（批次 T）----
   // 与 `mcp_idempotency` 同一类：三张映射表里存的是**外部 id → 本地自增 id**（`org_id` /
   // `gml_user_id` / `approval_id`）。重建会把这些本地 id 全部重排，于是上一代的映射会
@@ -360,6 +363,9 @@ export const TABLES = [
  */
 export const KEEP_TABLES = [
   'os_egp_runtime',
+  // D. FTS5 外部内容表的影子表（迁移 067）：由 audit_logs 上的触发器与 FTS 引擎维护，
+  //    清 audit_logs 时触发器同步清索引；**绝不直接 DELETE** 这些表（会让索引与内容表失配）。
+  'audit_logs_fts', 'audit_logs_fts_data', 'audit_logs_fts_idx', 'audit_logs_fts_docsize', 'audit_logs_fts_config',
   // A. 迁移与定义
   'schema_migrations', 'schema_def_fingerprints',
   // B. satellite seed 自清（procure-seed 的 ownedTables / oc-seed / quote-seed）

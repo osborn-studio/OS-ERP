@@ -11,7 +11,7 @@ data/backups/
 .env.local
 *.log
 .DS_Store
-release/
+/release/
 .local/
 backups/
 test-evidence/

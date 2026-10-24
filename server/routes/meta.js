@@ -15,15 +15,40 @@
 
 import { Router } from 'express'
 import { getDb } from '../db/index.js'
-import { ok, wrap, fail, failFromError } from '../lib/http.js'
-import { requireAuth, requireRole } from '../middleware/auth.js'
+import { ok, wrap, fail, bizFail, failFromError, paged, pageParams } from '../lib/http.js'
+import { requireAuth, requireRole, requirePerm, requireGlobalData, sessionToken } from '../middleware/auth.js'
 import { auditStrict } from '../middleware/audit.js'
+import {
+  AUDIT_EXPORT_MAX_ROWS,
+  AUDIT_COUNT_CAP,
+  AUDIT_PAGE_MAX,
+  AuditViewError,
+  CSV_HEADER,
+  buildWhere,
+  countCapped,
+  keywordUsesFts,
+  ftsState,
+  exportChunks,
+  orderOf,
+  parseFilters,
+  viewRow
+} from '../lib/audit-view.js'
 import { DOC_TYPE_LABEL } from '../lib/stock.js'
+// 角色 x 单据类型可见度矩阵（AD11，只读说明视图；AD2 的生成脚本复用同一份计算）
+import { roleMatrixFor } from '../lib/role-matrix.js'
 // 仓库类型文案的**唯一出处**在 `lib/warehouse.js`（与"新建/改仓"接口的取值域同一份）——
 // 分两份的后果实测过：餐饮线的 `kitchen` 不在字典里 ⇒ 界面上显示裸串 `kitchen`。
 import { WAREHOUSE_TYPES } from '../lib/warehouse.js'
 // 版本 / 构建 SHA 只有一处（`server/version.js`）：健康检查是运维判断发布版本的落点，不能再写字面量
 import { versionInfo } from '../version.js'
+// 运维健康（ADR-0029）：详情只给 admin，匿名只拿 status
+import { computeOpsStatus, opsCounters } from '../lib/ops-status.js'
+// Prometheus 文本导出（ADR-0045）：admin JWT 或 GML_METRICS_TOKEN Bearer
+import { renderPrometheus, metricsTokenOk, PROMETHEUS_CONTENT_TYPE } from '../lib/metrics-export.js'
+import { counterSnapshot, histogramSnapshot } from '../lib/process-counters.js'
+import { createMetricsThrottle } from '../lib/metrics-throttle.js'
+import { writeRetryStats } from '../lib/tx.js'
+import { DATA_DIR } from '../db/index.js'
 import { ROLES } from '../middleware/auth.js'
 // 配置的唯一出处与唯一写入点（批次 R）：
 //   · `SETTING_RULES` 定义全部键（标签 / 类型 / 默认值 / 值域 / 是否危险）；
@@ -37,6 +62,7 @@ import {
   resetSetting,
   ensureSettings,
   listSettings,
+  readSetting,
   listSettingAudit,
   auditSettingTrail,
   meta as settingsMeta
@@ -74,20 +100,94 @@ function stockDocTypes(db) {
   return map
 }
 
+/** 运维详情的门：admin 角色或超级管理员（与 ADR-0029 一致）；其余已登录者与匿名都看不到 */
+const isOpsAdmin = (u) => Boolean(u) && (u.role === 'admin' || Number(u.is_super) === 1)
+
+/**
+ * 可选鉴权：没带 Bearer（cookie 传输模式下含会话 Cookie）⇒ 匿名放行（探活、Docker HEALTHCHECK 不带令牌）；
+ * 带了就走完整的 `requireAuth`（令牌无效 ⇒ 401，而不是悄悄当匿名——带了凭据又不对，调用方应当知道）。
+ */
+function optionalAuth(req, res, next) {
+  return sessionToken(req).token ? requireAuth(req, res, next) : next()
+}
+
 r.get(
   '/health',
-  wrap((_req, res) => {
+  optionalAuth,
+  wrap((req, res) => {
     const db = getDb()
-    const tables = db.prepare("SELECT COUNT(*) c FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").get().c
-    const products = db.prepare("SELECT COUNT(*) c FROM products").get().c
-    return ok(res, {
+    // 匿名只拿：status / 服务名 / 版本与构建 SHA（ADR-0012 契约）/ 时间。库计数、备份、磁盘等一律只给 admin。
+    const body = {
       status: 'ok',
       service: 'gml-supply-chain',
       ...versionInfo(),
-      time: new Date().toISOString(),
-      database: { tables, products, seeded: products > 0 }
-    })
+      time: new Date().toISOString()
+    }
+    if (isOpsAdmin(req.user)) {
+      const tables = db.prepare("SELECT COUNT(*) c FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").get().c
+      const products = db.prepare("SELECT COUNT(*) c FROM products").get().c
+      body.database = { tables, products, seeded: products > 0 }
+      body.ops = computeOpsStatus({ db, dataDir: DATA_DIR })
+    }
+    return ok(res, body)
   })
+)
+
+/** `Authorization: Bearer <x>` 里的 x；形状不对 ⇒ null（不回显、不记录） */
+function bearerOf(req) {
+  const m = /^Bearer ([^\s]+)$/.exec(String(req.headers.authorization || ''))
+  return m ? m[1] : null
+}
+
+/**
+ * 指标鉴权（ADR-0045）：仅 `?format=prometheus` 接受 `GML_METRICS_TOKEN` 的 Bearer（抓取端没有用户会话）；
+ * 令牌不对 / 未配置 ⇒ 落到 `requireAuth`（admin JWT），所以错误令牌得 401，与"没带凭据"不可区分。
+ * 令牌对 JSON 形态与其它任何路由都无效。
+ */
+/**
+ * AB10：按来源 IP 的节流（独立桶，鉴权之前 —— 猜令牌的请求同样计数）。429 带业务码 + Retry-After。
+ * 策略在进程启动时由环境变量读定（`GML_METRICS_IP_LIMIT` / `GML_METRICS_IP_WINDOW_MS`）。
+ */
+const metricsThrottle = createMetricsThrottle()
+function metricsRateLimit(req, res, next) {
+  const verdict = metricsThrottle.consume(req.ip)
+  if (verdict.allowed) return next()
+  res.set('Retry-After', String(verdict.retryAfter))
+  return bizFail(res, Object.assign(new Error('指标抓取过于频繁，请稍后重试'), { status: 429, code: 'METRICS_RATE_LIMITED' }))
+}
+
+function metricsAuth(req, res, next) {
+  if (req.query?.format === 'prometheus' && metricsTokenOk(bearerOf(req))) return next()
+  return requireAuth(req, res, next)
+}
+
+/**
+ * 运维计数器。默认 JSON（ADR-0029）；`?format=prometheus` 返回 text exposition（ADR-0045）。
+ * 令牌放行时 `req.user` 为空：仅此处的处理器跳过 isOpsAdmin。
+ */
+r.get(
+  '/metrics',
+  metricsRateLimit,
+  metricsAuth,
+  wrap((req, res) => {
+    const format = req.query?.format
+    if (format !== undefined && format !== 'json' && format !== 'prometheus') return fail(res, 'format 只能是 json 或 prometheus', 400, 400)
+    const viaToken = !req.user && format === 'prometheus'
+    if (!viaToken && !isOpsAdmin(req.user)) return fail(res, '需要管理员权限', 403, 403)
+    const ops = computeOpsStatus({ db: getDb(), dataDir: DATA_DIR })
+    if (format !== 'prometheus') return ok(res, { counters: opsCounters(ops) })
+    res.status(200)
+    res.setHeader('Content-Type', PROMETHEUS_CONTENT_TYPE)
+    res.setHeader('Cache-Control', 'no-store')
+    return res.end(Buffer.from(renderPrometheus({ ops, retry: writeRetryStats(), counters: counterSnapshot(), histograms: histogramSnapshot(), version: versionInfo().version }), 'utf8'))
+  })
+)
+
+/** 角色与数据范围矩阵（AD11）：只读、requireAuth；不含权限点码，`me` 只描述调用者自己 */
+r.get(
+  '/role-matrix',
+  requireAuth,
+  wrap((req, res) => ok(res, roleMatrixFor(getDb(), req.user)))
 )
 
 r.get(
@@ -266,6 +366,95 @@ r.get(
     const db = getDb()
     ensureSettings(db)
     return ok(res, auditSettingTrail(db))
+  })
+)
+
+// ============================================================================
+// 审计日志查看器（Z7 / roadmap-v5 Z7）：权限 `system:audit:view`（admin 经迁移 062 授权；旧 /api/auth/audit-logs 仍是 admin 全量只读）
+// ============================================================================
+const AUDIT_PERM = 'system:audit:view'
+
+function auditRetention(db) {
+  const days = Number(readSetting(db, 'retention_audit_days'))
+  return {
+    audit_days: days,
+    note: `仅 master / notify 模块的审计行会按 ${days} 天窗口被 scripts/retention.mjs 清理；财务、资金、配置、账号、审批、隐私、保留等模块的审计永不清理（ADR-0030）。导出文件只含当前库中尚存的行。`
+  }
+}
+
+function filtersOf(req, res) {
+  try {
+    return parseFilters(req.query || {})
+  } catch (e) {
+    if (e instanceof AuditViewError) { bizFail(res, e); return null }
+    throw e
+  }
+}
+
+/** 审计日志列表：分页 + 过滤；detail 读取时再脱敏 */
+r.get(
+  '/audit-logs',
+  requireAuth,
+  requirePerm(AUDIT_PERM),
+  requireGlobalData('审计日志'),
+  wrap((req, res) => {
+    const filters = filtersOf(req, res)
+    if (!filters) return
+    const db = getDb()
+    const { page, pageSize: ps } = pageParams(req)
+    const pageSize = Math.min(ps, AUDIT_PAGE_MAX)
+    const { where, args } = buildWhere(filters, { fts: keywordUsesFts(db, filters.keyword) })
+    const offset = (page - 1) * pageSize
+    // 总数是封顶估算，翻页深度同封顶：想看更早的行请加过滤条件或导出
+    if (offset >= AUDIT_COUNT_CAP) return fail(res, `翻页超过 ${AUDIT_COUNT_CAP} 条上限，请加过滤条件缩小范围或使用导出`, 400, 400)
+    const { total, has_more } = countCapped(db, where, args)
+    const rows = db
+      .prepare(`SELECT * FROM audit_logs ${where} ORDER BY ${orderOf(filters).sql} LIMIT ? OFFSET ?`)
+      .all(...args, pageSize, offset)
+      .map(viewRow)
+    return paged(res, {
+      rows, total, page, pageSize, has_more, total_cap: AUDIT_COUNT_CAP,
+      totalPages: Math.ceil(Math.min(total, AUDIT_COUNT_CAP) / pageSize) || 1,
+      retention: auditRetention(db), export_max_rows: AUDIT_EXPORT_MAX_ROWS, fts: ftsState(db)
+    })
+  })
+)
+
+/** 审计日志 CSV 导出：同一过滤、分批流式、封顶；导出动作先于数据外发写严格审计 */
+r.get(
+  '/audit-logs/export.csv',
+  requireAuth,
+  requirePerm(AUDIT_PERM),
+  requireGlobalData('审计日志'),
+  wrap(async (req, res) => {
+    const filters = filtersOf(req, res)
+    if (!filters) return
+    const db = getDb()
+    const { where, args } = buildWhere(filters, { fts: keywordUsesFts(db, filters.keyword) })
+    const rows = db.prepare(`SELECT COUNT(*) c FROM (SELECT 1 FROM audit_logs ${where} LIMIT ?)`).get(...args, AUDIT_EXPORT_MAX_ROWS + 1).c
+    const truncated = rows > AUDIT_EXPORT_MAX_ROWS
+    // 快照上界：导出自己的审计行与导出期间的新行不进文件
+    const snapshotMax = db.prepare('SELECT COALESCE(MAX(id),0) m FROM audit_logs').get().m
+    const exported = Math.min(rows, AUDIT_EXPORT_MAX_ROWS)
+    // 审计写不进就不外发数据（严格审计要求事务内）
+    db.transaction(() => {
+      auditStrict(req, { action: 'AUDIT_LOG_EXPORT', module: 'audit', entity: 'audit_logs', detail: { filters, rows: exported, truncated, max_rows: AUDIT_EXPORT_MAX_ROWS, columns: CSV_HEADER } })
+    })()
+    const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14)
+    res.status(200)
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8')
+    res.setHeader('Content-Disposition', `attachment; filename="audit-logs-${stamp}.csv"`)
+    res.setHeader('Cache-Control', 'no-store')
+    res.setHeader('X-Export-Truncated', truncated ? '1' : '0')
+    res.setHeader('X-Export-Max-Rows', String(AUDIT_EXPORT_MAX_ROWS))
+    res.write(`﻿${CSV_HEADER.map((h) => `"${h}"`).join(',')}\r\n`)
+    for (const chunk of exportChunks(db, { where, args, order: orderOf(filters), snapshotMax, exported })) {
+      if (!res.write(chunk)) {
+        await new Promise((resolve) => { res.once('drain', resolve); res.once('close', resolve) })
+        if (res.destroyed) return
+      }
+    }
+    res.end()
   })
 )
 

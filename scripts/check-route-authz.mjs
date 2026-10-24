@@ -351,61 +351,50 @@ function group(file, kind, reason, routes, pending = null) {
 group('ai.js', 'public', '挂载层 app.use("/api/ai") 对 /manifest、/metrics 显式放行：AI 能力清单与指标定义，不含业务数据', [['GET', '/manifest'], ['GET', '/metrics']])
 group('auth.js', 'public', '登录入口本身不可能先有令牌；防暴力破解靠 login-throttle / 账号锁定', [['POST', '/login']])
 group('auth.js', 'public', '登录页要先选行业，行业列表只含名称/编码', [['GET', '/industries']])
-group('meta.js', 'public', '健康检查（版本/构建 SHA/库可用性），供探活与登录前展示；不含业务数据', [['GET', '/health']])
+group('meta.js', 'public', '健康检查：匿名只返回 status/版本/构建 SHA/时间；ops 详情在处理器内按 admin/is_super 门控（可选鉴权，ADR-0029）', [['GET', '/health']])
+group('meta.js', 'public', '运维指标：路由中间件 metricsAuth（守卫按名字识别不到）= ?format=prometheus 且 GML_METRICS_TOKEN Bearer 匹配（SHA-256 + timingSafeEqual，令牌只对该格式有效，ADR-0045）则放行，否则 requireAuth；处理器内再要求 isOpsAdmin（admin 角色或 is_super）或令牌通道，否则 403（ADR-0029）。无凭据/错令牌 401，不匿名可读', [['GET', '/metrics']])
 group('meta.js', 'public', '字典（角色名/经销商等级/仓库类型），前端登录前即需渲染；不含业务数据', [['GET', '/dict']])
+group('meta.js', 'self', '角色 x 单据类型可见度矩阵（AD11）：只含角色名 / 单据类型名 / 五档可见度，不含权限点码与任何用户 / 组织 / 门店名；`me` 只描述调用者自己', [['GET', '/role-matrix']])
 group('mall.js', 'public', '商城匿名浏览/登录入口；会话路由另有 requireMall（mall-session）', [['POST', '/login'], ['GET', '/home'], ['GET', '/products'], ['GET', '/products/:skuId']])
 group('promo.js', 'public', '商城活动墙：只返回"任何人都能参与"的自动促销（见处理器内 SQL 条件）', [['GET', '/shop/promotions']])
-group('qimen.js', 'public', '奇门网关模拟承接方：由 body.app_key + 签名 verifySign 自鉴权（处理器内）；注意 app_key 缺省时视为"未鉴权调用"并放行——属模拟网关的演示行为，生产需关闭或强制 app_key', [['POST', '/']], 'unassigned')
+group('qimen.js', 'public', '奇门网关模拟承接方：由 body.app_key + 签名 verifySign 在处理器内自鉴权；ADR-0028 起 app_key / 签名必填，ADR-0033 起签名为平台独立密钥 HMAC-SHA256 + 5 分钟时间窗 + nonce 防重放，缺失、未知平台、未签发密钥、错签名、过期或重放一律 401；生产运行时由 capabilities 关闭（503）', [['POST', '/']])
 
 // —— 只读自身 / 自身范围 ——
 group('auth.js', 'self', '返回/修改当前登录者自己的资料、权限或其数据范围内的组织树', [
   ['GET', '/me'], ['GET', '/roles'], ['POST', '/change-password'], ['POST', '/logout-all'],
-  ['GET', '/org-tree'], ['GET', '/permissions'], ['GET', '/my-permissions']
+  ['GET', '/org-tree'], ['GET', '/permissions'], ['GET', '/my-permissions'], ['GET', '/my-scope']
 ])
-group('approval.js', 'handler-scope', '撤回审批：cancelApproval 内判"提交人本人或管理员"（lib/approval.js）；发起审批：处理器内 assertCanRead 单据范围', [['POST', '/instances'], ['POST', '/instances/:id/cancel']])
+group('approval.js', 'handler-scope', '撤回审批：cancelApproval 内判"提交人本人或管理员"且单据在组织范围内，范围外 404；发起审批：处理器内 assertCanRead 单据范围 + approvalDocScope 目标单据组织范围（ADR-0037，lib/approval.js 唯一判据；待 Y2 的 DOC_SCOPE_RESOLVERS 合入后换分发表）', [['POST', '/instances'], ['POST', '/instances/:id/cancel']])
 
 // —— 元数据 / 字典 ——
 for (const [f, p] of [['costing.js', '/meta'], ['credit.js', '/meta'], ['im.js', '/meta'], ['manufacture.js', '/meta'], ['notify.js', '/meta'], ['qc.js', '/inspections/meta'], ['qc2.js', '/meta'], ['refund.js', '/meta'], ['quote.js', '/quotes/meta']]) {
   group(f, 'meta', '模块静态元数据/枚举（状态、类型、开关），前端渲染表单与筛选用，不含单据数据', [['GET', p]])
 }
 group('qc2.js', 'meta', '抽样方案静态查询（AQL 表计算），无业务数据', [['GET', '/sample-plan']])
-group('qimen.js', 'meta', '奇门接口能力清单（静态）', [['GET', '/capabilities']])
 group('docflow.js', 'meta', '单据类型/状态机/生命周期/流转图/取号规则的静态配置读取', [
   ['GET', '/types'], ['GET', '/types/:code/machine'], ['GET', '/types/:code/lifecycle'], ['GET', '/flows'], ['GET', '/flows/:code'], ['GET', '/no-rules']
 ])
 group('docflow.js', 'meta', '取号规则效果预览（不消耗序号，纯计算）', [['POST', '/no-preview']])
 group('docflow.js', 'handler-scope', '/actions 在处理器内 assertCanRead；/transition 在处理器内 assertEdgePermitted + 单据主体/组织范围（ADR 单据流转）', [['GET', '/actions'], ['POST', '/transition']])
-group('docflow.js', 'gap', '/no-issue 非 dry 时真实消耗一个单据序号，任何登录账号（含外部角色）都能调；应要求管理员/单据配置权限', [['POST', '/no-issue']], 'unassigned')
+group('docflow.js', 'handler-scope', '/no-issue 非 dry 时在处理器内按 DOC_CREATE_PERMS（lib/docflow.js 唯一映射表）要求该单据类型的创建权限，未映射类型 403 DOC_TYPE_PERM_UNMAPPED；dry 只读预览豁免（ADR-0028）', [['POST', '/no-issue']])
 
 // —— 门店 / 经销商 / 订货主体：处理器内按绑定主体收口 ——
-group('pos.js', 'handler-scope', '门店 POS：storeCtx 要求账号绑定 store_id 并只读写本店；未设 role/perm 闸门，即任何绑定门店的账号都可操作（班次核款/驳回 approve|reject 靠 lib/pos2 内的角色判定）。是否应加 requireStore/requirePerm 待评估', [
-  ['GET', '/context'], ['GET', '/products'], ['GET', '/orders'], ['GET', '/orders/:id'], ['GET', '/stocks'],
-  ['GET', '/shifts'], ['GET', '/shifts/open'], ['GET', '/shifts/:id'], ['POST', '/shifts/:id/reject'], ['POST', '/shifts/:id/approve'], ['POST', '/shifts/:id/cancel'],
-  ['GET', '/cash-drops'], ['GET', '/cash-drops/pending-shifts'], ['POST', '/cash-drops/:id/receive'], ['POST', '/cash-drops/:id/cancel'],
-  ['GET', '/daily-closes'], ['GET', '/returns'], ['GET', '/stock-checks'], ['GET', '/stock-checks/:id']
-], 'unassigned')
 group('requisitions.js', 'handler-scope', '门店要货：storeCtx 要求绑定门店，只读写本店单据', [['GET', '/store/mine'], ['GET', '/store/shipments/mine'], ['GET', '/store/shipments/:id'], ['POST', '/store/shipments/:id/receive']])
 group('demand.js', 'handler-scope', '经销商"我的"要货/计划：dealerCtx 要求绑定经销商，只读本经销商', [['GET', '/dealer/requisitions/mine'], ['GET', '/dealer/plans/mine']])
-group('sales.js', 'handler-scope', '销售读接口：scopeFilter / assertCanRead 只按经销商/门店绑定收口（scopePairs），不按内部账号的组织数据范围过滤；data_scope=org 的内部账号可读他组织订单/发货/退货/统计', [
+group('sales.js', 'handler-scope', '销售读接口（ADR-0026 已收口）：路由器链 requireAuth + attachOrgScope，处理器内两层范围——外部主体按经销商/门店绑定（scopeFilter / assertCanRead），内部账号按组织数据范围（lib/sales-order.js 的 salesScopeSql / assertSalesDocInScope，范围外 404）；列表与统计同一谓词。tests/sales-scope.test.mjs 覆盖', [
   ['GET', '/orders'], ['GET', '/orders/:id'], ['GET', '/deliveries'], ['GET', '/deliveries/:id'], ['GET', '/returns'], ['GET', '/stats']
-], 'unassigned')
-group('quote.js', 'handler-scope', '报价动作：处理器内按动作再选 requirePerm（动态权限码），守卫看不到', [['POST', '/quotes/:id/action']])
-group('order-center.js', 'handler-scope', '订货中心：路由器层 requireAuth + attachOrgScope + 客户主体准入（checkCustomerAccess）只收口经销商/门店自身主体；内部账号即使 data_scope=org 也读到全局（如 /overview 的 customerIds=null、/customers、/customers/tree），组织范围未落实。外部角色是本模块的正常用户，故不要求 perm 码', [
+])
+group('quote.js', 'handler-scope', '报价动作：处理器内按动作再选 requirePerm（动态权限码），守卫看不到；ADR-0034 起整个 quote.js 链为 requireAuth + attachOrgScope，范围判据在 lib/sales-order.js 的 quoteScopeSql / assertQuoteInScope / assertQuoteTargetInScope（范围外 404、目标越界 403），tests/quote-scope.test.mjs 覆盖', [['POST', '/quotes/:id/action']])
+group('order-center.js', 'handler-scope', '订货中心（ADR-0027 已收口）：路由器层 requireAuth + attachOrgScope，范围判据只有 lib/order-center.js 的 ocScope / ocAccessCheck 一份 —— 外部主体（dealer/store）只见自己，内部账号按客户归属组织（oc_customers.org_id，下游继承上级）过滤总览、客户树、列表、授信、对账单，范围外详情 404。外部角色是本模块的正常用户，故不要求 perm 码（写动作各自 requirePerm）', [
   ['GET', '/overview'], ['GET', '/flow'], ['GET', '/policies'], ['GET', '/customers'], ['GET', '/customers/tree'], ['GET', '/customers/:id'],
   ['GET', '/catalog'], ['POST', '/quote'], ['GET', '/orders'], ['GET', '/orders/:id'], ['GET', '/orders/:id/repeat'], ['GET', '/orders/:id/actions'],
   ['POST', '/orders/:id/:action'], ['GET', '/credit/:customerId'], ['GET', '/statements'], ['GET', '/statements/:id']
-], 'unassigned')
+])
 
-// —— 采购链：ADR-0017 收口列表/概览，ADR-0020（W1）收口详情/预览/计划/目录；剩余写路径见下 ——
-group('purchase-chain.js', 'gap', 'ADR-0020 边界：收货核对仍只有 requireAuth，未过 readGate，也未按组织范围判定', [
-  ['POST', '/orders/:id/receive-check']
-], 'unassigned')
-group('purchase-chain.js', 'handler-scope', '动作路由：处理器内 assertActionPermitted 按动作校验权限码；ADR-0020 明确写路径（含 POST /payments、/settlements 的自动分配与来源选择）仍无组织范围判定', [
-  ['POST', '/requisitions/:id/:action'], ['POST', '/invoices/:id/:action'], ['POST', '/settlements/:id/:action'], ['POST', '/payments/:id/:action']
-], 'unassigned')
+// —— 采购链：ADR-0017 收口列表/概览，ADR-0020（W1）收口详情/预览/计划/目录，ADR-0031（Y1）收口动作/转单/复核/收货核对（actionGate / readGate + assertPurchaseDocInScope）；本文件已无采购链登记 ——
 
 // —— 其它 ——
-group('auth.js', 'gap', '组织档案全表（含 path/负责人等）对任何登录账号（含外部角色）开放；注释写"管理员"但无闸门', [['GET', '/orgs']], 'unassigned')
+group('auth.js', 'handler-scope', '组织档案平铺列表：处理器内按 resolveOrgScope 裁剪（admin / 全局范围全量，其余只含范围内组织，经销商另含挂靠组织，空范围 ⇒ 空列表）；ADR-0028', [['GET', '/orgs']])
 
 // ---------------------------------------------------------------------------
 // 主流程
@@ -454,9 +443,13 @@ function main() {
   for (const [k, list] of Object.entries(pend)) {
     console.log(`  待办 pending=${k}：${list.length} 条`)
   }
+  // 没有任何排期待办时也要明说（而不是整行消失）：「清零」与「报告机制坏了」必须能从输出里分开
+  if (!Object.keys(pend).length) console.log('  待办 pending=none：0 条（已无带排期标记的真实缺口登记）')
   for (const p of problems) console.log(`  ✗ ${p}`)
   console.log(`通过 ${routes.length - problems.length} / 失败 ${problems.length}`)
-  process.exit(problems.length ? 1 : 0)
+  // 不用 process.exit()：stdout 接管道时写入是异步的，--list 的 ~70 KB 超过 64 KB 管道缓冲，机器繁忙时父进程读得慢，
+  // exit 会把未冲出的尾部丢掉（gen-codemap 读到残缺清单、codemap 测试随机红）。设 exitCode 让进程自然结束、先冲完缓冲。
+  process.exitCode = problems.length ? 1 : 0
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === SELF) main()

@@ -182,6 +182,23 @@ test('A08 login errors are identical and account limits apply before password wo
   assert.equal((await f.call('/login', { body: { username: {}, password: 'x' } })).status, 400)
 })
 
+test('X7 successful logins never lock; success clears failures; failures still lock', async t => {
+  const f = await fixture(t, { GML_LOGIN_ACCOUNT_LIMIT: '3', GML_LOGIN_IP_LIMIT: '100' })
+  for (let i = 0; i < 6; i++) assert.equal((await f.login()).status, 200)
+  assert.equal((await f.login('owner', secret())).status, 401); assert.equal((await f.login('owner', secret())).status, 401)
+  assert.equal((await f.login()).status, 200) // success wipes the 2 failures
+  assert.equal((await f.login('owner', secret())).status, 401); assert.equal((await f.login('owner', secret())).status, 401)
+  assert.equal((await f.login('owner', secret())).status, 401)
+  const locked = await f.login() // correct password is refused once 3 failures are recorded
+  assert.equal(locked.status, 429); assert.ok(Number(locked.retryAfter) >= 1)
+})
+
+test('X7 the IP bucket still counts successful logins', async t => {
+  const f = await fixture(t, { GML_LOGIN_IP_LIMIT: '3', GML_LOGIN_ACCOUNT_LIMIT: '50' })
+  for (let i = 0; i < 3; i++) assert.equal((await f.login()).status, 200)
+  assert.equal((await f.login()).status, 429)
+})
+
 test('A10 logout-all revokes every issued token', async t => {
   const f = await fixture(t), first = successful(await f.login()).token, second = successful(await f.login()).token
   assert.deepEqual(successful(await f.call('/logout-all', { token: first, method: 'POST' })), { revoked: true })

@@ -39,11 +39,11 @@
 
 import { applyTransition } from './docflow.js'
 import { nextDocNoAuto } from './docno.js'
-import { applyStockOut } from './stock.js'
+import { applyStockOut, stockScopeSql, warehouseInScope } from './stock.js'
 import { createPurchaseReturn } from './purchase.js'
 // 处置即调拨：让步 / 返工要**自动生成一张真实的调拨单**（原仓出库 + 隔离仓入库）。
 // 出入库与成本回写的实现只有一份（`lib/transfer.js`，库存页面开调拨单走的是同一份）。
-import { createTransfer, receiveTransfer, shipTransfer } from './transfer.js'
+import { createTransfer, receiveTransfer, shipTransfer, assertTransferTargetsInScope } from './transfer.js'
 
 // ---------------------------------------------------------------------------
 // 基础工具：一律用**本地时间**。
@@ -171,6 +171,9 @@ function judge(defectQty, ac) {
 export function pendingSources(db, q = {}) {
   const where = []
   const args = []
+  // ADR-0038 补充：待检来源随来源仓的组织范围（orgScope 不传 = 全局）
+  const scope = stockScopeSql(q.orgScope, '')
+  where.push(scope.sql); args.push(...scope.params)
   if (q.sourceType) {
     where.push('source_type = ?')
     args.push(q.sourceType)
@@ -506,9 +509,11 @@ export function getRequest(db, id) {
 }
 
 export function listRequests(db, q = {}) {
-  const { page = 1, pageSize = 20, status = null, sourceType = null, keyword = null } = q
+  const { page = 1, pageSize = 20, status = null, sourceType = null, keyword = null, orgScope = null } = q
   const where = []
   const args = []
+  const scope = stockScopeSql(orgScope, 'rq')
+  where.push(scope.sql); args.push(...scope.params)
   if (status) { where.push('rq.status = ?'); args.push(status) }
   if (sourceType) { where.push('rq.source_type = ?'); args.push(sourceType) }
   if (keyword) {
@@ -539,7 +544,7 @@ export function listRequests(db, q = {}) {
 // 四、检验（QCI）
 // ---------------------------------------------------------------------------
 
-export function getInspection(db, id) {
+export function getInspection(db, id, orgScope = null) {
   const head = db
     .prepare(
       `SELECT ci.*, w.name AS warehouse_name, s.name AS supplier_name
@@ -550,6 +555,8 @@ export function getInspection(db, id) {
     )
     .get(id)
   if (!head) return null
+  // ADR-0038 补充：检验单随其仓的范围；范围外与不存在同形（调用方给 404）。内嵌处置单同一道门，不另漏
+  if (orgScope && orgScope.scope !== 'all' && !warehouseInScope(db, head.warehouse_id, orgScope)) return null
   const items = db
     .prepare('SELECT * FROM qc_request_items WHERE request_id=? ORDER BY line_no')
     .all(head.request_id)
@@ -603,9 +610,11 @@ export function getInspection(db, id) {
 }
 
 export function listInspections(db, q = {}) {
-  const { page = 1, pageSize = 20, status = null, result = null, keyword = null } = q
+  const { page = 1, pageSize = 20, status = null, result = null, keyword = null, orgScope = null } = q
   const where = []
   const args = []
+  const scope = stockScopeSql(orgScope, 'ci')
+  where.push(scope.sql); args.push(...scope.params)
   if (status) { where.push('ci.status = ?'); args.push(status) }
   if (result) { where.push('ci.result = ?'); args.push(result) }
   if (keyword) {
@@ -860,10 +869,14 @@ export function directionOf(mode) {
  * 取不到就**拒绝执行**而不是静默跳过 —— 静默跳过的后果是「处置单显示已执行、
  * 货却还在可售仓里」，这正是本次要修掉的那类静默失效。
  */
-function quarantineWarehouse(db, targetType) {
-  const row = db
-    .prepare("SELECT id, code, name FROM warehouses WHERE type=? AND status='active' ORDER BY id LIMIT 1")
-    .get(targetType)
+function quarantineWarehouse(db, targetType, orgScope = null) {
+  const rows = db
+    .prepare("SELECT id, code, name FROM warehouses WHERE type=? AND status='active' ORDER BY id")
+    .all(targetType)
+  // ADR-0038 补充（AA4）：受限范围优先选范围内的隔离仓；没有任何范围内的仓 ⇒ 不退回全局仓，交给调用方的目标仓校验 403。
+  const row = (!orgScope || orgScope.scope === 'all')
+    ? rows[0]
+    : rows.find((w) => warehouseInScope(db, w.id, orgScope)) || rows[0]
   if (!row) {
     throw new QC2Error(
       `没有找到「${DISPOSITION_TARGET_LABEL[targetType] || targetType}」（warehouses.type='${targetType}'），` +
@@ -872,6 +885,17 @@ function quarantineWarehouse(db, targetType) {
     )
   }
   return row
+}
+
+/**
+ * 处置单的源仓是否在范围内（ADR-0038 补充）。`orgScope` 不传 = 全局（lib 内部 / 种子 / MCP 口径不变）；
+ * 范围外与不存在同形 404（`QC2_NOT_FOUND`），不泄漏存在性。
+ */
+function assertHandlingInScope(db, dh, orgScope) {
+  if (!orgScope || orgScope.scope === 'all') return
+  if (!warehouseInScope(db, dh.warehouse_id, orgScope)) {
+    throw new QC2Error('不良品处理单不存在', { code: 'QC2_NOT_FOUND', httpStatus: 404 })
+  }
 }
 
 /**
@@ -902,12 +926,16 @@ function returnUnitPrice(db, dh) {
  *   ③ 处理数量不能超过该行还没处置的量 —— 否则同一批不良品会被处置两次（退两次货）。
  */
 export function createHandling(db, p = {}) {
-  const { inspectionId, skuId, batchNo = '', qty, mode, reason = null, defectCode = null, remark = null, actor: actorRaw = null } = p
+  const { inspectionId, skuId, batchNo = '', qty, mode, reason = null, defectCode = null, remark = null, actor: actorRaw = null, orgScope = null } = p
   const actor = actorOf(actorRaw)
   if (!inspectionId) throw new QC2Error('缺少检验单', { code: 'QC2_NO_INSPECTION' })
   if (!MODE_LABEL[mode]) throw new QC2Error(`不认识的处置方式：${mode}`, { code: 'QC2_BAD_MODE' })
   const ci = db.prepare('SELECT * FROM qc_inspections WHERE id=?').get(inspectionId)
   if (!ci) throw new QC2Error('检验单不存在', { code: 'QC2_NOT_FOUND', httpStatus: 404 })
+  // ADR-0038 补充：检验单所在仓在范围外 ⇒ 与不存在同形 404（先于任何状态 / 数量校验，避免用错误文案探测）
+  if (orgScope && orgScope.scope !== 'all' && !warehouseInScope(db, ci.warehouse_id, orgScope)) {
+    throw new QC2Error('检验单不存在', { code: 'QC2_NOT_FOUND', httpStatus: 404 })
+  }
   if (ci.status === 'draft') throw new QC2Error('请先提交检验结论，再决定不良品怎么处理', { code: 'QC2_NOT_INSPECTED', httpStatus: 409 })
   if (ci.status === 'cancelled') throw new QC2Error('检验单已取消', { code: 'QC2_STATE_INVALID', httpStatus: 409 })
   if (ci.result !== 'unqualified') {
@@ -987,10 +1015,11 @@ function recalcHandlingCount(db, inspectionId) {
  * 为什么让步 / 返工也要走「执行」这一步：它们是**决策**，需要有人批准、需要留痕；
  * 而且现在它们都真的动库存，不执行就没有任何库存后果。
  */
-export function confirmHandling(db, { id, actor = {}, remark = null, source = 'api' }) {
+export function confirmHandling(db, { id, actor = {}, remark = null, source = 'api', orgScope = null }) {
   actor = actorOf(actor)
   const dh = db.prepare('SELECT * FROM qc_defect_handlings WHERE id=?').get(id)
   if (!dh) throw new QC2Error('不良品处理单不存在', { code: 'QC2_NOT_FOUND', httpStatus: 404 })
+  assertHandlingInScope(db, dh, orgScope)
   if (dh.status !== 'draft') {
     throw new QC2Error(`处理单当前为「${dh.status}」，只有待处理能执行`, { code: 'QC2_STATE_INVALID', httpStatus: 409 })
   }
@@ -1007,6 +1036,19 @@ export function confirmHandling(db, { id, actor = {}, remark = null, source = 'a
         '请先在报检/检验明细上补上批次号再执行。',
       { code: 'QC2_HANDLE_NO_BATCH', httpStatus: 409, detail: { handling_id: dh.id, mode: dh.mode } }
     )
+  }
+
+  // ADR-0038 补充：让步 / 返工会改写 `inventory_batches.qc_status`，它是 sku+批次级（跨仓）的可售结论。
+  // 受限账号不得借此改变范围外仓库同一批次货的可售性：该批次在范围外仍有库存 ⇒ 403，整笔不动。
+  if ((dh.mode === 'concession' || dh.mode === 'rework') && orgScope && orgScope.scope !== 'all') {
+    const outside = stockScopeSql(orgScope, 'st')
+    const shared = db
+      .prepare(`SELECT 1 FROM inventory_stocks st WHERE st.sku_id=? AND st.batch_no=? AND st.qty_on_hand>0 AND NOT (${outside.sql}) LIMIT 1`)
+      .get(dh.sku_id, dh.batch_no, ...outside.params)
+    if (shared) {
+      const e = new QC2Error('该批次在您的组织范围外的仓库仍有库存，让步 / 返工会改变其可售状态，请由有全局范围的账号处置', { code: 'TARGET_OUT_OF_SCOPE', httpStatus: 403 })
+      throw e
+    }
   }
 
   const tx = db.transaction(() => {
@@ -1087,7 +1129,9 @@ export function confirmHandling(db, { id, actor = {}, remark = null, source = 'a
       // 两步都在本事务内，任一步失败整笔回滚 —— 不会出现「出库了但没入库」的半截账。
       // 这张单在库存 → 调拨页面里能查到、能反查流水，与人工开的调拨单完全同构。
       const targetType = DISPOSITION_TARGET[dh.mode]
-      const targetWh = quarantineWarehouse(db, targetType)
+      const targetWh = quarantineWarehouse(db, targetType, orgScope)
+      // ADR-0038 补充：调拨两端（源仓 + 隔离仓）都必须在操作者范围内，先于建单；越界 403 且整笔不动
+      assertTransferTargetsInScope(db, dh.warehouse_id, targetWh.id, orgScope)
       // 流水的备注要把**来源**写清（客户口径：出入库单上的类型要能看出这是什么单）——
       // 出/入两条流水的 remark 都带上质检单号 + 处置单号 + 处置方式。
       const src = `质检${MODE_LABEL[dh.mode]}（${dh.inspection_no}）处置单 ${dh.doc_no}`
@@ -1177,10 +1221,11 @@ export function confirmHandling(db, { id, actor = {}, remark = null, source = 'a
   return { ...getHandling(db, id), stock_effect: out }
 }
 
-export function cancelHandling(db, { id, reason = null, actor = {}, source = 'api' }) {
+export function cancelHandling(db, { id, reason = null, actor = {}, source = 'api', orgScope = null }) {
   actor = actorOf(actor)
   const dh = db.prepare('SELECT * FROM qc_defect_handlings WHERE id=?').get(id)
   if (!dh) throw new QC2Error('不良品处理单不存在', { code: 'QC2_NOT_FOUND', httpStatus: 404 })
+  assertHandlingInScope(db, dh, orgScope)
   const tx = db.transaction(() => {
     applyTransition({
       db, docType: 'DH', id, action: 'cancel',
@@ -1208,7 +1253,7 @@ export function recalcDisposition(db, inspectionId) {
   return disposition
 }
 
-export function getHandling(db, id) {
+export function getHandling(db, id, orgScope = null) {
   const row = db
     .prepare(
       `SELECT dh.*, w.name AS warehouse_name, s.name AS supplier_name
@@ -1219,6 +1264,7 @@ export function getHandling(db, id) {
     )
     .get(id)
   if (!row) return null
+  if (orgScope && orgScope.scope !== 'all' && !warehouseInScope(db, row.warehouse_id, orgScope)) return null
   const events = db
     .prepare(
       `SELECT action, action_name, from_state, to_state, actor_name, remark, created_at
@@ -1234,9 +1280,11 @@ export function getHandling(db, id) {
 }
 
 export function listHandlings(db, q = {}) {
-  const { page = 1, pageSize = 20, status = null, mode = null, inspectionId = null, keyword = null } = q
+  const { page = 1, pageSize = 20, status = null, mode = null, inspectionId = null, keyword = null, orgScope = null } = q
   const where = []
   const args = []
+  const scope = stockScopeSql(orgScope, 'dh')
+  where.push(scope.sql); args.push(...scope.params)
   if (status) { where.push('dh.status = ?'); args.push(status) }
   if (mode) { where.push('dh.mode = ?'); args.push(mode) }
   if (inspectionId) { where.push('dh.inspection_id = ?'); args.push(inspectionId) }
@@ -1270,35 +1318,57 @@ export function listHandlings(db, q = {}) {
 // 六、概览与自洽审计
 // ---------------------------------------------------------------------------
 
-export function qcOverview(db) {
+/**
+ * QC 聚合的表源（ADR-0046）：全局范围用原表名（SQL 与此前逐字相同）；受限范围换成「只含范围内仓的子查询」。
+ * 范围谓词与 `listRequests` / `listInspections` / `listHandlings` 同一份 `stockScopeSql`（按 `warehouse_id` 经仓库组织）；
+ * 报检行没有仓列，随其报检单。范围值是 `Number()` 过的整数，直接内联（子查询在聚合里出现多次，避免重复绑定参数）；
+ * 空范围 ⇒ `1=0`（概览全 0、审计全空），不会变成全库。
+ */
+function scopedQcTables(orgScope) {
+  const sc = stockScopeSql(orgScope, '')
+  if (!orgScope || orgScope.scope === 'all') {
+    return { rq: 'qc_requests', ci: 'qc_inspections', dh: 'qc_defect_handlings', it: 'qc_request_items' }
+  }
+  let k = 0
+  const pred = sc.empty ? '1=0' : sc.sql.replace(/\?/g, () => String(Number(sc.params[k++])))
+  return {
+    rq: `(SELECT * FROM qc_requests WHERE ${pred})`,
+    ci: `(SELECT * FROM qc_inspections WHERE ${pred})`,
+    dh: `(SELECT * FROM qc_defect_handlings WHERE ${pred})`,
+    it: `(SELECT * FROM qc_request_items WHERE request_id IN (SELECT id FROM qc_requests WHERE ${pred}))`
+  }
+}
+
+export function qcOverview(db, { orgScope = null } = {}) {
+  const T = scopedQcTables(orgScope)
   const one = (sql, ...a) => num(db.prepare(sql).get(...a)?.v)
   const bySource = db
-    .prepare('SELECT source_type, COUNT(*) c FROM qc_requests GROUP BY source_type ORDER BY c DESC')
+    .prepare(`SELECT source_type, COUNT(*) c FROM ${T.rq} GROUP BY source_type ORDER BY c DESC`)
     .all()
     .map((r) => ({ ...r, label: SOURCE_LABEL[r.source_type] || r.source_type }))
   const byMode = db
-    .prepare("SELECT mode, COUNT(*) c, IFNULL(SUM(qty),0) qty FROM qc_defect_handlings WHERE status<>'cancelled' GROUP BY mode")
+    .prepare(`SELECT mode, COUNT(*) c, IFNULL(SUM(qty),0) qty FROM ${T.dh} WHERE status<>'cancelled' GROUP BY mode`)
     .all()
     .map((r) => ({ ...r, label: MODE_LABEL[r.mode] || r.mode }))
-  const sampleTotal = one('SELECT IFNULL(SUM(sample_qty),0) v FROM qc_inspections')
-  const defectTotal = one('SELECT IFNULL(SUM(defect_qty),0) v FROM qc_inspections')
+  const sampleTotal = one(`SELECT IFNULL(SUM(sample_qty),0) v FROM ${T.ci}`)
+  const defectTotal = one(`SELECT IFNULL(SUM(defect_qty),0) v FROM ${T.ci}`)
   return {
-    pending_source: num(pendingSources(db, { limit: 999 }).length),
-    requests: one('SELECT COUNT(*) v FROM qc_requests'),
-    requests_draft: one("SELECT COUNT(*) v FROM qc_requests WHERE status='draft'"),
-    requests_submitted: one("SELECT COUNT(*) v FROM qc_requests WHERE status='submitted'"),
-    requests_closed: one("SELECT COUNT(*) v FROM qc_requests WHERE status='closed'"),
-    inspections: one('SELECT COUNT(*) v FROM qc_inspections'),
-    waiting_inspect: one("SELECT COUNT(*) v FROM qc_inspections WHERE status='draft'"),
-    qualified: one("SELECT COUNT(*) v FROM qc_inspections WHERE result='qualified'"),
-    unqualified: one("SELECT COUNT(*) v FROM qc_inspections WHERE result='unqualified'"),
-    handlings: one('SELECT COUNT(*) v FROM qc_defect_handlings'),
-    handlings_draft: one("SELECT COUNT(*) v FROM qc_defect_handlings WHERE status='draft'"),
-    handlings_confirmed: one("SELECT COUNT(*) v FROM qc_defect_handlings WHERE status='confirmed'"),
-    scrap_qty: one("SELECT IFNULL(SUM(qty),0) v FROM qc_defect_handlings WHERE mode='scrap' AND status='confirmed'"),
-    return_qty: one("SELECT IFNULL(SUM(qty),0) v FROM qc_defect_handlings WHERE mode='return' AND status='confirmed'"),
-    concession_qty: one("SELECT IFNULL(SUM(qty),0) v FROM qc_defect_handlings WHERE mode='concession' AND status='confirmed'"),
-    rework_qty: one("SELECT IFNULL(SUM(qty),0) v FROM qc_defect_handlings WHERE mode='rework' AND status='confirmed'"),
+    pending_source: num(pendingSources(db, { limit: 999, orgScope }).length),
+    requests: one(`SELECT COUNT(*) v FROM ${T.rq}`),
+    requests_draft: one(`SELECT COUNT(*) v FROM ${T.rq} WHERE status='draft'`),
+    requests_submitted: one(`SELECT COUNT(*) v FROM ${T.rq} WHERE status='submitted'`),
+    requests_closed: one(`SELECT COUNT(*) v FROM ${T.rq} WHERE status='closed'`),
+    inspections: one(`SELECT COUNT(*) v FROM ${T.ci}`),
+    waiting_inspect: one(`SELECT COUNT(*) v FROM ${T.ci} WHERE status='draft'`),
+    qualified: one(`SELECT COUNT(*) v FROM ${T.ci} WHERE result='qualified'`),
+    unqualified: one(`SELECT COUNT(*) v FROM ${T.ci} WHERE result='unqualified'`),
+    handlings: one(`SELECT COUNT(*) v FROM ${T.dh}`),
+    handlings_draft: one(`SELECT COUNT(*) v FROM ${T.dh} WHERE status='draft'`),
+    handlings_confirmed: one(`SELECT COUNT(*) v FROM ${T.dh} WHERE status='confirmed'`),
+    scrap_qty: one(`SELECT IFNULL(SUM(qty),0) v FROM ${T.dh} WHERE mode='scrap' AND status='confirmed'`),
+    return_qty: one(`SELECT IFNULL(SUM(qty),0) v FROM ${T.dh} WHERE mode='return' AND status='confirmed'`),
+    concession_qty: one(`SELECT IFNULL(SUM(qty),0) v FROM ${T.dh} WHERE mode='concession' AND status='confirmed'`),
+    rework_qty: one(`SELECT IFNULL(SUM(qty),0) v FROM ${T.dh} WHERE mode='rework' AND status='confirmed'`),
     defect_rate: sampleTotal > 0 ? round4((defectTotal / sampleTotal) * 100) : 0,
     by_source: bySource,
     by_mode: byMode
@@ -1312,14 +1382,15 @@ export function qcOverview(db) {
  * 或者一张单被判退两次。这些错不会报错，只会让人不再相信系统。
  * 所以把「能算出来的一致性」全部写成断言，让它们可以被一条命令验证。
  */
-export function auditQc(db) {
+export function auditQc(db, { orgScope = null } = {}) {
+  const T = scopedQcTables(orgScope)
   const out = { ok: true }
 
   // 查一：行级数字关系（抽样 ≤ 报检、不良 ≤ 抽样、Ac < Re）
   out.badLineQty = db
     .prepare(
       `SELECT it.id, it.request_id, it.sku_id, it.qty, it.sample_qty, it.defect_qty
-         FROM qc_request_items it
+         FROM ${T.it} it
         WHERE it.sample_qty - it.qty > 0.005 OR it.defect_qty - it.sample_qty > 0.005
            OR it.defect_qty < 0 OR it.ac >= it.re`
     )
@@ -1329,7 +1400,7 @@ export function auditQc(db) {
   out.badVerdict = db
     .prepare(
       `SELECT it.id, it.request_id, it.sku_id, it.defect_qty, it.ac, it.result
-         FROM qc_request_items it
+         FROM ${T.it} it
         WHERE it.result <> 'pending'
           AND ((it.result='qualified' AND it.defect_qty > it.ac)
             OR (it.result='unqualified' AND it.defect_qty <= it.ac))`
@@ -1341,8 +1412,8 @@ export function auditQc(db) {
     .prepare(
       `SELECT rq.id, rq.doc_no, rq.total_qty, rq.total_sample_qty,
               IFNULL(SUM(it.qty),0) line_qty, IFNULL(SUM(it.sample_qty),0) line_sample
-         FROM qc_requests rq
-         LEFT JOIN qc_request_items it ON it.request_id = rq.id
+         FROM ${T.rq} rq
+         LEFT JOIN ${T.it} it ON it.request_id = rq.id
         GROUP BY rq.id
        HAVING ABS(rq.total_qty - IFNULL(SUM(it.qty),0)) > 0.005
            OR ABS(rq.total_sample_qty - IFNULL(SUM(it.sample_qty),0)) > 0.005`
@@ -1352,10 +1423,10 @@ export function auditQc(db) {
   out.inspDrift = db
     .prepare(
       `SELECT ci.id, ci.doc_no, ci.result,
-              IFNULL((SELECT SUM(it.defect_qty) FROM qc_request_items it WHERE it.request_id=ci.request_id),0) line_defect
-         FROM qc_inspections ci
+              IFNULL((SELECT SUM(it.defect_qty) FROM ${T.it} it WHERE it.request_id=ci.request_id),0) line_defect
+         FROM ${T.ci} ci
         WHERE ci.result <> 'pending'
-          AND ABS(ci.defect_qty - IFNULL((SELECT SUM(it.defect_qty) FROM qc_request_items it WHERE it.request_id=ci.request_id),0)) > 0.005`
+          AND ABS(ci.defect_qty - IFNULL((SELECT SUM(it.defect_qty) FROM ${T.it} it WHERE it.request_id=ci.request_id),0)) > 0.005`
     )
     .all()
 
@@ -1364,10 +1435,10 @@ export function auditQc(db) {
     .prepare(
       `SELECT dh.inspection_id, dh.sku_id, dh.batch_no,
               SUM(dh.qty) handled,
-              (SELECT it.qty FROM qc_request_items it
-                JOIN qc_inspections ci2 ON ci2.request_id = it.request_id
+              (SELECT it.qty FROM ${T.it} it
+                JOIN ${T.ci} ci2 ON ci2.request_id = it.request_id
                WHERE ci2.id = dh.inspection_id AND it.sku_id IS dh.sku_id LIMIT 1) reported
-         FROM qc_defect_handlings dh
+         FROM ${T.dh} dh
         WHERE dh.status <> 'cancelled'
         GROUP BY dh.inspection_id, dh.sku_id, dh.batch_no
        HAVING reported IS NOT NULL AND SUM(dh.qty) - reported > 0.005`
@@ -1378,18 +1449,18 @@ export function auditQc(db) {
   out.staleHandle = db
     .prepare(
       `SELECT dh.id, dh.doc_no, ci.doc_no AS inspection_no, ci.result
-         FROM qc_defect_handlings dh
-         JOIN qc_inspections ci ON ci.id = dh.inspection_id
+         FROM ${T.dh} dh
+         JOIN ${T.ci} ci ON ci.id = dh.inspection_id
         WHERE dh.status <> 'cancelled' AND ci.result = 'qualified'`
     )
     .all()
 
   out.closedWithDraft = db
     .prepare(
-      `SELECT rq.id, rq.doc_no FROM qc_requests rq
+      `SELECT rq.id, rq.doc_no FROM ${T.rq} rq
         WHERE rq.status = 'closed'
-          AND EXISTS (SELECT 1 FROM qc_defect_handlings dh
-                       JOIN qc_inspections ci ON ci.id = dh.inspection_id
+          AND EXISTS (SELECT 1 FROM ${T.dh} dh
+                       JOIN ${T.ci} ci ON ci.id = dh.inspection_id
                       WHERE ci.request_id = rq.id AND dh.status = 'draft')`
     )
     .all()
@@ -1399,15 +1470,15 @@ export function auditQc(db) {
   out.shortHandle = db
     .prepare(
       `SELECT rq.id, rq.doc_no, it.sku_id, it.batch_no, it.qty AS reported,
-              IFNULL((SELECT SUM(dh.qty) FROM qc_defect_handlings dh
+              IFNULL((SELECT SUM(dh.qty) FROM ${T.dh} dh
                        WHERE dh.inspection_id = ci.id AND dh.sku_id IS it.sku_id
                          AND IFNULL(dh.batch_no,'') = IFNULL(it.batch_no,'')
                          AND dh.status <> 'cancelled'), 0) AS handled
-         FROM qc_requests rq
-         JOIN qc_inspections ci ON ci.request_id = rq.id
-         JOIN qc_request_items it ON it.request_id = rq.id
+         FROM ${T.rq} rq
+         JOIN ${T.ci} ci ON ci.request_id = rq.id
+         JOIN ${T.it} it ON it.request_id = rq.id
         WHERE rq.status = 'closed' AND it.result = 'unqualified'
-          AND IFNULL((SELECT SUM(dh.qty) FROM qc_defect_handlings dh
+          AND IFNULL((SELECT SUM(dh.qty) FROM ${T.dh} dh
                        WHERE dh.inspection_id = ci.id AND dh.sku_id IS it.sku_id
                          AND IFNULL(dh.batch_no,'') = IFNULL(it.batch_no,'')
                          AND dh.status <> 'cancelled'), 0) + 0.005 < it.qty`
@@ -1417,11 +1488,11 @@ export function auditQc(db) {
   // 查六：孤儿引用（检验单指向不存在的报检单、处理单指向不存在的检验单）
   out.orphan = db
     .prepare(
-      `SELECT 'QCI' AS kind, ci.id FROM qc_inspections ci
-        WHERE NOT EXISTS (SELECT 1 FROM qc_requests rq WHERE rq.id = ci.request_id)
+      `SELECT 'QCI' AS kind, ci.id FROM ${T.ci} ci
+        WHERE NOT EXISTS (SELECT 1 FROM ${T.rq} rq WHERE rq.id = ci.request_id)
        UNION ALL
-       SELECT 'DH', dh.id FROM qc_defect_handlings dh
-        WHERE NOT EXISTS (SELECT 1 FROM qc_inspections ci WHERE ci.id = dh.inspection_id)`
+       SELECT 'DH', dh.id FROM ${T.dh} dh
+        WHERE NOT EXISTS (SELECT 1 FROM ${T.ci} ci WHERE ci.id = dh.inspection_id)`
     )
     .all()
 
@@ -1429,7 +1500,7 @@ export function auditQc(db) {
   // （原来只查 return / scrap；让步与返工在客户口径下同样"必须有单据、必须真出库"）
   out.missingStockEffect = db
     .prepare(
-      `SELECT dh.id, dh.doc_no, dh.mode FROM qc_defect_handlings dh
+      `SELECT dh.id, dh.doc_no, dh.mode FROM ${T.dh} dh
         WHERE dh.status='confirmed' AND dh.mode IN ('return','scrap','concession','rework')
           AND (dh.out_doc_no IS NULL OR dh.out_doc_no='')`
     )
@@ -1445,7 +1516,7 @@ export function auditQc(db) {
               t.id AS transfer_id, t.status AS transfer_status,
               (SELECT COUNT(*) FROM inventory_transactions x WHERE x.doc_type='TR_OUT' AND x.doc_id=t.id) AS out_txn,
               (SELECT COUNT(*) FROM inventory_transactions x WHERE x.doc_type='TR_IN'  AND x.doc_id=t.id) AS in_txn
-         FROM qc_defect_handlings dh
+         FROM ${T.dh} dh
          LEFT JOIN stock_transfers t ON dh.out_doc_type='TF' AND t.id = dh.out_doc_id
         WHERE dh.status='confirmed' AND dh.mode IN ('concession','rework')
           AND (t.id IS NULL OR t.status <> 'received'

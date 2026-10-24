@@ -117,12 +117,19 @@
 <a class="toc-l3" data-depth="3" href="#54-密钥与敏感文件">5.4 密钥与敏感文件</a>
 <a class="toc-l3" data-depth="3" href="#55-迁移与健康核对">5.5 迁移与健康核对</a>
 <a class="toc-l2" data-depth="2" href="#六-端口多实例与访问范围">六 端口、多实例与访问范围</a>
+<a class="toc-l3" data-depth="3" href="#61-反向代理后的受信配置gml_trust_proxyadr-0040">6.1 反向代理后的受信配置（GML_TRUST_PROXY，ADR-0040）</a>
+<a class="toc-l3" data-depth="3" href="#62-后台会话传输与安全响应头gml_session_transport--gml_csp_modeadr-0036">6.2 后台会话传输与安全响应头（GML_SESSION_TRANSPORT / GML_CSP_MODE，ADR-0036）</a>
+<a class="toc-l3" data-depth="3" href="#63-监控令牌抓取节流看板缓存与分段计时gml_metrics_token--gml_metrics_token_next--gml_metrics_ip_limit--gml_metrics_ip_window_ms--gml_dashboard_cache_ms--gml_profile">6.3 监控令牌、抓取节流、看板缓存与分段计时（GML_METRICS_TOKEN / GML_METRICS_TOKEN_NEXT / GML_METRICS_IP_LIMIT / GML_METRICS_IP_WINDOW_MS / GML_DASHBOARD_CACHE_MS / GML_PROFILE）</a>
+<a class="toc-l3" data-depth="3" href="#64-审计日志关键词检索开关gml_audit_ftsadr-0030">6.4 审计日志关键词检索开关（GML_AUDIT_FTS，ADR-0030）</a>
+<a class="toc-l3" data-depth="3" href="#65-mcp-令牌速率限制gml_mcp_token_rpm--gml_mcp_write_rpmadr-0056">6.5 MCP 令牌速率限制（GML_MCP_TOKEN_RPM / GML_MCP_WRITE_RPM，ADR-0056）</a>
+<a class="toc-l3" data-depth="3" href="#66-测试专用变量生产与交付实例不要设置">6.6 测试专用变量：生产与交付实例不要设置</a>
 <a class="toc-l2" data-depth="2" href="#七-备份校验与恢复演练">七 备份、校验与恢复演练</a>
 <a class="toc-l3" data-depth="3" href="#71-日常校验备份">7.1 日常校验备份</a>
 <a class="toc-l3" data-depth="3" href="#72-恢复演练">7.2 恢复演练</a>
 <a class="toc-l3" data-depth="3" href="#73-升级失败回退演练">7.3 升级失败回退演练</a>
 <a class="toc-l3" data-depth="3" href="#74-真实恢复与升级回退">7.4 真实恢复与升级回退</a>
 <a class="toc-l3" data-depth="3" href="#75-边界务必如实告知客户">7.5 边界（务必如实告知客户）</a>
+<a class="toc-l3" data-depth="3" href="#76-备份加密gml_backup_keyadr-0022">7.6 备份加密（GML_BACKUP_KEY，ADR-0022）</a>
 <a class="toc-l2" data-depth="2" href="#八-升级">八 升级</a>
 <a class="toc-l2" data-depth="2" href="#九-演示模式仅-demo不得用于真实数据">九 演示模式（仅 demo，不得用于真实数据）</a>
 <a class="toc-l2" data-depth="2" href="#十-常见故障">十 常见故障</a>
@@ -130,7 +137,7 @@
   </nav>
   <main id="doc">
 <h1 id="伴圆ai原生erp-本地安装手册">伴圆AI原生ERP 本地安装手册</h1>
-<p>适用版本：2026年10月23日修订。面向实施顾问、维护人员和演示人员。本手册分两条路径：<strong>生产模式</strong>（默认，空库、首次用 bootstrap 建管理员、不含任何样本数据）和<strong>演示模式</strong>（需显式设置 <code>GML_RUNTIME_MODE=demo</code>，才会灌入虚构样本与演示账号，见第九章）。</p>
+<p>适用版本：2026年10月24日修订。面向实施顾问、维护人员和演示人员。本手册分两条路径：<strong>生产模式</strong>（默认，空库、首次用 bootstrap 建管理员、不含任何样本数据）和<strong>演示模式</strong>（需显式设置 <code>GML_RUNTIME_MODE=demo</code>，才会灌入虚构样本与演示账号，见第九章）。</p>
 <p>本系统仍处于开发阶段，<strong>没有通过生产上线验收</strong>：下文的生产步骤描述的是当前代码的真实行为（依据 ADR-0001、0002、0003、0008、0009、0016、0018、0019），不是已验收的商用承诺。恢复、升级回退和容量的数字必须在目标主机上实测后才能引用，见第七章末的边界说明。美妆连锁、连锁餐饮为业务验收范围，服装不在范围内。</p>
 <h2 id="一-安装前准备">一 安装前准备</h2>
 <div class="table-wrap"><table><thead><tr><th>项目</th><th>要求</th></tr></thead><tbody><tr><td>运行环境</td><td>Node.js 22.x LTS，安装时保留 npm；不使用 Node 18、20、24 或其他主版本</td></tr>
@@ -205,6 +212,16 @@ node scripts/local-manage.mjs doctor --instance=$INSTANCE</code></pre>
 <tr><td><code>GML_SECRET_KEY</code>（可选，至少 16 字符）</td><td>通知渠道密钥的封存密钥；不设置时由签名密钥派生。设置后换签名密钥不会让旧封存值不可读</td></tr>
 <tr><td><code>GML_SECRET_KEY_PREVIOUS</code>（可选，逗号分隔）</td><td>只用于解密旧值，供轮换使用；轮换步骤见操作手册&quot;通知渠道密钥&quot;</td></tr>
 <tr><td><code>GML_WEBHOOK_ALLOWED_HOSTS</code>（可选，逗号分隔主机名）</td><td>出站 Webhook 主机白名单，只能进一步收窄，不能放开私网</td></tr>
+<tr><td><code>GML_BACKUP_KEY</code>（可选，至少 32 字节）</td><td>备份加密密钥（AES-256-GCM），见 7.6；<strong>必须与备份分开保管</strong>，丢失即加密备份永久不可恢复</td></tr>
+<tr><td><code>GML_TRUST_PROXY</code>（可选，默认 <code>off</code>）</td><td>反向代理受信配置，见 6.1</td></tr>
+<tr><td><code>GML_SESSION_TRANSPORT</code>、<code>GML_CSP_MODE</code>、<code>GML_COOKIE_SECURE</code>（可选）</td><td>后台会话传输方式与安全响应头，见 6.2</td></tr>
+<tr><td><code>GML_METRICS_TOKEN</code>（可选，至少 32 字符）</td><td>Prometheus 抓取令牌，只对 <code>GET /api/meta/metrics?format=prometheus</code> 有效，见 6.3；只经环境变量传入，不进仓库、工单和日志（<code>local-manage.mjs start</code> 会把环境里的该变量原样传给服务）</td></tr>
+<tr><td><code>GML_METRICS_TOKEN_NEXT</code>、<code>GML_METRICS_IP_LIMIT</code>、<code>GML_METRICS_IP_WINDOW_MS</code>（可选）</td><td>指标令牌轮换用的第二把令牌，与指标抓取按来源 IP 的节流参数，见 6.3 与操作手册第四十章</td></tr>
+<tr><td><code>GML_RELEASE_SIGN_KEY</code>（可选，只在<strong>构建发行候选包的机器</strong>上设置）</td><td>Ed25519 私钥 PEM 的<strong>绝对路径</strong>（不是密钥内容），<code>release-candidate.mjs</code> 用它给 <code>EVIDENCE.json</code> 签名；不是运行中服务的配置，服务实例上不要设置，也不要把私钥放进实例目录或仓库。见操作手册第三十五章</td></tr>
+<tr><td><code>GML_DASHBOARD_CACHE_MS</code>、<code>GML_PROFILE</code>（可选）</td><td>经营看板缓存时长与分段计时日志，见 6.3</td></tr>
+<tr><td><code>GML_AUDIT_FTS</code>（可选）</td><td>恰为 <code>0</code> 时审计日志关键词检索强制走 <code>LIKE</code>（止血开关），见 6.4 与操作手册第三十八章</td></tr>
+<tr><td><code>GML_MCP_TOKEN_RPM</code>、<code>GML_MCP_WRITE_RPM</code>（可选）</td><td>每个 MCP 令牌每 60 秒的总调用额度与写工具额度，见 6.5 与操作手册第四十七章</td></tr>
+<tr><td><code>GML_TEST_*</code>、<code>OS_ERP_SSH</code>、<code>OS_ERP_SCP</code>、<code>OS_ERP_GH</code></td><td><strong>测试专用，生产与交付实例不要设置</strong>，见 6.6</td></tr>
 <tr><td>直接部署 / Docker</td><td>必须自行设置强随机 <code>GML_JWT_SECRET</code>；缺失或公开值时服务拒绝启动</td></tr></tbody></table></div>
 <p>上表可选环境变量在启动时放在 <code>node scripts/local-manage.mjs start</code> 前面（会传给服务）。敏感值不要写进手册、聊天或工单。</p>
 <h3 id="55-迁移与健康核对">5.5 迁移与健康核对</h3>
@@ -219,7 +236,44 @@ curl -s http://127.0.0.1:3001/api/meta/health</code></pre>
 $env:GML_LOCAL_PORT=&quot;3011&quot;
 node scripts/local-manage.mjs start</code></pre>
 <p>同一份代码为<strong>第二家企业</strong>再开实例时，使用另一个绝对路径与另一个端口，各自独立执行 5.1–5.3；两个实例的数据、签名密钥、备份和账号互不相通（ADR-0019 的测试覆盖了这四个维度）。这不是多租户：同一数据库内没有租户隔离。</p>
-<p>更换端口后，登录、POS 与手册链接中的端口同步更改；离线手册的&quot;返回系统&quot;链接默认仍指向 3001，此时手动输入实际地址。需要局域网或公网访问时，必须在前面加 HTTPS 反向代理与访问控制并自行做安全评估，本手册不提供该配置。</p>
+<p>更换端口后，登录、POS 与手册链接中的端口同步更改；离线手册的&quot;返回系统&quot;链接默认仍指向 3001，此时手动输入实际地址。需要局域网或公网访问时，必须在前面加 HTTPS 反向代理与访问控制并自行做安全评估，本手册不提供代理本身的配置，仅说明程序侧的信任开关（6.1）。</p>
+<h3 id="61-反向代理后的受信配置gml_trust_proxyadr-0040">6.1 反向代理后的受信配置（GML_TRUST_PROXY，ADR-0040）</h3>
+<ul><li>默认 <code>GML_TRUST_PROXY=off</code>：程序忽略一切 <code>X-Forwarded-For</code> / <code>X-Forwarded-Proto</code> / <code>X-Request-Id</code>；登录节流与审计的来源 IP 是 TCP 对端地址，不发 HSTS，会话 Cookie 不带 <code>Secure</code>（除非 <code>GML_COOKIE_SECURE=always</code>）。</li><li>代理与程序同机：<code>GML_TRUST_PROXY=loopback</code>。代理在另一台机器或容器网络：填写代理<strong>连接到程序时的来源地址</strong>的 CIDR 列表，如 <code>GML_TRUST_PROXY=10.0.0.5/32,172.18.0.0/16</code>。不接受 <code>true</code>、<code>1</code>、<code>*</code>、<code>0.0.0.0/0</code> 等宽泛写法，非法值启动即失败（<code>TRUST_PROXY_INVALID</code>）。</li><li>只有对端命中该列表的连接，其转发头才被采纳：来源 IP 取转发链从右向左第一个不受信的地址；<code>X-Forwarded-Proto: https</code> 才使 HSTS 与 Cookie <code>Secure</code> 生效；<code>X-Request-Id</code> 才被透传。其余连接上客户端自带的这些头一律无效。</li><li>代理必须<strong>覆盖</strong>而不是透传这三个头（nginx：<code>proxy_set_header X-Forwarded-For $remote_addr; proxy_set_header X-Forwarded-Proto $scheme; proxy_set_header X-Request-Id $request_id;</code>），并且程序端口只对代理开放。若代理未覆盖 <code>X-Forwarded-For</code> 或程序端口可被绕过代理直连，节流键可被伪造。</li><li>未设置本项而放在代理后：所有用户共享代理 IP，来源 IP 限额会被整体触发；上线前必须设置并用不同客户端实测。</li><li>Docker：<code>docker-compose.yml</code> 已把 <code>GML_TRUST_PROXY</code> 透传给容器（缺省 <code>off</code>），在同目录 <code>.env</code> 里设置即可；容器内看到的代理来源是网桥网关，<code>loopback</code> 在 compose 默认部署里无效，应填网桥网段 CIDR（用 <code>docker network inspect</code> 核对）。</li><li>依据与完整判据：ADR-0040 受信代理配置（<code>docs/implementation/ADR-0040-trust-proxy.md</code>）。ADR 自述未对真实 nginx / caddy 拓扑做过实机验证，本手册的 nginx 片段同样没有在真实代理上实测。</li></ul>
+<h3 id="62-后台会话传输与安全响应头gml_session_transport--gml_csp_modeadr-0036">6.2 后台会话传输与安全响应头（GML_SESSION_TRANSPORT / GML_CSP_MODE，ADR-0036）</h3>
+<p><strong>安全响应头</strong>：所有响应固定带 <code>X-Content-Type-Options: nosniff</code>、<code>Referrer-Policy</code>、<code>Permissions-Policy</code>、<code>X-Frame-Options: DENY</code>；仅当请求被判定为 HTTPS（直连 TLS，或来自 <code>GML_TRUST_PROXY</code> 命中的代理且带 <code>X-Forwarded-Proto: https</code>）才发 HSTS。内容安全策略由 <code>GML_CSP_MODE</code> 控制：</p>
+<div class="table-wrap"><table><thead><tr><th><code>GML_CSP_MODE</code></th><th>行为</th></tr></thead><tbody><tr><td><code>enforce</code></td><td>发 <code>Content-Security-Policy</code>，浏览器拦截违规。<strong>生产模式缺省</strong></td></tr>
+<tr><td><code>report</code></td><td>发 <code>Content-Security-Policy-Report-Only</code>，只在浏览器控制台告警、不拦截。demo / test 缺省</td></tr>
+<tr><td><code>off</code></td><td>不发 CSP（其余安全头仍发）</td></tr></tbody></table></div>
+<p>写错值（如拼错）不会静默关闭，而是回落到该运行模式的缺省值。系统没有违规上报端点（无 <code>report-uri</code>），<code>report</code> 模式的违规只能在浏览器开发者工具里看；因此切换前建议先在 <code>report</code> 下用真实页面走一遍主要流程，再设为 <code>enforce</code>。</p>
+<p><strong>会话传输</strong>：<code>GML_SESSION_TRANSPORT</code> 取 <code>bearer</code>（缺省，任何其他值也等同）或 <code>cookie</code>。</p>
+<div class="table-wrap"><table><thead><tr><th>传输</th><th>行为</th><th>何时用</th></tr></thead><tbody><tr><td><code>bearer</code>（缺省）</td><td>登录响应返回令牌，前端存浏览器 <code>localStorage</code>，请求带 <code>Authorization: Bearer</code>；服务端不读取任何 Cookie</td><td>现状，与升级前完全一致</td></tr>
+<tr><td><code>cookie</code></td><td>登录响应不含令牌，改下发 HttpOnly 的 <code>gml_session</code> 与可读的 <code>gml_csrf</code> 两个 Cookie；非读请求必须带与 Cookie 一致的 <code>x-csrf-token</code> 头，否则 403 <code>CSRF_TOKEN_INVALID</code>；登录拒绝跨站浏览器请求（403 <code>CROSS_SITE_LOGIN_REJECTED</code>）；全部退出（<code>logout-all</code>）或改密会清除两个 Cookie</td><td>要避免登录令牌被页面脚本读走时</td></tr></tbody></table></div>
+<p>要点与限制：</p>
+<ul><li><code>cookie</code> 模式要求全程 HTTPS 且前后端同源：令 Cookie 带 <code>Secure</code> 的条件是请求被判为 HTTPS（见 6.1 配置 <code>GML_TRUST_PROXY</code>），或设置 <code>GML_COOKIE_SECURE=always</code> 强制 Cookie 带 <code>Secure</code>（该项只影响 Cookie，不触发 HSTS；只有 <code>always</code> 有意义）。</li><li>脚本、运维调用与 MCP 令牌继续使用 <code>Authorization: Bearer</code>，不受 CSRF 要求影响；<code>bearer</code> 模式下带 Cookie 的请求不会被当作登录凭据。</li><li>切换传输方式后，已登录用户需要重新登录。</li><li>如实边界：<code>cookie</code> 模式缩小的是&quot;令牌被带走后在别处重放&quot;的窗口，<strong>不能防御</strong>页面脚本注入（XSS）——同源脚本仍能以当前用户身份发请求；ADR 自述本批只有 Node 级测试，<strong>没有</strong>真实浏览器里的登录 / 刷新 / 多标签 / 退出验收。把 <code>cookie</code> 作为缺省之前，需要在目标环境做这一轮浏览器验收。</li><li>依据：ADR-0036 安全响应头与后台会话传输（<code>docs/implementation/ADR-0036-security-headers-and-session-transport.md</code>）。</li></ul>
+<h3 id="63-监控令牌抓取节流看板缓存与分段计时gml_metrics_token--gml_metrics_token_next--gml_metrics_ip_limit--gml_metrics_ip_window_ms--gml_dashboard_cache_ms--gml_profile">6.3 监控令牌、抓取节流、看板缓存与分段计时（GML_METRICS_TOKEN / GML_METRICS_TOKEN_NEXT / GML_METRICS_IP_LIMIT / GML_METRICS_IP_WINDOW_MS / GML_DASHBOARD_CACHE_MS / GML_PROFILE）</h3>
+<p>以下都是可选环境变量，和 5.4 的其他变量一样放在 <code>node scripts/local-manage.mjs start</code> 前面（会传给服务）；改值后需要重启服务。</p>
+<div class="table-wrap"><table><thead><tr><th>变量</th><th>缺省</th><th>取值与行为</th></tr></thead><tbody><tr><td><code>GML_METRICS_TOKEN</code></td><td>未设置（令牌路径关闭）</td><td>至少 32 字符（例如 <code>openssl rand -hex 32</code>）。设置后，Prometheus 可用 <code>Authorization: Bearer &lt;令牌&gt;</code> 读取 <code>GET /api/meta/metrics?format=prometheus</code>；令牌<strong>只读</strong>，对 JSON 形态、<code>/health</code> 和其他接口无效，不能放在 URL 里。短于 32 字符的令牌被忽略（本变量与 <code>GML_METRICS_TOKEN_NEXT</code> 都无效时令牌路径整体关闭，不会降级成弱口令）。未设置时仍可用管理员登录凭据读取该端点。令牌轮换 = 换值并重启。接入步骤见操作手册第三十一章</td></tr>
+<tr><td><code>GML_METRICS_TOKEN_NEXT</code></td><td>未设置</td><td>轮换用的第二把抓取令牌，要求与 <code>GML_METRICS_TOKEN</code> 相同（至少 32 字符，短于 32 字符被忽略）。与 <code>GML_METRICS_TOKEN</code> <strong>同时有效</strong>，权限范围也相同（只对 <code>format=prometheus</code> 的抓取有效）。用于不中断抓取的轮换：先设 NEXT 并重启，抓取端换新令牌，再把新值写进 <code>GML_METRICS_TOKEN</code>、删除 NEXT 并重启。轮换步骤见操作手册第四十章</td></tr>
+<tr><td><code>GML_METRICS_IP_LIMIT</code></td><td><code>120</code></td><td><code>GET /api/meta/metrics</code> 每个来源 IP 在一个窗口内允许的请求数，整数 1 至 100000。不在范围内或不是纯数字的值回落到缺省，不报错、服务照常启动。启动时读定，改值需重启。超限返回 429（<code>METRICS_RATE_LIMITED</code>，带 <code>Retry-After</code>）。计数在进程内存里，重启清零；与登录节流是各自独立的桶；来源 IP 受 <code>GML_TRUST_PROXY</code> 约束（6.1）</td></tr>
+<tr><td><code>GML_METRICS_IP_WINDOW_MS</code></td><td><code>60000</code>（60 秒）</td><td>上述节流的窗口长度，毫秒，整数 1000 至 86400000；范围外的值同样回落到缺省。启动时读定</td></tr>
+<tr><td><code>GML_DASHBOARD_CACHE_MS</code></td><td><code>30000</code>（30 秒）</td><td>总部经营看板的进程内结果缓存时长，单位毫秒，适用于汇总、趋势、排行、待办、库存分布和渠道接口（<code>/api/dashboard/summary</code>、<code>trend</code>、<code>top</code>、<code>todos</code>、<code>inventory-dist</code>、<code>channel</code>）。<code>0</code> 关闭缓存（每次重新聚合）；未设置、为空、负数或不是数字都回落到缺省 30000，不会报错。命中缓存需同时满足：未过期、该行业库的连接自上次计算以来没有任何写入、没有其他连接或进程向同一数据库提交过写入（别的行业库的写入不影响它）、本地日期没变（今日/本月指标跨零点会重算），所以显示的数字最多比库内容旧一个有效期，而写入频繁的实例命中率会低。调试数字对不上时可先设为 <code>0</code> 排除缓存。最近订单（<code>/api/dashboard/recent</code>）不缓存。缓存接口的响应顶层带 <code>cached_at</code> 与 <code>cache_ttl_ms</code>，页面据此显示&quot;数据截至&quot;（操作手册第四十三章）。依据 ADR-0044</td></tr>
+<tr><td><code>GML_PROFILE</code></td><td>未设置（关闭）</td><td>只有值<strong>恰好是</strong> <code>1</code> 才开启；<code>true</code>、<code>on</code> 等都不算。开启后，看板各缓存接口每次请求写一行 <code>profile_blocks</code> 日志（含接口名、总耗时、各计时块毫秒数、<code>cache</code> 为 <code>hit</code> 或 <code>miss</code>）。缓存命中时不重新计算，只有缓存查找一块有耗时；要看各查询块，请同时设 <code>GML_DASHBOARD_CACHE_MS=0</code>。该行是 info 级，<code>GML_LOG_LEVEL</code> 设为 warn 或 error 时看不到，<strong>不进接口响应</strong>，也不改变任何业务结果。用于定位看板慢在哪一块；每个请求多写一行日志，<strong>不要在生产长期开启</strong>，排查完关闭并重启。日志格式和级别受 <code>GML_LOG_FORMAT</code>、<code>GML_LOG_LEVEL</code> 控制</td></tr></tbody></table></div>
+<p>上述缓存与计时只影响看板的响应速度和日志量，不改变数据；<code>GML_DASHBOARD_CACHE_MS</code> 的 30 秒缺省值适合大多数实例，没有必要调大。Docker 部署时 <code>docker-compose.yml</code> 的 <code>environment</code> 显式列出的只有端口、主机、运行模式、数据目录、<code>GML_TRUST_PROXY</code> 和 <code>GML_JWT_SECRET</code> 等少数变量，但同时通过 <code>env_file</code> 载入同目录 <code>.env</code>（可选），所以本节的变量都可写进 <code>.env</code>；未实际用 compose 启动验证过这些变量。看板缓存与分段计时在目标主机上的效果（缓存命中率、日志量）没有实测，缓存命中的耗时数字见 <code>docs/implementation/capacity-baseline.md</code>，且不是目标主机结果。</p>
+<h3 id="64-审计日志关键词检索开关gml_audit_ftsadr-0030">6.4 审计日志关键词检索开关（GML_AUDIT_FTS，ADR-0030）</h3>
+<div class="table-wrap"><table><thead><tr><th>变量</th><th>缺省</th><th>取值与行为</th></tr></thead><tbody><tr><td><code>GML_AUDIT_FTS</code></td><td>未设置（正常使用 FTS）</td><td>只有值<strong>恰好是字符串 <code>0</code></strong> 才关闭：审计日志关键词检索一律走 <code>LIKE</code>；其他取值（未设置、空串、<code>1</code>、<code>false</code>）都不关闭。服务每次查询时读取，但已运行的进程拿不到事后改的环境，所以改值后<strong>重启服务</strong>。只影响查询路径：迁移 067 照常建表和触发器，写入照常维护索引，维护脚本 <code>audit-fts-maintain.mjs</code> 不读取它。用途是怀疑全文索引出问题时的止血，以及测试</td></tr></tbody></table></div>
+<p>没有这个变量时 FTS 是否可用由迁移 067 决定：数据库构建不带 FTS5（或不支持 trigram）时，迁移是空操作，检索自动走 <code>LIKE</code>，功能正确。变量设置方式同 5.4 的其他变量（放在 <code>node scripts/local-manage.mjs start</code> 前面）。索引检查、重建和止血流程见操作手册第三十八章。</p>
+<h3 id="65-mcp-令牌速率限制gml_mcp_token_rpm--gml_mcp_write_rpmadr-0056">6.5 MCP 令牌速率限制（GML_MCP_TOKEN_RPM / GML_MCP_WRITE_RPM，ADR-0056）</h3>
+<p>只对启用了 MCP 的实例有意义；<strong>生产模式下 MCP 整体关闭</strong>（<code>/mcp</code>、<code>/api/mcp</code> 返回 503 <code>FEATURE_DISABLED</code>），此时这两个变量没有作用。设置方式同 5.4 的其他变量（放在 <code>node scripts/local-manage.mjs start</code> 前面），启动时读定，改值需重启服务。</p>
+<div class="table-wrap"><table><thead><tr><th>变量</th><th>缺省</th><th>取值与行为</th></tr></thead><tbody><tr><td><code>GML_MCP_TOKEN_RPM</code></td><td><code>600</code></td><td>每个 MCP 令牌每 60 秒滑动窗口内允许的全部 <code>tools/call</code> 与对已知资源的 <code>resources/read</code> 次数，整数 1 至 1000000。不是纯数字或超出范围的值回落到缺省，不报错、服务照常启动</td></tr>
+<tr><td><code>GML_MCP_WRITE_RPM</code></td><td><code>60</code></td><td>其中 <code>level: write</code> 工具的每令牌每 60 秒额度，范围与回落规则相同。写调用同时计入总额度</td></tr></tbody></table></div>
+<p>超限返回 HTTP 429、<code>Retry-After</code> 和业务码 <code>MCP_RATE_LIMITED</code>；计数在进程内存里，重启清零、多进程各自计数。另有可选的每令牌每日配额，不是环境变量而是设置键 <code>mcp_token_daily_quota</code>（<code>/system/settings</code> →&quot;运维&quot;，危险配置，缺省 0 = 关闭）。429 的响应结构、排查和告警见操作手册第四十七章。这些缺省值不是按真实 Agent 流量标定的，没有在目标主机上实测。</p>
+<h3 id="66-测试专用变量生产与交付实例不要设置">6.6 测试专用变量：生产与交付实例不要设置</h3>
+<p>下面的变量只给开发和 CI 的测试用。<strong>不要写进 <code>.env</code>、compose 的 <code>environment</code> 或服务启动命令</strong>；设了不会让生产更安全，只会触发拒绝或让测试夹具改变行为。</p>
+<div class="table-wrap"><table><thead><tr><th>变量</th><th>谁读</th><th>在非测试模式设置会怎样</th></tr></thead><tbody><tr><td><code>GML_TEST_FS_FAULT</code>、<code>GML_TEST_FS_FAULT_MODE</code></td><td><code>audit-archive.mjs</code>、<code>db-backup.mjs</code>、<code>release-candidate.mjs --log</code>（经 <code>scripts/lib/fs-fault.mjs</code>）</td><td>在写入序列的相邻两步之间注入失败或 <code>abort</code>。只在 <code>GML_RUNTIME_MODE=test</code> 下可用；其他模式下只要设置了就在做任何写入之前以 <code>FS_FAULT_FORBIDDEN</code> 失败（<code>audit-archive</code>、<code>db-backup</code> 退出 2，<code>release-candidate --log</code> 在构建前失败）；点名拼错报 <code>FS_FAULT_UNKNOWN</code></td></tr>
+<tr><td><code>GML_TEST_ARCHIVE_PAUSE_AFTER_EXPORT</code></td><td><code>audit-archive.mjs</code></td><td>在导出 fsync 之后、删除之前暂停，供测试杀进程。未设置或空串时被忽略；设为其他任何值，或在非 <code>test</code> 模式设为 <code>1</code>，以 <code>PAUSE_HOOK_FORBIDDEN</code> 退出 2</td></tr>
+<tr><td><code>GML_TEST_INDUSTRIES</code>、<code>GML_TEST_STARTUP_MS</code>、<code>GML_TEST_BASE_URL</code></td><td>回归 / 浏览器 / 库存类型闸测试脚本（<code>regress-all.mjs</code>、<code>regress-isolated.mjs</code>、<code>test-inv-type-gate.mjs</code>、<code>browser-ci.mjs</code>、<code>tests/browser/*</code>）</td><td>服务进程不读取；只改变测试脚本的行业清单、启动等待时间和目标地址</td></tr>
+<tr><td><code>OS_ERP_SSH</code>、<code>OS_ERP_SCP</code>、<code>OS_ERP_GH</code></td><td><code>offbox-anchor.mjs</code>（前两个）、<code>release-candidate.mjs</code>（<code>OS_ERP_GH</code>）</td><td>用测试替身替换 <code>ssh</code> / <code>scp</code> / <code>gh</code>。只设 <code>OS_ERP_SSH</code> 而不设 <code>OS_ERP_SCP</code> 时 <code>offbox-anchor</code> 拒绝；<code>OS_ERP_GH</code> 只被 <code>release-candidate</code> 读取，在 <code>--ci-run=auto</code> 成功选出一次运行时，候选证据的 <code>ci_lookup</code> 记录 <code>gh_override: true</code>，<code>verify-release</code> 读到这个标记后给出警告</td></tr></tbody></table></div>
+<p><code>GML_RUNTIME_MODE</code> 本身决定运行模式（第三章），不属于上面这类&quot;可选注入&quot;，生产模式不要改成 <code>test</code>。</p>
 <h2 id="七-备份校验与恢复演练">七 备份、校验与恢复演练</h2>
 <p>有两套备份工具，用途不同：</p>
 <div class="table-wrap"><table><thead><tr><th>工具</th><th>产物</th><th>校验</th><th>适用</th></tr></thead><tbody><tr><td><code>scripts/db-backup.mjs</code></td><td><code>$GML_DATA_DIR/backups/</code> 下每库快照 + <code>backup-report-&lt;stamp&gt;.json</code></td><td>强制：integrity_check、foreign_key_check、表数与迁移数、只读打开 COUNT，通过后才裁剪旧备份</td><td><strong>生产的日常备份</strong>，也是恢复演练的输入</td></tr>
@@ -227,7 +281,7 @@ node scripts/local-manage.mjs start</code></pre>
 <h3 id="71-日常校验备份">7.1 日常校验备份</h3>
 <pre><code>GML_RUNTIME_MODE=production GML_DATA_DIR=$INSTANCE/data GML_DB= node scripts/db-backup.mjs
 echo $?</code></pre>
-<p>可选参数：行业名（<code>cosmetic</code>、<code>food</code>、<code>apparel</code> 之一，只备该库）、<code>--keep=N</code>（保留份数，N 不小于 1）、<code>--verify</code>（兼容旧用法，校验现在总是执行）。其他 <code>--</code> 参数被拒绝。退出码 0 全部通过；1 某库快照或校验失败（旧备份不裁剪，坏文件改名为 <code>*.db.failed</code> 保留排查）；2 参数或环境错误。判据：退出码 0，且报告里每库 <code>status</code> 为 <code>ok</code>。备份目录默认是数据目录下的 <code>backups</code>（可经库内设置 <code>backup_dir</code> 改为绝对路径）。建议每日一次，升级前必做一次。</p>
+<p>每个通过校验的快照旁还会写一个审计链清单 <code>&lt;备份&gt;.audit-manifest.json</code>（设了 <code>GML_BACKUP_KEY</code> 时另有 <code>.audit-manifest.enc</code>），记录当时审计日志链的链尾哈希和锚点；它们应随备份一起转存到别的机器，用法见操作手册 36.5。可选参数：行业名（<code>cosmetic</code>、<code>food</code>、<code>apparel</code> 之一，只备该库）、<code>--keep=N</code>（保留份数，N 不小于 1）、<code>--verify</code>（兼容旧用法，校验现在总是执行）。其他 <code>--</code> 参数被拒绝。退出码 0 全部通过；1 某库快照或校验失败（该库的旧备份不裁剪；明文模式下坏文件改名为 <code>*.db.failed</code> 保留排查，加密模式下明文临时文件被销毁；审计链清单写不出来时，新备份和本次创建的清单一并删除）；2 参数或环境错误。判据：退出码 0，且报告里每库 <code>status</code> 为 <code>ok</code>。备份目录默认是数据目录下的 <code>backups</code>（可经库内设置 <code>backup_dir</code> 改为绝对路径）。建议每日一次，升级前必做一次。</p>
 <h3 id="72-恢复演练">7.2 恢复演练</h3>
 <p>演练证明&quot;这套备份在空目录里能真正把服务拉起来并登录&quot;，并量出恢复耗时。<strong>目标目录必须是不存在或为空的绝对路径，且不能是线上数据目录。</strong></p>
 <pre><code>TARGET=/srv/drills/restore-$(date +%Y%m%d-%H%M)
@@ -245,10 +299,17 @@ node scripts/upgrade-rollback-drill.mjs --backup-dir=$INSTANCE/data/backups --ta
 <p>真实恢复（停服、移走旧文件留证、核对 sha256、复制、运行 <code>migrate.mjs</code> 与 <code>verify-migrations.mjs</code>、启动并对数）与升级失败回退，步骤和判据以 仓库内 <code>docs/operations/restore-runbook.md</code>（恢复与升级回退操作手册）第 4、5 节为准，本手册不重复。恢复前先对该备份集跑一次 7.2 的演练。</p>
 <p>使用 <code>local-manage.mjs backup</code> 的副本恢复时：停服并先备份当前 <code>data</code> 与 <code>.local</code>；将当前 data 改名保留，创建新的空 data；把备份中的 <code>gml_*.db</code> 放入，<strong>不要</strong>混入旧的 <code>-wal</code>、<code>-shm</code>；把同次备份的 <code>config.json</code> 恢复到 <code>.local/config.json</code>；启动后检查行业、近期单据、库存和角色。不要混用不同日期的数据库和配置，不要在服务运行中覆盖库文件。</p>
 <h3 id="75-边界务必如实告知客户">7.5 边界（务必如实告知客户）</h3>
-<ul><li>恢复演练的耗时来自演练机，<strong>不是生产 RTO</strong>；生产规模 RPO/RTO 要在目标主机（dmserver）上实测后才能承诺。</li><li>三个行业库各自独立快照，不是同一业务时刻；跨库一致需要停服窗口内备份。</li><li>目前没有备份加密、没有异地副本；备份与数据在同一块盘时，盘坏即备份坏，需另行复制到异地并按敏感文件保管。</li><li>备份恢复会回退账号安全版本（<code>auth_version</code>），恢复后应让用户重新登录并轮换已签发的令牌。</li><li>演练探针只有用户、商品、采购单、收款单计数和应收未收余额，不是逐笔比对。</li></ul>
+<ul><li>恢复演练的耗时来自演练机，<strong>不是生产 RTO</strong>；生产规模 RPO/RTO 要在目标主机（dmserver）上实测后才能承诺。</li><li>三个行业库在一个短暂写冻结窗口内依次快照，报告带共享的 <code>consistency_stamp</code>，这是<strong>近似一致点，不是跨库事务</strong>（7.6）；严格的跨库一致仍需要停服窗口内备份。</li><li>备份加密是<strong>可选项，缺省关闭</strong>（见 7.6）；没有异地副本机制，备份与数据在同一块盘时，盘坏即备份坏，需另行复制到异地并按敏感文件保管。</li><li>备份恢复会回退账号安全版本（<code>auth_version</code>），恢复后应让用户重新登录并轮换已签发的令牌。</li><li>演练探针只有用户、商品、采购单、收款单计数和应收未收余额，不是逐笔比对。</li></ul>
+<h3 id="76-备份加密gml_backup_keyadr-0022">7.6 备份加密（GML_BACKUP_KEY，ADR-0022）</h3>
+<p>备份含密码哈希、令牌哈希、通知渠道密文和客户资料，备份盘外泄等于全库泄露。设置 <code>GML_BACKUP_KEY</code> 后 <code>db-backup.mjs</code> 输出 AES-256-GCM 加密的 <code>*.db.enc</code>，报告里 <code>encrypted</code> 为 <code>true</code>，<code>sha256</code> 与大小是<strong>密文</strong>的。</p>
+<pre><code>openssl rand -base64 48        # 生成密钥，存入密码管理器或离线介质，不要放在备份所在的盘
+GML_BACKUP_KEY=&quot;$(cat /secure/backup.key)&quot; GML_RUNTIME_MODE=production GML_DATA_DIR=$INSTANCE/data GML_DB= node scripts/db-backup.mjs
+echo $?</code></pre>
+<ul><li>未设置：行为不变，输出明文 <code>.db</code>。设置但短于 32 字节：直接退出码 2（<code>BACKUP_KEY_WEAK</code>），<strong>不会</strong>降级写明文。</li><li>恢复演练（7.2）和升级回退演练（7.3）读到 <code>.db.enc</code> 时需要在环境变量里提供同一个 <code>GML_BACKUP_KEY</code>；缺失为 <code>DRILL_BACKUP_KEY_REQUIRED</code>，密钥错误为 <code>DRILL_BACKUP_DECRYPT_FAILED</code>（备份文件被改动时通常先被报告里的 sha256 核对拦下，为 <code>RESTORE_SHA256_MISMATCH</code>），退出码 1，目标目录不留库文件。</li><li>明文窗口：SQLite 的快照只能写成文件，所以有密钥时快照先落在备份目录里 0600 权限的临时文件（名字以 <code>.</code> 开头、以 <code>.plain.tmp</code> 结尾），校验与加密完成后覆盖并删除。这不是&quot;明文从不落盘&quot;；在 SSD 或写时复制文件系统上覆盖不保证物理擦除，进程被强杀会遗留临时文件，发现时手工清理。更强的保证是把备份目录放在加密卷上。</li><li>三库在同一写冻结窗口内依次快照，报告顶层 <code>consistency_stamp</code> 记录冻结时长。冻结期间其他写入最长等待一次快照拷贝的时间，大库请在低峰执行；拿不到锁（5 秒）整次失败（<code>BACKUP_FREEZE_FAILED</code>），不产出文件、旧备份不裁剪。</li><li>密钥丢失 = 加密备份永久不可恢复，没有后门。旧备份仍须用旧密钥解密；轮换做法是用新密钥生成并演练通过新备份，旧密钥保留到旧备份过期。怀疑密钥泄露按明文备份泄露处理，同时按 ADR-0008 轮换 <code>GML_SECRET_KEY</code>，并让用户改密、轮换令牌。完整步骤见 <code>docs/operations/restore-runbook.md</code> 第 1.1 节。</li><li>未验证：大库加密耗时在目标主机 <code>dmserver</code> 上没有实测，报告里的 <code>encryption.ms</code> 是本机数字。</li><li>依据：ADR-0022 备份加密与三库一致点（<code>docs/implementation/ADR-0022-backup-encryption.md</code>）。</li></ul>
 <h2 id="八-升级">八 升级</h2>
 <p>升级顺序：①对当前版本做 7.1 备份；②对该备份集跑 7.3 回退演练，必须通过（它只证明&quot;这份备份 + 当时运行演练的代码&quot;能起来，<strong>不证明新版本的迁移与回退兼容</strong>）；③再在新目录解压新版本并 <code>setup</code>，用<strong>新版本的代码</strong>对同一备份集重跑 7.2 恢复演练与 7.3 回退演练，通过后才继续；④实例目录保持不变（<code>--instance=</code> 指向同一个绝对目录），停旧服务、启动新版本；⑤运行 <code>migrate.mjs --status</code> 与 <code>verify-migrations.mjs</code>，登录并对数。</p>
 <p>迁移报错（含 <code>MIGRATION_CHECKSUM_MISMATCH</code>）时：<strong>不要</strong>重试、不要手工改 <code>schema_migrations</code>、不要使用 <code>--adopt-checksums</code>；停服、切回旧代码，按恢复手册第 5 节回退。<code>--adopt-checksums</code> 只用于经评审确认&quot;库结构与新文件一致&quot;的历史迁移文件修订。</p>
+<p>可选的第 2.5 步：想在<strong>你的</strong>数据量上预先知道这批迁移要多久、会把写入者挡多久，在升级前用同一份备份集运行升级演练 <code>scripts/upgrade-rehearsal.mjs</code>（参数、判据和读报告方法见操作手册第三十二章）。它在隔离副本上重放迁移，不改动线上数据，但耗时数字来自运行它的机器，不是承诺。</p>
 <p>行为变化提示：升级到包含 ADR-0008、0015、0017 的版本后，内置 <code>purchase</code> 角色默认的子树范围在账号没有组织归属时会看到空的采购工作台与待办，需管理员为账号挂组织或设置数据范围（见操作手册对应一节）；收款确认与付款执行默认需要凭证号和第二人复核（ADR-0018）。这些是收口的直接后果，不是故障。</p>
 <h2 id="九-演示模式仅-demo不得用于真实数据">九 演示模式（仅 demo，不得用于真实数据）</h2>
 <p>演示模式必须显式开启，且只能使用全新的、专用于演示的实例目录：</p>
@@ -272,13 +333,17 @@ node scripts/upgrade-rollback-drill.mjs --backup-dir=$INSTANCE/data/backups --ta
 <tr><td><code>DATA_DIRECTORY_REQUIRED</code></td><td>数据库相关命令要求 <code>GML_DATA_DIR</code> 是绝对路径。<code>DATA_DIRECTORY_IS_REPOSITORY</code>（不得指向代码副本 <code>data/</code>）只由 ADR-0019 列出的几个检查类脚本使用，退出码因脚本而异（<code>db-backup.mjs</code> 为 2，<code>bootstrap-admin.mjs</code> 为 1）</td></tr>
 <tr><td><code>BOOTSTRAP_*</code> 错误</td><td>按错误码核对参数、密码规则和模式；库中已有账号时不能再次 bootstrap</td></tr>
 <tr><td><code>MIGRATION_CHECKSUM_MISMATCH</code></td><td>部署的代码与建库时不一致；停服，按第八章回退，不要收养校验和</td></tr>
+<tr><td>启动即失败，<code>TRUST_PROXY_INVALID</code></td><td><code>GML_TRUST_PROXY</code> 填了 <code>true</code>、<code>1</code>、<code>*</code>、<code>0.0.0.0/0</code> 等宽泛或非法写法；改成 <code>off</code>、<code>loopback</code> 或 CIDR 列表（6.1）</td></tr>
+<tr><td>备份退出码 2，<code>BACKUP_KEY_WEAK</code></td><td><code>GML_BACKUP_KEY</code> 短于 32 字节；换用 <code>openssl rand -base64 48</code> 生成的密钥（7.6）</td></tr>
+<tr><td>演练报 <code>DRILL_BACKUP_KEY_REQUIRED</code> / <code>DRILL_BACKUP_DECRYPT_FAILED</code></td><td>备份已加密，演练环境缺少或用错 <code>GML_BACKUP_KEY</code>（7.6）</td></tr>
+<tr><td>cookie 会话下写操作 403 <code>CSRF_TOKEN_INVALID</code></td><td><code>GML_SESSION_TRANSPORT=cookie</code> 时非读请求必须带与 <code>gml_csrf</code> 一致的 <code>x-csrf-token</code>；脚本调用请改用 Bearer 令牌（6.2）</td></tr>
 <tr><td>接口返回 503 <code>FEATURE_DISABLED</code></td><td>该能力在生产模式下被关闭（商城、奇门、OMS 模拟、IM 同步、MCP），不是故障</td></tr>
 <tr><td>登录成功但看不到采购数据</td><td>通常是组织归属或数据范围，见操作手册相应一节</td></tr>
 <tr><td>校验报告 hash mismatch</td><td>文件被改动或解压不完整；普通接收者应重新完整解压</td></tr>
 <tr><td>备份没有数据库</td><td>至少完成一次首次启动或 bootstrap；确认操作的是正确实例目录</td></tr>
 <tr><td>首次建库较慢</td><td>健康检查最多等待 180 秒，超时会停止本次子服务</td></tr></tbody></table></div>
 <h2 id="十一-正式使用前的边界">十一 正式使用前的边界</h2>
-<p>本软件处于开发阶段，仓库自述&quot;未达生产就绪&quot;。当前代码已提供：生产与演示数据隔离、首个管理员 bootstrap、未验收网络能力关闭、通知出站策略与渠道密钥封存、校验备份与恢复/回退演练、收付款证据与二人复核。<strong>尚未完成或未验证</strong>：Windows/Linux 实机验收、目标主机上的容量与 RPO/RTO 实测、备份加密与异地副本、跨库同一时刻一致备份、真实支付/短信/IM/电商平台连接器、HTTPS 与反向代理方案、完整账号治理与会话策略，以及客户业务规则核验。在这些完成并有验收证据之前，不得对外宣称商业可用。</p>
+<p>本软件处于开发阶段，仓库自述&quot;未达生产就绪&quot;。当前代码已提供：生产与演示数据隔离、首个管理员 bootstrap、未验收网络能力关闭、通知出站策略与渠道密钥封存、校验备份与恢复/回退演练、收付款证据与二人复核。<strong>尚未完成或未验证</strong>：Windows/Linux 实机验收、目标主机上的容量与 RPO/RTO 实测、异地副本、严格的跨库同一时刻一致备份（现有的是近似一致点，备份加密为可选项且未在目标主机实测）、真实支付/短信/IM/电商平台连接器、HTTPS 与反向代理方案（程序侧开关已有，真实代理拓扑与 cookie 会话的浏览器端验收未做）、完整账号治理与会话策略，以及客户业务规则核验。在这些完成并有验收证据之前，不得对外宣称商业可用。</p>
 <p>包中没有附带国外大模型账号、API Key 或额度。MCP 是 ERP 的能力接口，生产模式下整体关闭，不等于已经接通某个大模型。</p>
   </main>
 </div>

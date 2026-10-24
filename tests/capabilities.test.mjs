@@ -72,6 +72,7 @@ test('production HTTP rejects entire restricted surfaces without data side effec
     ['/API/MALL/checkout/?enable=true', 'POST', {}, 'public_mall'],
     ['/api/qimen', 'POST', { method: 'taobao.qimen.inventory.query', request: {} }, 'qimen_gateway'],
     ['/api/qimen/capabilities', 'GET', undefined, 'qimen_gateway'],
+    ['/api/qimen/platforms/1/secret', 'POST', {}, 'qimen_gateway'],
     ['/api/oms/sync/1', 'POST', { count: 2 }, 'oms_simulation'],
     ['/api/oms/stock-push', 'POST', { platform_id: 1 }, 'oms_simulation'],
     ['/api/oms/orders/1/ship', 'POST', {}, 'oms_simulation'],
@@ -182,9 +183,12 @@ for (const mode of ['demo', 'test']) {
       assert.ok([200, 400, 404, 409, 422].includes(response.status), `${mode}: ${route} domain response ${response.status}`)
       assert.notEqual((await response.json()).error, 'FEATURE_DISABLED')
     }
+    // 网关在非生产模式可用（不是 503 FEATURE_DISABLED），且自鉴权：缺 app_key / 签名 ⇒ 401（ADR-0028）
     const qimen = await request('/api/qimen', 'POST', {})
-    assert.equal(qimen.status, 200)
-    assert.notEqual((await qimen.json()).error, 'FEATURE_DISABLED')
+    assert.equal(qimen.status, 401)
+    const qimenBody = await qimen.json()
+    assert.notEqual(qimenBody.error, 'FEATURE_DISABLED')
+    assert.equal(qimenBody.success, false)
     const mcp = await request('/mcp', 'POST', { jsonrpc: '2.0', id: 1, method: 'initialize' })
     assert.equal(mcp.status, 200)
     assert.ok((await mcp.json()).result.serverInfo)
