@@ -18,7 +18,7 @@
 | `accounting_periods` | 034 | 035·idx, 036·idx | lib/annual.js, lib/closing.js, lib/period-audit.js, lib/period.js, lib/report.js | — |
 | `accounting_subjects` | 032 | 032·idx | lib/accounting.js, lib/annual.js, lib/closing.js, lib/report.js | routes/accounting.js |
 | `agent_token_roles` | 006 | — | — | — |
-| `agent_tokens` | 006 | 006·idx, 053, 055 | mcp/admin.js, mcp/server.js, mcp/tokens.js | — |
+| `agent_tokens` | 006 | 006·idx, 053, 055 | lib/mcp-rate-limit.js, mcp/admin.js, mcp/server.js, mcp/tokens.js | — |
 | `ai_query_logs` | schema.sql | — | — | routes/ai.js |
 | `approval_instances` | 014 | 014·idx | lib/approval.js, lib/im-sync.js, lib/metrics.js, mcp/tools.js | — |
 | `approval_records` | 014 | 014·idx | lib/approval.js | — |

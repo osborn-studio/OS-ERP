@@ -391,7 +391,7 @@ function McpTokenLimitsBlock({ nonce }: { nonce: number }) {
   )
 }
 
-type McpQuota = { daily_quota: number; enabled: boolean; truncated?: boolean; tokens: { id: number; name: string; used: number; remaining: number }[] }
+type McpQuota = { daily_quota: number; enabled: boolean; usage_unavailable?: boolean; truncated?: boolean; tokens: { id: number; name: string; used: number; remaining: number }[] }
 
 /**
  * 每令牌今日配额用量（AG9，只读，仅 system.mcp.manage）。数据来自 `GET /api/mcp/limits/quota`，口径同日配额判定（本地日历日的审计行数）。
@@ -400,6 +400,7 @@ type McpQuota = { daily_quota: number; enabled: boolean; truncated?: boolean; to
 function McpQuotaBlock({ nonce }: { nonce: number }) {
   const { data, error } = useFetch<McpQuota>('/mcp/limits/quota', undefined, [nonce])
   if (!data || error || !data.enabled) return null
+  if (data.usage_unavailable) return <div data-testid="mcp-quota" data-quota={data.daily_quota} data-unavailable="1" className="mt-3 text-[12px] text-amber-700">今日配额用量暂时读不到（审计表不可读）；此时调用会被安全拒绝，不代表还有剩余额度。</div>
   const low = data.tokens.filter((t) => t.remaining === 0).length
   return (
     <div data-testid="mcp-quota" data-quota={data.daily_quota} data-exhausted={low} className="mt-3">

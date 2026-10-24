@@ -60,7 +60,7 @@ MCP 令牌除了"近 1 小时调用数"这一条粗粒度上限（`agent_tokens.
 | 级别 | 发现 | 处理 |
 |---|---|---|
 | high | `consumeDb` 在事务外取一次时刻 / 窗口并跨 BUSY 重试沿用；争用跨过分钟边界时按旧窗口判定与记账，无视新窗口已满 ⇒ 超发 | 已修：时刻、窗口、`Retry-After` 都在写锁内每次尝试重新取；回归测试模拟"等锁期间跨窗口且新窗口已满"，断言拒绝且没有对旧窗口记账 |
-| medium | 后台清理在事件循环上用同步写重试，库被占着写锁时最多可阻塞约 20 秒（4 × busy_timeout） | 已修：先做只读探测，无过期行则不拿写锁；有过期行时把该连接的 `busy_timeout` 临时降到 250 ms、`maxAttempts: 1`，拿不到锁就放弃本轮（计 `purge_failed`，下一分钟再来），`finally` 里恢复原 `busy_timeout`；测试：另一连接占着写锁时 purge 在 2.5 s 内返回失败、`busy_timeout` 已恢复、锁释放后的下一轮成功删除 |
+| medium | 后台清理在事件循环上用同步写重试，库被占着写锁时最多可阻塞约 20 秒（4 × busy_timeout） | 已修：先做只读探测，无过期行则不拿写锁；有过期行时把该连接的 `busy_timeout` 临时降到 25 ms、`maxAttempts: 1`，拿不到锁就放弃本轮（计 `purge_failed`，下一分钟再来），`finally` 里恢复原 `busy_timeout`；测试：另一连接占着写锁时 purge 在 2.5 s 内返回失败、`busy_timeout` 已恢复、锁释放后的下一轮成功删除 |
 | — | 迁移 073 与常规 fail-closed 路径无发现（审计环境 ABI 不匹配，仅静态审阅） | — |
 
 ## 补充 2（AF9，roadmap-v11）：真实定时器测试、写锁等待直方图、并发写下的基准
@@ -93,9 +93,9 @@ MCP 令牌除了"近 1 小时调用数"这一条粗粒度上限（`agent_tokens.
 
 **决定。**
 - **迁移 075（`075_mcp_rate_denied_kind.cjs`）。** `mcp_rate_buckets.kind` 的 CHECK 放宽为 `all|write|denied`。SQLite 不能改 CHECK，所以是表重建：新建 `mcp_rate_buckets_new` → `INSERT … SELECT` 逐列拷贝 → **核对行数一致，不一致抛错回滚** → 删旧表 → 改名 → 重建索引。全程一个事务（runner 的 `up` 本来就在事务里；被直接调用时自己开事务），失败整条回滚、旧表原样；已是新 CHECK 则不动（幂等）；暂存表名是本迁移私有的，遗留则先删。`verify()` 与 `up()` 同一来源：表、索引、列、主键、**建表语句允许 `'denied'`**。073 不改（ADR-0009），其 `verify()` 对重建后的表仍成立。
-- **拒绝行。** `db` 模式下，被 `rpm` / `write_rpm` 拒绝的调用在 `withWriteRetry` 判定事务**提交之后**，另用一个短事务 `INSERT … ON CONFLICT DO UPDATE SET count=count+1` 记 `kind='denied'`（窗口取判定时的窗口）。**永不影响放行与 429**：① 判定读取的 SQL 显式 `kind IN ('all','write')`，denied 行不参与滑动窗口估计；② 拒绝行写入包在独立的 `try/catch` 里，`busy_timeout` 临时降到 250 ms、`maxAttempts: 1`、`finally` 恢复——任何失败（锁忙、旧 CHECK 未迁移、触发器拒绝）只计 `os_erp_mcp_rate_store_failures_total{reason="denied_write_failed"}` 并吞掉，调用方照常得到原来的 `reason`（不会变成 `store_unavailable`）；③ 放行的调用、`store_unavailable`、日配额拒绝都不写 denied。基数：每令牌每窗口至多一行，随既有的过期清理一起被删。
+- **拒绝行。** `db` 模式下，被 `rpm` / `write_rpm` 拒绝的调用在 `withWriteRetry` 判定事务**提交之后**，另用一个短事务 `INSERT … ON CONFLICT DO UPDATE SET count=count+1` 记 `kind='denied'`（窗口取判定时的窗口）。**永不影响放行与 429**：① 判定读取的 SQL 显式 `kind IN ('all','write')`，denied 行不参与滑动窗口估计；② 拒绝行写入包在独立的 `try/catch` 里，`busy_timeout` 临时降到 25 ms、`maxAttempts: 1`、`finally` 恢复——任何失败（锁忙、旧 CHECK 未迁移、触发器拒绝）只计 `os_erp_mcp_rate_store_failures_total{reason="denied_write_failed"}` 并吞掉，调用方照常得到原来的 `reason`（不会变成 `store_unavailable`）；③ 放行的调用、`store_unavailable`、日配额拒绝都不写 denied。基数：每令牌每窗口至多一行，随既有的过期清理一起被删。
 - **精确计数。** `recentLimitedByToken` 改为对「当前 + 上一窗口」的 `denied` 行求和（API 字段名不变，语义从"触顶窗口数 0..2"变为"被限流次数"）；接口文案与前端不再称为代理值。仍是尽力而为：拒绝行写失败的那一次不会被数到（有计数器可见）。
-- **`GET /api/mcp/limits/quota`（`system.mcp.manage`）。** `{ daily_quota, enabled, truncated, tokens:[{id,name,used,remaining}] }`：只列**在用**令牌（至多 500，用量多者在前），`used` 取自 `mcp_call_logs` 里本地今日的行数（与 `dailyQuotaState` 同谓词，`dailyQuotaByToken` 一次 `GROUP BY` 查询），`remaining = max(0, quota − used)`；配额为 0 ⇒ 空列表（不披露调用节奏）。口径边界：限流器还有进程内"影子计数"兜底审计写失败的情形，这里看不到，展示值是审计表口径。
+- **`GET /api/mcp/limits/quota`（`system.mcp.manage`）。** `{ daily_quota, enabled, truncated, tokens:[{id,name,used,remaining}] }`：只列**在用**令牌（active 且未过期；`dailyQuotaUsage` 一次 `LEFT JOIN … GROUP BY … ORDER BY used DESC LIMIT 501`，先排序后截断到 500），`used` 取自 `mcp_call_logs` 里本地今日的行数（与 `dailyQuotaState` 同谓词）；审计表读不到 ⇒ `usage_unavailable=true`、`tokens` 为空（限流此时 fail closed，不能报「剩余全部额度」），`remaining = max(0, quota − used)`；配额为 0 ⇒ 空列表（不披露调用节奏）。字段：`daily_quota, enabled, usage_unavailable, truncated, tokens`。口径边界：限流器还有进程内"影子计数"兜底审计写失败的情形，这里看不到，展示值是审计表口径。
 - **前端。** `McpCenter.tsx` 限速卡片里加一个数据驱动的配额区块（`data-testid="mcp-quota"`，配额关闭 / 读取失败 / 403 时不显示）；每令牌限流行改为"被限流 N 次"。布局由并行的 AG11 负责，本批只加最小区块。
 - **阈值推导。** `monitoring.md` 写明 `OsErpMcpRateStoreWaitHigh` 的 100 ms / 0.1 次每秒 / 15 分钟如何从 AF9 基准数字反推（最坏已测 p95 24.9 ms 的 4 倍；同步调用下 10 次/秒 × 100 ms = 事件循环占满；样本量下限；`for` 过滤批量导入），并给出上线后的复核方法。告警规则本身未改。
 
@@ -105,5 +105,14 @@ MCP 令牌除了"近 1 小时调用数"这一条粗粒度上限（`agent_tokens.
 
 ### Codex 审计（AG9，gpt-6.1-sol，只读）
 
-（见本节下方，审计完成后补记。）
+对提交 5eaa845 的审计结果（无 high）：
 
+| 级别 | 发现 | 处理 |
+|---|---|---|
+| high | 无 | — |
+| medium | 迁移 075 首次应用走 runner 的延迟事务（`db.transaction`），并发写者可能让它因 `SQLITE_BUSY(_SNAPSHOT)` 失败；失败会回滚、旧表完好，但启动中止 | 接受并记录：这是 runner 对**所有**未应用迁移的既有行为（heal 路径已是 IMMEDIATE + 重试，AF4）；回滚后重启即可；表很小（只有近两个窗口的行），重建在毫秒级；不改 runner（影响所有迁移） |
+| medium | 新进程写的 `denied` 行会让 075 之前的旧进程读桶时抛错（`cnt[r.kind]` 未定义）⇒ 该令牌 `store_unavailable` 直到行滑出窗口 | 接受并记录为升级约束：多进程共用数据目录时一起停、迁移、一起起（`monitoring.md` 写明）；新进程的判定读取显式 `kind IN ('all','write')`，以后再加 kind 不会重演；单进程部署不受影响 |
+| medium | `recordDenied` 的 250 ms `busy_timeout` 在别的进程抢先持锁时会阻塞事件循环约 250 ms/次拒绝 | 已修：降到 25 ms（不重试）；丢一次拒绝行的代价只是计数少一次（有 `denied_write_failed` 计数）。未改成异步：better-sqlite3 是同步库，异步写要另开连接，复杂度不值得 |
+| medium | 配额读失败时端点把缺失条目显示为"用量 0 / 剩余全部"，而限流此时 fail closed | 已修：`dailyQuotaUsage` 读失败返回 null ⇒ 端点 `usage_unavailable=true` 且 `tokens` 为空；前端显示「暂时读不到」；测试里把审计表改名后断言 |
+| low | 500 上限按 id 取前 500 再排序，用量最多的大 id 令牌会被挤掉；过期 / 失效令牌占位 | 已修：`ORDER BY used DESC` 在 SQL 里先排序后截断；过滤已过期令牌（所有者变更导致的失效不在此判，文档已写）；测试覆盖「最大 id 但用量最多」在 cap=2 下仍保留 |
+| — | 授权（登录 + `system.mcp.manage`）、披露范围（仅 id / 名称 / 数字，无前缀哈希明文）、上限、回滚保旧表、幂等、073 verify 兼容、校验和不变、拒绝行写失败时 `reason` 仍是 `rpm`、`busy_timeout` 恢复、连接不留事务 —— 审计环境的内存探测均确认 | — |

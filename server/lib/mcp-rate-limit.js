@@ -104,7 +104,7 @@ export function rateStoreFromEnv(env = process.env) {
 const PURGE_CHUNK = 5000
 const PURGE_MAX_CHUNKS = 20
 const PURGE_BUSY_MS = 250 // 后台清理最多等这么久的写锁
-const DENIED_BUSY_MS = 250 // 拒绝行的尽力写最多等这么久的写锁（拒绝本身已决定，不值得让事件循环久等）
+const DENIED_BUSY_MS = 25 // 拒绝行的尽力写最多等这么久的写锁（拒绝本身已决定，不值得让事件循环久等；Codex 审计 medium：250 ms 太长）
 const stmts = new WeakMap() // db → 预编译语句（连接关闭后随连接回收）
 function dbStatements(db) {
   let s = stmts.get(db)
@@ -146,7 +146,7 @@ export function createMcpRateLimiter({ env = process.env, now = Date.now, ...ove
   /**
    * 拒绝计数（AG9）：放行判定**已经做完**之后，在独立的短事务里给 kind='denied' 记一行增量。尽力而为——
    * 任何失败（锁忙、旧 CHECK 未迁移、表问题）都只计 `denied_write_failed` 并吞掉，调用方照常返回原来的 429（reason 不变）。
-   * 只在 busy_timeout 临时降到 250 ms、不重试：拒绝路径不该因为数一下而在事件循环上久等。判定读取只认 all/write，denied 行永远不参与放行。
+   * 只在 busy_timeout 临时降到 25 ms、不重试：拒绝路径不该因为数一下而在事件循环上久等。判定读取只认 all/write，denied 行永远不参与放行。
    */
   function recordDenied(db, s, key, ws) {
     let prevBusy = null
@@ -296,20 +296,24 @@ export function recentLimitedByToken(db, { scope = '', policy = mcpRatePolicy(),
 }
 
 /**
- * 每令牌**今日**日配额用量（AG9，管理端只读展示用）。→ Map<令牌 id, 今日 `mcp_call_logs` 行数>，传入的每个 id 都有条目（无记录为 0）。
- * 口径与 `dailyQuotaState` 完全一致（本地日历日、`token_id` 分组、同一个 `created_at >= date('now','localtime')` 谓词）。
- * 读不到（表缺失等）⇒ 空 Map，永不抛。注意：限流器还有进程内"影子计数"兜底审计写失败的情形，这里看不到它——展示值是审计表口径。
+ * 在用令牌**今日**日配额用量，按用量降序（AG9，管理端只读展示用）。→ `{ rows:[{id,name,used}], truncated }` | `null`（读失败）。
+ * 口径与 `dailyQuotaState` 完全一致（本地日历日、`mcp_call_logs.token_id` 分组、同一个 `created_at >= date('now','localtime')` 谓词）。
+ * 「在用」= 行状态 active 且未过期；所有者变更导致的失效（`effective_status`）不在此判（那是令牌列表的事）。
+ * **先排序后截断**：用量多的令牌不会因为 id 大而被上限挤掉（Codex 审计）。读失败返回 null 而不是空 / 0——限流在同样的读失败时是 fail closed 的，
+ * 展示层若给出"还剩全部额度"会误导运维。注意：限流器还有进程内"影子计数"兜底审计写失败，这里看不到，展示值是审计表口径。
  */
-export function dailyQuotaByToken(db, tokenIds) {
-  const out = new Map()
-  const ids = [...new Set(tokenIds)].filter((x) => Number.isSafeInteger(x) && x > 0)
-  if (!ids.length) return out
+export function dailyQuotaUsage(db, { cap = 500 } = {}) {
   try {
-    const rows = db.prepare(`SELECT token_id, COUNT(*) c FROM mcp_call_logs WHERE created_at >= date('now','localtime') AND token_id IN (${ids.map(() => '?').join(',')}) GROUP BY token_id`).all(...ids)
-    const got = new Map(rows.map((r) => [r.token_id, r.c]))
-    for (const id of ids) out.set(id, got.get(id) ?? 0)
-  } catch { /* 展示用 */ }
-  return out
+    const rows = db.prepare(`
+      SELECT t.id AS id, t.name AS name, COUNT(l.id) AS used
+        FROM agent_tokens t
+        LEFT JOIN mcp_call_logs l ON l.token_id = t.id AND l.created_at >= date('now','localtime')
+       WHERE t.status = 'active' AND (t.expires_at IS NULL OR t.expires_at = '' OR t.expires_at >= datetime('now','localtime'))
+       GROUP BY t.id
+       ORDER BY used DESC, t.id
+       LIMIT ?`).all(cap + 1)
+    return { rows: rows.slice(0, cap), truncated: rows.length > cap }
+  } catch { return null }
 }
 
 /** 已配置的日配额（0 = 关闭）。只读展示用：读失败按 0 显示不影响限流（限流自己走 `dailyQuotaState`，读失败 fail closed）。 */
@@ -349,4 +353,4 @@ export function dailyQuotaState(db, tokenId, { now = () => new Date() } = {}) {
   }
 }
 
-export default { createMcpRateLimiter, recentLimitedByToken, dailyQuotaByToken, rateStoreFromEnv, dailyQuotaState, DEFAULT_MCP_RATE, mcpRatePolicy, dailyQuotaConfigured }
+export default { createMcpRateLimiter, recentLimitedByToken, dailyQuotaUsage, rateStoreFromEnv, dailyQuotaState, DEFAULT_MCP_RATE, mcpRatePolicy, dailyQuotaConfigured }

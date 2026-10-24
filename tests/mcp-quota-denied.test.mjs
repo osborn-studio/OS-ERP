@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url'
 import { setTimeout as delay } from 'node:timers/promises'
 import Database from 'better-sqlite3'
 import { createToken } from '../server/mcp/tokens.js'
-import { createMcpRateLimiter, recentLimitedByToken, mcpRatePolicy, dailyQuotaByToken } from '../server/lib/mcp-rate-limit.js'
+import { createMcpRateLimiter, recentLimitedByToken, mcpRatePolicy, dailyQuotaUsage } from '../server/lib/mcp-rate-limit.js'
 import { COUNTER_DEFS, counterSnapshot } from '../server/lib/process-counters.js'
 
 const require = createRequire(import.meta.url)
@@ -171,17 +171,27 @@ test('recentLimitedByToken: exact denied counts over current + previous window, 
   db.close()
 })
 
-test('dailyQuotaByToken counts today mcp_call_logs per token the way dailyQuotaState does', () => {
+test('dailyQuotaUsage: today counts per active token like dailyQuotaState; ranks before capping; excludes revoked/expired; null on read failure', () => {
   const db = new Database(':memory:')
-  db.exec("CREATE TABLE mcp_call_logs (id INTEGER PRIMARY KEY, token_id INTEGER, created_at TEXT)")
+  db.exec(`CREATE TABLE agent_tokens (id INTEGER PRIMARY KEY, name TEXT, status TEXT, expires_at TEXT);
+           CREATE TABLE mcp_call_logs (id INTEGER PRIMARY KEY, token_id INTEGER, created_at TEXT)`)
+  const tok = db.prepare('INSERT INTO agent_tokens (id, name, status, expires_at) VALUES (?,?,?,?)')
+  for (let i = 1; i <= 5; i++) tok.run(i, `t${i}`, 'active', null)
+  tok.run(6, 't6', 'revoked', null)
+  tok.run(7, 't7', 'active', '2000-01-01 00:00:00')
+  tok.run(8, 't8', 'active', '2999-01-01 00:00:00')
   const ins = db.prepare('INSERT INTO mcp_call_logs (token_id, created_at) VALUES (?, ?)')
   const today = db.prepare("SELECT datetime('now','localtime') v").get().v
   const yesterday = db.prepare("SELECT datetime('now','localtime','-1 day') v").get().v
-  ins.run(1, today); ins.run(1, today); ins.run(2, today); ins.run(1, yesterday); ins.run(9, today)
-  const m = dailyQuotaByToken(db, [1, 2, 3])
-  assert.deepEqual([...m.entries()].sort((a, b) => a[0] - b[0]), [[1, 2], [2, 1], [3, 0]])
-  assert.equal(dailyQuotaByToken(db, []).size, 0)
-  assert.equal(dailyQuotaByToken(new Database(':memory:'), [1]).size, 0, 'missing table => empty, never throws')
+  ins.run(1, today); ins.run(1, today); ins.run(2, today); ins.run(1, yesterday); ins.run(6, today); ins.run(7, today)
+  for (let i = 0; i < 4; i++) ins.run(5, today) // 最大 id 但用量最多
+  const all = dailyQuotaUsage(db)
+  assert.deepEqual(all.rows.map((r) => [r.id, r.used]), [[5, 4], [1, 2], [2, 1], [3, 0], [4, 0], [8, 0]])
+  assert.equal(all.truncated, false)
+  const cut = dailyQuotaUsage(db, { cap: 2 })
+  assert.deepEqual(cut.rows.map((r) => r.id), [5, 1], 'busiest survive the cap even with the largest id')
+  assert.equal(cut.truncated, true)
+  assert.equal(dailyQuotaUsage(new Database(':memory:')), null, 'missing tables => null, never throws')
   db.close()
 })
 
@@ -257,14 +267,14 @@ test('GET /api/mcp/limits/quota: empty when quota is off; per active token used/
   f.db.prepare("UPDATE agent_tokens SET status='revoked' WHERE id=?").run(dead.id)
   let r = await f.get('/api/mcp/limits/quota', admin)
   assert.equal(r.status, 200)
-  assert.deepEqual(r.body.data, { daily_quota: 0, enabled: false, truncated: false, tokens: [] })
+  assert.deepEqual(r.body.data, { daily_quota: 0, enabled: false, usage_unavailable: false, truncated: false, tokens: [] })
   setQuota(f.db, 5)
   assert.equal(await f.mcpCall(a.token), 200)
   assert.equal(await f.mcpCall(a.token), 200)
   assert.equal(await f.mcpCall(b.token), 200)
   r = await f.get('/api/mcp/limits/quota', admin)
   const d = r.body.data
-  assert.deepEqual(Object.keys(d).sort(), ['daily_quota', 'enabled', 'tokens', 'truncated'])
+  assert.deepEqual(Object.keys(d).sort(), ['daily_quota', 'enabled', 'tokens', 'truncated', 'usage_unavailable'])
   assert.equal(d.daily_quota, 5)
   assert.equal(d.enabled, true)
   const by = Object.fromEntries(d.tokens.map((x) => [x.name, x]))
@@ -282,6 +292,11 @@ test('GET /api/mcp/limits/quota: empty when quota is off; per active token used/
   const a2 = r.body.data.tokens.find((x) => x.name === 'tok-a')
   assert.equal(a2.remaining, 0)
   assert.ok(a2.used >= 5)
+  // audit table unreadable => honest 'unavailable', never "all quota remaining"
+  f.db.exec('ALTER TABLE mcp_call_logs RENAME TO mcp_call_logs_gone')
+  r = await f.get('/api/mcp/limits/quota', admin)
+  f.db.exec('ALTER TABLE mcp_call_logs_gone RENAME TO mcp_call_logs')
+  assert.deepEqual([r.body.data.usage_unavailable, r.body.data.tokens.length], [true, 0])
   // authz
   const pw = randomBytes(24).toString('base64url')
   const created = await fetch(`${f.base}/api/auth/users`, {
