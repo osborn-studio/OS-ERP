@@ -342,6 +342,12 @@ export const SETTING_RULES = {
     gt: 0,
     impact: '备份数超出它时按时间清理最旧的（只清本工具命名规则生成的文件）。'
   },
+  // ---- MCP 令牌日配额（ADR-0056 / AD9）：0 = 关闭；调低 = 令牌当日更早被拒，所以是危险键 ----
+  mcp_token_daily_quota: {
+    group: 'ops', label: 'MCP 令牌每日调用配额', type: 'int', default: '0', is_danger: true, wired: true,
+    min: 0, max: 100000000,
+    impact: '每个 MCP 令牌每个本地日历日最多这么多次工具调用（按调用审计行统计，过本地午夜归零）；超出返回 429 MCP_RATE_LIMITED。0 = 不限（每分钟速率仍由 GML_MCP_TOKEN_RPM / GML_MCP_WRITE_RPM 管）。'
+  },
   // ---- 数据保留（ADR-0030）：`scripts/retention.mjs` 读取；缩短窗口 = 更早永久删除日志，所以是危险键 ----
   retention_audit_days: {
     group: 'ops', label: '审计日志保留天数', type: 'int', default: '365', is_danger: true, wired: true,

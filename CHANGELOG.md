@@ -8,6 +8,10 @@
 
 <!-- generated -->
 
+## 第十三批（进行中）：见 roadmap-v9
+
+- [ADR-0056：MCP 工具级速率限制与日配额（AD9）](docs/implementation/ADR-0056-mcp-rate-limit-quota.md) — 两个按令牌的 60 秒滑动窗口额度（`server/lib/mcp-rate-limit.js`）：`GML_MCP_TOKEN_RPM`（全部 `tools/call` 与 `resources/read`，默认 600）、`GML_MCP_WRITE_RPM`（`level: 'write'` 工具，默认 60）。范围 1..1000000，非法值回退默认。写调用同时计入两个额度；先检查后记账，所以被写额度拒绝的调用不消耗总额度，写额度与读额度互不挤占（但总额度是硬上限）…
+
 ## 第十二批（进行中）：见 roadmap-v8
 
 - [ADR-0050：MCP 采购订单读工具与剩余聚合读口和 HTTP 范围对齐（AC1）](docs/implementation/ADR-0050-mcp-purchase-scope-parity.md) — 单一谓词：`server/lib/purchase.js` 新增 `purchaseOrderScopeSql(orgScope, alias)`，返回 `{ sql, params, empty }`，判据就是既有 `purchaseScopeSql(...).wh`（入库仓 `warehouses.org_id`；全局 `1=1`；`dealer` / `none` / 空集合 `1=0`；仓无组织对受限范围不可见）。HTTP 订单列表、`/stats`、`assertP…

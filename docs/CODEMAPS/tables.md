@@ -82,7 +82,7 @@
 | `mall_customers` | schema.sql | 025 | lib/coupon.js, lib/member.js, lib/pos2.js, middleware/mall-session.js | routes/mall.js, routes/promo.js |
 | `material_issue_items` | 023 | 023·idx | lib/mfg.js | — |
 | `material_issues` | 023 | 023·idx | lib/docflow.js, lib/mfg.js | — |
-| `mcp_call_logs` | 006 | 006·idx | mcp/admin.js, mcp/server.js, mcp/tokens.js | — |
+| `mcp_call_logs` | 006 | 006·idx | lib/mcp-rate-limit.js, mcp/admin.js, mcp/server.js, mcp/tokens.js | — |
 | `mcp_confirmations` | 006 | 006·idx | mcp/admin.js, mcp/server.js | — |
 | `mcp_idempotency` | 006 | 006·idx, 026·idx | mcp/server.js | — |
 | `member_accounts` | 025 | 025·idx | lib/member.js | routes/promo.js |

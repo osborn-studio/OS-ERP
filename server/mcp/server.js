@@ -39,6 +39,8 @@ import * as engine from '../lib/stock.js'
 import { versionInfo } from '../version.js'
 import { logger } from '../lib/logger.js'
 import { incCounter, incMcpToolCall, registerMcpTools } from '../lib/process-counters.js'
+import { bizFail } from '../lib/http.js'
+import { createMcpRateLimiter, dailyQuotaState } from '../lib/mcp-rate-limit.js'
 
 const r = Router()
 
@@ -126,6 +128,44 @@ function argsFingerprint(args) {
 // ============================================================
 // 工具执行
 // ============================================================
+
+// ---- 速率限制与日配额（ADR-0056 / AD9）----
+// 键 = 验签后的令牌行 id（不读请求体 / 头 / IP）。超限 ⇒ HTTP 429 + `Retry-After`，业务码 `MCP_RATE_LIMITED` 由 `bizFail` 构造（唯一构造点），
+// 同时保留 JSON-RPC 外壳（jsonrpc / id）与工具级错误的 `result.isError` 形态，MCP 客户端仍能把原因交给模型。
+// 被限流的调用不写审计行（否则洪泛会变成对 SQLite 的写放大），只进进程内计数器 `os_erp_mcp_tool_calls_total{code="MCP_RATE_LIMITED"}`。
+const mcpLimiter = createMcpRateLimiter()
+const RATE_TEXT = {
+  rpm: (d) => `该 Token 每分钟调用已达上限（${mcpLimiter.policy.rpm} 次），请 ${d.retryAfter} 秒后重试`,
+  write_rpm: (d) => `该 Token 每分钟写型调用已达上限（${mcpLimiter.policy.writeRpm} 次），请 ${d.retryAfter} 秒后重试`,
+  daily_quota: (d) => `该 Token 今日调用已达配额（${d.quota} 次），请次日再试或联系管理员调整`,
+  unavailable: () => '限流状态暂不可用，为安全起见拒绝本次调用，请稍后重试'
+}
+
+function rateLimited(res, id, tool, d) {
+  incMcpToolCall(tool?.name, 'MCP_RATE_LIMITED')
+  const reason = d.reason === 'daily_quota' || d.reason === 'rpm' || d.reason === 'write_rpm' ? d.reason : 'unavailable'
+  const retryAfter = Math.max(1, Math.floor(d.retryAfter || 1))
+  const err = Object.assign(new Error(RATE_TEXT[reason]({ ...d, retryAfter })), {
+    code: 'MCP_RATE_LIMITED', status: 429, detail: { reason, retry_after: retryAfter }
+  })
+  const cap = { status: 429, body: null }
+  bizFail({ status(s) { cap.status = s; return this }, json(b) { cap.body = b; return this } }, err)
+  res.set('Retry-After', String(retryAfter))
+  return res.status(cap.status).json({
+    jsonrpc: '2.0',
+    id,
+    ...cap.body,
+    result: { content: [{ type: 'text', text: JSON.stringify({ error: 'MCP_RATE_LIMITED', message: cap.body.message, detail: cap.body.detail }, null, 2) }], isError: true }
+  })
+}
+
+/** 速率 + 日配额的一次判定；通过返回 null，否则返回拒绝详情 */
+function mcpBudget(db, tokenId, level) {
+  const rate = mcpLimiter.consume(tokenId, level)
+  if (!rate.allowed) return rate
+  const q = dailyQuotaState(db, tokenId)
+  return q.allowed ? null : q
+}
 
 // 凭据 / 协议层错误。`data.code` 是给客户端程序判定用的**稳定业务码**（ADR-0011），
 // `message` 是给人看的；只给 message 的话客户端只能靠字符串匹配中文。
@@ -366,6 +406,8 @@ r.post('/', (req, res) => {
       const toolName = RESOURCE_TOOL[uri]
       if (!toolName) return rpcError(res, id, -32602, `未知资源：${uri}`)
       const tool = resolveTool(toolName)
+      const limited = mcpBudget(db, row.id, 'read')
+      if (limited) return rateLimited(res, id, tool, limited)
       const denied = checkToolAccess(tool, gate)
       if (denied) {
         logCall(db, { token: row, tool, ok: false, errorCode: denied.code, args: { uri }, ip: req.ip })
@@ -435,6 +477,9 @@ r.post('/', (req, res) => {
     const ip = req.ip
 
     const tool = TOOL_MAP.get(toolName)
+    // 限流在一切工具判定之前：未知工具、无权限、参数非法的调用同样占额度（猜工具名 / 撞权限也受限）
+    const limited = mcpBudget(db, row.id, tool?.level)
+    if (limited) return rateLimited(res, id, tool, limited)
     if (!tool) {
       logCall(db, { token: row, tool: { name: toolName }, ok: false, errorCode: 'TOOL_NOT_FOUND', args, ip })
       return toolError(res, id, 'TOOL_NOT_FOUND', `未知工具：${toolName}`)
