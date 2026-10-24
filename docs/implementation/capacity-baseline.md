@@ -937,3 +937,4 @@ gh run view <run-id> --log-failed
 - 本机整机负载 30–65，**绝对数字偏大，只看量级与"有无失败"**；写入者是**一个进程一个连接**，不是多写者并发，也不经 HTTP / `audit()` 中间件；没有同时运行服务，故 `os_erp_audit_fts_fallback_total`（`--metrics-url` 采集）本批**未采集**，读路径回退由 AF4 的真实服务用例覆盖。
 - 同一个秒级用例在 `tests/audit-fts-races.test.mjs`（"AG4 writer process keeps inserting…"，约 3 s）：写入者 400 行/s，经轮询（非 sleep）确认「触发器在位时在写 → `--disable` → 索引缺席时仍在写 → `--enable` → 触发器恢复后仍在写」，断言确认行数 = 表内行数、序号不重、链完好、索引文档数 = 行数。
 - 复现：`node scripts/bench-audit-toggle-under-write.mjs --rounds 20 --rate 200 --seed-rows 20000`；`--mode burst --burst-every-ms 0`；`--writer-busy-ms 500 --retries 0` 观察失败形态。
+- 说明：表中四个场景在审计跟进修复（steady 模式落后时不再"补发"积压、`ok` 须含每次开关均真实执行）**之前**跑出；steady 场景的"实测行/秒"因此可能略高估被挡之后的恢复速率，其余结论不受影响。修复后用 `--rounds 3 --seed-rows 3000` 复跑一次，`ok: true`、`toggles_ok: true`、零失败。
