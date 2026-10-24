@@ -536,9 +536,19 @@ for (const mode of MODES) {
     assert.equal(rep2.report_phase, 'final'); assert.equal(e2.prune_state, 'done')
     assert.deepEqual(e2.pruned_orphans, [orphan])
     assert.equal(f.dbs().length, 1, 'keep=1 honoured; the previous newest was pruned by the continuing run')
-    assert.equal(f.B(['--keep=1']).status, 0, 'idempotent')
+    assert.equal(f.B(['--keep=1']).status, 0, 'repeating is safe (exit 0; each run still adds a backup and prunes by keep)')
   })
 }
+
+test('orphan manifests that no interrupted prune explains (e.g. backup moved off-host) are never swept', { timeout: 120000 }, (t) => {
+  const f = backupFixture(t)
+  assert.equal(f.B(['--keep=5']).status, 0)
+  const keepSake = `gml_cosmetic_20200101-000000.db.audit-manifest.json`
+  writeFileSync(path.join(f.bdir, keepSake), '{}\n')
+  assert.equal(f.B(['--keep=1']).status, 0)
+  assert.ok(f.names().includes(keepSake), 'a manifest whose backup was moved away deliberately stays')
+  assert.deepEqual(cosEntry(readReport(f)).pruned_orphans, [])
+})
 
 test('db-backup prune point does not fire when nothing is deleted (no step to interrupt)', { timeout: 120000 }, (t) => {
   const f = backupFixture(t)
@@ -547,7 +557,7 @@ test('db-backup prune point does not fire when nothing is deleted (no step to in
 })
 
 test('db-backup fault (encrypted): report/prune points leave no plaintext and the .enc backups + manifests stay decryptable', { timeout: 180000 }, (t) => {
-  for (const [point, mode] of [['backup.after-report-write-before-rename', 'abort'], ['backup.after-prune-delete-before-dirsync', 'abort'], ['backup.after-prune-delete-before-dirsync', 'throw']]) {
+  for (const [point, mode] of [['backup.after-report-write-before-rename', 'abort'], ['backup.after-report-write-before-rename', 'throw'], ['backup.after-prune-delete-before-dirsync', 'abort'], ['backup.after-prune-delete-before-dirsync', 'throw']]) {
     const f = backupFixture(t)
     assert.equal(f.B(['--keep=5'], KEY).status, 0)
     const r = f.B(['--keep=1'], { ...KEY, ...fault(point, mode) })
@@ -555,7 +565,11 @@ test('db-backup fault (encrypted): report/prune points leave no plaintext and th
     assert.deepEqual(plaintextSnapshots(f), [], point)
     const encs = f.names().filter((n) => n.endsWith('.db.enc'))
     assert.ok(encs.length >= 1)
-    for (const n of encs) decryptFile(path.join(f.bdir, n), null, KEY_BYTES)
+    for (const n of encs) {
+      decryptFile(path.join(f.bdir, n), null, KEY_BYTES)
+      const me = path.join(f.bdir, `${n}.audit-manifest.enc`)
+      if (existsSync(me)) decryptFile(me, null, KEY_BYTES) // 清单随备份，认证可解
+    }
     assert.equal(f.B(['--keep=1'], KEY).status, 0)
     assert.equal(f.names().filter((n) => n.endsWith('.db.enc')).length, 1)
   }
@@ -572,10 +586,13 @@ test('fsync order (AG6): report temp fsync -> rename -> directory fsync; the pre
   const tSync = idx(ev, (e) => e.op === 'fsync' && e.path === tmpPath)
   const d1 = idx(ev, (e) => e.op === 'fsync' && e.path === f.bdir, r1)
   const unlink = idx(ev, (e) => e.op === 'rm' && /gml_cosmetic_[^/]*\.db$/.test(e.path))
-  const d2 = idx(ev, (e) => e.op === 'fsync' && e.path === f.bdir, unlink)
+  const lastRm = ev.reduce((m, e, k) => (e.op === 'rm' && /gml_cosmetic_/.test(e.path) ? k : m), -1)
+  const d2 = idx(ev, (e) => e.op === 'fsync' && e.path === f.bdir, lastRm)
   const r2 = idx(ev, isReportRename, r1 + 1)
   assert.ok(tSync < r1 && r1 < d1 && d1 < unlink, 'pre-prune report: fsync, rename, dir fsync, only then delete')
   assert.ok(unlink < d2 && d2 < r2, 'deletes, then dir fsync, then the final report')
+  const tmp2 = ev[r2].from
+  assert.ok(idx(ev, (e) => e.op === 'fsync' && e.path === tmp2) < r2, 'final report temp is fsynced before its rename')
   const d3 = idx(ev, (e) => e.op === 'fsync' && e.path === f.bdir, r2)
   assert.ok(r2 < d3, 'final report rename is followed by a directory fsync')
 })

@@ -48,7 +48,7 @@ GML_BACKUP_KEY="$(cat /secure/backup.key)" GML_RUNTIME_MODE=production GML_DATA_
 **A. 报告缺失，但备份完整**（命令在写报告时被打断，或最近一次运行的报告没有出现）
 
 1. 确认备份完整：新 `gml_<库>_<stamp>.db`（或 `.db.enc`）旁边有 `.audit-manifest.json`（加密模式还有 `.audit-manifest.enc`）。没有清单的备份“可用但缺链清单”，按 §5b 的孤儿备份处理（确认后可删，或重新备份）。
-2. 目录里若有 `.backup-report-<stamp>.json.<随机串>.tmp`（点文件）：它是本次本该落地的报告，内容完整且已 fsync，只是没来得及改名。可以 `jq . <文件>` 查看；**不要手工改名成报告**（核对 sha256 时以备份文件为准，见第 4 节第 3 步，必要时重新备份）。下一次正常运行会自动清扫它。
+2. 目录里若有 `.backup-report-<stamp>.json.<随机串>.tmp`（点文件）：它是本次本该落地的报告，若进程是在 `fsync` 之后被打断（注入点 `after-report-write-before-rename` 即此状态），内容完整；若是更早被杀，它可能是半截文件，不要据此下结论。可以 `jq . <文件>` 查看；**不要手工改名成报告**（核对 sha256 时以备份文件为准，见第 4 节第 3 步，必要时重新备份）。下一次正常运行会自动清扫它。
 3. 对没有报告的备份，用文件本身核验：`shasum -a 256 <备份文件>`，并按第 2 节的恢复演练（`scripts/db-restore-drill.mjs`）实际打开它；加密备份先用当前密钥解密。
 4. 正常再跑一次 `node scripts/db-backup.mjs`：自动清扫遗留 `.tmp`、写出新报告、按 keep 规则裁剪。退出码 0 才算收尾。
 
@@ -56,8 +56,8 @@ GML_BACKUP_KEY="$(cat /secure/backup.key)" GML_RUNTIME_MODE=production GML_DATA_
 
 1. 报告是清理前持久化的：条目的 `pruned` 列出这次要删（可能已删）的旧备份文件名，`pruned_orphans` 列出孤儿清单。`prune_state=planned` 且 `report_phase=pre-prune` 说明删除阶段被打断，终版报告没写；`failed` 附带 `prune_error=BACKUP_PRUNE_FAILED…`；`skipped` 说明 pre-prune 报告没写成，所以**没有删任何文件**。
 2. 新备份（条目 `status=ok` 的 `file`）和它的清单不受影响，可直接用于恢复。`pruned` 里的名字可能还在（断电后目录项没落盘的删除会“复活”，无害）或已不在；两种都不需要手工处理。
-3. 若发现“备份已不在、`.audit-manifest.*` 还在”的孤儿清单：这是删除在“删备份”与“删清单”之间被打断。**如果那份清单你已离机保存，保留你的离机副本**；盘上的孤儿清单下一次运行会被清扫（条目 `pruned_orphans` 记名）。
-4. 重新运行 `node scripts/db-backup.mjs`（同样的 `--keep`）：按 keep 规则继续裁剪、清扫孤儿清单，写出 `report_phase=final` 且 `prune_state=done` 的报告。再跑一次应是空操作（`prune_state=none`）。
+3. 若发现“备份已不在、`.audit-manifest.*` 还在”的孤儿清单：这是删除在“删备份”与“删清单”之间被打断。**如果那份清单你已离机保存，保留你的离机副本**；盘上的孤儿清单下一次运行只会清扫**上一份报告明确列为被打断清理（`planned` / `failed`）所涉及的备份**对应的孤儿清单（条目 `pruned_orphans` 记名）；其它孤儿清单（例如备份被你搬到机外、清单留作审计基线）不会被自动删除。
+4. 重新运行 `node scripts/db-backup.mjs`（同样的 `--keep`）：按 keep 规则继续裁剪、清扫孤儿清单，写出 `report_phase=final` 且 `prune_state=done` 的报告。重复运行是安全的，但不是空操作：每次运行都会新增一份备份并按 keep 裁剪上一份，所以 `--keep=1` 时每次报告都会是 `prune_state=done`；只有备份数没超 keep 时才是 `none`。
 
 ## 2. 定期：恢复演练（证明备份能起来，量 RTO/RPO）
 

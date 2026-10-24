@@ -101,7 +101,7 @@ node scripts/audit-archive.mjs --data-dir /abs/data --industry cosmetic --before
 | `backup.after-manifest-fsync`（AF6） | 第一个库的 `.audit-manifest.json`（及加密模式的 `.audit-manifest.enc`）已写、清单文件已 fsync、目录已 fsync；裁剪与报告未做 | 备份 + 清单完整（含清单的目录项已 fsync），没有本次报告；其余库（如有）只有终名、无清单 | 清单失败路径删除该库的备份与清单（`BACKUP_MANIFEST_FAILED`） | abort：备份可用；下一次正常运行写新报告并按 keep 裁剪。throw：重跑 |
 | `backup.after-sidecar` | 备份与清单都已落盘、报告未写 | 备份 + 清单完整，没有本次报告 | 同左（未捕获异常，进程非零退出） | 备份可用；下一次正常运行写出新报告并按 keep 裁剪 |
 | `backup.after-report-write-before-rename`（AG6） | 一份报告的临时文件 `.backup-report-<stamp>.json.<rand>.tmp` 已写完且已 fsync，尚未 rename；每次写报告前都会触发（有清理计划时先是 pre-prune 那份，其后是终版那份）。pre-prune 那份触发时**还没删任何文件** | 新备份 + 清单完整；旧报告原样保留（报告名下没有半截文件）；留下一个内容完整的 `.backup-report-*.tmp`（点文件，不匹配报告名规则）；有清理计划时旧备份**一个都没删** | 该次报告写入失败：删掉自己的临时文件、打印“报告写入失败”、非零退出；备份与清单完整；若是 pre-prune 那份失败，该目录的清理被跳过（`prune_state=skipped`，不删任何文件） | 备份可用。下一次正常运行先清扫遗留的 `.backup-report-*.tmp`，再照常写报告并按 keep 裁剪。临时文件内容就是本次本该落地的报告，可用于事后查看 |
-| `backup.after-prune-delete-before-dirsync`（AG6） | 清理已 `unlink` 旧备份与其清单、**目录未 fsync**；pre-prune 报告（`report_phase=pre-prune`，条目 `prune_state=planned`，`pruned` 列出本次要删/已删的文件名）已持久化；终版报告未写。仅当本次确实删了文件才触发 | 新备份 + 清单完整；报告是 pre-prune 版（盘上同时可能因断电“复活”部分旧备份——无害，下次按 keep 再裁）；`pruned` 里的名字要么已删要么将删 | 清理捕获为失败：条目 `prune_state=failed`、`prune_error=BACKUP_PRUNE_FAILED…`，终版报告照常写出，非零退出（备份本身仍是 `ok`） | 备份可用。下一次正常运行继续：按 keep 规则裁剪仍超额的旧备份，并清扫“备份已不在、清单还在”的孤儿清单（条目 `pruned_orphans`）。删了备份没来得及删清单的状态由此自愈 |
+| `backup.after-prune-delete-before-dirsync`（AG6） | 清理已 `unlink` 旧备份与其清单、**目录未 fsync**；pre-prune 报告（`report_phase=pre-prune`，条目 `prune_state=planned`，`pruned` 列出本次要删/已删的文件名）已持久化；终版报告未写。仅当本次确实删了文件才触发 | 新备份 + 清单完整；报告是 pre-prune 版（盘上同时可能因断电“复活”部分旧备份——无害，下次按 keep 再裁）；`pruned` 里的名字要么已删要么将删 | 清理捕获为失败：条目 `prune_state=failed`、`prune_error=BACKUP_PRUNE_FAILED…`，终版报告照常写出，非零退出（备份本身仍是 `ok`） | 备份可用。下一次正常运行继续：按 keep 规则裁剪仍超额的旧备份，并清扫**上一份报告里 `prune_state` 为 `planned` / `failed` 的 `pruned` 所列备份**对应的“备份已不在、清单还在”孤儿清单（条目 `pruned_orphans`）；与被打断的清理无关的孤儿清单（如备份被搬到机外、清单留作审计基线）**不会**被自动清扫。删了备份没来得及删清单的状态由此自愈 |
 
 无密钥模式下终名 `.db` 只在 fsync + 校验通过后经 rename 出现，因此“磁盘上有终名 `.db`”总是意味着该快照通过过完整性校验。
 
@@ -129,7 +129,7 @@ node scripts/audit-archive.mjs --data-dir /abs/data --industry cosmetic --before
 - **断电 / 内核崩溃**：脚本按下列顺序发起 fsync，**在 Linux ext4/xfs 上**这些顺序使得“到达某一注入点”意味着此前的步骤已持久：快照文件 fsync → 改终名 → **目录 fsync** →（加密模式）擦除明文；清单文件 fsync（明文清单；密文清单由 `encryptFile` 在 rename 前 fsync）→ **目录 fsync**（覆盖两种清单的目录项）→ 报告（AG6：临时文件 fsync → rename → 目录 fsync；有清理计划时这是 pre-prune 报告）→ 删除旧备份与清单 → **目录 fsync** → 终版报告。`tests/fs-fault.test.mjs` 的 `fsync order` 用例用只读的 fs 追踪器断言这些**调用顺序**（密文/清单临时文件先 fsync 再 rename、目录 fsync 先于第一次明文覆写、新建目录的父目录 fsync、清单 fsync + 目录 fsync 先于报告 rename；AG6：报告临时文件 fsync → rename → 目录 fsync，pre-prune 报告先于第一次 `unlink`，删除后的目录 fsync 先于终版报告；它证明脚本发起了 fsync，不证明硬件落盘）。
 - **macOS**：`fsync` 只保证到磁盘缓存，不等于 `F_FULLFSYNC`（Node 不暴露），所以在 macOS 上这些 fsync 是尽力而为，不能据此声称断电持久。
 - **新建目录**：首次运行创建备份目录（含嵌套的 `backup_dir`）时，脚本逐级 fsync 每个新目录的父目录；已存在的目录层级不重复处理，其自身的持久性是前提。
-- **未覆盖**：① （AG6 已收口，不再属于未覆盖）报告文件现在是临时文件 → fsync → rename → 目录 fsync，裁剪删除之后也 fsync 目录；清理前先把“将删除清单”持久化进 pre-prune 报告。仍然成立的限制：报告是诊断记录，不是恢复所需对象——它的持久化只让“报告缺失”这一状态在 Linux ext4/xfs 上不会因断电出现（macOS 仍是尽力而为）；旧报告的**清理**（超出保留份数的 `backup-report-*.json`）删除后虽然 fsync 了目录，但没有对应的“记录先于删除”（旧报告本身就是被淘汰的诊断记录）；② 断电后目录项未落盘的删除可能“复活”已裁剪的旧备份（无害，下次按 keep 再裁，并会清扫其孤儿清单）；③ 被擦除的明文只做了零填充 + fsync，文件系统/SSD 层面的残留不在保证内；④ 没有做过真实断电实验——只有进程级 abort 与调用顺序断言。断电之后，离机保存清单前应对最近一份备份再跑一次校验（`--against-backup` 或重新备份）。
+- **未覆盖**：① （AG6 已收口，不再属于未覆盖）报告文件现在是临时文件 → fsync → rename → 目录 fsync，裁剪删除之后也 fsync 目录；清理前先把“将删除清单”持久化进 pre-prune 报告。仍然成立的限制：报告是诊断记录，不是恢复所需对象——它的持久化只保证：一旦命令走过“报告 rename + 目录 fsync”这一步，报告在 Linux ext4/xfs 上断电后仍在（macOS 仍是尽力而为）；在此之前断电或被杀，本次运行仍可能没有报告（备份与清单不受影响）；旧报告的**清理**（超出保留份数的 `backup-report-*.json`）删除后虽然 fsync 了目录，但没有对应的“记录先于删除”（旧报告本身就是被淘汰的诊断记录）；② 断电后目录项未落盘的删除可能“复活”已裁剪的旧备份（无害，下次按 keep 再裁，并会清扫其孤儿清单）；③ 被擦除的明文只做了零填充 + fsync，文件系统/SSD 层面的残留不在保证内；④ 没有做过真实断电实验——只有进程级 abort 与调用顺序断言。断电之后，离机保存清单前应对最近一份备份再跑一次校验（`--against-backup` 或重新备份）。
 
 #### 平台差异：macOS 与 Linux（AE6）
 
@@ -144,7 +144,7 @@ node scripts/audit-archive.mjs --data-dir /abs/data --industry cosmetic --before
 | 大小写 | 默认大小写不敏感（可格式化为敏感） | 敏感 | 所有备份/报告名都是小写库名 + 数字时间戳 + 固定后缀，冲突检测在两者上一致 |
 | `open(..., 'wx')` / `link` 到已存在名 | `EEXIST` | 同 | 清单边车用 `wx`，不会覆盖遗留清单 |
 
-注意：Windows 不在支持范围（目录 fsync 被跳过，`rename` 覆盖语义不同）。运行时间：故障矩阵（`tests/fs-fault.test.mjs` 全部用例，AG6 后 62 个）本机约 45–80 秒空闲机；AG6 当天整机负载 40–60 时约 200 秒（随机器负载），仍低于 3 分钟预算；每个子进程有 120 秒超时，用例级超时 180 秒。
+注意：Windows 不在支持范围（目录 fsync 被跳过，`rename` 覆盖语义不同）。运行时间：故障矩阵（`tests/fs-fault.test.mjs` 全部用例，AG6 后 63 个）本机约 45–80 秒空闲机；AG6 当天整机负载 40–60 时 208–224 秒（超出空闲机的 3 分钟预算，纯属负载所致，见 capacity-baseline.md AG6 记录）；每个子进程有 120 秒超时，用例级超时 180 秒。
 
 ### 证据日志追加（`release-candidate --log` → `appendEntry`）
 

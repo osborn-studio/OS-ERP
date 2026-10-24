@@ -458,6 +458,16 @@ for (const { snap, chainSummary } of pending) {
 // 这样“删了但报告没写”时，盘上已有一份说明删了什么的持久报告；“报告没落地”时一个文件都没删。
 const SIDECAR_SFX = ['.audit-manifest.json', '.audit-manifest.enc']
 const isBackupName = (f) => f.endsWith('.db') || f.endsWith('.db.enc')
+/** 目录里最新一份报告中，该行业条目上“清理未完成”（planned / failed）的备份文件名集合；读不出来 ⇒ 空集（宁可不清扫） */
+function interruptedPrunes(dir, code) {
+  try {
+    const latest = fs.readdirSync(dir).filter((f) => /^backup-report-.*\.json$/.test(f)).sort().at(-1)
+    if (!latest) return new Set()
+    const rep = JSON.parse(fs.readFileSync(path.join(dir, latest), 'utf8'))
+    const e = (rep.results || []).find((x) => x.code === code)
+    return new Set(e && (e.prune_state === 'planned' || e.prune_state === 'failed') && Array.isArray(e.pruned) ? e.pruned : [])
+  } catch { return new Set() }
+}
 for (const { snap } of pending) {
   const { entry, cfg, dir, base } = snap
   if (entry.status !== 'ok') continue
@@ -469,11 +479,15 @@ for (const { snap } of pending) {
     .sort((a, b) => b.m - a.m)
   // 裁剪：只处理本脚本命名规则生成的 .db / .db.enc，新文件永远保留，其余按时间保留 keep-1 份
   entry.pruned = others.slice(Math.max(cfg.keep - 1, 0)).map((x) => x.f)
-  // 孤儿清单：清单文件还在、对应备份已不在（上一次删除在“删备份”与“删清单”之间被打断）。备份被裁掉后清单没有用处，随这次清扫
+  // 孤儿清单：清单文件还在、对应备份已不在。**只清扫“上一次清理被打断”的**——即该备份名出现在本目录最新报告里 prune_state 为 planned/failed 的 pruned 清单中；
+  // 其余孤儿（例如备份已被运维搬到机外、清单留作审计基线）一律不动（清单可以脱离备份被 --against-backup 使用）
+  const interrupted = interruptedPrunes(dir, entry.code)
   entry.pruned_orphans = names.filter((f) => {
     if (!f.startsWith(`${base}_`)) return false
     const sfx = SIDECAR_SFX.find((s) => f.endsWith(s))
-    return !!sfx && isBackupName(f.slice(0, -sfx.length)) && !names.includes(f.slice(0, -sfx.length))
+    if (!sfx) return false
+    const backup = f.slice(0, -sfx.length)
+    return isBackupName(backup) && !names.includes(backup) && interrupted.has(backup)
   })
   entry.prune_state = entry.pruned.length || entry.pruned_orphans.length ? 'planned' : 'none'
 }
