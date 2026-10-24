@@ -14,6 +14,7 @@
 - [ADR-0042：OMS 写路由与 MCP 库存工具按组织范围收口](docs/implementation/ADR-0042-oms-write-mcp-inventory-scope.md) — 判据不新增：沿用 ADR-0034 / 0039 的「平台绑定组织 = 平台履约仓所属组织」（`omsOrderScopeSql` / `omsPlatformScopeSql`，`server/lib/sales-order.js`），仓库侧用 ADR-0038 的 `assertWarehouseInScope` / `stockScopeSql`（`server/lib/stock.js`）。 2. `ship` / `complete` / `refund` 增 `a…
 - [ADR-0044：低库存口径统一与看板热点块（AA5）](docs/implementation/ADR-0044-dashboard-hot-blocks.md) — `metrics.js` / `ai.js` / `tools.js` 全部改调 `countBelowSafe` / `listBelowSafe`（`lib/stock.js`）。口径差异（有意为之，逐条列出）
 - [ADR-0045 Prometheus 指标导出与抓取令牌（AA10）](docs/implementation/ADR-0045-metrics-export.md) — `GET /api/meta/metrics?format=prometheus` 返回 `text/plain; version=0.0.4; charset=utf-8`（`Cache-Control: no-store`），每个指标族一行 `# HELP`、一行 `# TYPE`，名字统一前缀 `os_erp_`。无 `format` 或 `format=json` 与 ADR-0029 完全一致；其它 `format` 值 ⇒ 400（不静默回落）。
+- [ADR-0046：主数据下拉仓库项、采购订单读与 QC 聚合按仓库组织范围收口](docs/implementation/ADR-0046-master-options-qc-scope.md) — 判据唯一化：全部复用既有谓词，不新写 SQL 口径——仓库按 `stockScopeSql(orgScope, '', 'id')`，采购订单按 `purchaseScopeSql(orgScope,'po').wh` 与详情的 `assertPurchaseDocInScope(db,'PO',…)`，QC 聚合按 `stockScopeSql(orgScope,'')`（`warehouse_id`，与 `listRequests / listInspections / …
 
 ## 第九批：见 roadmap-v5
 

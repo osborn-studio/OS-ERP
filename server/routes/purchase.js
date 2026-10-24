@@ -77,11 +77,14 @@ r.get(
   '/orders',
   requireAuth,
   requirePerm(...PO_READ_PERMS),
+  attachOrgScope,
   wrap((req, res) => {
     const db = getDb()
     const { page, pageSize, offset } = pageParams(req)
-    const conds = []
-    const params = []
+    // ADR-0046：订单归属经入库仓的组织（与 assertPurchaseDocInScope 同一谓词）；空范围 ⇒ 空列表
+    const scope = purchaseScopeSql(req.orgScope, 'po')
+    const conds = [scope.wh]
+    const params = [...scope.params]
     if (req.query.status) {
       conds.push('po.status = ?')
       params.push(req.query.status)
@@ -115,8 +118,11 @@ r.get(
   '/orders/:id',
   requireAuth,
   requirePerm(...PO_READ_PERMS),
-  wrap((req, res) => {
+  attachOrgScope,
+  guard((req, res) => {
     const db = getDb()
+    // ADR-0046：范围外与不存在同形 404（DOC_NOT_FOUND）
+    assertPurchaseDocInScope(db, 'PO', Number(req.params.id), req.orgScope)
     const order = loadOrder(db, Number(req.params.id))
     if (!order) return fail(res, '采购订单不存在', 404)
     return ok(res, order)

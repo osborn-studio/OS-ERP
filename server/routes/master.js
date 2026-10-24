@@ -483,9 +483,12 @@ r.post(
 r.get(
   '/options',
   requireAuth,
-  wrap((_req, res) => {
+  attachOrgScope,
+  wrap((req, res) => {
     const db = getDb()
     const q = (sql, args = []) => db.prepare(sql).all(...args)
+    // ADR-0046：仓库项按调用者仓库组织范围裁剪（与仓库主数据读 / 库存域同一谓词 stockScopeSql）；全局范围 `1=1` 不变。
+    const whScope = stockScopeSql(req.orgScope, '', 'id')
     return ok(res, {
       brands: q('SELECT id AS value, name AS label, code FROM brands WHERE status=\'active\' ORDER BY id'),
       categories: q('SELECT id AS value, name AS label, code, parent_id FROM categories WHERE status=\'active\' ORDER BY sort_no, id'),
@@ -497,9 +500,9 @@ r.get(
       // ⚠️ 只影响**候选下拉**；仓库维护页走 `GET /warehouses`，隔离仓照常可见、可改名、可停用。
       warehouses: q(
         `SELECT id AS value, name AS label, code, type FROM warehouses
-          WHERE status='active' AND type NOT IN (${ISOLATION_WAREHOUSE_TYPES.map(() => '?').join(',')})
+          WHERE status='active' AND type NOT IN (${ISOLATION_WAREHOUSE_TYPES.map(() => '?').join(',')}) AND ${whScope.sql}
           ORDER BY id`,
-        ISOLATION_WAREHOUSE_TYPES
+        [...ISOLATION_WAREHOUSE_TYPES, ...whScope.params]
       ),
       // **全部启用仓（含隔离仓）** —— 给"查询筛选"类下拉用（如库存查询的"全部仓库"）。
       //
@@ -508,7 +511,7 @@ r.get(
       //   · `warehouses_all` = **筛选面**，隔离仓里**真的有货**，筛不出来就查不了它的库存。
       // 两者混用一个键的后果实测过：把隔离仓从候选里排掉的同时，它也**从筛选里消失了**。
       // 纯 additive：`warehouses` 的现有行为一个字没改。
-      warehouses_all: q("SELECT id AS value, name AS label, code, type FROM warehouses WHERE status='active' ORDER BY id"),
+      warehouses_all: q(`SELECT id AS value, name AS label, code, type FROM warehouses WHERE status='active' AND ${whScope.sql} ORDER BY id`, whScope.params),
       stores: q("SELECT id AS value, name AS label, code, type, region FROM stores WHERE status='active' ORDER BY id"),
       suppliers: q("SELECT id AS value, name AS label, code FROM suppliers WHERE status='active' ORDER BY id"),
       dealers: q("SELECT id AS value, name AS label, code, level, discount_rate, credit_limit, credit_used FROM dealers WHERE status='active' ORDER BY id"),

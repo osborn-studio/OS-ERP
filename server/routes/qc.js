@@ -88,7 +88,8 @@ r.get(
   '/inspections/overview',
   requireAuth,
   requirePerm('quality.inspect.view'),
-  wrap((_req, res) => ok(res, inspectionOverview(getDb())))
+  attachOrgScope,
+  wrap((req, res) => ok(res, inspectionOverview(getDb(), { orgScope: req.orgScope })))
 )
 
 // 待质检的到货单：质检岗的入口。放在 :id 之前，否则 'pending' 会被当成 id。
