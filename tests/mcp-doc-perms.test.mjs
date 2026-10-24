@@ -393,8 +393,12 @@ test('Y6 bound doc types: owner without binding is denied; with binding sees onl
         const r = await call('doc.query', { doc_type: c, limit: 100 }, tk)
         assert.ok(okTool(r), `${c} ${JSON.stringify(r.body).slice(0, 200)}`)
         const col = BOUND[c][1]
-        const distinct = new Set(ids(r).map((id) => rowsOf(c, id)[col]))
-        assert.ok(distinct.size > 1, `${c}: exempt callers see more than one ${col}`)
+        // 豁免调用者看到的就是表里最新的 100 行，不按门店/经销商裁剪（与种子数据里最新 100 行恰好属于几家门店无关：
+        // ubuntu 上曾因种子日期按本地时区生成而使最新 100 张交班单同属一店，"distinct > 1" 的断言随机红）
+        const newest = db.prepare(`SELECT id FROM ${tableOf(c)} ORDER BY id DESC LIMIT 100`).all().map((x) => x.id)
+        assert.deepEqual(ids(r), newest, `${c}: exempt callers see exactly the newest rows regardless of ${col}`)
+        const distinctAll = db.prepare(`SELECT COUNT(DISTINCT ${col}) n FROM ${tableOf(c)}`).get().n
+        assert.ok(distinctAll > 1, `${c}: fixture has rows from more than one ${col}`)
       }
       const codes = toolText(await call('doc.list_types', {}, tk)).doc_types.map((x) => x.code)
       for (const c of Object.keys(BOUND)) assert.ok(codes.includes(c), `${c} listed for exempt caller`)
