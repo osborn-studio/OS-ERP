@@ -131,3 +131,7 @@
 - 三条 scopeless 指标在受限范围下仍按 `metrics_global_for_restricted` 处理（默认隐藏；`label` 为全局数并带 `scoped:false`）。
 - 守卫只管"是否声明"，不证明 `scopeAware: true` 的谓词正确；那由各指标的受限范围用例负责。
 - 校验在 Mac mini Node 22 上，不等于 Linux / 目标平台验收；未做浏览器验证。
+
+### Codex 审计（AG2）
+
+`codex exec -m gpt-6.1-sol --sandbox read-only`，静态审查加只读 mock 校验（32 种可见性组合、12 个应付谓词 / 参数用例），对象为 AG2 提交。结论：**无高 / 中项**。谓词与结算单 / 应付台账路由同源（含 `voided` 排除、NULL 组织与空 / none / dealer 范围）；守卫、`hide` 过滤与 `scoped` 标记共用严格的 `isScopeAware`，无重复 key 或漏声明；`values` / `catalog` / 字典 / `keys` 过滤 / 空 `allow` 均无全局数绕过；绑定主体在 `label` 下也看不到 `payable_open`。其余两点是已记录的边界：守卫只验声明不验谓词；`label` 下受限账号仍可取三条 scopeless 指标的全局数（带 `scoped:false`，既定语义）。
