@@ -608,7 +608,7 @@ node scripts/upgrade-rehearsal.mjs --from=58 --backup-dir=/abs/new-dir/data/back
 - **它是过渡，不是 `nightly-capacity.yml` 的替代**。`ci.yml` 已在 `main` 上（已有 `workflow_dispatch`），按 GitHub 的规则，`gh workflow run ci.yml --ref <推送后的分支>` 理论上可以在合入前直接运行分支上的新 job；但**本次没有推送、没有触发**，没有任何 run id，所以这里没有它的任何数字（该分支派发方式也未验证）。`nightly-capacity.yml` 合入 `main` 后应删除该 job，按下方命令跑三次规定运行。
 - 未验证：该 job 在 GitHub 上能否 30 分钟内跑完（20 分钟预算只约束生成阶段，备份、两次恢复演练、explain-audit、压测、写档压测在剩余时间内；托管 runner 上没有任何耗时数据）。
 
-### AE8 复查（2026-10-24）：仍无可派发项
+### AE8 复查（2026-10-24）：未派发（main 上不可用）
 - 检查：`gh api repos/osborn-studio/OS-ERP/contents/.github/workflows/nightly-capacity.yml?ref=main` 无内容（`main` 的 `.github/workflows` 下没有该文件）；`main` 上 `ci.yml` 只含 `checks`、`docker`、`regression` 三个 job，**没有** `capacity-smoke`，也没有 `candidate`。`gh pr list` 显示 PR #4–#8 仍为 OPEN，仅 #1–#3 已合并（PR #9 的基线 `batch-thirteen` 也未进入 `main`）。
 - 结果：已派发 0 次（`nightly-capacity.yml` 0/3，`capacity-smoke` 0/1，`candidate` 0/1）；没有 run id，上面的结果登记表保持待填，本节没有任何托管 runner 数字。`capacity-smoke` 过渡 job 也不能删除：它尚未在 `main` 上，且从未跑过。未修改任何工作流或仓库设置。
 - 等待项：合入 `main` 的顺序决定首跑条件。`nightly-capacity.yml` 与 `capacity-smoke`/`candidate` 到达 `main` 后，再按下方命令各派发一次；全部成功且 `nightly-capacity.yml` 在 `main` 上时，才删除 `capacity-smoke`（整块）及其策略测试。
