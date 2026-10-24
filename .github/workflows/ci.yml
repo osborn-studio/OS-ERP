@@ -109,7 +109,7 @@ jobs:
       - name: Smoke (scripts/docker-smoke.mjs; prints allowlisted lines only)
         run: node scripts/docker-smoke.mjs --image "$IMAGE" --expect-sha "$GITHUB_SHA"
       - name: Alert rules (promtool check rules, prom/prometheus v3.5.0 pinned by digest)
-        run: docker run --rm --network none --entrypoint promtool -v "$PWD/docs/operations/alerts:/alerts:ro" prom/prometheus@sha256:63805ebb8d2b3920190daf1cb14a60871b16fd38bed42b857a3182bc621f4996 check rules /alerts/*.yml
+        run: docker run --rm --network none --entrypoint promtool -v "$PWD:/w:ro" -w /w prom/prometheus@sha256:63805ebb8d2b3920190daf1cb14a60871b16fd38bed42b857a3182bc621f4996 check rules docs/operations/alerts/*.yml
 
   browser:
     # Real-browser scenarios (tests/browser/*.mjs, driven by scripts/browser-ci.mjs) on Linux Chromium.

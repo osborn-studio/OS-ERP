@@ -27,13 +27,21 @@ groups:
           summary: "登录节流存储不可用，用户无法登录"
           description: "检查数据目录下 login-throttle.sqlite 的权限/损坏/磁盘；见 ADR-0005。"
 
+      - alert: OsErpWriteRetryExhausted
+        # 写重试用尽 = 有请求因 SQLITE_BUSY 最终失败；一次即告警（不加 for：10m 窗口的 increase 撑不过 10m 的 pending 期）
+        expr: increase(os_erp_write_retry_exhausted_total[10m]) > 0
+        labels: { severity: warning }
+        annotations:
+          summary: "写事务重试用尽，有请求因争用失败"
+          description: "检查是否有长事务/备份与写入同时进行；见 ADR-0035，必要时调 GML_WRITE_RETRY_MAX 或错开备份时段。"
+
       - alert: OsErpWriteContention
-        # 写重试用尽 = 有请求因 SQLITE_BUSY 最终失败；或重试速率持续偏高
-        expr: increase(os_erp_write_retry_exhausted_total[10m]) > 0 or rate(os_erp_write_retries_total[10m]) > 1
+        # 重试速率持续偏高（还没到用尽，但争用在加剧）
+        expr: rate(os_erp_write_retries_total[10m]) > 1
         for: 10m
         labels: { severity: warning }
         annotations:
-          summary: "写事务争用：重试用尽或重试频繁"
+          summary: "写事务争用：重试频繁"
           description: "检查是否有长事务/备份与写入同时进行；见 ADR-0035，必要时调 GML_WRITE_RETRY_MAX 或错开备份时段。"
 
       - alert: OsErpDiskLowOrMigrationDrift

@@ -92,7 +92,7 @@ ADR-0036 的 CSP 目前只发 `Content-Security-Policy-Report-Only`，头里没�
 ## 补充 2（AC9，batch twelve）：规则文件化、promtool 校验与端到端
 
 ### 告警规则文件化
-`monitoring.md` 里内联的两段规则移到 `docs/operations/alerts/os-erp.yml`（5 条）与 `os-erp-ab10.yml`（4 条），文档只引用文件，Prometheus 的 `rule_files` 可直接指向它们。CI 的 docker job 增一步 `promtool check rules`：`prom/prometheus` v3.5.0 以 **digest 固定**（`@sha256:63805ebb…`，与同文件 action 的 SHA 固定同风格）、`--network none`、规则目录只读挂载、仅 `promtool` 入口，不起 Prometheus 进程。
+`monitoring.md` 里内联的两段规则移到 `docs/operations/alerts/os-erp.yml`（6 条）与 `os-erp-ab10.yml`（4 条），文档只引用文件，Prometheus 的 `rule_files` 可直接指向它们。CI 的 docker job 增一步 `promtool check rules`：`prom/prometheus` v3.5.0 以 **digest 固定**（`@sha256:63805ebb…`，与同文件 action 的 SHA 固定同风格）、`--network none`、规则目录只读挂载、仅 `promtool` 入口，不起 Prometheus 进程。
 本机没有 `promtool`：本地只做 YAML 解析 + 结构检查（`groups[].rules[].alert/expr/labels.severity`），promtool 的 PromQL 语法检查要等 CI 实跑。`tests/metrics-export.test.mjs` 另断言：每个规则文件有 `groups`、每条告警恰有一个 `expr` 与 `severity`、告警名唯一、表达式里引用的每个 `os_erp_*` 序列（去掉 `_bucket/_sum/_count`）都出现在真实渲染的导出里、`os_erp_mcp_tool_calls_total{code=...}` 的码都在 `MCP_RESULT_CODES` 内，`monitoring.md` 不再内联规则且引用每个文件。
 
 ### MCP 计数端到端
@@ -100,3 +100,9 @@ ADR-0036 的 CSP 目前只发 `Content-Security-Policy-Report-Only`，头里没�
 
 ### SIGTERM 指标快照
 `server/index.js` 的 `SIGTERM` 处理（`process.once`）先写一行 JSON（`shutdownSnapshotLine`，`msg=metrics_snapshot`、`event=shutdown`，含 `counters`、`histograms`、`retry`），再 `server.close()` 并退出 0；5 s 兜底定时器（unref）。安全性：只读内存计数器、不查库、不含路径/账号；序列化失败折成 `metrics_snapshot_failed` 一行；`SIGKILL`/崩溃无快照。日志直接 `console.log` 一行 JSON（不经文本格式的 logger，以保证测试模式下同样是单行 JSON）。
+
+### 审计（Codex）后的修正
+- promtool 步骤：容器内没有 shell，`/alerts/*.yml` 不会被展开；改为挂载仓库根、`-w /w`，由宿主 shell 展开 `docs/operations/alerts/*.yml`。
+- 快照落盘：`process.exit` 前等待 stdout 写回调（5 s 兜底），避免管道背压时截断。
+- `OsErpWriteContention` 原先把"重试用尽"与"重试速率高"放在同一条且带 `for: 10m`：10 分钟窗口的 `increase` 撑不过 10 分钟的 pending 期，单次用尽永远不会触发。拆为 `OsErpWriteRetryExhausted`（无 `for`）与 `OsErpWriteContention`（速率，`for: 10m`）。
+- 已知保留：`OsErpMcpAuditUnavailable` 依赖审计行落地后才计数，持续的 `mcp_call_logs` 写失败由 `OsErpAuditStrictWriteFailing`（`reason="mcp_call_log"`）覆盖，本条只看结果码。

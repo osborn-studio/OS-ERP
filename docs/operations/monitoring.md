@@ -69,9 +69,9 @@ AB10 新增：
 
 计数器是进程内的，重启归零；用 `increase()`/`rate()`，不要直接比较绝对值。收到 `SIGTERM`（`kill`、`docker stop`、systemd 停止）时，服务在优雅退出前向标准输出写**一行** JSON 快照（`"msg":"metrics_snapshot","event":"shutdown"`，含计数器、直方图、写重试；不含路径与账号），重启前后可据此对账。`SIGKILL` 与崩溃不会有快照。
 
-## 4. 告警规则（5 条 + AB10 的 4 条，见 4.1）
+## 4. 告警规则（6 条 + AB10 的 4 条，见 4.1）
 
-以上 5 条规则在 `docs/operations/alerts/os-erp.yml`（CI 的 docker job 用 `promtool check rules` 校验；Prometheus 的 `rule_files` 直接引用该文件）。
+以上 6 条规则在 `docs/operations/alerts/os-erp.yml`（CI 的 docker job 用 `promtool check rules` 校验；Prometheus 的 `rule_files` 直接引用该文件）。
 
 另外建议（非 OS-ERP 指标）：用 `up{job="os-erp"} == 0` 监控抓取本身；`rate_limited` 的突增可单独做看板观察撞库趋势，但不建议直接告警（误输入会触发）。
 

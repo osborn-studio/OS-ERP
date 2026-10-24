@@ -311,9 +311,12 @@ const httpServer = app.listen(PORT, HOST, () => {
 // 快照只读内存计数器，不查库；兜底定时器保证挂住的连接不会拖住退出。
 process.once('SIGTERM', () => {
   // 日志不能阻止退出：快照失败也照常往下走
-  try { console.log(shutdownSnapshotLine({ counters: counterSnapshot(), histograms: histogramSnapshot(), retry: writeRetryStats() })) } catch { void 0 }
+  let flushed = false
+  let closed = false
+  const finish = () => { if (flushed && closed) process.exit(0) }
+  try { process.stdout.write(`${shutdownSnapshotLine({ counters: counterSnapshot(), histograms: histogramSnapshot(), retry: writeRetryStats() })}\n`, () => { flushed = true; finish() }) } catch { flushed = true }
   const force = setTimeout(() => process.exit(0), 5000)
   force.unref()
-  httpServer.close(() => process.exit(0))
+  httpServer.close(() => { closed = true; finish() })
   httpServer.closeIdleConnections?.()
 })
