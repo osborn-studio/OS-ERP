@@ -137,6 +137,8 @@ const mcpLimiter = createMcpRateLimiter()
 /** 后台定时器入口（server/index.js）：清理某个行业库里的过期限速桶（memory 模式为空操作） */
 export function purgeMcpRateBuckets(db) { return mcpLimiter.purge(db) }
 export const mcpRateStore = mcpLimiter.policy.store
+/** 清理周期（毫秒）：默认 60000；仅测试模式可经 GML_TEST_MCP_RATE_PURGE_MS 缩短 */
+export const mcpRatePurgeMs = mcpLimiter.policy.purgeMs
 const RATE_TEXT = {
   rpm: (d) => `该 Token 每分钟调用已达上限（${mcpLimiter.policy.rpm} 次），请 ${d.retryAfter} 秒后重试`,
   write_rpm: (d) => `该 Token 每分钟写型调用已达上限（${mcpLimiter.policy.writeRpm} 次），请 ${d.retryAfter} 秒后重试`,

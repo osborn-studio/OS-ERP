@@ -83,6 +83,10 @@ export const HISTOGRAM_DEFS = Object.freeze({
   audit_write_duration_seconds: {
     help: 'Duration of audit_logs INSERT statements in seconds (includes failed attempts).',
     buckets: [0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1]
+  },
+  mcp_rate_store_wait_seconds: {
+    help: 'Wall-clock seconds of one MCP rate-limit db consume (write-lock wait + busy retries + the short transaction), including refused and failed calls. Only observed when GML_MCP_RATE_STORE=db.',
+    buckets: [0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10]
   }
 })
 const hists = new Map()

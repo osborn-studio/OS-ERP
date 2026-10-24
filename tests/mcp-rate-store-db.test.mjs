@@ -307,3 +307,162 @@ test('Codex medium: purge never waits long for a held write lock, restores busy_
     a.close(); b.close()
   } finally { rmSync(dir, { recursive: true, force: true }) }
 })
+
+// ---- AF9（ADR-0056 补充 2）-------------------------------------------------
+import { mcpRatePolicy } from '../server/lib/mcp-rate-limit.js'
+import { HISTOGRAM_DEFS, histogramSnapshot, resetCounters } from '../server/lib/process-counters.js'
+import { readFileSync, readdirSync } from 'node:fs'
+
+test('AF9 test-only knobs: window/purge period are honoured in test mode, refused everywhere else', () => {
+  const t = mcpRatePolicy({ GML_RUNTIME_MODE: 'test', GML_TEST_MCP_RATE_WINDOW_MS: '1000', GML_TEST_MCP_RATE_PURGE_MS: '300' })
+  assert.equal(t.windowMs, 1000)
+  assert.equal(t.purgeMs, 300)
+  const d = mcpRatePolicy({})
+  assert.equal(d.windowMs, 60000)
+  assert.equal(d.purgeMs, 60000)
+  for (const mode of [undefined, 'production', 'demo', 'TEST', '']) {
+    for (const k of ['GML_TEST_MCP_RATE_WINDOW_MS', 'GML_TEST_MCP_RATE_PURGE_MS']) {
+      const env = { [k]: '1000' }
+      if (mode !== undefined) env.GML_RUNTIME_MODE = mode
+      assert.throws(() => mcpRatePolicy(env), (e) => e.code === 'MCP_RATE_TEST_KNOB_FORBIDDEN', `${k} in mode ${mode}`)
+      assert.throws(() => createMcpRateLimiter({ env }), (e) => e.code === 'MCP_RATE_TEST_KNOB_FORBIDDEN')
+    }
+  }
+  // empty string counts as unset (a blank env line must not break production)
+  assert.equal(mcpRatePolicy({ GML_TEST_MCP_RATE_WINDOW_MS: '' }).windowMs, 60000)
+  for (const bad of ['abc', '1.5', '-1', '0', '499', '60001', '1e3']) {
+    assert.throws(() => mcpRatePolicy({ GML_RUNTIME_MODE: 'test', GML_TEST_MCP_RATE_WINDOW_MS: bad }), (e) => e.code === 'MCP_RATE_TEST_KNOB_INVALID', bad)
+  }
+  for (const bad of ['abc', '50', '3600001']) {
+    assert.throws(() => mcpRatePolicy({ GML_RUNTIME_MODE: 'test', GML_TEST_MCP_RATE_PURGE_MS: bad }), (e) => e.code === 'MCP_RATE_TEST_KNOB_INVALID', bad)
+  }
+})
+
+test('AF9 shortened window actually drives memory and db limiting and the purge cutoff', () => {
+  const db = memDb()
+  const w = 1000
+  let t = 5_000_000_000 - (5_000_000_000 % w)
+  const env = { GML_RUNTIME_MODE: 'test', GML_TEST_MCP_RATE_WINDOW_MS: String(w), GML_MCP_TOKEN_RPM: '2' }
+  const mem = createMcpRateLimiter({ env, now: () => t })
+  assert.equal(mem.consume(1, 'read', 's').allowed, true)
+  assert.equal(mem.consume(1, 'read', 's').allowed, true)
+  assert.equal(mem.consume(1, 'read', 's').allowed, false)
+  const l = createMcpRateLimiter({ env: { ...env, GML_MCP_RATE_STORE: 'db' }, now: () => t })
+  assert.equal(l.consume(1, 'read', 's', db).allowed, true)
+  assert.equal(l.consume(1, 'read', 's', db).allowed, true)
+  const r = l.consume(1, 'read', 's', db)
+  assert.deepEqual([r.allowed, r.reason, r.retryAfter], [false, 'rpm', 1])
+  t += 2 * w
+  assert.equal(l.consume(1, 'read', 's', db).allowed, true, 'two short windows later the budget is back')
+  t += 3 * w
+  assert.deepEqual(l.purge(db), { deleted: 2 }, 'cutoff = window start - 2 short windows')
+  db.close()
+})
+
+test('AF9 histogram os_erp_mcp_rate_store_wait_seconds: registered, label-free, observed per db consume (also on failure), silent in memory mode', () => {
+  assert.ok(HISTOGRAM_DEFS.mcp_rate_store_wait_seconds, 'registered')
+  assert.equal(HISTOGRAM_DEFS.mcp_rate_store_wait_seconds.labelName, undefined, 'no labels => fixed cardinality')
+  const b = HISTOGRAM_DEFS.mcp_rate_store_wait_seconds.buckets
+  assert.ok(b.length <= 16 && b[b.length - 1] >= 2.5 && b.every((x, i) => i === 0 || x > b[i - 1]))
+  resetCounters()
+  const db = memDb()
+  const mem = createMcpRateLimiter({ env: {} })
+  mem.consume(1, 'read', 's')
+  assert.equal(histogramSnapshot().mcp_rate_store_wait_seconds.count, 0, 'memory mode never observes')
+  const l = createMcpRateLimiter({ env: { GML_MCP_RATE_STORE: 'db' } })
+  for (let i = 0; i < 3; i++) l.consume(1, 'read', 's', db)
+  assert.equal(histogramSnapshot().mcp_rate_store_wait_seconds.count, 3)
+  db.exec('DROP TABLE mcp_rate_buckets')
+  assert.equal(l.consume(1, 'read', 's', db).reason, 'store_unavailable')
+  assert.equal(histogramSnapshot().mcp_rate_store_wait_seconds.count, 4, 'failed attempts are observed too')
+  db.close()
+  resetCounters()
+})
+
+test('AF9 contention: waiting for a held write lock lands in the slow buckets', () => {
+  resetCounters()
+  const dir = mkdtempSync(path.join(tmpdir(), 'os-erp-rate-wait-'))
+  try {
+    const file = path.join(dir, 'w.db')
+    const a = new Database(file); a.pragma('journal_mode=WAL'); M073.up(a)
+    const b = new Database(file); b.pragma('busy_timeout=150')
+    const l = createMcpRateLimiter({ env: { GML_MCP_RATE_STORE: 'db' } })
+    a.exec('BEGIN IMMEDIATE')
+    const r = l.consume(1, 'read', 's', b)
+    assert.equal(r.reason, 'store_unavailable')
+    const h = histogramSnapshot().mcp_rate_store_wait_seconds
+    assert.equal(h.count, 1)
+    assert.ok(h.sum >= 0.1, `waited ${h.sum}s`)
+    assert.equal(h.buckets.find((x) => x.le === 0.05).count, 0)
+    a.exec('ROLLBACK'); a.close(); b.close()
+  } finally { rmSync(dir, { recursive: true, force: true }); resetCounters() }
+})
+
+test('AF9 alert OsErpMcpRateStoreWaitHigh exists, uses the exported histogram, requires traffic and a for: duration', () => {
+  const text = readFileSync(path.join(ROOT, 'docs/operations/alerts/os-erp-ab10.yml'), 'utf8')
+  const i = text.indexOf('- alert: OsErpMcpRateStoreWaitHigh')
+  assert.ok(i > 0)
+  const block = text.slice(i).split(/\n\s*- alert: /)[0]
+  assert.match(block, /histogram_quantile\(0\.95/)
+  assert.match(block, /os_erp_mcp_rate_store_wait_seconds_bucket/)
+  assert.match(block, /os_erp_mcp_rate_store_wait_seconds_count/)
+  assert.match(block, /\bfor: /)
+  assert.match(block, /severity: warning/)
+})
+
+test('AF9 docs: monitoring.md documents the histogram, synchronous guidance and when to prefer memory; ADR-0056 has supplement 2', () => {
+  const doc = readFileSync(path.join(ROOT, 'docs/operations/monitoring.md'), 'utf8')
+  assert.match(doc, /os_erp_mcp_rate_store_wait_seconds/)
+  assert.match(doc, /synchronous=NORMAL/)
+  assert.match(doc, /OsErpMcpRateStoreWaitHigh/)
+  assert.match(doc, /GML_MCP_RATE_STORE=memory/)
+  const adr = readFileSync(path.join(ROOT, 'docs/implementation/ADR-0056-mcp-rate-limit-quota.md'), 'utf8')
+  assert.match(adr, /补充 2（AF9/)
+  assert.match(adr, /GML_TEST_MCP_RATE_WINDOW_MS/)
+  const cap = readFileSync(path.join(ROOT, 'docs/implementation/capacity-baseline.md'), 'utf8')
+  assert.match(cap, /## AF9 /)
+})
+
+test('AF9 live server: the real purge timer removes expired buckets within seconds (shortened window + period, test mode only)', async (t) => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'os-erp-mcp-purge-live-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const srv = await startServer(t, dir, {
+    GML_MCP_RATE_STORE: 'db', GML_MCP_TOKEN_RPM: '1000', GML_MCP_WRITE_RPM: '1000',
+    GML_TEST_MCP_RATE_WINDOW_MS: '1000', GML_TEST_MCP_RATE_PURGE_MS: '500'
+  })
+  const db = new Database(path.join(dir, 'gml_cosmetic.db'))
+  db.pragma('busy_timeout=5000')
+  t.after(() => db.close())
+  const token = createToken(db, { name: 'purge-live', scopes: 'read,write' }).token
+  assert.equal((await srv.call(token)).status, 200)
+  const first = db.prepare('SELECT MIN(window_start) w FROM mcp_rate_buckets').get().w
+  assert.ok(first > 0, 'bucket row written by the live server')
+  // keep the live window busy so a current row always exists; the first row must vanish once it is >2 windows old
+  const deadline = Date.now() + 15_000
+  let gone = false
+  while (Date.now() < deadline) {
+    await srv.call(token)
+    if (!db.prepare('SELECT 1 FROM mcp_rate_buckets WHERE window_start=?').get(first)) { gone = true; break }
+    await delay(200)
+  }
+  assert.ok(gone, 'expired bucket purged by the background timer')
+  const live = db.prepare('SELECT COUNT(*) c FROM mcp_rate_buckets').get().c
+  assert.ok(live >= 1 && live <= 8, `live buckets survive and stay bounded (${live})`)
+  assert.match(await srv.metrics(), /os_erp_mcp_rate_store_wait_seconds_count [1-9]/)
+})
+
+test('AF9 server refuses test knobs outside test mode at startup', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'os-erp-knob-refuse-'))
+  try {
+    const env = { PATH: process.env.PATH, HOME: dir, GML_RUNTIME_MODE: 'demo', GML_DATA_DIR: dir, GML_DB: '', HOST: '127.0.0.1', PORT: '0', GML_TEST_MCP_RATE_WINDOW_MS: '1000' }
+    const c = spawn(process.execPath, ['server/index.js'], { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] })
+    let out = ''
+    c.stdout.on('data', (d) => { out += d }); c.stderr.on('data', (d) => { out += d })
+    const timer = setTimeout(() => c.kill('SIGKILL'), 20000)
+    const [code] = await once(c, 'close')
+    clearTimeout(timer)
+    assert.notEqual(code, 0)
+    assert.match(out, /MCP_RATE_TEST_KNOB_FORBIDDEN|GML_TEST_MCP_RATE_WINDOW_MS/)
+    assert.ok(!out.includes('服务已启动'))
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+})

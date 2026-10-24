@@ -1089,7 +1089,7 @@ OMS /stats 与 AI 平台分析的 SQL 唯一来源（AE3，ADR-0044 补充 4）
 | `incCounter` | fn | — | — | lib/audit-trail.js, lib/db-ttl-cache.js, lib/login-throttle.js, lib/mcp-rate-limit.js, mcp/server.js |
 | `incMcpToolCall` | fn | — | — | mcp/server.js |
 | `mcpCodeTotal` | fn | — | — | — |
-| `observeHistogram` | fn | — | — | lib/audit-trail.js |
+| `observeHistogram` | fn | — | — | lib/audit-trail.js, lib/mcp-rate-limit.js |
 | `registerMcpTools` | fn | — | — | mcp/server.js |
 | `resetCounters` | fn | — | — | — |
 
@@ -1728,6 +1728,7 @@ MCP 服务端：以标准 MCP（2026-07-28 无状态版）暴露系统业务能�
 | 导出 | 类型 | 路由 | MCP 工具 | 被模块调用 |
 |---|---|---|---|---|
 | `CACHE_DENIED` | const | — | — | — |
+| `mcpRatePurgeMs` | const | — | — | — |
 | `mcpRateStore` | const | — | — | — |
 | `purgeMcpRateBuckets` | fn | — | — | — |
 | `redactArgs` | fn | — | — | — |
