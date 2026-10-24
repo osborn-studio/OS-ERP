@@ -9,7 +9,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { createRequire } from 'node:module'
-import { mkdtempSync, rmSync, readFileSync, writeFileSync, readdirSync, existsSync, statSync, truncateSync } from 'node:fs'
+import { mkdtempSync, rmSync, readFileSync, writeFileSync, readdirSync, existsSync, statSync, truncateSync, renameSync, openSync, closeSync, fsyncSync, mkdirSync, linkSync, readSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -18,6 +18,7 @@ import { runMigrations, MIGRATIONS_DIR } from '../server/db/migrations/runner.js
 import { insertAuditRow } from '../server/lib/audit-trail.js'
 import { verifyChain } from '../server/lib/audit-chain-verify.js'
 import { FAULT_POINTS, faultPoint, assertFsFaultAllowed } from '../scripts/lib/fs-fault.mjs'
+import { decryptFile, MAGIC } from '../server/lib/backup-crypto.js'
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url))
 const SCHEMA = readFileSync(path.join(ROOT, 'server/db/schema.sql'), 'utf8')
@@ -257,6 +258,146 @@ test('db-backup fault (encrypted, abort after db copy): the plaintext temp is 06
   const th = f2.B([], { ...key, ...fault('backup.after-db-copy', 'throw') })
   assert.equal(th.status, 1)
   assert.equal(f2.names().filter((n) => n.endsWith('.plain.tmp') || n.endsWith('.failed')).length, 0, 'encrypted mode never leaves plaintext after a handled failure')
+})
+
+// ---------------------------------------------------------------- db-backup 加密模式 × 每个注入点（AE6）
+// 口径：任何注入点之后，备份目录里除“abort 于 after-db-copy 留下的 0600 .plain.tmp”外，不得有任何明文 SQLite 文件；
+// .db.enc / .audit-manifest.enc 必须能用当前密钥解开（认证通过），明文清单 .audit-manifest.json 只含哈希元数据。
+const KEY = { GML_BACKUP_KEY: 'k'.repeat(40) }
+const KEY_BYTES = Buffer.from(KEY.GML_BACKUP_KEY, 'utf8')
+const SQLITE_MAGIC = Buffer.from('SQLite format 3\0')
+const head = (file, n = 16) => { const fd = openSync(file, 'r'); try { const b = Buffer.alloc(n); return b.subarray(0, readSync(fd, b, 0, n, 0)) } finally { closeSync(fd) } }
+const isPlainSqlite = (file) => head(file).equals(SQLITE_MAGIC)
+/** 备份目录里所有明文 SQLite 文件（含点文件、.failed、.partial、.tmp） */
+const plaintextSnapshots = (f) => f.names().filter((n) => statSync(path.join(f.bdir, n)).isFile() && isPlainSqlite(path.join(f.bdir, n)))
+function decryptTo(t, file) {
+  const out = path.join(tmp(t, 'os-ae6-dec-'), 'out')
+  decryptFile(file, out, KEY_BYTES)
+  return out
+}
+
+for (const point of FAULT_POINTS.backup) {
+  for (const mode of MODES) {
+    test(`db-backup fault ${point} (${mode}, encrypted): no plaintext survives except the documented abort temp; .enc/manifest states are recoverable; next run completes`, { timeout: 180000 }, (t) => {
+      const f = backupFixture(t)
+      assert.equal(f.B(['--keep=5'], KEY).status, 0)
+      const good = f.names().filter((n) => n.endsWith('.db.enc'))
+      assert.equal(good.length, 1)
+      assert.deepEqual(plaintextSnapshots(f), [], 'baseline: encrypted mode leaves no plaintext')
+      const r = f.B(['--keep=5'], { ...KEY, ...fault(point, mode) })
+      assertDied(r, mode, point)
+      assert.ok(f.names().includes(good[0]), 'the earlier encrypted backup is untouched')
+      decryptFile(path.join(f.bdir, good[0]), null, KEY_BYTES)
+      const names = f.names()
+      const encs = names.filter((n) => n.endsWith('.db.enc') && !good.includes(n))
+      const tmps = names.filter((n) => n.endsWith('.plain.tmp'))
+      const plain = plaintextSnapshots(f)
+      assert.equal(names.filter((n) => n.endsWith('.db') || n.endsWith('.partial') || n.endsWith('.failed')).length, 0, 'encrypted mode never writes a plaintext-named backup, partial or quarantine file')
+      if (point === 'backup.after-db-copy') {
+        assert.equal(encs.length, 0, 'no ciphertext yet')
+        if (mode === 'abort') {
+          // 断电最接近的情形：明文临时文件还在，这是文档登记的唯一明文窗口；必须是 0600 且是唯一的明文文件
+          assert.equal(tmps.length, 1); assert.deepEqual(plain, tmps)
+          assert.equal(statSync(path.join(f.bdir, tmps[0])).mode & 0o777, 0o600)
+        } else {
+          assert.equal(tmps.length, 0, 'handled failure shreds the plaintext'); assert.deepEqual(plain, [])
+          assert.equal(r.status, 1); assert.match(r.stdout + r.stderr, /BACKUP_SNAPSHOT_FAILED/)
+        }
+      } else {
+        // 密文已落盘并已擦除明文：任何模式下都不应有明文临时文件或明文快照
+        assert.equal(tmps.length, 0, 'plaintext temp already shredded before the sidecar step'); assert.deepEqual(plain, [])
+        const sidecars = names.filter((n) => n.includes('.audit-manifest.'))
+        if (point === 'backup.before-sidecar') {
+          if (mode === 'abort') {
+            assert.equal(encs.length, 1, 'verified ciphertext without manifests (usable, chain manifest missing)')
+            assert.equal(sidecars.filter((n) => n.startsWith(encs[0])).length, 0)
+            const dec = decryptTo(t, path.join(f.bdir, encs[0]))
+            const chk = new Database(dec, { readonly: true })
+            try { assert.equal(chk.pragma('integrity_check', { simple: true }), 'ok') } finally { chk.close() }
+          } else {
+            assert.equal(encs.length, 0, 'MANIFEST_FAILED removes the half-finished ciphertext')
+            assert.equal(r.status, 1); assert.match(r.stdout + r.stderr, /BACKUP_MANIFEST_FAILED/)
+          }
+        } else {
+          assert.equal(encs.length, 1)
+          const mj = path.join(f.bdir, `${encs[0]}.audit-manifest.json`); const me = path.join(f.bdir, `${encs[0]}.audit-manifest.enc`)
+          assert.ok(existsSync(mj) && existsSync(me), 'both manifests are complete')
+          assert.ok(!isPlainSqlite(mj) && head(me, 4).equals(MAGIC), 'json manifest is metadata, enc manifest is ciphertext')
+          assert.equal(readFileSync(decryptTo(t, me), 'utf8'), readFileSync(mj, 'utf8'), 'the authenticated manifest equals the plain one')
+          assert.equal(statSync(mj).mode & 0o777, 0o600)
+          decryptFile(path.join(f.bdir, encs[0]), null, KEY_BYTES)
+        }
+      }
+      // 下一次正常运行：退出 0、新密文可解、清单齐全；abort 遗留的明文临时文件仍在（运维擦除），本次不新增任何明文
+      const staleTmps = tmps.length
+      const next = f.B(['--keep=5'], KEY)
+      assert.equal(next.status, 0, next.stdout + next.stderr)
+      const entry = JSON.parse(readFileSync(path.join(f.bdir, f.reports().at(-1)), 'utf8')).results.find((x) => x.code === 'cosmetic')
+      assert.equal(entry.status, 'ok'); assert.equal(entry.encrypted, true)
+      decryptFile(entry.file, null, KEY_BYTES)
+      assert.ok(existsSync(`${entry.file}.audit-manifest.json`) && existsSync(`${entry.file}.audit-manifest.enc`))
+      assert.equal(f.names().filter((n) => n.endsWith('.plain.tmp')).length, staleTmps, 'a normal run adds no plaintext temp')
+      assert.equal(plaintextSnapshots(f).length, staleTmps)
+    })
+  }
+}
+
+// ---------------------------------------------------------------- 平台差异（macOS / Linux）
+// 脚本依赖的文件系统原语：同目录 rename 覆盖已有文件、目录 fsync、rename 到目录上的错误码、大小写折叠。
+// 这些断言按 process.platform 分支：两平台共同保证的部分严格断言，已知差异按平台断言，未知平台只跑共同部分。
+test('platform: rename over an existing file replaces it atomically for readers on both macOS and Linux (partial → final, report overwrite)', (t) => {
+  const dir = tmp(t, 'os-ae6-plat-')
+  const a = path.join(dir, 'a'); const b = path.join(dir, 'b')
+  writeFileSync(a, 'new'); writeFileSync(b, 'old')
+  const fd = openSync(b, 'r') // 持有旧 inode 的读者
+  try {
+    renameSync(a, b)
+    assert.equal(readFileSync(b, 'utf8'), 'new', 'the destination name now resolves to the new content')
+    assert.ok(!existsSync(a), 'the source name is gone')
+    const buf = Buffer.alloc(3)
+    assert.equal(readSync(fd, buf, 0, 3, 0), 3)
+    assert.equal(buf.toString(), 'old', 'an already-open reader keeps the old inode (POSIX), no torn read')
+  } finally { closeSync(fd) }
+  assert.deepEqual(readdirSync(dir), ['b'], 'no stray temp left behind')
+})
+
+test('platform: rename of a file onto a directory (or a directory onto a non-empty one) is refused, never merged', (t) => {
+  const dir = tmp(t, 'os-ae6-plat-')
+  mkdirSync(path.join(dir, 'd')); writeFileSync(path.join(dir, 'd', 'x'), '1'); writeFileSync(path.join(dir, 'f'), '2')
+  mkdirSync(path.join(dir, 'e')); writeFileSync(path.join(dir, 'e', 'y'), '3')
+  // 文件 → 已存在的目录：Linux 与 macOS 都是 EISDIR
+  assert.throws(() => renameSync(path.join(dir, 'f'), path.join(dir, 'd')), (e) => e.code === 'EISDIR', 'file over directory: EISDIR on Linux and macOS')
+  // 目录 → 非空目录：POSIX 允许 ENOTEMPTY 或 EEXIST（Linux 与 macOS 常见为 ENOTEMPTY）；关键是被拒绝且不合并
+  assert.throws(() => renameSync(path.join(dir, 'e'), path.join(dir, 'd')), (e) => ['ENOTEMPTY', 'EEXIST'].includes(e.code), 'directory over non-empty directory is refused')
+  assert.equal(readFileSync(path.join(dir, 'd', 'x'), 'utf8'), '1'); assert.equal(readFileSync(path.join(dir, 'f'), 'utf8'), '2')
+})
+
+test('platform: directory fsync (the db-backup rename durability step) succeeds read-only on both; opening a directory for writing never does', (t) => {
+  const dir = tmp(t, 'os-ae6-plat-')
+  writeFileSync(path.join(dir, 'x'), '1')
+  const dfd = openSync(dir, 'r')
+  try { fsyncSync(dfd) } finally { closeSync(dfd) } // db-backup 的做法：只读打开目录再 fsync
+  assert.throws(() => openSync(dir, 'r+'), (e) => e.code === 'EISDIR', 'a directory cannot be opened for writing')
+  // 语义差异（只能文档化、不可在此断言）：macOS 的 fsync 只保证到达磁盘缓存，不保证落盘（需 F_FULLFSYNC，Node 不暴露）；
+  // Linux 的目录 fsync 持久化目录项。两者对 abort（进程死、内核存活）模拟的结论相同。
+})
+
+test('platform: case sensitivity differs (APFS default folds case, Linux does not) and the backup/report names never depend on it', (t) => {
+  const dir = tmp(t, 'os-ae6-plat-')
+  writeFileSync(path.join(dir, 'Probe.tmp'), 'x')
+  const folds = existsSync(path.join(dir, 'probe.tmp'))
+  if (process.platform === 'linux') assert.equal(folds, false, 'Linux filesystems used by CI are case-sensitive')
+  else if (process.platform === 'darwin') assert.equal(typeof folds, 'boolean', 'APFS is case-insensitive by default but may be formatted case-sensitive')
+  // 备份文件名全部由小写库名 + 数字时间戳 + 固定后缀构成：同名冲突检测（existsSync）在两种文件系统上结论一致
+  const f = ['gml_cosmetic_20261024-010203.db', 'gml_cosmetic_20261024-010203_1.db.enc', 'backup-report-20261024-010203.json']
+  for (const n of f) assert.equal(n, n.toLowerCase())
+})
+
+test('platform: hard-linking over an existing name is refused (EEXIST) on both, so the wx sidecar write cannot clobber a stale manifest', (t) => {
+  const dir = tmp(t, 'os-ae6-plat-')
+  writeFileSync(path.join(dir, 'a'), '1'); writeFileSync(path.join(dir, 'b'), '2')
+  assert.throws(() => linkSync(path.join(dir, 'a'), path.join(dir, 'b')), (e) => e.code === 'EEXIST')
+  assert.throws(() => writeFileSync(path.join(dir, 'b'), 'z', { flag: 'wx' }), (e) => e.code === 'EEXIST', 'flag wx (used for the manifest sidecars) refuses to overwrite')
 })
 
 // ---------------------------------------------------------------- 证据日志追加
