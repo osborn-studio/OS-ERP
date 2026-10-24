@@ -171,7 +171,7 @@ try {
   const read = rel => fs.readFileSync(path.join(root, rel), 'utf8')
 
   check('package carries provenance (baseCommit, third-party notices) and the required source/frontend files', () => {
-    for (const f of ['src/App.tsx', 'server/index.js', 'scripts/bootstrap-admin.mjs', 'scripts/db-restore-drill.mjs', 'reusable/README.md', 'dist/index.html', 'package-lock.json', 'THIRD_PARTY_NOTICES.md']) assert.ok(fs.existsSync(path.join(root, f)), f)
+    for (const f of ['src/App.tsx', 'server/index.js', 'scripts/bootstrap-admin.mjs', 'scripts/db-restore-drill.mjs', 'reusable/README.md', 'dist/index.html', 'package-lock.json', 'THIRD_PARTY_NOTICES.md', 'CHANGELOG.md', 'release/sbom.cdx.json']) assert.ok(fs.existsSync(path.join(root, f)), f)
     assert.match(String(manifest.baseCommit), /^[0-9a-f]{7,64}$/, 'MANIFEST.baseCommit must be a git sha')
     assert.ok(manifest.files['THIRD_PARTY_NOTICES.md'], 'notices must be hash-listed')
   })

@@ -31,7 +31,9 @@
 import { Router } from 'express'
 import { getDb } from '../db/index.js'
 import { ok, fail, wrap, pageParams, paged, bizFail } from '../lib/http.js'
-import { requireAuth, requirePerm, currentUser } from '../middleware/auth.js'
+import { requireAuth, requirePerm, currentUser, attachOrgScope } from '../middleware/auth.js'
+import { assertStockDocInScope } from '../lib/stock.js'
+import { assertPurchaseDocInScope } from '../lib/purchase.js'
 import { audit } from '../middleware/audit.js'
 import {
   QCError, RESULT_LABEL,
@@ -86,7 +88,8 @@ r.get(
   '/inspections/overview',
   requireAuth,
   requirePerm('quality.inspect.view'),
-  wrap((_req, res) => ok(res, inspectionOverview(getDb())))
+  attachOrgScope,
+  wrap((req, res) => ok(res, inspectionOverview(getDb(), { orgScope: req.orgScope })))
 )
 
 // 待质检的到货单：质检岗的入口。放在 :id 之前，否则 'pending' 会被当成 id。
@@ -94,9 +97,10 @@ r.get(
   '/inspections/pending',
   requireAuth,
   requirePerm('quality.inspect.view'),
+  attachOrgScope,
   wrap((req, res) => {
     const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 500)
-    return ok(res, { list: pendingReceipts(getDb(), { limit }) })
+    return ok(res, { list: pendingReceipts(getDb(), { limit, orgScope: req.orgScope }) })
   })
 )
 
@@ -105,7 +109,9 @@ r.get(
   '/inspections/receipt/:receiptId',
   requireAuth,
   requirePerm('quality.inspect.view'),
+  attachOrgScope,
   guard((req, res) => {
+    assertPurchaseDocInScope(getDb(), 'GR', Number(req.params.receiptId), req.orgScope)
     const data = getReceiptForInspect(getDb(), Number(req.params.receiptId))
     if (!data) return fail(res, '到货单不存在', 404)
     return ok(res, data)
@@ -120,10 +126,12 @@ r.get(
   '/inspections',
   requireAuth,
   requirePerm('quality.inspect.view'),
+  attachOrgScope,
   wrap((req, res) => {
     const db = getDb()
     const { page, pageSize } = pageParams(req)
     const out = listInspections(db, {
+      orgScope: req.orgScope,
       page, pageSize,
       status: req.query.status || null,
       result: req.query.result || null,
@@ -138,10 +146,13 @@ r.post(
   '/inspections',
   requireAuth,
   requirePerm('quality.inspect.edit'),
+  attachOrgScope,
   guard((req, res) => {
     const db = getDb()
     const u = currentUser(req)
     const { receipt_id, inspect_date, items, remark } = req.body || {}
+    // ADR-0038 补充：到货单经仓归属判范围，范围外 404
+    assertPurchaseDocInScope(db, 'GR', Number(receipt_id), req.orgScope)
     // createInspection 返回的是**整张质检单**（含明细与流转留痕），不是 id。
     // 这里曾经写成 `const id = createInspection(...)` 再 `getInspection(db, id)`，
     // 结果 better-sqlite3 收到一个对象、按命名参数处理，撞上匿名 `?` 抛
@@ -163,7 +174,9 @@ r.get(
   '/inspections/:id',
   requireAuth,
   requirePerm('quality.inspect.view'),
+  attachOrgScope,
   guard((req, res) => {
+    assertStockDocInScope(getDb(), 'purchase_inspections', Number(req.params.id), req.orgScope, { notFound: '质检单不存在' })
     const data = getInspection(getDb(), Number(req.params.id))
     if (!data) return fail(res, '质检单不存在', 404)
     return ok(res, data)
@@ -175,8 +188,11 @@ r.post(
   '/inspections/:id/submit',
   requireAuth,
   requirePerm('quality.inspect'),
+  attachOrgScope,
   guard((req, res) => {
     const db = getDb()
+    // ADR-0038 补充：判退会生成采购退货单并出库，质检单的到货仓必须在范围内（404，先于任何写）
+    assertStockDocInScope(db, 'purchase_inspections', Number(req.params.id), req.orgScope, { notFound: '质检单不存在' })
     const { lines, remark } = req.body || {}
     const out = submitInspection(db, {
       id: Number(req.params.id), lines: lines || null,
@@ -194,8 +210,10 @@ r.post(
   '/inspections/:id/close',
   requireAuth,
   requirePerm('quality.inspect'),
+  attachOrgScope,
   guard((req, res) => {
     const db = getDb()
+    assertStockDocInScope(db, 'purchase_inspections', Number(req.params.id), req.orgScope, { notFound: '质检单不存在' })
     transitionInspection(db, {
       id: Number(req.params.id), action: 'close', actor: actorOf(req), source: 'api'
     })
@@ -208,8 +226,10 @@ r.post(
   '/inspections/:id/cancel',
   requireAuth,
   requirePerm('quality.inspect'),
+  attachOrgScope,
   guard((req, res) => {
     const db = getDb()
+    assertStockDocInScope(db, 'purchase_inspections', Number(req.params.id), req.orgScope, { notFound: '质检单不存在' })
     transitionInspection(db, {
       id: Number(req.params.id), action: 'cancel',
       actor: actorOf(req), remark: req.body?.remark || null, source: 'api'

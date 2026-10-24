@@ -287,3 +287,55 @@ test('backup-crypto: an existing .partial belonging to someone else is never del
   assert.throws(() => decryptFile(dest, out, Buffer.from(KEY)))
   assert.equal(readFileSync(`${out}.partial`, 'utf8'), 'foreign')
 })
+
+// ---- AC7（ADR-0049 补充）：备份清单带审计链尾与锚点摘要 ----
+import { insertAuditRow } from '../server/lib/audit-trail.js'
+import { decryptFile as decryptManifest } from '../server/lib/backup-crypto.js'
+
+const auditRows = (dir, n) => {
+  const db = new Database(path.join(dir, 'gml_cosmetic.db'))
+  for (let i = 0; i < n; i++) insertAuditRow(db, { userId: 1, userName: 'u', action: 'UPDATE', module: 'sales', entity: 'order', entityId: i, detail: { i }, ip: '127.0.0.1' })
+  const tip = db.prepare('SELECT id, row_hash FROM audit_logs ORDER BY id DESC LIMIT 1').get()
+  const anchors = db.prepare('SELECT COUNT(*) AS n FROM audit_chain_anchors').get().n
+  db.close()
+  return { tip, anchors }
+}
+
+test('AC7 the manifest records the audit chain tip and an anchors digest, in the report and a plaintext sidecar; pruning removes sidecars', { timeout: 120000 }, (t) => {
+  const dir = fixture(t)
+  const { tip } = auditRows(dir, 6)
+  assert.equal(backup(dir, ['cosmetic', '--keep=1']).status, 0)
+  const entry = latestReport(dir).results.find((r) => r.code === 'cosmetic')
+  assert.deepEqual([entry.audit_chain.verified, entry.audit_chain.last_id, entry.audit_chain.tip_hash, entry.audit_chain.anchors_count], [true, tip.id, tip.row_hash, 0])
+  assert.match(entry.audit_chain.anchors_digest, /^[0-9a-f]{64}$/)
+  const sidecar = `${entry.file}.audit-manifest.json`
+  const m = JSON.parse(readFileSync(sidecar, 'utf8'))
+  assert.equal(m.format, 'os-erp-backup-audit-manifest/1')
+  assert.equal(m.backup_sha256, entry.sha256)
+  assert.equal(m.audit_chain.tip_hash, tip.row_hash)
+  assert.equal(existsSync(`${entry.file}.audit-manifest.enc`), false, 'no key, no encrypted manifest')
+  assert.equal(backup(dir, ['cosmetic', '--keep=1']).status, 0)
+  const sidecars = readdirSync(backupDir(dir)).filter((f) => f.includes('.audit-manifest.'))
+  assert.equal(sidecars.length, 1, 'the pruned backup took its sidecar with it')
+})
+
+test('AC7 encrypted backups also carry an authenticated encrypted manifest equal to the plaintext one', { timeout: 120000 }, (t) => {
+  const dir = fixture(t)
+  const { tip } = auditRows(dir, 4)
+  assert.equal(backup(dir, ['cosmetic'], { GML_BACKUP_KEY: KEY }).status, 0)
+  const entry = latestReport(dir).results.find((r) => r.code === 'cosmetic')
+  const plain = JSON.parse(readFileSync(`${entry.file}.audit-manifest.json`, 'utf8'))
+  const out = path.join(dir, 'm.json')
+  decryptManifest(`${entry.file}.audit-manifest.enc`, out, Buffer.from(KEY))
+  assert.deepEqual(JSON.parse(readFileSync(out, 'utf8')), plain)
+  assert.equal(plain.audit_chain.tip_hash, tip.row_hash)
+  assert.deepEqual(readdirSync(backupDir(dir)).filter((f) => f.includes('.plain.tmp') || f.endsWith('.partial')), [])
+})
+
+test('AC7 an empty audit chain is recorded as present with zero rows and a null tip', { timeout: 120000 }, (t) => {
+  const dir = fixture(t)
+  const entry = (() => { assert.equal(backup(dir, ['cosmetic']).status, 0); return latestReport(dir).results.find((r) => r.code === 'cosmetic') })()
+  assert.equal(entry.audit_chain.present, true)
+  assert.equal(entry.audit_chain.rows, 0)
+  assert.equal(entry.audit_chain.tip_hash, null)
+})

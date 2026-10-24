@@ -35,6 +35,7 @@
 
 import { getDb } from '../db/index.js'
 import { stampDef, defStale } from '../db/migrations/_helpers.cjs'
+import { countBelowSafe } from './stock.js'
 
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100
 const num = (v) => Number(v) || 0
@@ -263,20 +264,11 @@ export const METRICS = [
     category: '风险',
     unit: '个',
     formula: 'COUNT(SKU WHERE 该 SKU 库存合计 < 安全库存)',
-    exclusions: '安全库存为 0 或空的 SKU 不参与（未设基准就没有「低于」可言）',
+    exclusions: '安全库存为 0 或空的 SKU、非 active 状态的 SKU 不参与（未设基准就没有「低于」可言；停用品不需要补货）',
     source: 'product_skus, inventory_stocks',
     note: '按 SKU 跨仓汇总后再比，不是逐仓比 —— 逐仓比会把「A 仓缺但 B 仓有」也算成缺货',
-    compute: (db) =>
-      num(db.prepare(
-        `SELECT COUNT(*) v FROM (
-           SELECT s.id, COALESCE(SUM(st.qty_on_hand),0) q, s.safe_stock
-             FROM product_skus s
-             LEFT JOIN inventory_stocks st ON st.sku_id = s.id
-            WHERE COALESCE(s.safe_stock,0) > 0
-            GROUP BY s.id
-           HAVING q < s.safe_stock
-         )`
-      ).get().v)
+    // AA5：与看板、预警页、AI、MCP 同一口径（lib/stock.js countBelowSafe）；口径多了 status='active'（停用 SKU 不再计入）
+    compute: (db) => num(countBelowSafe(db))
   },
   {
     key: 'expiring_qty',

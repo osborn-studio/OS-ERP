@@ -17,7 +17,7 @@ import { Router } from 'express'
 import { getDb } from '../db/index.js'
 import { ok, fail, wrap, pageParams, paged } from '../lib/http.js'
 import { requireAuth, requirePerm, requireGlobalData } from '../middleware/auth.js'
-import { DOC_TYPE_LABEL } from '../lib/stock.js'
+import { DOC_TYPE_LABEL, listBelowSafe } from '../lib/stock.js'
 import { metricDefinitions } from '../lib/metrics.js'
 import { versionInfo } from '../version.js'
 
@@ -177,16 +177,9 @@ r.post(
         break
       }
       case 'stock_alert': {
-        result = db
-          .prepare(
-            `SELECT sk.sku_code, sk.name AS sku_name, p.name AS product_name, sk.safe_stock,
-                    COALESCE(SUM(st.qty_on_hand),0) qty_on_hand,
-                    sk.safe_stock - COALESCE(SUM(st.qty_on_hand),0) AS shortage
-             FROM product_skus sk JOIN products p ON p.id=sk.product_id LEFT JOIN inventory_stocks st ON st.sku_id=sk.id
-             WHERE sk.status='active' AND sk.safe_stock>0 GROUP BY sk.id
-             HAVING COALESCE(SUM(st.qty_on_hand),0) < sk.safe_stock ORDER BY shortage DESC`
-          )
-          .all()
+        // AA5：与看板 / 预警页同一口径（lib/stock.js listBelowSafe）；本路由要求全局数据范围，故不传 orgScope；
+        // 原写法无 LIMIT，这里用 -1（SQLite 不限）保持"全部低库存 SKU"，输出字段与原来逐字一致。
+        result = listBelowSafe(db, -1).map(({ sku_id, ...row }) => row)
         break
       }
       case 'expiring_stock': {

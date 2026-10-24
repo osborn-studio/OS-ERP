@@ -30,7 +30,7 @@ const bundled = await build({
   ` }
 })
 const browser = await chromium.launch({
-  executablePath: required('GML_CHROMIUM_EXECUTABLE'), chromiumSandbox: true, headless: true,
+  executablePath: required('GML_CHROMIUM_EXECUTABLE'), chromiumSandbox: process.env.GML_CHROMIUM_SANDBOX !== '0', headless: true,
   env: { ...process.env, ...(process.env.GML_BROWSER_LD_LIBRARY_PATH ? { LD_LIBRARY_PATH: process.env.GML_BROWSER_LD_LIBRARY_PATH } : {}) }
 })
 const results = []
@@ -52,6 +52,7 @@ async function scenario(name, fn) {
     if (request.method() !== 'GET') return route.abort('blockedbyclient')
     if (url.pathname === '/api/meta/dict') return respond({ roles: { viewer: '只读访客', dealer: '经销商', store: '门店店长' } })
     if (url.pathname === '/api/master/options') return respond({ dealers: [{ value: 17, label: 'Fixture dealer' }], stores: [{ value: 29, label: 'Fixture store' }] })
+    if (url.pathname === '/api/auth/org-tree') return respond({ tree: [{ id: 5, name: 'Fixture HQ', children: [{ id: 8, name: 'Fixture East', children: [] }] }], total: 2, scope: { scope: 'all' } })
     if (url.pathname === '/api/auth/users') return respond({ list: [row], total: 1 })
     if (url.pathname === '/api/generic-records') return respond({ list: [], total: 0 })
     return route.abort('blockedbyclient')
@@ -98,11 +99,15 @@ try {
     await page.getByLabel(/^姓名/).fill('New fixture')
     await page.getByLabel(/^密码/).fill('synthetic-new-password-for-test')
     await page.getByLabel(/^角色/).selectOption('store')
+    // Dealer binding is hidden unless the role/scope is dealer-related; reveal it through the dealer scope.
+    assert.equal(await page.getByLabel(/^绑定经销商/).count(), 0)
+    await page.getByLabel(/^数据范围/).selectOption('dealer')
     await page.getByLabel(/^绑定经销商/).selectOption('17')
     await page.getByLabel(/^绑定门店/).selectOption('29')
     const { body, method } = await save()
     assert.equal(method, 'POST'); assert.equal(body.dealer_id, 17); assert.equal(body.store_id, 29)
     assert.equal(body.role, 'store'); assert.equal(body.status, 'active')
+    assert.equal(body.data_scope, 'dealer'); assert.equal(Object.hasOwn(body, 'org_id'), false)
     assert.equal(body.password, 'synthetic-new-password-for-test')
   })
   await scenario('editing selections and clearing a password still obey the Users contract', async ({ page, edit, save }) => {
@@ -121,6 +126,41 @@ try {
     await page.getByLabel(/^绑定门店/).selectOption('')
     const { body } = await save()
     assert.equal(body.dealer_id, null); assert.equal(body.store_id, null)
+  })
+  await scenario('untouched org/scope controls are not sent and the session-revocation warning is shown', async ({ page, edit, save }) => {
+    await edit()
+    await page.getByTestId('revoke-warning').waitFor()
+    assert.match(await page.getByTestId('revoke-warning').innerText(), /所有登录会话会立即失效/)
+    const { body } = await save()
+    assert.equal(Object.hasOwn(body, 'org_id'), false); assert.equal(Object.hasOwn(body, 'data_scope'), false)
+    assert.equal(Object.hasOwn(body, 'last_login_at'), false); assert.equal(Object.hasOwn(body, 'username'), false)
+  })
+  await scenario('org tree and data scope selection send numeric org_id and exact scope string', async ({ page, edit, save }) => {
+    await edit()
+    await page.getByLabel(/^所属组织/).locator('option[value="8"]').waitFor({ state: 'attached' })
+    await page.getByLabel(/^所属组织/).selectOption('8')
+    await page.getByLabel(/^数据范围/).selectOption('subtree')
+    assert.match(await page.getByTestId('scope-hint').innerText(), /本组织及下级/)
+    const { body } = await save()
+    assert.equal(body.org_id, 8); assert.equal(body.data_scope, 'subtree')
+    assert.equal(body.dealer_id, 17); assert.equal(body.store_id, 29)
+  })
+  await scenario('clearing org and resetting scope to role default are explicit', async ({ page, edit, save }) => {
+    await edit()
+    await page.getByLabel(/^所属组织/).selectOption({ label: '（清除所属组织）' })
+    await page.getByLabel(/^数据范围/).selectOption('role_default')
+    const { body } = await save()
+    assert.equal(body.org_id, null); assert.equal(body.data_scope, '')
+  })
+  await scenario('dealer scope without a dealer binding is blocked before fetch; binding fields follow role/scope', async ({ page, writes, edit }) => {
+    await edit()
+    await page.getByLabel(/^绑定经销商/).selectOption('')
+    assert.equal(await page.getByLabel(/^绑定经销商/).count(), 0, 'hidden once empty and not dealer-related')
+    await page.getByLabel(/^数据范围/).selectOption('dealer')
+    assert.equal(await page.getByLabel(/^绑定经销商/).count(), 1)
+    await page.getByRole('button', { name: '保存', exact: true }).click()
+    await page.getByText('数据范围为「仅本经销商」时必须绑定经销商', { exact: true }).waitFor()
+    assert.equal(writes.length, 0)
   })
   await scenario('unknown injected option is blocked before fetch', async ({ page, writes, edit }) => {
     await edit()
@@ -151,7 +191,7 @@ try {
     const { body } = await save()
     assert.equal(body.subject_id, '17'); assert.equal(body.password, null)
   })
-  const report = { suite: 'user-editor-browser', transport: 'intercepted fixtures; real Users/DataPage DOM interactions and API client', browser: browser.version(), sandbox: true, passed: results.length, results }
+  const report = { suite: 'user-editor-browser', transport: 'intercepted fixtures; real Users/DataPage DOM interactions and API client', browser: browser.version(), sandbox: process.env.GML_CHROMIUM_SANDBOX !== '0', passed: results.length, results }
   if (process.env.GML_BROWSER_EVIDENCE) await writeFile(process.env.GML_BROWSER_EVIDENCE, JSON.stringify(report, null, 2) + '\n', { flag: 'wx' })
   console.log(JSON.stringify(report))
 } finally { await browser.close() }

@@ -219,9 +219,10 @@ runWithIndustry(industry, () => {
     ok(approved.status === 'approved' && !!approved.approved_by_name, '审批通过且记录审批人')
 
     // 过期：把有效期改到昨天，转单必须被拒
-    db.prepare('UPDATE sales_quotes SET valid_to=? WHERE id=?').run(
-      new Date(Date.now() - 86400000).toISOString().slice(0, 10), q.id
-    )
+    // 「昨天」按本地日历算（toISOString 是 UTC：本地 17:00 以后 UTC 已是次日，UTC 的昨天 = 本地今天，报价就不算过期）
+    const yesterday = new Date(Date.now() - 86400000)
+    const yesterdayLocal = `${yesterday.getFullYear()}-${String(yesterday.getMonth() + 1).padStart(2, '0')}-${String(yesterday.getDate()).padStart(2, '0')}`
+    db.prepare('UPDATE sales_quotes SET valid_to=? WHERE id=?').run(yesterdayLocal, q.id)
     throwsCode(() => convertQuote(db, { id: q.id, actor }), 'QUOTE_EXPIRED', '过期报价转单被拒')
     const expired = expireQuotes(db, { actor })
     ok(expired.expired >= 1, `批量过期置 ${expired.expired} 张为「已过期」`)
