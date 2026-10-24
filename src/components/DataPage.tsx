@@ -177,7 +177,8 @@ export default function DataPage({
   onExtraChange,
   preparePayload,
   formNotice,
-  noCard = false
+  noCard = false,
+  emptyScopeText
 }: {
   title: string
   desc?: string
@@ -199,8 +200,10 @@ export default function DataPage({
   /** Optional page-specific notice rendered above the form fields. */
   formNotice?: (form: any, context: { isEditing: boolean }) => ReactNode
   noCard?: boolean
+  /** AC11：列表按账号数据范围裁剪后为空（且没有任何过滤 / 关键字、请求未失败）时显示的说明；不传则只显示表格自带的“暂无数据”。 */
+  emptyScopeText?: string
 }) {
-  const { list, total, loading, page, pageSize, filters: f, setFilters, setPage, reload, summary } = useList(path, initParams)
+  const { list, total, loading, error: listError, page, pageSize, filters: f, setFilters, setPage, reload, summary } = useList(path, initParams)
   const [open, setOpen] = useState(false)
   const [form, setForm] = useState<any>({})
   const [saving, setSaving] = useState(false)
@@ -376,6 +379,12 @@ export default function DataPage({
 
       {summaryRender?.(summary)}
 
+      {/* AC11：范围内本来就没有数据 ≠ 过滤后没有结果；有过滤 / 关键字 / 请求失败时不显示，避免把别的原因画成“范围为空” */}
+      {emptyScopeText && !loading && !listError && list.length === 0 && !keyword && Object.values(f || {}).every((v) => v === '' || v === null || v === undefined) && (
+        <div role="status" data-testid="empty-scope-hint" className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[13px] text-amber-800">
+          {emptyScopeText}
+        </div>
+      )}
       <Card pad={false}>
         <Table
           columns={

@@ -105,7 +105,7 @@ test('driver registers every scenario file under tests/browser and each one pars
   const helpers = new Set(['lib.mjs', 'session-switch.mjs', 'scenario-data.mjs'])
   const files = readdirSync(path.join(ROOT, 'tests/browser')).filter((f) => f.endsWith('.mjs') && !helpers.has(f)).map((f) => f.replace(/\.mjs$/, ''))
   assert.deepEqual([...declared].sort(), files.sort())
-  for (const need of ['funds-review', 'scope-notice', 'my-scope', 'audit-logs', 'inventory-paging', 'approval-template-perm', 'pos-settle-perm']) assert.ok(declared.includes(need), `${need} must be registered in SCENARIOS`)
+  for (const need of ['funds-review', 'scope-notice', 'my-scope', 'audit-logs', 'inventory-paging', 'approval-template-perm', 'pos-settle-perm', 'audit-fts-hint', 'dashboard-cache-stamp']) assert.ok(declared.includes(need), `${need} must be registered in SCENARIOS`)
   assert.equal(new Set(declared).size, declared.length, 'no scenario is registered twice')
   for (const f of readdirSync(path.join(ROOT, 'tests/browser')).filter((x) => x.endsWith('.mjs'))) {
     const r = spawnSync(process.execPath, ['--check', path.join(ROOT, 'tests/browser', f)], { encoding: 'utf8' })
@@ -166,6 +166,29 @@ test('AB9 permission scenarios assert both the hidden control and the server ver
     assert.doesNotMatch(src, /https?:\/\/(?!127\.0\.0\.1|localhost)/, `${f} must not hard-code external origins`)
     assert.doesNotMatch(src, /console\.log\([^)]*(password|token)/i, `${f} must not print credentials`)
   }
+})
+
+test('AC11 scenarios assert the hint modes, the disabled/blocked query, the server verdicts, the stamp arithmetic and the 403 absence', () => {
+  const audit = read('tests/browser/audit-fts-hint.mjs')
+  for (const needle of ['audit-fts-hint', 'audit-action-hint', "'too_short'", "'like'", "'fts'", 'AUDIT_ACTION_NEEDS_MODULE', 'data-needs-module', 'isDisabled()', 'sent, []', 'status, 400', 'data.total, direct.total', '.status(), 403', 'count(), 0', 'externalRequests']) {
+    assert.ok(audit.includes(needle), `audit-fts-hint must assert ${needle}`)
+  }
+  const dash = read('tests/browser/dashboard-cache-stamp.mjs')
+  for (const needle of ['数据截至', '缓存 30 s', 'cache_ttl_ms', 'cached_at', 'data-cached-at', 'dashboard-refresh', 'oldest(', 'must not move backwards', '/api/inventory/adjust', 'GLOBAL_DATA_FORBIDDEN', 'status(), 403', 'count(), 0', 'externalRequests']) {
+    assert.ok(dash.includes(needle), `dashboard-cache-stamp must assert ${needle}`)
+  }
+  for (const f of ['audit-fts-hint', 'dashboard-cache-stamp']) {
+    const src = read(`tests/browser/${f}.mjs`)
+    assert.match(src, /from '\.\/lib\.mjs'/, `${f} uses the shared loopback/Linux helpers`)
+    assert.doesNotMatch(src, /https?:\/\/(?!127\.0\.0\.1|localhost)/, `${f} must not hard-code external origins`)
+    assert.doesNotMatch(src, /console\.log\([^)]*(password|token)/i, `${f} must not print credentials`)
+    assert.match(src, /blockedbyclient/, `${f} blocks non-loopback requests`)
+  }
+  // 页面侧的钩子必须存在，场景才有东西可断言
+  const page = read('src/pages/Dashboard.tsx')
+  assert.ok(page.includes('dashboard-cache-stamp') && page.includes('dashboard-refresh') && page.includes('selectCacheStamp'))
+  const auditPage = read('src/pages/system/AuditLogs.tsx')
+  assert.ok(auditPage.includes('audit-fts-hint') && auditPage.includes('audit-action-hint') && auditPage.includes('KEYWORD_HINTS'))
 })
 
 test('driver gives every scenario a 5 minute kill timer and runs them in registration order (AA8 + AB9 included)', () => {

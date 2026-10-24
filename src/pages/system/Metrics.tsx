@@ -21,6 +21,7 @@
 import { useMemo, useState } from 'react'
 import { Card, Field, Modal, SectionTitle, StatCard, Table, Tabs, fmtInt, toast, useFetch } from '../../components/ui'
 import { useAuth } from '../../store/auth'
+import OpsCountersCard from '../../components/OpsCountersCard'
 import { RefreshCw, ShieldCheck, ShieldAlert, Calculator, Search, Layers } from 'lucide-react'
 import {
   fmtMetricValue, isMetricError, syncMetricDefs,
@@ -208,6 +209,7 @@ export default function Metrics() {
       )}
 
       {tab === 'gov' && (
+        <>
         <Card>
           <SectionTitle
             title="定义一致性自检"
@@ -270,6 +272,8 @@ export default function Metrics() {
             但写两份必然分家，所以定义与算法只写在代码里一处，表是投影，这页负责证明两者没分家。
           </div>
         </Card>
+        {canSync && <OpsCountersCard />}
+        </>
       )}
 
       <Modal
