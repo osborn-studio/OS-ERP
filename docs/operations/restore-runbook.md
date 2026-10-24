@@ -35,6 +35,12 @@ GML_BACKUP_KEY="$(cat /secure/backup.key)" GML_RUNTIME_MODE=production GML_DATA_
 - **轮换**：旧备份用旧密钥加密，不会被新密钥解开。步骤：① 用新密钥生成一份新备份并跑演练通过；② 保留旧密钥直到旧备份按 `backup_keep` 被裁剪完或已确认不再需要；③ 之后销毁旧密钥。需要立即换掉旧备份时：用旧密钥演练解密验证 → 用新密钥重新备份 → 安全删除旧 `.db.enc`。
 - 怀疑密钥泄露：视同明文备份泄露，轮换备份密钥的同时按 ADR-0008 轮换 `GML_SECRET_KEY`、重置账号密码与令牌。
 
+
+### 备份失败告警与健康检查（ADR-0029）
+
+- 想在备份失败时收到消息：先在通知管理里建好并启用一个渠道（出站策略同 ADR-0008，私网/回环地址会被拒绝），然后给备份任务设 `GML_ALERT_CHANNEL=<渠道 code>`。只有**失败**才发，内容仅含数据目录名、行业码、`BACKUP_*` 错误码；成功静默。发没发出去看备份命令的 stderr：`ALERT_SENT` 或 `ALERT_NOT_SENT: <原因>`，渠道侧的记录在 `notify_logs`（`triggered_by=db-backup`）。告警自身失败不影响备份退出码。
+- 备份**没跑**不会告警。用 admin 令牌看 `GET /api/meta/health` 的 `ops.last_backup`（`result / encrypted / age_seconds`），或 `GET /api/meta/metrics` 的 `backup_age_seconds`、`backup_missing`、`backup_last_failed`，由外部监控判断"超过 N 小时没有成功备份"。同一处还能看 `migration_checksums.mismatched`（非 0 先按第 5 节处理，不要收养）、`login_throttle`（`unavailable` 时登录会 503）、`disk_free_bytes`（备份目录同卷时尤其要盯）。匿名调用只返回 `status` 与版本，探活不受影响。
+
 ## 2. 定期：恢复演练（证明备份能起来，量 RTO/RPO）
 
 频率：每月一次，以及每次升级前。演练在一台与线上无关的机器或线上机器上的一个**空目录**里做，不会碰线上目录。

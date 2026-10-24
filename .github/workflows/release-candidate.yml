@@ -1,0 +1,169 @@
+name: Release candidate
+
+# AF1: split out of ci.yml so tag pushes never create skipped-job status contexts for the CI checks on the same SHA.
+# Triggers: pushes of v* tags and manual dispatch only. Never pull_request, never branch pushes. Read-only token, no secrets,
+# no signing key. Builds an UNSIGNED candidate as workflow artifacts; creates no tag, no GitHub Release, does not commit back.
+# Not release acceptance and not production acceptance. It has not been run on GitHub yet.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CI: 'true'
+  HOST: 127.0.0.1
+  GML_RUNTIME_MODE: test
+  GML_DB: ''
+
+jobs:
+  candidate:
+    # AD10/AF1: unsigned release candidate built on a hosted runner. Runs ONLY for workflow_dispatch and pushes of v* tags
+    # (never for pull requests or pushes to main). It builds RC-<version>-<sha>.zip + EVIDENCE.json with the focused suite and
+    # guards run by the script itself, self-verifies the result, and uploads three files as 14-day workflow artifacts.
+    # It creates no tag and no GitHub Release, publishes nothing, and does not commit back (the evidence-log line is an artifact).
+    # Hosted CI holds no signing key: the candidate is unsigned (built_by: hosted-ci); a formal release must be re-signed by the
+    # key holder on a controlled machine (docs/release/README.md). Not release acceptance and not production acceptance.
+    name: Release candidate (unsigned, artifacts only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      actions: read # only for `gh run list` (--ci-run=auto) to find a successful ci.yml run for this exact commit
+    concurrency:
+      group: candidate-${{ github.repository }}
+      cancel-in-progress: false
+    env:
+      GML_VERIFY_PLATFORM: linux
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+      - name: Prepare isolated Python verifier and output paths (outside the checkout)
+        run: |
+          set -euo pipefail
+          python -m venv "$RUNNER_TEMP/xlsx-venv"
+          "$RUNNER_TEMP/xlsx-venv/bin/pip" install --no-cache-dir --disable-pip-version-check -r requirements-test.txt
+          echo "GML_PYTHON=$RUNNER_TEMP/xlsx-venv/bin/python" >> "$GITHUB_ENV"
+          echo "CAND_OUT=$RUNNER_TEMP/candidate" >> "$GITHUB_ENV"
+          echo "CAND_LOG=$RUNNER_TEMP/evidence-log.jsonl" >> "$GITHUB_ENV"
+          echo "CAND_UPLOAD=$RUNNER_TEMP/candidate-upload" >> "$GITHUB_ENV"
+          command -v unzip
+      - name: Install locked dependencies and selected native build hooks
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm rebuild better-sqlite3 esbuild --no-audit --no-fund
+      # The log lives in $RUNNER_TEMP, so the checkout stays clean; a seed copy (if the repo has one) lets the chain continue.
+      - name: Build candidate (focused suite + guards + acceptance run by the script; unsigned)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          umask 077
+          [ -f docs/release/EVIDENCE-LOG.jsonl ] && cp docs/release/EVIDENCE-LOG.jsonl "$CAND_LOG"
+          # The workflow-level GML_RUNTIME_MODE=test / GML_DB='' are for the source-level jobs; the production acceptance step inside
+          # the script must start the packaged server in production mode, so they are removed for this command (as for a local run).
+          env -u GML_RUNTIME_MODE -u GML_DB node scripts/release-candidate.mjs --run-tests --ci-run=auto --log="$CAND_LOG" --output="$CAND_OUT"
+      - name: Self-verify the candidate (extracted package, evidence, archive hash, log chain)
+        run: |
+          set -euo pipefail
+          zip="$(ls "$CAND_OUT"/RC-*.zip)"
+          name="$(basename "$zip" .zip)"
+          mkdir -p "$RUNNER_TEMP/pkg-x"
+          unzip -q "$zip" -d "$RUNNER_TEMP/pkg-x"
+          pkg="$(ls -d "$RUNNER_TEMP"/pkg-x/*/)"
+          (cd "$pkg" && node scripts/verify-release.mjs --evidence="$CAND_OUT/$name.evidence/EVIDENCE.json" --artifact="$zip" --log="$CAND_LOG")
+          mkdir -p "$CAND_UPLOAD"
+          cp "$zip" "$CAND_UPLOAD/"
+          cp "$CAND_OUT/$name.evidence/EVIDENCE.json" "$CAND_UPLOAD/EVIDENCE.json"
+          tail -n 1 "$CAND_LOG" > "$CAND_UPLOAD/evidence-log-line.jsonl"
+      # AF7 supply-chain self-checks (self-contained block: 2 steps + the extra artifact files in the upload step below).
+      # Re-apply as-is after the "Self-verify the candidate" step in any workflow that has the same CAND_*/pkg-x conventions.
+      # Both steps are read-only toward the repository; they need network access (registry.npmjs.org, the GitHub API).
+      # `npm audit signatures` is pinned to the npmjs registry because .npmrc points installs at registry.npmmirror.com, which has
+      # no audit/signature endpoint. Observed locally: with that override npm audited 42 packages, close to the 36 lockfile entries
+      # resolved from npmjs, so entries resolved from npmmirror are probably NOT covered; npm's selection logic is not guaranteed
+      # (it verifies registry metadata by name@version, it does not bind the installed tarball to the signed integrity). The step
+      # records npm's own "audited N packages" summary and the per-host lockfile counts so the coverage gap is visible in the artifact. A signature verification failure fails the job.
+      - name: Verify registry signatures of installed dependencies (npm audit signatures, npmjs registry)
+        run: |
+          set -euo pipefail
+          mkdir -p "$CAND_UPLOAD"
+          {
+            npm audit signatures --registry=https://registry.npmjs.org
+            echo
+            echo "lockfile entries by registry host (npm audit signatures covers only the npmjs.org entries; npmmirror has no signature endpoint):"
+            grep -o '"resolved": "https\?://[^/]*' package-lock.json | sed 's/"resolved": "//' | sort | uniq -c
+          } 2>&1 | tee "$CAND_UPLOAD/audit-signatures.txt"
+      # The previous candidate artifact is untrusted DATA: only a run of this repository's candidate workflow that succeeded on
+      # `main` or on a v* tag, with event push or workflow_dispatch (never pull_request, so a fork PR branch named main is ignored), is
+      # considered (a dispatch from any other branch is ignored; a v*-named branch dispatched by a writer is still accepted: the diff is
+      # informational, not a trust decision), only sbom.cdx.json (or the one fixed
+      # release/sbom.cdx.json entry of the zip) is read, nothing from it is executed, size is capped, and the diff output is sanitised.
+      # The diff is informational: no previous artifact => "first candidate"; a malformed previous SBOM is reported in the
+      # output file and as a warning, it does not fail the candidate.
+      - name: SBOM diff vs the previous candidate artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CAND_WORKFLOW: release-candidate.yml
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p "$CAND_UPLOAD"
+          pkg="$(ls -d "$RUNNER_TEMP"/pkg-x/*/)"
+          cur="${pkg}release/sbom.cdx.json"
+          cp "$cur" "$CAND_UPLOAD/sbom.cdx.json"
+          prev_root="$RUNNER_TEMP/prev-candidate"
+          rm -rf "$prev_root"; mkdir -p "$prev_root"
+          prev_sbom=""
+          ids="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$CAND_WORKFLOW" --status success --limit 30 --json databaseId,headBranch,event --jq '.[] | select(.databaseId != (env.GITHUB_RUN_ID | tonumber)) | select(.event == "push" or .event == "workflow_dispatch") | select(.headBranch == "main" or (.headBranch | test("^v[0-9]"))) | .databaseId' 2>/dev/null | head -n 10 || true)"
+          for id in $ids; do
+            case "$id" in ''|*[!0-9]*) continue ;; esac
+            d="$prev_root/$id"; mkdir -p "$d"
+            gh run download "$id" --repo "$GITHUB_REPOSITORY" --pattern 'os-erp-candidate-*' --dir "$d" >/dev/null 2>&1 || continue
+            f="$(find "$d" -maxdepth 3 -type f -name sbom.cdx.json | head -n 1)"
+            if [ -z "$f" ]; then
+              z="$(find "$d" -maxdepth 3 -type f -name 'RC-*.zip' | head -n 1)"
+              [ -n "$z" ] || continue
+              entry="$(unzip -Z1 "$z" 2>/dev/null | grep -E '^[^/]+/release/sbom\.cdx\.json$' | head -n 1 || true)"
+              [ -n "$entry" ] || continue
+              unzip -p "$z" -- "$entry" 2>/dev/null | head -c 33554433 > "$d/sbom-from-zip.cdx.json" || true
+              f="$d/sbom-from-zip.cdx.json"
+            fi
+            prev_sbom="$f"; prev_id="$id"
+            break
+          done
+          if [ -z "$prev_sbom" ]; then
+            echo "first candidate: no previous successful candidate artifact (main / v* runs of $CAND_WORKFLOW, 14-day retention) was found, so there is nothing to diff against." | tee "$CAND_UPLOAD/sbom-diff.txt"
+            printf '{"previous":null,"reason":"first candidate or no downloadable previous candidate artifact"}\n' > "$CAND_UPLOAD/sbom-diff.json"
+          elif node scripts/sbom-diff.mjs "$prev_sbom" "$cur" --json-out="$CAND_UPLOAD/sbom-diff.json" --table-out="$CAND_UPLOAD/sbom-diff.txt"; then
+            echo "diffed against the candidate artifact of run $prev_id"
+          else
+            echo "previous candidate SBOM (run $prev_id) is malformed or unreadable, or the diff failed; no diff produced." | tee "$CAND_UPLOAD/sbom-diff.txt"
+            printf '{"previous":null,"reason":"previous SBOM malformed or unreadable"}\n' > "$CAND_UPLOAD/sbom-diff.json"
+            echo "::warning::previous candidate SBOM is malformed or unreadable; SBOM diff skipped"
+          fi
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: os-erp-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/candidate-upload/RC-*.zip
+            ${{ runner.temp }}/candidate-upload/EVIDENCE.json
+            ${{ runner.temp }}/candidate-upload/evidence-log-line.jsonl
+            ${{ runner.temp }}/candidate-upload/sbom.cdx.json
+            ${{ runner.temp }}/candidate-upload/sbom-diff.json
+            ${{ runner.temp }}/candidate-upload/sbom-diff.txt
+            ${{ runner.temp }}/candidate-upload/audit-signatures.txt
+          if-no-files-found: error
+          retention-days: 14

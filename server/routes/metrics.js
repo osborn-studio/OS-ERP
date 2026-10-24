@@ -35,14 +35,29 @@
 import { Router } from 'express'
 import { getDb } from '../db/index.js'
 import { ok, wrap } from '../lib/http.js'
-import { requireAuth, requirePerm } from '../middleware/auth.js'
+import { requireAuth, requirePerm, attachOrgScope, permContext, hasPerm } from '../middleware/auth.js'
+import { boundStoreId, boundDealerId, isExternalSubject, storeBindingExempt } from '../lib/store-binding.js'
 import { audit } from '../middleware/audit.js'
 import {
   METRICS, METRIC_BY_KEY, metricDefinitions, metricValues,
-  metricCatalog, metricGroups, syncMetricDefs, metricDefsStale
+  metricCatalog, metricGroups, metricScopedFlags, metricVisibility, syncMetricDefs, metricDefsStale
 } from '../lib/metrics.js'
 
 const r = Router()
+
+/**
+ * AE1（ADR-0057）：调用者可见的指标集合。每条指标登记 `perms`（任一命中），受限范围另受 `metrics_global_for_restricted` 约束。
+ * 缺权限的指标缺席（不是 403）；`hidden` 是被隐藏条数，随响应返回供前端说明。
+ */
+const subjectBoundOf = (req) => {
+  const u = req.user
+  return !storeBindingExempt(u) && (isExternalSubject(u) || boundStoreId(u) !== null || boundDealerId(u) !== null)
+}
+
+const visibilityOf = (db, req, keys = null) => {
+  const ctx = permContext(db, req.user)
+  return metricVisibility(db, { canPerm: (c) => hasPerm(ctx, c), orgScope: req.orgScope, keys, subjectBound: subjectBoundOf(req), user: req.user })
+}
 
 const daysOf = (req) => {
   const n = Math.floor(Number(req.query.days))
@@ -64,15 +79,19 @@ r.get(
   '/',
   requireAuth,
   requirePerm('system:metrics:view'),
+  attachOrgScope,
   wrap((req, res) => {
     const db = getDb()
     const days = daysOf(req)
     const withValues = String(req.query.with_values ?? '1') !== '0'
+    const vis = visibilityOf(db, req)
+    const groups = metricGroups(db, { days, withValues, orgScope: req.orgScope, allow: vis.allow, subjectBound: subjectBoundOf(req), user: req.user })
     return ok(res, {
       days,
-      groups: metricGroups(db, { days, withValues }),
-      total: METRICS.length,
-      modules: [...new Set(METRICS.map((m) => m.module))]
+      groups,
+      total: vis.allow.size,
+      modules: groups.map((g) => g.module),
+      hidden_count: vis.hidden
     })
   })
 )
@@ -90,14 +109,17 @@ r.get(
   '/values',
   requireAuth,
   requirePerm('system:metrics:view'),
+  attachOrgScope,
   wrap((req, res) => {
     const db = getDb()
     const days = daysOf(req)
     const keys = keysOf(req)
-    const values = metricValues(db, { keys, days })
+    const vis = visibilityOf(db, req, keys)
+    const values = metricValues(db, { keys, days, orgScope: req.orgScope, allow: vis.allow, user: req.user, subjectBound: subjectBoundOf(req) })
     // unknown = 请求了但字典里没有的 key —— 显式回一个列表，别让人对着空值猜
     const unknown = keys ? keys.filter((k) => !METRIC_BY_KEY[k]) : []
-    return ok(res, { days, values, unknown })
+    // scoped：该值是否按调用者范围算（false = 全局口径，前端据此标注）；见 ADR-0053
+    return ok(res, { days, values, scoped: metricScopedFlags(req.orgScope, keys, vis.allow, subjectBoundOf(req)), unknown, hidden_count: vis.hidden })
   })
 )
 
@@ -106,9 +128,14 @@ r.get(
   '/catalog',
   requireAuth,
   requirePerm('system:metrics:view'),
+  attachOrgScope,
   wrap((req, res) => {
     const db = getDb()
-    return ok(res, { items: metricCatalog(db, { days: daysOf(req), withValues: true }) })
+    const vis = visibilityOf(db, req)
+    return ok(res, {
+      items: metricCatalog(db, { days: daysOf(req), withValues: true, orgScope: req.orgScope, allow: vis.allow, subjectBound: subjectBoundOf(req), user: req.user }),
+      hidden_count: vis.hidden
+    })
   })
 )
 

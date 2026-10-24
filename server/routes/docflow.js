@@ -22,9 +22,11 @@ import {
   requirePerm,
   requireInternal,
   permContext,
+  hasPerm,
   assertCanRead,
   isExternalUser,
   attachOrgScope,
+  resolveOrgScope,
   // 内部模块码的**唯一出处**已提到 middleware/auth.js（批次 T：审批提交入口也要用同一条判定）
   INTERNAL_MODULES
 } from '../middleware/auth.js'
@@ -39,10 +41,28 @@ import {
   effectOwnerOf,
   historyOf,
   traceByDocNo,
-  explainLifecycle
+  docEventScope,
+  docScopeOf,
+  docInScope,
+  DOC_SCOPE_RESOLVERS,
+  explainLifecycle,
+  createPermOf
 } from '../lib/docflow.js'
 import { listDocNoRules, previewDocNo, nextDocNoAuto, nextDocNoByRule } from '../lib/docno.js'
 import { audit } from '../middleware/audit.js'
+import { readSetting } from '../lib/settings.js'
+// 领域库在求值期把各自的范围谓词登记到 doc-scope-registry；本路由依赖它们，显式 import 保证一定已登记（ADR-0032）。
+import '../lib/purchase.js'
+import '../lib/sales-order.js'
+import '../lib/order-center.js'
+
+/** 读接口的范围上下文：req.orgScope 由 attachOrgScope 挂上；缺失 ⇒ 失败关闭（按无范围算）。 */
+const scopeCtx = (req) => {
+  const db = getDb()
+  // ADR-0051：默认严格门店绑定（未绑门店的非总部账号读不到 RC / YQ / SH），总部角色豁免；设置键 docflow_strict_store_binding=0 回退
+  const strict = readSetting(db, 'docflow_strict_store_binding') === true
+  return { db, user: req.user, orgScope: req.orgScope || { scope: 'none', orgIds: [] }, strictBinding: strict, hqExempt: strict }
+}
 
 const r = Router()
 
@@ -81,23 +101,29 @@ export function handleFlowError(res, e) {
 r.get(
   '/overview',
   requireAuth,
+  attachOrgScope,
   requireInternal('全局单据总览'),
   wrap((req, res) => {
     const db = getDb()
     const c = (sql) => db.prepare(sql).get().c
+    // ADR-0032：流转留痕与状态分布按账号数据范围统计；总数（类型 / 状态 / 动作 / 业务流 / 规则）是静态定义，不含单据数据。
+    const ctx = scopeCtx(req)
+    const evScope = docEventScope(ctx, 'e')
     const recent = db
       .prepare(
-        `SELECT doc_type,doc_no,action_name,from_state,to_state,actor_name,source,created_at
-         FROM doc_events ORDER BY id DESC LIMIT 12`
+        `SELECT e.doc_type,e.doc_no,e.action_name,e.from_state,e.to_state,e.actor_name,e.source,e.created_at
+         FROM doc_events e WHERE ${evScope.sql} ORDER BY e.id DESC LIMIT 12`
       )
-      .all()
-    // 各单据类型的实际状态分布（用真实数据回答「现在系统里有多少单在什么状态」）
+      .all(...evScope.params)
+    // 各单据类型的实际状态分布（用真实数据回答「现在系统里有多少单在什么状态」）；只统计范围内的单据
     const dist = []
     for (const t of db.prepare("SELECT code,name,table_name FROM doc_types WHERE status='active' ORDER BY sort_order").all()) {
+      const p = docScopeOf(ctx, t.code)
+      if (!p) continue
       try {
         const rows = db
-          .prepare(`SELECT ${t.table_name === 'pos_shifts' ? 'status' : 'status'} s, COUNT(*) c FROM ${t.table_name} GROUP BY status`)
-          .all()
+          .prepare(`SELECT status s, COUNT(*) c FROM ${t.table_name} t WHERE ${p.all ? '1=1' : p.sql} GROUP BY status`)
+          .all(...(p.all ? [] : p.params))
         if (!rows.length) continue
         dist.push({ docType: t.code, name: t.name, total: rows.reduce((n, x) => n + x.c, 0), states: rows.map((x) => ({ state: x.s, count: x.c })) })
       } catch {
@@ -109,7 +135,7 @@ r.get(
       states: c('SELECT COUNT(*) c FROM doc_states'),
       actions: c('SELECT COUNT(*) c FROM doc_actions'),
       flows: c("SELECT COUNT(*) c FROM biz_flows WHERE status='active'"),
-      events: c('SELECT COUNT(*) c FROM doc_events'),
+      events: db.prepare(`SELECT COUNT(*) c FROM doc_events e WHERE ${evScope.sql}`).get(...evScope.params).c,
       noRules: c("SELECT COUNT(*) c FROM doc_no_rules WHERE status='active'"),
       recent,
       distribution: dist
@@ -212,6 +238,9 @@ r.post(
       const owner = effectOwnerOf(type.code)
       const access = owner && owner.canAccess ? owner.canAccess(db, req, row) : assertCanRead(req, row)
       if (!access.ok) return fail(res, access.message, access.status)
+      // ADR-0051（Codex 审计）：带门店绑定的类型（RC / YQ / SH）在驱动前也过绑定闸，否则对未绑门店的非总部账号，
+      // 错误响应（409 的 docNo 等）会泄露其不可见单据；与读接口同一份 docInScope，范围外与不存在同形 404
+      if (row && DOC_SCOPE_RESOLVERS[type.code]?.binding && !docInScope(scopeCtx(req), type.code, row.id)) return fail(res, '记录不存在', 404)
 
       // ② 外部主体不得驱动内部单据域
       if (INTERNAL_MODULES.has(type.module) && isExternalUser(req)) {
@@ -253,10 +282,16 @@ r.post(
 r.get(
   '/history/:docType/:id',
   requireAuth,
+  attachOrgScope,
   requireInternal('总部单据历史；订货方请查看自己的业务单据'),
   wrap((req, res) => {
     try {
-      return ok(res, historyOf(getDb(), { docType: req.params.docType, id: Number(req.params.id) }))
+      const db = getDb()
+      const ctx = scopeCtx(req)
+      // ADR-0032：先解析类型（未注册 ⇒ 404），再核对单据在范围内；范围外与不存在同形 404，不泄漏存在性
+      const type = getDocType(db, req.params.docType)
+      if (!docInScope(ctx, type.code, req.params.id)) return fail(res, '单据不存在', 404)
+      return ok(res, historyOf(db, { docType: type.code, id: Number(req.params.id), scope: docEventScope(ctx, 'doc_events') }))
     } catch (e) {
       return handleFlowError(res, e)
     }
@@ -267,10 +302,12 @@ r.get(
 r.get(
   '/trace',
   requireAuth,
+  attachOrgScope,
   requireInternal('总部单据联查'),
   wrap((req, res) => {
     if (!req.query.doc_no) return fail(res, '需要 doc_no')
-    return ok(res, traceByDocNo(getDb(), String(req.query.doc_no)))
+    // ADR-0032：命中单号与 payload 关联的事件都只返回范围内单据的留痕（范围外 ⇒ 空列表，与无此单号同形）
+    return ok(res, traceByDocNo(getDb(), String(req.query.doc_no), { scope: docEventScope(scopeCtx(req), 'doc_events') }))
   })
 )
 
@@ -278,12 +315,15 @@ r.get(
 r.get(
   '/events',
   requireAuth,
+  attachOrgScope,
   requireInternal('全局单据日志'),
   wrap((req, res) => {
     const db = getDb()
     const { page, pageSize, offset } = pageParams(req)
-    const conds = ['1=1']
-    const args = []
+    // ADR-0032：先套范围谓词（别名 doc_events），再叠加调用者的过滤条件
+    const evScope = docEventScope(scopeCtx(req), 'doc_events')
+    const conds = [evScope.sql]
+    const args = [...evScope.params]
     if (req.query.doc_type) {
       conds.push('doc_type=?')
       args.push(String(req.query.doc_type))
@@ -405,7 +445,13 @@ r.post(
   })
 )
 
-/** 试取号：真实走一次取号链路（会消耗一个序号，用于联调） */
+/**
+ * 试取号：真实走一次取号链路（会消耗一个序号，用于联调）。
+ *
+ * ADR-0028：非干跑要求调用者持有该单据类型的**创建权限**（`DOC_CREATE_PERMS`，唯一映射表）；
+ * 类型没有映射（含未注册类型）⇒ 403 `DOC_TYPE_PERM_UNMAPPED`，对管理员同样成立（映射缺项是工程缺口，不是权限问题）。
+ * 干跑只读预览、不消耗序号，保持豁免。权限判定在取号**之前**，被拒绝的调用不消耗序号。
+ */
 r.post(
   '/no-issue',
   requireAuth,
@@ -420,13 +466,34 @@ r.post(
           .get(docType)
         return ok(res, { docNo: rule ? previewDocNo(db, { docType, pattern: rule.pattern, seqPad: rule.seq_pad }) : null, dry: true })
       }
-      const no = nextDocNoAuto(db, {
+      const need = createPermOf(docType)
+      if (!need) {
+        throw new DocFlowError('该单据类型未配置创建权限映射，拒绝取号', { code: 'DOC_TYPE_PERM_UNMAPPED', httpStatus: 403 })
+      }
+      if (!hasPerm(permContext(db, req.user), need)) {
+        throw new DocFlowError(`当前角色无权为该单据类型取号（需 ${need}）`, {
+          code: 'DOC_CREATE_PERM_DENIED', httpStatus: 403, detail: { permCode: need }
+        })
+      }
+      const args = {
         docType,
         orgId: orgId ? Number(orgId) : null,
         warehouseId: whId ? Number(whId) : null,
         bizDate
-      })
-      return ok(res, { docNo: no, byRule: !!nextDocNoByRule(db, { docType, orgId: orgId ? Number(orgId) : null, warehouseId: whId ? Number(whId) : null, bizDate }) })
+      }
+      // 规则按 org / 仓分计数器：受限范围不得替范围外的组织 / 仓取号（会烧别人的序号）。
+      const scope = resolveOrgScope(db, req.user)
+      if (scope.scope !== 'all' && (args.orgId != null || args.warehouseId != null)) {
+        const allowed = new Set((scope.orgIds || []).map(Number))
+        const whOrg = args.warehouseId != null ? db.prepare('SELECT org_id FROM warehouses WHERE id=?').get(args.warehouseId)?.org_id : null
+        if ((args.orgId != null && !allowed.has(args.orgId)) || (args.warehouseId != null && !allowed.has(Number(whOrg)))) {
+          throw new DocFlowError('org_id / warehouse_id 超出当前账号的组织范围，拒绝取号', { code: 'DOC_NO_SCOPE_DENIED', httpStatus: 403 })
+        }
+      }
+      // 先按规则取号；没有规则才回落旧逻辑。**只取一次**：规则命中时再调一次 nextDocNoByRule 会多烧一个序号。
+      const byRuleNo = nextDocNoByRule(db, args)
+      const no = byRuleNo || nextDocNoAuto(db, args)
+      return ok(res, { docNo: no, byRule: !!byRuleNo })
     } catch (e) {
       return handleFlowError(res, e)
     }

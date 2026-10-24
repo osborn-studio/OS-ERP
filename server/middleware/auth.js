@@ -17,6 +17,7 @@ import { runtimeMode } from '../runtime.js'
 import jwt from 'jsonwebtoken'
 import { getDb, DEFAULT_INDUSTRY, assertIndustry, getCurrentIndustry } from '../db/index.js'
 import { fail, bizFail } from '../lib/http.js'
+import { sessionCookieToken, needsCsrf, csrfValid, clearSessionCookies } from './session-transport.js'
 
 // 密钥来源：`GML_JWT_SECRET` 优先，**兼容 `JWT_SECRET`**（A20）。
 // 起因：`docker-compose.yml` 配的是 `JWT_SECRET`，而这里只读 `GML_JWT_SECRET` ——
@@ -258,13 +259,32 @@ export function bearerToken(req) {
   return header.startsWith('Bearer ') ? header.slice(7) : null
 }
 
+/**
+ * 后台会话令牌的取法（Y11，ADR-0036）：Bearer 头优先；**没有 Authorization 头**且
+ * `GML_SESSION_TRANSPORT=cookie` 时才看会话 Cookie（bearer 模式从不读 Cookie）。
+ * Authorization 头只要出现（即使无效）就不回落到 Cookie。`viaCookie` ⇒ 需要 CSRF 双提交。
+ */
+export function sessionToken(req) {
+  const bearer = bearerToken(req)
+  if (bearer) return { token: bearer, viaCookie: false }
+  if (req.headers.authorization) return { token: null, viaCookie: false }
+  const cookie = sessionCookieToken(req)
+  return cookie ? { token: cookie, viaCookie: true } : { token: null, viaCookie: false }
+}
+
 export function requireAuth(req, res, next) {
-  const token = bearerToken(req)
+  const { token, viaCookie } = sessionToken(req)
   if (!token) return fail(res, '未登录或登录已过期', 401, 401)
+  // Cookie 里的会话一旦判死，顺带清掉两只 Cookie（HttpOnly 的那只前端自己清不掉）
+  const dead = () => { if (viaCookie) clearSessionCookies(req, res) }
   try {
     // 只接受**后台** audience 的令牌：C 端（`gml-mall`）令牌在这里一律 401
     const p = jwt.verify(token, JWT_SECRET, { audience: BACK_AUD, algorithms: ['HS256'] })
-    const revoked = () => bizFail(res, { status: 401, code: 'SESSION_REVOKED', message: '会话已失效，请重新登录' })
+    // Cookie 是环境凭据：写操作必须带与会话绑定的 CSRF 值（头 == Cookie == HMAC(JWT)）
+    if (viaCookie && needsCsrf(req) && !csrfValid(req, token, JWT_SECRET)) {
+      return bizFail(res, { status: 403, code: 'CSRF_TOKEN_INVALID', message: '缺少或无效的 CSRF 令牌，请刷新页面后重试' })
+    }
+    const revoked = () => { dead(); return bizFail(res, { status: 401, code: 'SESSION_REVOKED', message: '会话已失效，请重新登录' }) }
     if (!Number.isSafeInteger(p.uid) || p.uid <= 0 || !Number.isSafeInteger(p.auth_version) || p.auth_version < 0 ||
         !assertIndustry(p.industry) || p.industry !== getCurrentIndustry()) return revoked()
     // ------------------------------------------------------------------
@@ -303,6 +323,7 @@ export function requireAuth(req, res, next) {
     }
     next()
   } catch {
+    dead()
     return fail(res, '登录状态无效，请重新登录', 401, 401)
   }
 }
@@ -311,6 +332,10 @@ export function requireRole(...roles) {
   return (req, res, next) => {
     if (!req.user) return fail(res, '未登录', 401, 401)
     if (req.user.role === 'admin') return next()
+    // AF10（Codex 审计 high）：旧闸只比对主角色名；主角色已停用时同样不放行（与 permContext 同一条 active-only 规则）
+    if (!isRoleActive(getDb(), req.user.role)) {
+      return fail(res, `当前角色「${ROLES[req.user.role] || req.user.role}」已停用，无此操作权限`, 403, 403)
+    }
     if (roles.length && !roles.includes(req.user.role)) {
       return fail(res, `当前角色「${ROLES[req.user.role] || req.user.role}」无此操作权限`, 403, 403)
     }
@@ -323,6 +348,10 @@ export function requireWrite(req, res, next) {
   // 纵深防御：写闸要能**自己**识别出"这不是后台身份"，而不是指望上游一定挂过 requireAuth。
   // 原来的写法只挡 `role === 'viewer'` —— 于是任何"新出现的"非后台角色都自动获得写权限
   // （C 端 `mall` 就是这样过的闸）。改成**后台角色白名单**：不在表里的一律拒写。
+  // AF10：账号的角色一个 active 的都没有（主角色与附加角色全停用）⇒ 拒写；admin / 超管不受角色表约束
+  if (req.user.role !== 'admin' && !splitRolesByStatus(getDb(), req.user.uid, req.user.role).active.length) {
+    return fail(res, '当前账号的角色已全部停用，不能执行写操作', 403, 403)
+  }
   if (!Object.prototype.hasOwnProperty.call(ROLES, req.user.role) || req.user.role === 'viewer') {
     return fail(
       res,
@@ -478,20 +507,48 @@ export function currentUser(req) {
 //       两轴分开，避免「有菜单但看不到数据」或「看得到数据但动不了」。
 //       全部向下兼容：旧 requireRole(...) 继续可用，新代码用 requirePerm(...)。
 
-/** 取某用户的权限点集合（走 user_roles，支持一人多角色；admin 超级管理员全开） */
+/** 停用角色提示码（登录 / me / my-scope 的 `notice_code`；成功响应里的提示，不是失败码，所以不进 bizFail） */
+export const ROLE_INACTIVE_NOTICE = 'ROLE_INACTIVE_NOTICE'
+
+/** 账号被授予的全部角色码：user_roles 并上主角色 users.role（去重，不看角色状态） */
+function grantedRoleCodes(db, userId, primary) {
+  const roles = userId ? db.prepare('SELECT role_code FROM user_roles WHERE user_id=?').all(userId).map((r) => r.role_code) : []
+  if (primary && !roles.includes(primary)) roles.push(primary)
+  return roles
+}
+
+/**
+ * 账号的角色拆成 { active, inactive }（ADR-0051 补充 3）：有效权限**只合并 `roles.status='active'`** 的角色，
+ * 主角色也不例外；库里没有该角色行的码按停用处理（`role_permissions` 对 roles 有外键，本来也不会有权限点）。
+ * 每次回库查，没有缓存——角色状态一改，下一次请求（旧令牌也一样）就按新状态判。
+ */
+export function splitRolesByStatus(db, userId, primary) {
+  const granted = grantedRoleCodes(db, userId, primary)
+  if (!granted.length) return { active: [], inactive: [] }
+  const ph = granted.map(() => '?').join(',')
+  const live = new Set(db.prepare(`SELECT code FROM roles WHERE status='active' AND code IN (${ph})`).all(...granted).map((r) => r.code))
+  return { active: granted.filter((c) => live.has(c)), inactive: granted.filter((c) => !live.has(c)).sort() }
+}
+
+/** 单个角色码是否 active（旧 requireRole 闸用；库里没有该行按停用） */
+function isRoleActive(db, code) {
+  return !!db.prepare("SELECT 1 FROM roles WHERE code=? AND status='active'").get(code)
+}
+
+/** 某角色集合的权限点并集 */
+function permsOfRoles(db, roles) {
+  if (!roles.length) return []
+  const ph = roles.map(() => '?').join(',')
+  return db.prepare(`SELECT DISTINCT perm_code AS code FROM role_permissions WHERE role_code IN (${ph})`).all(...roles).map((r) => r.code)
+}
+
+/** 取某用户的权限点集合（走 user_roles，支持一人多角色；admin 超级管理员全开；只计 active 角色） */
 export function userPermissions(db, userId, role) {
   const row = db.prepare('SELECT is_super, role FROM users WHERE id=?').get(userId)
   if (row?.is_super || row?.role === 'admin') {
     return db.prepare('SELECT code FROM permissions').all().map((r) => r.code)
   }
-  const roles = db.prepare('SELECT role_code FROM user_roles WHERE user_id=?').all(userId).map((r) => r.role_code)
-  if (role && !roles.includes(role)) roles.push(role)
-  if (!roles.length) return []
-  const ph = roles.map(() => '?').join(',')
-  return db
-    .prepare(`SELECT DISTINCT perm_code AS code FROM role_permissions WHERE role_code IN (${ph})`)
-    .all(...roles)
-    .map((r) => r.code)
+  return permsOfRoles(db, splitRolesByStatus(db, userId, role).active)
 }
 
 /**
@@ -503,6 +560,9 @@ export function userPermissions(db, userId, role) {
  *   将来"一人多角色"或"admin 全开"的口径只会在一侧更新 ——
  *   表现是「同一个按钮，列表页点得动、详情页点不动」。
  *
+ * AF10（ADR-0051 补充 3）：只合并 `roles.status='active'` 的角色（主角色也算）；账号因此一个权限都没有时
+ * 返回空集合，所有权限门照常拒绝（与"无角色"同一出口）。
+ *
  * @returns {{ perms: Set<string>|null, isSuper: boolean }} isSuper=true 时 perms 为 null（全开）
  */
 export function permContext(db, user) {
@@ -511,16 +571,17 @@ export function permContext(db, user) {
   if (row?.is_super || row?.role === 'admin' || u.role === 'admin') {
     return { perms: null, isSuper: true }
   }
-  const roles = u.uid
-    ? db.prepare('SELECT role_code FROM user_roles WHERE user_id=?').all(u.uid).map((r) => r.role_code)
-    : []
-  if (u.role && !roles.includes(u.role)) roles.push(u.role)
-  if (!roles.length) return { perms: new Set(), isSuper: false }
-  const ph = roles.map(() => '?').join(',')
-  const perms = new Set(
-    db.prepare(`SELECT DISTINCT perm_code FROM role_permissions WHERE role_code IN (${ph})`).all(...roles).map((r) => r.perm_code)
-  )
-  return { perms, isSuper: false }
+  return { perms: new Set(permsOfRoles(db, splitRolesByStatus(db, u.uid, u.role).active)), isSuper: false }
+}
+
+/** 登录 / me / my-scope 共用的停用角色披露：只含**调用者自己**被授予且已停用的角色码 */
+export function roleInactiveNotice(db, userId, primary) {
+  const { inactive } = splitRolesByStatus(db, userId, primary)
+  return {
+    roles_inactive: inactive,
+    notice_code: inactive.length ? ROLE_INACTIVE_NOTICE : null,
+    notice_message: inactive.length ? '你的账号被授予的部分角色已停用，其权限不再生效；如需恢复请联系管理员。' : null
+  }
 }
 
 /** 权限点是否命中（permContext 的配套判据；admin/超管恒真） */

@@ -1,0 +1,5 @@
+{
+  "note": "Time-boxed exemptions for npm audit (scripts/check-audit-allowlist.mjs). the allow section covers the runtime gate (--omit=dev, high+critical); the dev section covers the manual dev-dependency review (--include-dev, critical only). The sections are not interchangeable. Each entry needs advisory, reason, expires (YYYY-MM-DD, future, at most 180 days). An exemption is not a fix.",
+  "allow": [],
+  "dev": []
+}

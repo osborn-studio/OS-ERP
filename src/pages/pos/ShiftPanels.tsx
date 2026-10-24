@@ -21,6 +21,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import api from '../../api/client'
 import { Modal, Empty, toast } from '../../components/ui'
+import ScopeNotice, { type FetchFailure } from '../../components/ScopeNotice'
+import { selectPosActions, type PosActionState } from '../../utils/pos-actions'
+import { usePosPermissions, toFailure } from './usePosPermissions'
 import {
   Banknote, Smartphone, CreditCard, Wallet, MoreHorizontal,
   RefreshCw, Lock, ClipboardCheck, RotateCcw, PackageMinus, ShieldCheck, Plus
@@ -52,6 +55,21 @@ export const PAY_METHODS = [
 export const PAY_LABEL: Record<string, string> = Object.fromEntries(PAY_METHODS.map((m) => [m.key, m.label]))
 
 const money = (v: any) => `¥${Number(v || 0).toFixed(2)}`
+/** 按钮被禁用时的可见原因（不只靠 title：触屏没有悬停） */
+function Why({ a }: { a: PosActionState }) {
+  return !a.enabled && a.reason ? <div role="note" data-testid="pos-action-reason" className="text-[11px] text-amber-700 mt-1 max-w-[260px]">{a.reason}</div> : null
+}
+
+/** 权限加载失败时的提示 + 重试（失败时所有受控按钮都被隐藏，必须给用户一条路） */
+function PermRetry({ failed, retry }: { failed: boolean; retry: () => void }) {
+  if (!failed) return null
+  return (
+    <div role="status" data-testid="pos-perms-failed" className="rounded-lg border border-amber-200 bg-amber-50 text-amber-800 text-[12px] p-2 mb-3">
+      权限信息加载失败，相关操作按钮暂时隐藏（不代表没有权限）。<button className="underline ml-2" onClick={retry}>重试</button>
+    </div>
+  )
+}
+
 /** 差异着色沿用中国习惯：正数（长款）用红，负数（短款）用绿 —— 这里按"钱多了"标红提醒 */
 const vColor = (v: number) => (Math.abs(v) < 0.005 ? 'text-slate-500' : v > 0 ? 'text-red-600' : 'text-emerald-600')
 
@@ -78,12 +96,15 @@ export function ShiftCenter({ ctx, reloadCtx }: { ctx: any; reloadCtx: () => voi
   const [detail, setDetail] = useState<any>(null)
   const [modal, setModal] = useState<'' | 'open' | 'declare' | 'approve' | 'settle' | 'reject'>('')
   const [busy, setBusy] = useState(false)
+  const [failure, setFailure] = useState<FetchFailure>({})
+  const { permissions, currentUser, failed: permsFailed, retry: retryPerms } = usePosPermissions()
+  const act = selectPosActions({ permissions, currentUser })
 
   const load = () => {
     api
       .get('/pos/shifts', { status: status || '', pageSize: 60 })
-      .then((r: any) => setRows(r.data || r))
-      .catch(() => {})
+      .then((r: any) => { setRows(r.data || r); setFailure({}) })
+      .catch((e: any) => setFailure(toFailure(e)))
   }
   useEffect(() => { load() }, [status])
 
@@ -92,6 +113,7 @@ export function ShiftCenter({ ctx, reloadCtx }: { ctx: any; reloadCtx: () => voi
       const r: any = await api.get(`/pos/shifts/${id}`)
       setDetail(r.data || r)
     } catch (e: any) {
+      setFailure(toFailure(e))
       toast(e.message || '加载失败', 'error')
     }
   }
@@ -106,9 +128,12 @@ export function ShiftCenter({ ctx, reloadCtx }: { ctx: any; reloadCtx: () => voi
 
   const cur = ctx?.shift
   const sys = ctx?.shift_system
+  const curAct = selectPosActions({ permissions, currentUser, shift: cur })
 
   return (
     <div className="p-3 h-full overflow-auto">
+      <ScopeNotice failure={failure} loading={false} />
+      <PermRetry failed={permsFailed} retry={retryPerms} />
       {/* 当前班次 */}
       <div className="bg-white border border-ink-300 rounded-lg p-3 mb-3">
         <div className="flex items-start justify-between gap-3 flex-wrap">
@@ -131,22 +156,26 @@ export function ShiftCenter({ ctx, reloadCtx }: { ctx: any; reloadCtx: () => voi
             )}
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            {!cur && (
+            {!cur && act.shift_open.visible && (
               <button className="btn-primary btn-sm" onClick={() => setModal('open')}>
                 <Lock size={13} /> 开班
               </button>
             )}
-            {cur?.status === 'open' && (
+            {cur?.status === 'open' && act.shift_declare.visible && (
               <button className="btn-primary btn-sm" onClick={() => setModal('declare')}>
                 <ClipboardCheck size={13} /> 报数交班
               </button>
             )}
-            {cur?.status === 'declared' && (
-              <button className="btn-primary btn-sm" onClick={() => openDetail(cur.id).then(() => setModal('approve'))}>
-                <ShieldCheck size={13} /> 核款
-              </button>
+            {cur?.status === 'declared' && curAct.shift_approve.visible && (
+              <div>
+                <button className="btn-primary btn-sm" disabled={!curAct.shift_approve.enabled} title={curAct.shift_approve.reason || undefined}
+                  onClick={() => openDetail(cur.id).then(() => setModal('approve'))}>
+                  <ShieldCheck size={13} /> 核款
+                </button>
+                <Why a={curAct.shift_approve} />
+              </div>
             )}
-            <button className="btn-ghost btn-sm" onClick={() => { load(); reloadCtx() }}>
+            <button className="btn-ghost btn-sm" onClick={() => { load(); reloadCtx(); retryPerms() }}>
               <RefreshCw size={13} /> 刷新
             </button>
           </div>
@@ -154,7 +183,7 @@ export function ShiftCenter({ ctx, reloadCtx }: { ctx: any; reloadCtx: () => voi
       </div>
 
       {/* 日结上传（放在核款下面：核款是日结的前提，顺序不能反） */}
-      <DailyCloseBlock ctx={ctx} />
+      <DailyCloseBlock ctx={ctx} permissions={permissions} currentUser={currentUser} />
 
       {/* 班次列表 */}
       <div className="bg-white border border-ink-300 rounded-lg overflow-hidden">
@@ -247,6 +276,8 @@ export function ShiftCenter({ ctx, reloadCtx }: { ctx: any; reloadCtx: () => voi
           onReject={() => setModal('reject')}
           onSettle={() => setModal('settle')}
           onChanged={() => after('已处理')}
+          permissions={permissions}
+          currentUser={currentUser}
         />
       )}
 
@@ -580,7 +611,7 @@ function RejectForm({ busy, onSubmit }: { busy: boolean; onSubmit: (remark: stri
  *  改成：详情弹窗在动作弹窗打开期间隐藏（`detail && !modal`），`detail` 一直留着。
  */
 function ShiftDetailModal({
-  detail, onClose, onDeclare, onApprove, onReject, onSettle, onChanged
+  detail, onClose, onDeclare, onApprove, onReject, onSettle, onChanged, permissions, currentUser
 }: {
   detail: any
   onClose: () => void
@@ -589,9 +620,12 @@ function ShiftDetailModal({
   onReject: () => void
   onSettle: () => void
   onChanged: () => void
+  permissions: string[] | null
+  currentUser: { id?: any; name?: any; username?: any } | null
 }) {
   const s = detail.shift
   const v = Number(s.variance || 0)
+  const act = selectPosActions({ permissions, currentUser, shift: s })
 
   return (
     <Modal open title={`班次 ${s.doc_no || s.shift_id}`} onClose={onClose} width={920}>
@@ -679,17 +713,17 @@ function ShiftDetailModal({
         </div>
 
         <div className="flex items-center gap-2 flex-wrap pt-1">
-          {s.status === 'open' && <button className="btn-ghost btn-sm" onClick={onDeclare}>报数交班</button>}
-          {s.status === 'declared' && (
+          {s.status === 'open' && act.shift_declare.visible && <button className="btn-ghost btn-sm" onClick={onDeclare}>报数交班</button>}
+          {s.status === 'declared' && act.shift_approve.visible && (
             <>
-              <button className="btn-primary btn-sm" onClick={onApprove}>核款</button>
-              <button className="btn-ghost btn-sm" onClick={onReject}>退回重报</button>
+              <button className="btn-primary btn-sm" disabled={!act.shift_approve.enabled} title={act.shift_approve.reason || undefined} onClick={onApprove}>核款</button>
+              <button className="btn-ghost btn-sm" disabled={!act.shift_reject.enabled} title={act.shift_reject.reason || undefined} onClick={onReject}>退回重报</button>
             </>
           )}
-          {detail.can_settle && (
+          {detail.can_settle && act.variance_settle.visible && (
             <button className="btn-primary btn-sm" onClick={onSettle}>长短款落案</button>
           )}
-          {s.status !== 'closed' && s.status !== 'cancelled' && (
+          {s.status !== 'closed' && s.status !== 'cancelled' && act.shift_cancel.visible && (
             <button
               className="btn-ghost btn-sm text-red-600 ml-auto"
               onClick={async () => {
@@ -707,6 +741,7 @@ function ShiftDetailModal({
             </button>
           )}
         </div>
+        {s.status === 'declared' && <Why a={act.shift_approve} />}
       </div>
     </Modal>
   )
@@ -761,7 +796,7 @@ function SettleVarianceModal({ shift, onClose, onDone }: { shift: any; onClose: 
 }
 
 /** 日结上传（核款门禁在前） */
-function DailyCloseBlock({ ctx }: { ctx: any }) {
+function DailyCloseBlock({ ctx, permissions, currentUser }: { ctx: any; permissions: string[] | null; currentUser: { id?: any; name?: any; username?: any } | null }) {
   const [closes, setCloses] = useState<any[]>([])
   const [result, setResult] = useState<any>(null)
   const [busy, setBusy] = useState(false)
@@ -769,6 +804,7 @@ function DailyCloseBlock({ ctx }: { ctx: any }) {
   useEffect(() => { load() }, [])
   const gate = ctx?.daily_close_gate
   const blocked = gate && gate.ok === false
+  const dc = selectPosActions({ permissions, currentUser, dailyCloseGate: gate }).daily_close
 
   return (
     <div className="bg-white border border-ink-300 rounded-lg p-3 mb-3">
@@ -785,7 +821,7 @@ function DailyCloseBlock({ ctx }: { ctx: any }) {
             </div>
           )}
         </div>
-        <button className="btn-primary btn-sm shrink-0" disabled={busy || blocked} onClick={async () => {
+        {dc.visible && <button className="btn-primary btn-sm shrink-0" disabled={busy || !dc.enabled} title={dc.reason || undefined} onClick={async () => {
           setBusy(true)
           try {
             const r: any = await api.post('/pos/daily-close', {})
@@ -798,7 +834,7 @@ function DailyCloseBlock({ ctx }: { ctx: any }) {
           }
         }}>
           {busy ? '上传中…' : '立即日结上传'}
-        </button>
+        </button>}
       </div>
 
       {result && (
@@ -836,10 +872,13 @@ export function CashDropPanel() {
   const [picked, setPicked] = useState<number[]>([])
   const [ref, setRef] = useState('')
   const [busy, setBusy] = useState(false)
+  const [failure, setFailure] = useState<FetchFailure>({})
+  const { permissions, currentUser, failed: permsFailed, retry: retryPerms } = usePosPermissions()
+  const act = selectPosActions({ permissions, currentUser })
 
   const load = () => {
-    api.get('/pos/cash-drops/pending-shifts').then((r: any) => setPend(r.data || r)).catch(() => {})
-    api.get('/pos/cash-drops').then((r: any) => setDrops(r.data || r)).catch(() => {})
+    api.get('/pos/cash-drops/pending-shifts').then((r: any) => { setPend(r.data || r); setFailure({}) }).catch((e: any) => setFailure(toFailure(e)))
+    api.get('/pos/cash-drops').then((r: any) => setDrops(r.data || r)).catch((e: any) => setFailure(toFailure(e)))
   }
   useEffect(() => { load() }, [])
 
@@ -851,6 +890,8 @@ export function CashDropPanel() {
 
   return (
     <div className="p-3 h-full overflow-auto">
+      <ScopeNotice failure={failure} loading={false} />
+      <PermRetry failed={permsFailed} retry={retryPerms} />
       <div className="bg-white border border-ink-300 rounded-lg p-3 mb-3">
         <div className="text-[13px] font-medium text-ink-900 title-serif mb-1">现金缴款</div>
         <p className="text-[12px] text-slate-500 leading-5 mb-2">
@@ -881,7 +922,7 @@ export function CashDropPanel() {
             <div className="flex items-center gap-2">
               <input className="input h-8 max-w-[200px]" placeholder="押运 / 银行凭据号" value={ref} onChange={(e) => setRef(e.target.value)} />
               <span className="text-[12px] text-slate-500">已选 {picked.length} 个班次 · 合计 <b className="text-brand-700 tabular-nums">{money(pickedTotal)}</b></span>
-              <button
+              {act.cashdrop_create.visible && <button
                 className="btn-primary btn-sm ml-auto"
                 disabled={busy || !picked.length}
                 onClick={async () => {
@@ -899,7 +940,7 @@ export function CashDropPanel() {
                 }}
               >
                 {busy ? '提交中…' : '生成缴款单'}
-              </button>
+              </button>}
             </div>
           </>
         )}
@@ -926,18 +967,22 @@ export function CashDropPanel() {
               {d.received_by_name ? ` · 接收人 ${d.received_by_name}` : ''}
               {d.reference_no ? ` · 凭据 ${d.reference_no}` : ''}
             </div>
-            {d.status === 'pending' && (
-              <div className="flex items-center gap-3 mt-1">
-                <button
-                  className="text-[11px] text-brand-700"
+            {d.status === 'pending' && (() => {
+              const da = selectPosActions({ permissions, currentUser, cashDrop: d })
+              return (
+              <div className="flex items-center gap-3 mt-1 flex-wrap">
+                {da.cashdrop_receive.visible && <button
+                  className="text-[11px] text-brand-700 disabled:opacity-50"
+                  disabled={!da.cashdrop_receive.enabled}
+                  title={da.cashdrop_receive.reason || undefined}
                   onClick={async () => {
                     try { await api.post(`/pos/cash-drops/${d.id}/receive`, {}); toast('已点收'); load() }
                     catch (e: any) { toast(e.message, 'error') }
                   }}
                 >
                   总部点收
-                </button>
-                <button
+                </button>}
+                {da.cashdrop_cancel.visible && <button
                   className="text-[11px] text-red-500"
                   onClick={async () => {
                     if (!confirm('取消该缴款单？会把班次已缴金额退回，钱重新回到待缴里。')) return
@@ -946,9 +991,11 @@ export function CashDropPanel() {
                   }}
                 >
                   取消
-                </button>
+                </button>}
+                <Why a={da.cashdrop_receive} />
               </div>
-            )}
+              )
+            })()}
           </div>
         ))}
         {!drops.length && <Empty text="暂无缴款记录" />}
@@ -989,8 +1036,11 @@ function StoreCheckPanel() {
   const [detail, setDetail] = useState<any>(null)
   const [busy, setBusy] = useState(false)
   const [reason, setReason] = useState('')
+  const [failure, setFailure] = useState<FetchFailure>({})
+  const { permissions, currentUser, failed: permsFailed, retry: retryPerms } = usePosPermissions()
+  const act = selectPosActions({ permissions, currentUser })
 
-  const load = () => api.get('/pos/stock-checks').then((r: any) => setRows(r.data || r)).catch(() => {})
+  const load = () => api.get('/pos/stock-checks').then((r: any) => { setRows(r.data || r); setFailure({}) }).catch((e: any) => setFailure(toFailure(e)))
   useEffect(() => { load() }, [])
 
   const openDetail = async (id: number) => {
@@ -1014,6 +1064,8 @@ function StoreCheckPanel() {
 
   return (
     <div className="space-y-3">
+      <ScopeNotice failure={failure} loading={false} />
+      <PermRetry failed={permsFailed} retry={retryPerms} />
       <div className="bg-white border border-ink-300 rounded-lg p-3">
         <div className="flex items-start justify-between gap-2 flex-wrap">
           <div>
@@ -1024,7 +1076,7 @@ function StoreCheckPanel() {
               过账是唯一动库存的动作（盘盈入库 / 盘亏出库）。
             </p>
           </div>
-          <button
+          {act.stock_check_create.visible && <button
             className="btn-primary btn-sm shrink-0"
             disabled={busy}
             onClick={async () => {
@@ -1042,7 +1094,7 @@ function StoreCheckPanel() {
             }}
           >
             <Plus size={13} /> 新建全盘单
-          </button>
+          </button>}
         </div>
       </div>
 
@@ -1112,10 +1164,10 @@ function StoreCheckPanel() {
                 </tbody>
               </table>
             </div>
-            {detail.check.status !== 'adjusted' && (
+            {detail.check.status !== 'adjusted' && (act.stock_check_create.visible || act.stock_check_adjust.visible) && (
               <div className="flex items-center gap-2">
                 <input className="input h-8 max-w-[220px]" placeholder="差异备注（可选）" value={reason} onChange={(e) => setReason(e.target.value)} />
-                <button
+                {act.stock_check_create.visible && <button
                   className="btn-ghost btn-sm"
                   disabled={busy}
                   onClick={async () => {
@@ -1130,8 +1182,8 @@ function StoreCheckPanel() {
                   }}
                 >
                   保存实盘数
-                </button>
-                <button
+                </button>}
+                {act.stock_check_adjust.visible && <button
                   className="btn-primary btn-sm ml-auto"
                   disabled={busy}
                   onClick={async () => {
@@ -1145,7 +1197,7 @@ function StoreCheckPanel() {
                   }}
                 >
                   <ShieldCheck size={13} /> 过账调整库存
-                </button>
+                </button>}
               </div>
             )}
           </div>

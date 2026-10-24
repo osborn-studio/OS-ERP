@@ -34,6 +34,8 @@ import { createHash } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
 import { runtimeMode } from '../../runtime.js'
+import { withWriteRetry } from '../../lib/tx.js'
+import { testPause } from '../../lib/test-pause.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const require = createRequire(import.meta.url)
@@ -143,6 +145,14 @@ export function runMigrations(db, { log, warn = (m) => console.warn(m), migratio
   const record = db.prepare('INSERT OR REPLACE INTO schema_migrations (id, name, checksum, checksum_origin) VALUES (?,?,?,?)')
   const adopt = db.prepare("UPDATE schema_migrations SET checksum=?, checksum_origin='adopted' WHERE id=? AND checksum IS NULL")
 
+  // 接管：后到的迁移可声明 `supersedesVerifyOf = ['<旧迁移 id>']`——旧迁移的结构自检（及其自愈重跑）改由它自己负责。
+  // 用于旧迁移的 verify 与后来的"可选化"设置冲突（旧 verify 会把被有意删除的对象当作缺失而重建）；旧迁移文件不改（ADR-0009）。
+  const superseded = new Set()
+  for (const file of files) {
+    const m = require(path.join(migrationsDir, file))
+    if (m && Array.isArray(m.supersedesVerifyOf)) for (const old of m.supersedesVerifyOf) superseded.add(old)
+  }
+
   for (const file of files) {
     const id = idOf(file)
     const mod = require(path.join(migrationsDir, file))
@@ -162,17 +172,26 @@ export function runMigrations(db, { log, warn = (m) => console.warn(m), migratio
         adopted.push(id)
         if (log) log(`[migrate] adopt ${id}  ${name}（补登校验和）`)
       }
-      if (!verify) continue
+      if (!verify || superseded.has(id)) continue
       let ok = true
       try { ok = verify(db) === true } catch { ok = false }
       if (ok) continue
-      const tx = db.transaction(() => {
+      // AF4：上面的 verify 是锁外的陈旧读。维护脚本（--enable/--disable）可能恰在此刻提交——旧实现的延迟事务先读设置再写，会得到
+      // SQLITE_BUSY_SNAPSHOT（busy_timeout 解决不了陈旧快照）。现在：BEGIN IMMEDIATE 先取写锁（遇 BUSY/BUSY_SNAPSHOT 有上限地重试），
+      // 在锁内**重读**状态——已收敛（verify 为真）则什么都不做，否则按此刻的设置重跑 up。
+      testPause('GML_TEST_MIGRATE_HEAL_PAUSE', 'migrate-heal') // 守卫看真实进程环境 GML_RUNTIME_MODE，不看 mode 选项（Codex 复核）
+      const didHeal = withWriteRetry(db, () => {
+        let stillBad = true
+        try { stillBad = verify(db) !== true } catch { stillBad = true }
+        if (!stillBad) return false
         up(db)
         record.run(id, name, sum, 'healed')
-      })
-      tx()
-      healed.push(id)
-      if (log) log(`[migrate] heal ${id}  ${name}（结构缺失，已重跑修复）`)
+        return true
+      }, { label: `migrate-heal:${id}` })
+      if (didHeal) {
+        healed.push(id)
+        if (log) log(`[migrate] heal ${id}  ${name}（结构缺失，已重跑修复）`)
+      } else if (log) log(`[migrate] heal-skip ${id}  ${name}（取得写锁后重读，状态已被并发的维护动作收敛，无需修复）`)
       continue
     }
 

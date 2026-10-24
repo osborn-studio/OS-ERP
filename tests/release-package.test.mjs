@@ -18,6 +18,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -40,7 +41,8 @@ function put(dir, rel, content) {
 function minimalSource(t, { commit = true } = {}) {
   const src = tempDir(t, 'os-erp-release-src-')
   for (const name of ['server', 'scripts']) cpSync(path.join(ROOT, name), path.join(src, name), { recursive: true })
-  for (const name of ['package.json', 'package-lock.json', 'THIRD_PARTY_NOTICES.md', 'LICENSE']) cpSync(path.join(ROOT, name), path.join(src, name))
+  for (const name of ['package.json', 'package-lock.json', 'THIRD_PARTY_NOTICES.md', 'LICENSE', 'CHANGELOG.md']) cpSync(path.join(ROOT, name), path.join(src, name))
+  cpSync(path.join(ROOT, 'docs/implementation'), path.join(src, 'docs/implementation'), { recursive: true }) // 变更记录漂移校验的输入
   put(src, 'src/App.tsx', '// stub\n')
   put(src, 'reusable/README.md', '# stub\n')
   put(src, 'docs/本地交付/README.md', '# stub\n')
@@ -87,6 +89,21 @@ test('minimal package carries baseCommit and notices, and passes production acce
   assert.ok(manifest.files['THIRD_PARTY_NOTICES.md'])
   assert.ok(existsSync(path.join(pkg, 'THIRD_PARTY_NOTICES.md')))
   assert.doesNotMatch(readFileSync(path.join(pkg, 'README.md'), 'utf8'), /12345/)
+  // Y9：版本、变更记录与 SBOM 随包交付并被清单覆盖
+  assert.equal(manifest.version, JSON.parse(readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version)
+  assert.match(manifest.version, /^0\.2\.0-alpha\.1$/)
+  for (const f of ['CHANGELOG.md', 'release/sbom.cdx.json']) {
+    assert.ok(manifest.files[f], `${f} listed in MANIFEST`)
+    assert.ok(existsSync(path.join(pkg, f)), `${f} present`)
+  }
+  assert.equal(readFileSync(path.join(pkg, 'CHANGELOG.md'), 'utf8'), readFileSync(path.join(ROOT, 'CHANGELOG.md'), 'utf8'))
+  // CHANGELOG 里的链接在包内都能解析（ADR、整改跟踪、开发进度）
+  const links = [...readFileSync(path.join(pkg, 'CHANGELOG.md'), 'utf8').matchAll(/\]\((docs\/[^)]+)\)/g)].map(m => m[1])
+  assert.ok(links.length >= 30)
+  for (const l of links) assert.ok(existsSync(path.join(pkg, l)), `${l} resolves inside the package`)
+  const sbom = JSON.parse(readFileSync(path.join(pkg, 'release/sbom.cdx.json'), 'utf8'))
+  assert.equal(sbom.bomFormat, 'CycloneDX')
+  assert.ok(sbom.components.length > 0)
 
   const evidence = tempDir(t, 'os-erp-release-evidence-')
   const run = spawnSync(process.execPath, ['scripts/test-local-delivery.mjs', `--package=${pkg}`, `--evidence=${evidence}`, '--reuse-node-modules'], {
@@ -141,6 +158,67 @@ test('verify-release rejects a package without baseCommit, notices, or with data
   assert.equal(verify().status, 0, 'runtime directories are allowed')
 })
 
+test('verify-release requires CHANGELOG.md and a parseable CycloneDX SBOM that are listed and hash-checked', (t) => {
+  const src = minimalSource(t)
+  const out = tempDir(t, 'os-erp-release-out-')
+  assert.equal(release(src, out).status, 0)
+  const pkg = extract(t, out)
+  const verify = () => spawnSync(process.execPath, ['scripts/verify-release.mjs'], { cwd: pkg, env: { PATH }, encoding: 'utf8' })
+  assert.equal(verify().status, 0)
+  const manifestFile = path.join(pkg, 'MANIFEST.json')
+  const original = readFileSync(manifestFile, 'utf8')
+  const mutate = (fn) => { const m = JSON.parse(original); fn(m); writeFileSync(manifestFile, JSON.stringify(m)); return verify() }
+  let r = mutate(m => { delete m.files['CHANGELOG.md'] })
+  assert.notEqual(r.status, 0)
+  assert.match(r.stderr, /CHANGELOG\.md/)
+  r = mutate(m => { delete m.files['release/sbom.cdx.json'] })
+  assert.notEqual(r.status, 0)
+  assert.match(r.stderr, /sbom\.cdx\.json/)
+  writeFileSync(manifestFile, original)
+  // 内容被换成不是 CycloneDX 的 JSON（哪怕清单哈希同步改了）也要红
+  const sbomFile = path.join(pkg, 'release/sbom.cdx.json')
+  const sbomOriginal = readFileSync(sbomFile, 'utf8')
+  const rehash = (content) => {
+    writeFileSync(sbomFile, content)
+    const m = JSON.parse(original)
+    m.files['release/sbom.cdx.json'] = createHash('sha256').update(content).digest('hex')
+    writeFileSync(manifestFile, JSON.stringify(m))
+    return verify()
+  }
+  r = rehash('{"bomFormat":"SPDX","components":[{"name":"x"}]}')
+  assert.notEqual(r.status, 0)
+  assert.match(r.stderr, /CycloneDX/)
+  r = rehash(JSON.stringify({ bomFormat: 'CycloneDX', specVersion: 'garbage', components: [null] }))
+  assert.notEqual(r.status, 0)
+  assert.match(r.stderr, /specVersion/)
+  r = rehash(JSON.stringify({ bomFormat: 'CycloneDX', specVersion: '1.5', components: [null] }))
+  assert.notEqual(r.status, 0)
+  assert.match(r.stderr, /name\/version/)
+  r = rehash(JSON.stringify({ bomFormat: 'CycloneDX', specVersion: '1.5', components: [{ name: 'a', version: '1', 'bom-ref': 'a@1' }, { name: 'a', version: '1', 'bom-ref': 'a@1' }] }))
+  assert.notEqual(r.status, 0)
+  assert.match(r.stderr, /duplicate bom-ref/)
+  r = rehash('not json')
+  assert.notEqual(r.status, 0)
+  assert.match(r.stderr, /sbom/i)
+  r = rehash(JSON.stringify({ bomFormat: 'CycloneDX', specVersion: '1.5', components: [] }))
+  assert.notEqual(r.status, 0)
+  assert.match(r.stderr, /no components/)
+  // 清单哈希不同步（事后篡改）同样红
+  writeFileSync(manifestFile, original)
+  writeFileSync(sbomFile, sbomOriginal.replace('CycloneDX', 'CycloneDX '))
+  assert.notEqual(verify().status, 0)
+  writeFileSync(sbomFile, sbomOriginal)
+  assert.equal(verify().status, 0)
+})
+
+test('package-release refuses to package a stale CHANGELOG.md', (t) => {
+  const src = minimalSource(t)
+  writeFileSync(path.join(src, 'CHANGELOG.md'), readFileSync(path.join(src, 'CHANGELOG.md'), 'utf8') + '\nhand edit\n')
+  const r = release(src, tempDir(t, 'os-erp-release-out-'))
+  assert.notEqual(r.status, 0)
+  assert.match(r.stderr + r.stdout, /CHANGELOG\.md is stale/)
+})
+
 test('package-release leaves database-like files out of the archive', (t) => {
   const src = minimalSource(t)
   put(src, 'public/demo.sqlite', 'x')
@@ -158,4 +236,40 @@ test('package-release refuses to build without a git commit to record', (t) => {
   const r = release(src, tempDir(t, 'os-erp-release-out-'))
   assert.notEqual(r.status, 0)
   assert.match(r.stderr, /baseCommit/)
+})
+
+test('AF7: verify-release --sbom-diff prints the component diff, exits 0 on differences, and fails only on a malformed previous SBOM', (t) => {
+  const src = minimalSource(t)
+  const out = tempDir(t, 'os-erp-release-out-')
+  assert.equal(release(src, out).status, 0)
+  const pkg = extract(t, out)
+  const verify = (...args) => spawnSync(process.execPath, ['scripts/verify-release.mjs', ...args], { cwd: pkg, env: { PATH }, encoding: 'utf8' })
+  const sbom = JSON.parse(readFileSync(path.join(pkg, 'release/sbom.cdx.json'), 'utf8'))
+  const prevDir = tempDir(t, 'os-erp-prev-sbom-')
+  const prev = path.join(prevDir, 'prev.cdx.json')
+  // 前一份：去掉现有的第一个组件、再加一个现在没有的组件 → 当前包相对前一份有 1 个 added、1 个 removed
+  const dropped = sbom.components[0]
+  writeFileSync(prev, JSON.stringify({ ...sbom, components: [...sbom.components.slice(1), { type: 'library', name: 'gone-pkg', version: '9.9.9', 'bom-ref': 'gone-pkg@9.9.9' }] }))
+  let r = verify('--sbom-diff', prev)
+  assert.equal(r.status, 0, r.stderr)
+  assert.match(r.stdout, /Added \(1\)/)
+  assert.match(r.stdout, /Removed \(1\)/)
+  assert.match(r.stdout, /gone-pkg/)
+  const jsonLine = r.stdout.split('\n').find(l => l.startsWith('[verify] sbom-diff-json '))
+  const diff = JSON.parse(jsonLine.slice('[verify] sbom-diff-json '.length))
+  assert.deepEqual(diff.added.map(x => x.name), [dropped.group ? `${dropped.group}/${dropped.name}` : dropped.name])
+  assert.deepEqual(diff.removed.map(x => x.name), ['gone-pkg'])
+  // 相同 SBOM（= 形式）：无差异，仍然 0
+  writeFileSync(prev, JSON.stringify(sbom))
+  r = verify(`--sbom-diff=${prev}`)
+  assert.equal(r.status, 0, r.stderr)
+  assert.match(r.stdout, /No component changes/)
+  // 畸形 / 缺失 / 缺参数 → 非 0
+  writeFileSync(prev, '{"bomFormat":"nope"}')
+  r = verify('--sbom-diff', prev)
+  assert.notEqual(r.status, 0)
+  assert.match(r.stderr, /SBOM-DIFF/)
+  assert.notEqual(verify('--sbom-diff', path.join(prevDir, 'missing.json')).status, 0)
+  assert.notEqual(verify('--sbom-diff').status, 0)
+  assert.equal(verify().status, 0, 'without the flag nothing changes')
 })

@@ -52,6 +52,7 @@ import { assertWarehouseUsable, assertWarehouseAllowedForDoc } from './warehouse
 // 读未登记的键会抛 `SETTING_UNKNOWN`（宁可炸，也不要安静地用某个默认值）——
 // 这正是三个"幽灵配置"的成因。
 import { readSetting } from './settings.js'
+import { registerDocScopeBuilder } from './doc-scope-registry.js'
 
 const nowStr = () => localNow()
 // 业务日一律走 dates.js 的本地口径。原来是 `toISOString()` 截取 —— UTC 日期，
@@ -1034,9 +1035,15 @@ export function matchInvoiceToReceipts(db, invoiceId) {
 export function buildSettlement(db, q = {}) {
   const {
     supplierId, orgId = null, settleDate = ymd(new Date()),
-    periodStart = null, periodEnd = null, settleMode = 'auto', actor = {}, remark = null
+    periodStart = null, periodEnd = null, settleMode = 'auto', actor = {}, remark = null,
+    // 调用者组织范围（ADR-0028）：不传 / all = 不限；受限范围只取范围内的入库（经仓归属）/ 发票（自身 org_id）/ 退货（经仓归属）。
+    // 空范围 ⇒ 谓词恒假 ⇒ 落到下面的 PST_NOTHING，不会变成全库。
+    orgScope = null
   } = q
   if (!supplierId) throw new PurchaseError('结算需要指定供应商', { code: 'PST_NO_SUPPLIER' })
+  const rcScope = purchaseScopeSql(orgScope, 'r')
+  const invScope = purchaseScopeSql(orgScope, 'i')
+  const retScope = purchaseScopeSql(orgScope, 'pr')
 
   const cond = ["r.supplier_id=?"]
   const args = [supplierId]
@@ -1053,6 +1060,8 @@ export function buildSettlement(db, q = {}) {
         WHERE si.source_type='receipt' AND st.status <> 'voided'
      )`
   )
+  cond.push(rcScope.wh)
+  args.push(...rcScope.params)
   const receipts = db
     .prepare(`SELECT r.* FROM purchase_receipts r WHERE ${cond.join(' AND ')} ORDER BY r.receipt_date`)
     .all(...args)
@@ -1065,6 +1074,8 @@ export function buildSettlement(db, q = {}) {
   invCond.push(
     `(i.settle_id IS NULL OR i.settle_id IN (SELECT id FROM purchase_settlements WHERE status='voided'))`
   )
+  invCond.push(invScope.org)
+  invArgs.push(...invScope.params)
   const invoices = db
     .prepare(`SELECT i.* FROM purchase_invoices i WHERE ${invCond.join(' AND ')} ORDER BY i.invoice_date`)
     .all(...invArgs)
@@ -1139,6 +1150,8 @@ export function buildSettlement(db, q = {}) {
           WHERE si.source_type='return' AND st.status <> 'voided'
        )`
     )
+    rCond.push(retScope.wh)
+    rArgs.push(...retScope.params)
     returnRows = db
       .prepare(`SELECT pr.* FROM purchase_returns pr WHERE ${rCond.join(' AND ')} ORDER BY pr.return_date, pr.id`)
       .all(...rArgs)
@@ -1345,7 +1358,9 @@ export function createPayment(db, pay = {}) {
   const {
     supplierId, orgId = null, payDate = ymd(new Date()), payType = 'transfer', currency = 'CNY',
     amount = 0, bankAccount = null, voucherNo = null, remark = null, actor = {},
-    allocations = null // [{ settle_id, amount }]，不传则按 FIFO 自动核销
+    allocations = null, // [{ settle_id, amount }]，不传则按 FIFO 自动核销
+    // 调用者组织范围（ADR-0028）：自动 FIFO 只在范围内的结算单上挑；手工核销指向范围外结算单 ⇒ 404（与不存在同形）。
+    orgScope = null
   } = pay
   if (!supplierId) throw new PurchaseError('付款单缺少供应商', { code: 'PAY_NO_SUPPLIER' })
   if (!(Number(amount) > 0)) throw new PurchaseError('付款金额必须大于 0', { code: 'PAY_BAD_AMOUNT' })
@@ -1355,8 +1370,11 @@ export function createPayment(db, pay = {}) {
       code: 'PAY_BAD_CURRENCY', httpStatus: 400
     })
   }
+  if (allocations && allocations.length && orgScope && orgScope.scope !== 'all') {
+    for (const a of allocations) assertPurchaseDocInScope(db, 'PST', a?.settle_id, orgScope)
+  }
   const no = docNo(db, 'PAY', payDate)
-  const plan = allocations && allocations.length ? allocations : planAllocation(db, supplierId, Number(amount))
+  const plan = allocations && allocations.length ? allocations : planAllocation(db, supplierId, Number(amount), { orgScope })
   // 手工指定核销目标时必须逐条过闸（自动 FIFO 自己也只会在"未付余额"范围内挑，
   // 但两条路都走同一个校验，避免"自动的能过、手工的绕过"）
   assertPaymentAllocations(db, { supplierId, allocations: plan })
@@ -1492,15 +1510,17 @@ function assertPaymentSettlements(db, { paymentId, supplierId }) {
   assertPaymentAllocations(db, { supplierId, allocations: items, selfPaymentId: paymentId })
 }
 
-export function planAllocation(db, supplierId, amount) {
+export function planAllocation(db, supplierId, amount, { orgScope = null } = {}) {
+  // 受限范围只在范围内的结算单上做 FIFO（ADR-0028）；不传 / all = 全量，行为与此前一致。
+  const scope = purchaseScopeSql(orgScope)
   const rows = db
     .prepare(
       `SELECT id, doc_no, settle_amount, paid_amount
          FROM purchase_settlements
-        WHERE supplier_id=? AND status IN ('audited','settled')
+        WHERE supplier_id=? AND status IN ('audited','settled') AND ${scope.org}
         ORDER BY settle_date, id`
     )
-    .all(supplierId)
+    .all(supplierId, ...scope.params)
   let left = Number(amount)
   const plan = []
   for (const r of rows) {
@@ -2090,6 +2110,17 @@ export function purchaseScopeSql(orgScope, alias = '') {
 }
 
 /**
+ * 采购订单可见范围的**唯一**谓词（ADR-0050）：订单经入库仓 `warehouses.org_id` 归属，不看 `target_store_id`。
+ * HTTP 列表 / 统计、`assertPurchaseDocInScope('PO')`、MCP `purchase.list_orders` / `report.dashboard_kpi` 都从这里取，
+ * 不再各抄一份 SQL。返回 `{ sql, params, empty }`：`sql` 是完整谓词（无前导 AND），全局范围恒为 `1=1`，
+ * 空 / dealer / none 范围为 `1=0`（并置 `empty: true`）。`alias` 为 `purchase_orders` 的表别名。
+ */
+export function purchaseOrderScopeSql(orgScope, alias = '') {
+  const s = purchaseScopeSql(orgScope, alias)
+  return { sql: s.wh, params: s.params, empty: s.empty }
+}
+
+/**
  * 单据是否在调用者组织范围内（ADR-0020）：详情 / 动作 / 预览类读接口取单前的同一道判据。
  * 与 `purchaseScopeSql` 同一口径 —— 请购 / 发票 / 结算 / 付款按自身 `org_id`，订单 / 收货经 `warehouses.org_id`；
  * 归属 NULL 对受限范围不可见、对全局范围可见。不在范围内与不存在**同形**（404 + 同一句话），不泄漏存在性。
@@ -2098,14 +2129,14 @@ export function purchaseScopeSql(orgScope, alias = '') {
 const SCOPED_DOC_TABLES = {
   PRQ: ['purchase_requisitions', 'org'], PI: ['purchase_invoices', 'org'],
   PST: ['purchase_settlements', 'org'], PAY: ['purchase_payments', 'org'],
-  PO: ['purchase_orders', 'wh'], GR: ['purchase_receipts', 'wh']
+  PO: ['purchase_orders', 'wh'], GR: ['purchase_receipts', 'wh'], PRT: ['purchase_returns', 'wh']
 }
 export function assertPurchaseDocInScope(db, docType, id, orgScope) {
   const def = SCOPED_DOC_TABLES[docType]
   if (!def) throw new PurchaseError(`不支持的单据类型 ${docType}`, { code: 'BAD_DOC_TYPE' })
   const scope = purchaseScopeSql(orgScope, 't')
   const row = Number.isFinite(Number(id))
-    ? db.prepare(`SELECT t.* FROM ${def[0]} t WHERE t.id=? AND ${scope[def[1]]}`).get(Number(id), ...scope.params)
+    ? db.prepare(`SELECT t.* FROM ${def[0]} t WHERE t.id=? AND ${docType === 'PO' ? purchaseOrderScopeSql(orgScope, 't').sql : scope[def[1]]}`).get(Number(id), ...scope.params)
     : null
   if (!row) throw new PurchaseError('单据不存在', { code: 'DOC_NOT_FOUND', httpStatus: 404 })
   return row
@@ -2598,3 +2629,10 @@ claimTransitionEffect(
     }),
   { entry: 'POST /api/purchase/payments/:id/:action' }
 )
+
+// 单据流读接口（ADR-0032）：把采购范围谓词登记给 docflow 的 DOC_SCOPE_RESOLVERS。`spec.via` ∈ 'org' | 'wh'，
+// 判据仍只有上面的 purchaseScopeSql 一份；这里只做形状适配（对别名 t 的完整谓词）。
+registerDocScopeBuilder('purchase', ({ orgScope }, spec) => {
+  const s = purchaseScopeSql(orgScope, 't')
+  return s.empty ? null : { sql: s[spec.via], params: s.params }
+})

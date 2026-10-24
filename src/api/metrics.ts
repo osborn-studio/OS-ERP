@@ -40,11 +40,44 @@ export interface MetricDef {
 /** 定义 + 当前值。值为 { error } 时表示这条算不出来（不是 0） */
 export interface MetricItem extends MetricDef {
   value: number | { error: string } | null
+  /** false = 该值是全局口径（受限账号看到的不是本组织的数）；缺省或 true = 按调用者范围算（ADR-0053） */
+  scoped?: boolean
 }
 
 export interface MetricGroup {
   module: string
   items: MetricItem[]
+}
+
+/** `GET /metrics` 响应：只含调用者有权看到的指标；`hidden_count` = 因缺业务权限或无范围口径而被隐藏的条数（ADR-0057） */
+export interface MetricsDictResponse {
+  days: number
+  groups: MetricGroup[]
+  total: number
+  modules: string[]
+  hidden_count?: number
+}
+
+/**
+ * 调用者是否为受限（按组织范围收窄）账号。AF2 适配行：接口若回传 `restricted` / `scope_restricted` 就直接用（AF2 字段名确定后只改这一行）；
+ * 目前接口没有该字段，退一步用「有指标标了 scoped === false（全局口径）」推断——只有受限账号才会看到这种标。
+ * 推断不到（如 hide 模式下受限账号只看到范围口径指标）就不标，宁可少标也不在管理员页面上误标。
+ */
+export function callerRestricted(data: unknown, items: MetricItem[]): boolean {
+  const d = (data || {}) as { restricted?: boolean; scope_restricted?: boolean }
+  const explicit = d.restricted ?? d.scope_restricted // AF2-ADAPTER: 字段名以 AF2 合入为准
+  return typeof explicit === 'boolean' ? explicit : items.some((m) => m.scoped === false)
+}
+
+/** 该指标是否显示「按范围计算」：受限账号 + 该指标按范围收窄（scoped === true，或 AF2 的 scopeAware 标记） */
+export function showsScopedMarker(m: MetricItem & { scopeAware?: boolean; scope_aware?: boolean }, restricted: boolean): boolean {
+  return restricted && m.scoped !== false && (m.scoped === true || m.scopeAware === true || m.scope_aware === true)
+}
+
+/** 被隐藏指标的一行说明；没有隐藏项时返回 null */
+export function hiddenMetricsNote(hidden?: number | null): string | null {
+  const n = Number(hidden) || 0
+  return n > 0 ? `另有 ${n} 项指标未显示：当前账号缺少对应业务查看权限，或其数据范围下该指标没有范围口径（见设置「受限账号可见的全局口径指标」）` : null
 }
 
 export const METRICS_PATH = '/system/metrics'

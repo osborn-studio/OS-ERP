@@ -112,26 +112,30 @@
 <h1 id="伴圆ai原生erp-依赖安全说明">伴圆AI原生ERP 依赖安全说明</h1>
 <p>版本：1.0.1，日期：2026年10月21日。本文解释GitHub依赖告警、本轮修复和剩余风险。安全告警代表第三方库存在已知漏洞，不等于系统已被攻击，也不能把功能测试通过理解为没有安全风险。</p>
 <h2 id="一-本轮处理">一 本轮处理</h2>
-<p>升级前GitHub共有12条开放告警，覆盖6类依赖。以下11条有官方修复版本，已在本轮升级到不受对应公告影响的版本；braces仍没有官方补丁，告警保留，不以关闭或忽略告警代替修复。</p>
+<p>升级前GitHub共有12条开放告警，覆盖6类依赖。以下11条有官方修复版本，已在本轮升级到不受对应公告影响的版本；braces公告其后已被GitHub撤回（见第二节更新）。</p>
 <div class="table-wrap"><table><thead><tr><th>依赖</th><th>原版本</th><th>本轮版本</th><th>处理范围</th></tr></thead><tbody><tr><td>Vite</td><td>5.4.21</td><td>6.4.5</td><td>路径访问限制、Windows编辑器调用等6条公告</td></tr>
 <tr><td>esbuild</td><td>0.21.5</td><td>随Vite升级至0.25系列</td><td>开发服务器跨站读取公告</td></tr>
 <tr><td>React Router</td><td>6.30.6</td><td>7.18.4</td><td>跳转及SSR解析2条原有公告，并避开7.18.0新增受影响范围</td></tr>
 <tr><td>fflate</td><td>0.8.2</td><td>0.8.3</td><td>畸形ZIP64触发解压死循环公告</td></tr>
 <tr><td>postcss-selector-parser</td><td>6.1.4</td><td>7.1.7</td><td>特制选择器导致CPU消耗公告，以npm override固定</td></tr>
-<tr><td>braces</td><td>3.0.3</td><td>3.0.3</td><td>暂无官方补丁，保留高危告警并限制使用场景</td></tr></tbody></table></div>
+<tr><td>braces</td><td>3.0.3</td><td>3.0.3</td><td>公告已撤回（2026-10-24），仍限制使用场景</td></tr></tbody></table></div>
 <p>Vite开发服务器显式监听127.0.0.1。没有升级业务数据库和业务规则，没有更换现有Tailwind 3样式体系。React Router涉及主版本升级，因此需额外验证真实页面登录、跳转及角色入口，不能只看编译通过。</p>
 <h2 id="二-剩余高危告警">二 剩余高危告警</h2>
+<p><strong>更新（2026年10月24日）</strong>：下述braces公告GHSA-vfj7-8cjw-p6xm已被GitHub撤回（Withdrawn Advisory，理由是不属于实际可利用的漏洞），官方审计不再列出braces及其上游链。以下内容保留为历史记录，其中&quot;保留告警&quot;&quot;暂无官方补丁&quot;的表述不再适用；暂行限制作为良好做法仍可沿用。此前运行依赖审计唯一的高危条目是zod（GHSA-mrhx-c7xc-m3w5）：该依赖在代码中没有任何引用，现已从依赖中移除，限期白名单随之清空，持续集成的审计门禁仍然保留，详见<code>docs/security/dependency-notes.md</code>第9节。</p>
 <p>公告：GHSA-vfj7-8cjw-p6xm，CVE-2026-93687。GitHub公告将braces 3.0.3及以下版本列为受影响，修复版本为None。特制的深层嵌套花括号匹配模式可能耗尽调用栈，使Node进程退出，属于拒绝服务风险。</p>
 <p>本项目由Tailwind的文件匹配及监听依赖间接引入braces。现有文件匹配模式写在受维护者控制的tailwind.config.js中，普通业务表单没有被设计为接收并执行任意构建glob。基于当前调用方式，主要暴露在开发和构建链，而不是普通业务API；这是对当前代码路径的风险判断，不是漏洞已经修复的结论。</p>
 <p>暂行限制：</p>
 <ul><li>不把开发服务器开放到公网，也不将npm run dev作为客户生产运行方式。</li><li>不把用户上传内容、业务字段或外部传入的字符串拼进Tailwind文件匹配模式。</li><li>仅在可信源码目录构建，不监听未知来源目录、上传目录或可由外部人员修改的源码。</li><li>普通本地安装采用已构建dist和npm ci --omit=dev，运行依赖中不安装Tailwind或braces。</li><li>保留GitHub告警，持续以官方公告和修复版本为准，不标记为“误报”或“已解决”。</li></ul>
+<p>影响评估的依据（<code>npm ls braces --all --package-lock-only</code> 的依赖链输出、运行依赖树中没有 braces、各位置是否可达、重新评估的触发条件和未验证项）记录在仓库内 <code>docs/security/dependency-notes.md</code>。</p>
 <p>彻底移除该依赖需要迁移样式构建链或等待上游补丁。迁移Tailwind主版本会影响全站生成样式和兼容性，需要独立安排界面回归，未在本轮仓促实施。</p>
 <h2 id="三-检查方法与口径">三 检查方法与口径</h2>
 <pre><code>node scripts/test-dependency-security.mjs
 npm audit --json --registry=https://registry.npmjs.org
+node scripts/check-audit-allowlist.mjs
 npm audit --omit=dev --json --registry=https://registry.npmjs.org</code></pre>
 <p>新增依赖回归检查锁定版本、ZIP中文往返、畸形ZIP64及时退出、路由匹配及CSS解析兼容性。构建后的样式按PostCSS解析并规范化无意义空白后比较，1294条声明一致。</p>
 <p>全依赖npm audit仍会显示braces及chokidar、fast-glob、micromatch、tailwindcss共5个受影响包。这些条目源于同一条未修复公告，不应描述为额外修复了5个独立漏洞。只审计运行依赖时未发现已知公告，不代表已证明业务代码、浏览器包和部署环境绝对安全。</p>
+<p><code>check-audit-allowlist.mjs</code> 是 CI 里的运行依赖高危公告门禁：每条公告必须在 <code>docs/security/audit-allowlist.json</code> 里带原因和不超过 180 天的到期日，到期或未登记即失败；它是限期豁免，不等于已修复。参数、条目规则与处置流程见操作手册第四十二章。</p>
 <p>完整业务回归、实际浏览器检查及新版安装验收结果以本次交付记录为准。GitHub依赖分析为异步处理，远程告警关闭状态需在推送后复核，不预先声称平台已经清零。</p>
 <h2 id="四-权威来源">四 权威来源</h2>
 <ul><li>Vite及编辑器调用：https://github.com/advisories/GHSA-587h-7wmj-h5pm</li><li>React Router跳转：https://github.com/advisories/GHSA-wrjc-x8rr-h8h6</li><li>React Router后续补丁：https://github.com/advisories/GHSA-qwww-vcr4-c8h2</li><li>fflate ZIP64：https://github.com/advisories/GHSA-px8p-9vwx-vf98</li><li>braces剩余漏洞：https://github.com/advisories/GHSA-vfj7-8cjw-p6xm</li></ul>
