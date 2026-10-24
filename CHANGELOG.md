@@ -11,6 +11,7 @@
 ## 第十二批（进行中）：见 roadmap-v8
 
 - [ADR-0050：MCP 采购订单读工具与剩余聚合读口和 HTTP 范围对齐（AC1）](docs/implementation/ADR-0050-mcp-purchase-scope-parity.md) — 单一谓词：`server/lib/purchase.js` 新增 `purchaseOrderScopeSql(orgScope, alias)`，返回 `{ sql, params, empty }`，判据就是既有 `purchaseScopeSql(...).wh`（入库仓 `warehouses.org_id`；全局 `1=1`；`dealer` / `none` / 空集合 `1=0`；仓无组织对受限范围不可见）。HTTP 订单列表、`/stats`、`assertP…
+- [ADR-0052：发行证据透明日志与 CI 签名口径（AC6）](docs/implementation/ADR-0052-evidence-transparency-log.md) — `docs/release/EVIDENCE-LOG.jsonl`，一行一个候选：`{schema:1, name, evidence_sha256, signature, built_by, timestamp, prev}`。 - `evidence_sha256` = 规范化 EVIDENCE.json（ADR-0047 规范化 v1，与签名相同的字节）的 sha256；`signature` = `EVIDENCE.sig` 文本（去首尾空白）的 sha256 或 `…
 
 ## 第十一批（进行中）：见 roadmap-v7
 

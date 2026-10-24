@@ -22,6 +22,10 @@
  *   签名（AB4，ADR-0047）：环境变量 GML_RELEASE_SIGN_KEY=<Ed25519 私钥 PEM 的绝对路径> 时，对 EVIDENCE 的规范化 JSON 做 Ed25519 签名，
  *     EVIDENCE.sig（base64）写在 EVIDENCE.json 旁；未设置则 `signature: null` 且照常构建。设置了但密钥不可用（缺失、非 Ed25519、
  *     在 git 工作树内、权限对组/其它可读）⇒ 在构建前失败，绝不静默退回未签名。zip 本身不含证据（证据含 zip 哈希，会自指）。
+ *   透明日志（AC6，ADR-0052）：--log[=<文件>]（默认 docs/release/EVIDENCE-LOG.jsonl）。构建前校验链并拒绝同名候选；
+ *     证据通过自验后追加一行 {name, evidence_sha256, signature 摘要|null, built_by, timestamp, prev}。GITHUB_ACTIONS=true 记
+ *     built_by: hosted-ci（此时拒绝配置签名密钥：托管 CI 不持钥）；有签名记 key-holder；否则 local。EVIDENCE 里也带 built_by。
+ *     追加会修改被跟踪文件：下一次构建前须先提交该行。
  *   --focused-result=passed|failed --focused-source=<说明>  --regression-result=… --regression-source=<说明>
  * ============================================================================
  */
@@ -35,10 +39,11 @@ import { unzipSync } from 'fflate'
 import { hashTestsTree, TESTS_TREE_FILE } from './lib/tests-tree.mjs'
 import { KEY_ENV, SIG_FILE, loadSigningKey, signEvidence } from './lib/evidence-sign.mjs'
 import { createPublicKey } from 'node:crypto'
+import { LOG_FILE, appendEntry, assertAppendable, builtByFor } from './lib/evidence-log.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const RESULTS = new Set(['passed', 'failed'])
-const KNOWN = new Set(['output', 'skip-build', 'skip-docs', 'reuse-node-modules', 'run-guards', 'run-tests', 'ci-run',
+const KNOWN = new Set(['output', 'skip-build', 'skip-docs', 'reuse-node-modules', 'run-guards', 'run-tests', 'ci-run', 'log',
   'focused-result', 'focused-source', 'regression-result', 'regression-source'])
 export const GUARDS = [
   ['tsc', ['node_modules/typescript/bin/tsc', '--noEmit']],
@@ -76,11 +81,12 @@ function parseArgs(argv) {
     const a = argv[i]
     const m = /^--([a-z-]+)(?:=(.*))?$/.exec(a)
     if (!m || !KNOWN.has(m[1])) throw new Error(`Unknown or malformed argument: ${a}`)
-    // 值选项同时接受 `--k=v` 与 `--k v`
+    // 值选项同时接受 `--k=v` 与 `--k v`；--log 的值可省略（默认路径），且只接受 `--log=<file>` 形式
+    if (m[1] === 'log') { opts.log = m[2] === undefined ? true : m[2]; if (m[2] === '') throw new Error('--log= needs a file path'); continue }
     if (m[2] === undefined && !flagOnly.includes(m[1]) && argv[i + 1] !== undefined && !argv[i + 1].startsWith('--')) opts[m[1]] = argv[++i]
     else opts[m[1]] = m[2] ?? true
   }
-  for (const k of Object.keys(opts)) if (flagOnly.includes(k) === (typeof opts[k] !== 'boolean')) throw new Error(`--${k} ${flagOnly.includes(k) ? 'takes no value' : 'needs a value'}`)
+  for (const k of Object.keys(opts)) if (k !== 'log' && flagOnly.includes(k) === (typeof opts[k] !== 'boolean')) throw new Error(`--${k} ${flagOnly.includes(k) ? 'takes no value' : 'needs a value'}`)
   if (opts['ci-run'] !== undefined && opts['ci-run'] !== 'auto' && !/^\d{1,20}$/.test(opts['ci-run'])) throw new Error('--ci-run must be a numeric GitHub Actions run id or "auto"')
   if (opts['run-tests'] && opts['focused-result'] !== undefined) throw new Error('--run-tests produces the focused result itself; do not combine it with --focused-result')
   for (const k of ['focused', 'regression']) {
@@ -212,6 +218,8 @@ function main() {
   if (signKeyPath !== undefined && signKeyPath === '') throw new Error(`${KEY_ENV} is set but empty; unset it to build an unsigned candidate`)
   let signKey = null
   if (signKeyPath !== undefined) { try { signKey = loadSigningKey(signKeyPath) } catch (error) { throw new Error(`${KEY_ENV}: ${error.message}`) } }
+  const hosted = process.env.GITHUB_ACTIONS === 'true'
+  if (hosted && signKeyPath !== undefined) throw new Error(`${KEY_ENV} is set on a hosted CI runner; hosted CI must not hold the signing key (formal releases are re-signed by the key holder on a controlled machine)`)
   const commit = git('rev-parse', 'HEAD')
   const version = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version
   const name = `RC-${version}-${commit.slice(0, 7)}`
@@ -219,6 +227,8 @@ function main() {
   const zipFile = path.join(output, `${name}.zip`)
   const evidenceDir = path.join(output, `${name}.evidence`)
   for (const f of [zipFile, evidenceDir]) if (fs.existsSync(f)) throw new Error(`${f} already exists; remove it first`) // 在可清理区之前判断，绝不删除已有候选
+  const logFile = opts.log === undefined ? null : path.resolve(opts.log === true ? path.join(ROOT, LOG_FILE) : opts.log)
+  if (logFile) assertAppendable(logFile, name) // 链已坏或同名已入日志 ⇒ 构建前失败，不留产物
   const work = fs.mkdtempSync(path.join(os.tmpdir(), 'os-erp-rc-'))
   const cleanupOutputs = () => { for (const f of [zipFile, `${zipFile}.sha256`]) fs.rmSync(f, { force: true }); fs.rmSync(evidenceDir, { recursive: true, force: true }) }
   try {
@@ -297,6 +307,7 @@ function main() {
       acceptance: { result: smoke.result, origin: 'produced', mode: smoke.mode, checks: smoke.checks.length, reuse_node_modules: Boolean(opts['reuse-node-modules']) },
       secret_scan: secretScan,
       not_a_release: true,
+      built_by: builtByFor({ signed: Boolean(signKey) }),
       signature: null
     }
     // 签名覆盖整份证据（含 signature 元数据）；写出的 JSON 必须与被签对象逐字段一致（验签时按规范化字节，与缩进无关）。
@@ -309,6 +320,10 @@ function main() {
     if (selfPub) fs.writeFileSync(selfPub, createPublicKey(signKey).export({ type: 'spki', format: 'pem' }))
     fs.writeFileSync(path.join(evidenceDir, 'RELEASE-NOTES.md'), extractNotes(fs.readFileSync(path.join(ROOT, 'CHANGELOG.md'), 'utf8'), version, { commit, builtAt }).text)
     runNode(pkg, ['scripts/verify-release.mjs', `--evidence=${path.join(evidenceDir, 'EVIDENCE.json')}`, `--artifact=${zipFile}`, ...(selfPub ? [`--pubkey=${selfPub}`] : [])], 'verify-release --evidence')
+    if (logFile) {
+      const entry = appendEntry(logFile, { name, evidence: finalEvidence, sigText: signed ? signed.sigBase64 : null, builtBy: finalEvidence.built_by })
+      console.log(`[release-candidate] evidence log: appended ${entry.name} to ${logFile} (commit this line before the next build)`)
+    }
     console.log(JSON.stringify({ candidate: zipFile, sha256: zipHash, evidence: path.join(evidenceDir, 'EVIDENCE.json'), notes: path.join(evidenceDir, 'RELEASE-NOTES.md'), not_a_release: true }, null, 2))
   } catch (error) {
     cleanupOutputs()
