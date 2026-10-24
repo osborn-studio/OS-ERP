@@ -412,7 +412,7 @@ node scripts/upgrade-rehearsal.mjs --from=62 --backup-dir=… --target-dir=… -
 
 ### 分批与守卫（`synth-data.mjs`）
 - `--batch-txns N`：每当 `inventory_transactions` 的最大 rowid 越过 N 的整数倍（在单据事务之外的循环边界检查），先 `wal_checkpoint(TRUNCATE)`，再 `VACUUM`，再 checkpoint。目的是控制 WAL 与空闲页，不是改数据：同种子下分批与不分批的 `digest` 相同（测试断言）。
-- 磁盘守卫：`VACUUM` 在 WAL 模式下峰值额外占用约 2 倍库大小，所以边界处若可用空间 < `2.2 × 库大小 + --min-free-mb` 则**不做 VACUUM 而直接停止**（`partial_reason: disk_low`）；另外每 200 个循环迭代与每个边界检查一次 `可用空间 < --min-free-mb`。
+- 磁盘守卫：`VACUUM` 在 WAL 模式下峰值额外占用约 2 倍库大小，所以边界处若可用空间 < `2.2 × 库大小 + --min-free-mb` 则**不做 VACUUM 而直接停止**（`partial_reason: disk_low`）；另外在第 1 个循环迭代、之后每 200 个迭代与每个边界检查一次 `可用空间 < --min-free-mb`；`statfs` 读不出来时按「不安全」处理，直接停止（`disk_low`），VACUUM 跨过时间预算时同样立刻停止。
 - `--time-budget M`（分钟，可小数，仅约束**生成阶段**）：到点后在下一个循环边界停止，后续阶段整体跳过；已提交的单据完整，仍照常做不变量校验（校验与 VACUUM 的收尾时间不计入预算，流水线给生成步骤的进程超时是"预算 + 30 分钟"）。
 - 流水线在 `large-ci` 下为省磁盘（runner 约 14 GB）：每次恢复演练结束立刻删除恢复出的整库副本，两次演练后删除备份目录。**这些都没有在大库上验证；估算峰值约为库大小的 4 倍（数据 + 明文备份 + 加密备份 + 演练副本），100 万流水库约 1.5–2.5 GB（由冒烟库 5 万流水 68 MB 外推，未验证）。**
 

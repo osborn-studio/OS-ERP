@@ -339,23 +339,24 @@ export async function generate(opts, dataDir, env = process.env) {
     if (performance.now() >= deadline) { stop = { reason: 'time_budget', phase: phaseName }; return true }
     checks++
     const atBoundary = maxTxn() >= nextBoundary
-    // 磁盘余量：每次分批边界检查，另外每 200 次循环检查一次（statfs 很便宜，但不必逐单据）
-    if (opts.minFreeMb > 0 && (atBoundary || checks % 200 === 0)) {
+    // 磁盘余量：每次分批边界检查，另外第 1 次与之后每 200 次循环检查一次（statfs 很便宜，但不必逐单据）
+    if (opts.minFreeMb > 0 && (atBoundary || checks % 200 === 1)) {
       const f = noteFree()
-      if (f != null && f < opts.minFreeMb) { stop = { reason: 'disk_low', phase: phaseName }; return true }
+      if (f == null || f < opts.minFreeMb) { stop = { reason: 'disk_low', phase: phaseName }; return true }
     }
     if (atBoundary) {
       // VACUUM 在 WAL 模式下会把整库副本先写进 WAL 再 checkpoint 回主文件：峰值额外占用 ≈ 2 × 库大小。余量不够就不 VACUUM，直接停。
       db.pragma('wal_checkpoint(TRUNCATE)')
       const need = Math.ceil((fs.statSync(dbFileNow()).size / 1048576) * 2.2)
       const f = noteFree()
-      if (f != null && f < need + opts.minFreeMb) { stop = { reason: 'disk_low', phase: phaseName }; return true }
+      if (f == null || f < need + opts.minFreeMb) { stop = { reason: 'disk_low', phase: phaseName }; return true }
       const t = performance.now()
       db.exec('VACUUM')
       db.pragma('wal_checkpoint(TRUNCATE)')
       batching.vacuum_ms += Math.round(performance.now() - t); batching.vacuums++
       while (maxTxn() >= nextBoundary) nextBoundary += opts.batchTxns
       noteFree()
+      if (performance.now() >= deadline) { stop = { reason: 'time_budget', phase: phaseName }; return true } // VACUUM 本身可能跨过截止点
     }
     return false
   }
