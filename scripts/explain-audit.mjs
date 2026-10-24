@@ -97,9 +97,9 @@ export const STATEMENTS = [
     sql: "SELECT x.sku_id, x.sku_code, x.sku_name, p.name AS product_name, x.safe_stock, x.q qty_on_hand, x.safe_stock - x.q shortage FROM (SELECT sk.id AS sku_id, sk.product_id, sk.sku_code, sk.name AS sku_name, sk.safe_stock, COALESCE((SELECT SUM(st.qty_on_hand) FROM inventory_stocks st WHERE st.sku_id = sk.id),0) q FROM product_skus sk WHERE sk.status='active' AND sk.safe_stock>0) x JOIN products p ON p.id = x.product_id WHERE x.q < x.safe_stock ORDER BY shortage DESC, x.sku_id LIMIT ?" },
   // AD3：trend 三条的 SQL 文本直接取自 server/lib/dashboard-sql.js（路由执行的同一份，不再是人工镜像）；窗口取 /trend 默认 30 天。
   // online 声明 expectIndex（迁移 070 的 idx_oms_order_time）：缺索引时退化成整表 SCAN，由守卫报红。
-  { id: 'dash.trend_sales', mirrors: 'server/routes/dashboard.js GET /trend (server/lib/dashboard-sql.js trendSalesSql)', bench: null, expectIndex: 'idx_so_order_date', sql: trendSalesSql(30) },
-  { id: 'dash.trend_purchase', mirrors: 'server/routes/dashboard.js GET /trend (server/lib/dashboard-sql.js trendPurchaseSql)', bench: null, sql: trendPurchaseSql(30) },
-  { id: 'dash.trend_online', mirrors: 'server/routes/dashboard.js GET /trend (server/lib/dashboard-sql.js trendOnlineSql)', bench: null, expectIndex: 'idx_oms_order_time', params: onlineWindow(30), sql: trendOnlineSql() },
+  { id: 'dash.trend_sales', mirrors: 'server/routes/dashboard.js GET /trend (server/lib/dashboard-sql.js trendSalesSql)', bench: null, expectIndex: 'idx_so_order_date', expectSearch: true, sql: trendSalesSql(30) },
+  { id: 'dash.trend_purchase', mirrors: 'server/routes/dashboard.js GET /trend (server/lib/dashboard-sql.js trendPurchaseSql)', bench: null, expectIndex: 'idx_po_order_date', expectSearch: true, sql: trendPurchaseSql(30) },
+  { id: 'dash.trend_online', mirrors: 'server/routes/dashboard.js GET /trend (server/lib/dashboard-sql.js trendOnlineSql)', bench: null, expectIndex: 'idx_oms_order_time', expectSearch: true, params: onlineWindow(30), sql: trendOnlineSql() },
   // AC4：以下语句的 SQL 文本**直接取自** server/lib/dashboard-sql.js（路由 server/routes/dashboard.js 执行的就是这一份），不是人工镜像；
   // 窗口取各接口的默认值（/top 30 天、/channel 90 天）。AB2 的 /top 改成 CROSS JOIN 固定"先取窗口内订单再取明细"，所以声明 expectIndex。
   { id: 'dash.top_products', mirrors: 'server/routes/dashboard.js GET /top (server/lib/dashboard-sql.js topProductsSql)', bench: null, expectIndex: 'idx_so_order_date', sql: topProductsSql(30) },
@@ -108,7 +108,7 @@ export const STATEMENTS = [
   { id: 'dash.top_stores', mirrors: 'server/routes/dashboard.js GET /top (server/lib/dashboard-sql.js topStoresSql)', bench: null, expectIndex: 'idx_so_order_date', sql: topStoresSql(30) },
   { id: 'dash.inventory_dist_agg', mirrors: 'server/routes/dashboard.js GET /inventory-dist (server/lib/dashboard-sql.js INVENTORY_DIST_AGG_SQL)', bench: null, sql: INVENTORY_DIST_AGG_SQL },
   { id: 'dash.channel_offline', mirrors: 'server/routes/dashboard.js GET /channel (server/lib/dashboard-sql.js channelOfflineSql)', bench: null, expectIndex: 'idx_so_order_date', sql: channelOfflineSql(90) },
-  { id: 'dash.channel_online', mirrors: 'server/routes/dashboard.js GET /channel (server/lib/dashboard-sql.js channelOnlineSql)', bench: null, expectIndex: 'idx_oms_order_time', params: onlineWindow(90), sql: channelOnlineSql() },
+  { id: 'dash.channel_online', mirrors: 'server/routes/dashboard.js GET /channel (server/lib/dashboard-sql.js channelOnlineSql)', bench: null, expectIndex: 'idx_oms_order_time', expectSearch: true, params: onlineWindow(90), sql: channelOnlineSql() },
   { id: 'dash.recent_sales', mirrors: 'server/routes/dashboard.js GET /recent (server/lib/dashboard-sql.js RECENT_SQL.salesOrders)', bench: null, sql: RECENT_SQL.salesOrders },
   { id: 'dash.recent_purchase', mirrors: 'server/routes/dashboard.js GET /recent (server/lib/dashboard-sql.js RECENT_SQL.purchaseOrders)', bench: null, sql: RECENT_SQL.purchaseOrders },
   { id: 'dash.recent_oms', mirrors: 'server/routes/dashboard.js GET /recent (server/lib/dashboard-sql.js RECENT_SQL.omsOrders)', bench: null, sql: RECENT_SQL.omsOrders },
@@ -361,6 +361,13 @@ export function auditStatements(db, statements, { threshold = DEFAULT_THRESHOLD,
     if (s.expectIndex && !plan.some(d => d.includes(s.expectIndex))) {
       const table = [...aliasMap(s.sql).values()][0] ?? '?'
       violations.push({ statement: s.id, table, detail: plan.join(' | '), reason: `计划未使用声明的索引 ${s.expectIndex}` })
+    }
+    // expectSearch（AD3，Codex 审计）：除了"用了这个索引"，还必须是带范围 / 等值约束的 SEARCH（`SEARCH … USING [COVERING] INDEX <idx> (col>?)`），
+    // 而不是对该索引的整条 SCAN——否则去掉区间谓词后计划退化成"覆盖索引全扫"，expectIndex 仍然绿
+    if (s.expectSearch && s.expectIndex && plan.some(d => d.includes(s.expectIndex)) &&
+        !plan.some(d => d.startsWith('SEARCH ') && d.includes(` INDEX ${s.expectIndex} (`))) {
+      const table = [...aliasMap(s.sql).values()][0] ?? '?'
+      violations.push({ statement: s.id, table, detail: plan.join(' | '), reason: `计划用了 ${s.expectIndex} 但不是带约束的 SEARCH（索引全扫，区间谓词失效）` })
     }
     out.push({ id: s.id, mirrors: s.mirrors, bench: s.bench ?? null, plan, scans })
   }

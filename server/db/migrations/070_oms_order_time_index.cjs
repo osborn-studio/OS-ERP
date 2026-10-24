@@ -31,11 +31,21 @@ module.exports.INDEXES = INDEXES
 
 const applicable = (db, ix) => tableExists(db, ix.table) && ix.needs.every((c) => hasColumn(db, ix.table, c))
 
+/** 同名索引的定义是否就是 INDEXES 里写的：所属表、有序键列、非 UNIQUE、非局部（Codex 审计：只查名字会放过 `ON oms_orders(status)` 这类漂移） */
+function definitionOk(db, ix) {
+  const row = db.prepare(`PRAGMA index_list(${ix.table})`).all().find((r) => r.name === ix.name)
+  if (!row || row.unique || row.partial) return false
+  const keys = db.prepare(`PRAGMA index_xinfo(${ix.name})`).all().filter((c) => c.key).map((c) => c.name)
+  return keys.join(',') === ix.cols.split(',').map((c) => c.trim()).join(',')
+}
+
 module.exports.up = (db) => {
   for (const ix of INDEXES) {
     if (!applicable(db, ix)) continue
+    // 名字被占用但定义不对（手工建过同名索引）：删掉重建；这个名字归本迁移所有
+    if (hasIndex(db, ix.name) && !definitionOk(db, ix)) db.exec(`DROP INDEX ${ix.name}`)
     db.exec(`CREATE INDEX IF NOT EXISTS ${ix.name} ON ${ix.table}(${ix.cols})`)
   }
 }
 
-module.exports.verify = (db) => INDEXES.every((ix) => !applicable(db, ix) || hasIndex(db, ix.name))
+module.exports.verify = (db) => INDEXES.every((ix) => !applicable(db, ix) || (hasIndex(db, ix.name) && definitionOk(db, ix)))

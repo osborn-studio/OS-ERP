@@ -957,6 +957,20 @@ test('AD3 migration 070: creates idx_oms_order_time, idempotent, verify() follow
   mig.up(db); mig.up(db) // 幂等
   assert.equal(mig.verify(db), true)
   assert.ok(idx())
+  // Codex 审计：同名但定义不对的索引——verify 为假，up 修复
+  db.exec('DROP INDEX idx_oms_order_time; CREATE INDEX idx_oms_order_time ON oms_orders(status)')
+  assert.equal(mig.verify(db), false, 'verify checks the definition, not just the name')
+  mig.up(db)
+  assert.equal(mig.verify(db), true)
+  assert.match(idx().sql, /order_time\s*,\s*status\s*,\s*platform_id\s*,\s*pay_amount/)
+  db.exec('DROP INDEX idx_oms_order_time; CREATE UNIQUE INDEX idx_oms_order_time ON oms_orders(order_time, status, platform_id, pay_amount)')
+  assert.equal(mig.verify(db), false, 'UNIQUE variant rejected')
+  mig.up(db)
+  assert.equal(mig.verify(db), true)
+  db.exec("DROP INDEX idx_oms_order_time; CREATE INDEX idx_oms_order_time ON oms_orders(order_time, status, platform_id, pay_amount) WHERE status <> 'x'")
+  assert.equal(mig.verify(db), false, 'partial variant rejected')
+  mig.up(db)
+  assert.equal(mig.verify(db), true)
   // 表或列缺失时 up 跳过、verify 视为满足（与 059/065 同约定）
   const bare = new Database(':memory:'); t.after(() => bare.close())
   mig.up(bare)
@@ -969,8 +983,8 @@ test('AD3 migration 070: creates idx_oms_order_time, idempotent, verify() follow
 
 test('AD3 sinceDate() equals SQLite date(now,localtime,-N day) for the same instant, incl. fractional / negative / non-finite / out-of-range windows', (t) => {
   const mem = new Database(':memory:'); t.after(() => mem.close())
-  const instants = ['2026-10-24T00:00:00.000Z', '2026-10-24T15:59:59.000Z', '2026-10-24T16:00:00.000Z', '2026-03-01T23:30:00.000Z', '2026-12-31T23:59:59.000Z', '2024-02-29T12:00:00.000Z']
-  const windows = [0, 1, 7, 30, 90, 365, 1.5, 0.25, 1e-7, 1e6, 2e6, 3e6, -1, -30, -1e6, 1e21, 'abc', NaN, Infinity, -Infinity, '30', '', undefined]
+  const instants = ['2026-10-24T00:00:00.000Z', '2026-10-24T12:00:00.000Z', '2026-10-24T15:59:59.000Z', '2026-10-24T16:00:00.000Z', '2026-03-01T23:30:00.000Z', '2026-12-31T23:59:59.000Z', '2024-02-29T12:00:00.000Z']
+  const windows = [0, 1, 7, 30, 90, 365, 1.5, 0.25, 0.500000001, 0.4999999999, 1e-7, 1e6, 2e6, 3e6, -1, -30, -1e6, 1e21, 'abc', NaN, Infinity, -Infinity, '30', '', undefined]
   for (const iso of instants) {
     const now = new Date(iso)
     // SQLite 把无时区字符串当 UTC，再 'localtime' 转本地——与 'now','localtime' 对同一瞬间的处理相同
@@ -988,8 +1002,8 @@ test('AD3 sinceDate() matches SQLite under several process time zones (child pro
     import Database from 'better-sqlite3'
     import { sinceDate } from './server/lib/dashboard-sql.js'
     const db = new Database(':memory:'); const bad = []
-    for (const iso of ['2026-03-08T06:59:59.000Z','2026-03-08T07:00:01.000Z','2026-11-01T05:59:59.000Z','2026-11-01T06:00:01.000Z','2026-10-24T18:29:59.000Z','2026-10-24T18:30:01.000Z','2026-01-01T00:00:00.000Z']) {
-      for (const w of [0, 1, 30, 90, 1.5]) {
+    for (const iso of ['2026-10-24T12:00:00.000Z','2026-10-24T00:00:00.001Z','2026-03-08T06:59:59.000Z','2026-03-08T07:00:01.000Z','2026-11-01T05:59:59.000Z','2026-11-01T06:00:01.000Z','2026-10-24T18:29:59.000Z','2026-10-24T18:30:01.000Z','2026-01-01T00:00:00.000Z']) {
+      for (const w of [0, 1, 30, 90, 1.5, 0.500000001, 0.4999999999, 0.5, 2.0000000004]) {
         const want = db.prepare("SELECT date(?, 'localtime', '-' || ? || ' day') d").get(iso.replace('T',' ').replace('Z',''), String(w)).d
         const got = sinceDate(w, new Date(iso))
         if (got !== want) bad.push([process.env.TZ, iso, w, got, want])
@@ -1064,6 +1078,9 @@ test('AD3 sales / purchase trend SQL moved into dashboard-sql.js is textually th
   }
 })
 
+/** 去掉 order_time 区间谓词的 trend 线上语句（只保留 date() 复核）：SQLite 会选覆盖索引全扫 */
+const trendLike = () => 'SELECT date(order_time) AS date, COALESCE(SUM(pay_amount),0) amount FROM oms_orders INDEXED BY idx_oms_order_time WHERE date(order_time) >= date(\'now\') GROUP BY date(order_time)'
+
 test('AD3 explain-audit: trend + channel online use idx_oms_order_time (SEARCH, no SCAN); channel_online exemption is gone; dropping the index turns the guard red', (t) => {
   const { db } = omsFixture(t)
   const ids = ['dash.trend_sales', 'dash.trend_purchase', 'dash.trend_online', 'dash.channel_online']
@@ -1074,6 +1091,7 @@ test('AD3 explain-audit: trend + channel online use idx_oms_order_time (SEARCH, 
   assert.equal(byId.get('dash.trend_online').sql, dsql.trendOnlineSql())
   assert.deepEqual(byId.get('dash.trend_online').params, dsql.onlineWindow(30))
   assert.equal(byId.get('dash.trend_online').expectIndex, 'idx_oms_order_time')
+  for (const id of ids) assert.equal(byId.get(id).expectSearch, true, `${id}: must be a constrained SEARCH, not an index scan`)
   assert.equal(byId.get('dash.channel_online').sql, dsql.channelOnlineSql())
   assert.deepEqual(byId.get('dash.channel_online').params, dsql.onlineWindow(90))
   assert.equal(byId.get('dash.channel_online').expectIndex, 'idx_oms_order_time')
@@ -1086,6 +1104,11 @@ test('AD3 explain-audit: trend + channel online use idx_oms_order_time (SEARCH, 
     assert.ok(!planOf(id).some((d) => /^SCAN (o|oms_orders)\b/.test(d)), `${id}: no table scan of oms_orders`)
   }
   // 变异：没有迁移 070 的库（threshold 压到 1 行，夹具表很小）→ 守卫红
+  // Codex 审计：去掉区间谓词（计划退化成覆盖索引全扫）也必须红——expectSearch
+  const noRange = trendLike()
+  const scanOnly = auditStatements(db, [{ id: 'x.online_noop', mirrors: 't', expectIndex: 'idx_oms_order_time', expectSearch: true, sql: noRange, params: [] }], { allow: [], threshold: 1000000 })
+  assert.equal(scanOnly.ok, false, JSON.stringify(scanOnly.statements[0].plan))
+  assert.match(scanOnly.violations.at(-1).reason, /不是带约束的 SEARCH/)
   db.exec('DROP INDEX idx_oms_order_time')
   const bad = auditStatements(db, ids.map((i) => byId.get(i)), { allow: [], threshold: 1 })
   assert.equal(bad.ok, false)

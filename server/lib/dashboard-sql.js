@@ -22,7 +22,8 @@ const since = (days) => `date('now','localtime','-${days} day')`
 export function sinceDate(days, now = new Date()) {
   const n = Number(days)
   if (!Number.isFinite(n) || String(n).startsWith('-')) return null
-  const t = now.getTime() - now.getTimezoneOffset() * 60000 - n * 86400000
+  // SQLite 把 'N day' 修饰符按毫秒取整：iJD += (int64)(r*86400000 + 0.5·sign(r))，对 r=-N 即从当前毫秒中减去 trunc(N*86400000 + 0.5)
+  const t = now.getTime() - now.getTimezoneOffset() * 60000 - Math.trunc(n * 86400000 + 0.5)
   const jd = t / 86400000 + 2440587.5
   if (!(jd >= 0 && jd < 5373484.5)) return null
   const m = /^([+-]?)(\d{4,6})-(\d{2})-(\d{2})T/.exec(new Date(t).toISOString())
