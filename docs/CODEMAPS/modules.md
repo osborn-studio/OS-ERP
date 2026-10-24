@@ -3,7 +3,7 @@
 <!-- generated -->
 <!-- 由 `node scripts/gen-codemap.mjs` 生成，勿手改；CI 校验不漂移 -->
 
-共 81 个模块。“路由”只列在处理器区域内直接引用该函数的路由（路由超过 5 条时按路由文件汇总，明细见 [routes.md](routes.md)）；“MCP 工具”来自 `server/mcp/tools.js` 的 40 个工具；“被模块调用”是其它 lib/mcp 模块里的跨文件引用。“—”表示静态扫描没找到调用方，不等于死代码。
+共 82 个模块。“路由”只列在处理器区域内直接引用该函数的路由（路由超过 5 条时按路由文件汇总，明细见 [routes.md](routes.md)）；“MCP 工具”来自 `server/mcp/tools.js` 的 40 个工具；“被模块调用”是其它 lib/mcp 模块里的跨文件引用。“—”表示静态扫描没找到调用方，不等于死代码。
 
 ## 扫描边界（必读）
 
@@ -191,14 +191,30 @@
 | `syncOcAr` | fn | POST /api/ar/oc/sync | — | — |
 | `voidReceipt` | fn | POST /api/ar/receipts/:id/void | — | — |
 
+## `server/lib/audit-anchor-manifest.js`
+
+审计链尾 / 锚点摘要的离机清单：生成、读取、与在用库比对（ADR-0049 补充，AC7）
+
+| 导出 | 类型 | 路由 | MCP 工具 | 被模块调用 |
+|---|---|---|---|---|
+| `MANIFEST_FORMAT` | const | — | — | — |
+| `anchorsDigest` | fn | — | — | — |
+| `buildManifest` | fn | — | — | — |
+| `compareLiveToBackup` | fn | — | — | — |
+| `forEachJsonlRow` | fn | — | — | — |
+| `loadBackupManifest` | fn | — | — | — |
+| `sha256FileSync` | fn | — | — | — |
+| `summarizeAuditChain` | fn | — | — | — |
+| `withoutAnchorList` | fn | — | — | — |
+
 ## `server/lib/audit-chain-verify.js`
 
 审计哈希链校验器：顺序走一遍 `audit_logs`，报告第一个断点（ADR-0049）
 
 | 导出 | 类型 | 路由 | MCP 工具 | 被模块调用 |
 |---|---|---|---|---|
-| `chainColumnsPresent` | fn | — | — | — |
-| `verifyChain` | fn | — | — | lib/audit-trail.js |
+| `chainColumnsPresent` | fn | — | — | lib/audit-anchor-manifest.js |
+| `verifyChain` | fn | — | — | lib/audit-anchor-manifest.js, lib/audit-trail.js |
 | `verifyJsonlSegment` | fn | — | — | — |
 
 ## `server/lib/audit-trail.js`
@@ -271,10 +287,10 @@
 | `FORMAT_VERSION` | const | — | — | — |
 | `MAGIC` | const | — | — | — |
 | `MIN_KEY_BYTES` | const | — | — | — |
-| `decryptFile` | fn | — | — | — |
+| `decryptFile` | fn | — | — | lib/audit-anchor-manifest.js |
 | `encryptFile` | fn | — | — | — |
 | `loadBackupKey` | fn | — | — | — |
-| `shredFile` | fn | — | — | — |
+| `shredFile` | fn | — | — | lib/audit-anchor-manifest.js |
 
 ## `server/lib/backup-dir.js`
 

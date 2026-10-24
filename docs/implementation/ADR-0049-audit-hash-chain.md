@@ -69,3 +69,17 @@
 - 新增：迁移 068、`server/db/migrations/_audit_chain.cjs`、`server/lib/audit-chain-verify.js`、`scripts/audit-verify-chain.mjs`、`scripts/audit-archive.mjs`、`scripts/lib/audit-chain-cli.mjs`、`tests/audit-chain.test.mjs`。
 - 改动：`server/lib/audit-trail.js`（链式写入、两个受控改链入口）、`server/lib/admin-bootstrap.js`（改走唯一 INSERT 点）、`scripts/retention.mjs`（删行登记锚点）、`scripts/lib/privacy-common.mjs`（`applyPlan` 改写 audit_logs 后重算）。
 - 运维：docs/operations/audit-integrity.md。
+
+## 补充（AC7）：链尾 / 锚点离机保存、`--against-backup`、归档崩溃恢复
+
+**问题**：链与锚点都在库里，对能写库的人无效（整链重算、伪造锚点）；归档在“导出 fsync 之后、删除之前”被杀时的状态没有测试，重跑只会 `OUT_EXISTS`。
+
+**决定**
+1. `db-backup.mjs`：每份通过校验的快照对**快照内容**跑 `verifyChain`，把 `{verified, rows, first_id, last_id, tip_hash, anchors_count, anchors_digest}` 写进报告条目 `audit_chain`（明文），并在备份旁写 `<备份>.audit-manifest.json`（含锚点明细与备份 sha256）；加密模式再写内容相同的 `.audit-manifest.enc`（沿用备份的 AES-256-GCM 格式，认证）。备份载荷本身就是整库，所以“加密载荷内”的权威数据是快照里的 `audit_logs` / `audit_chain_anchors`，`.enc` 清单是它的认证副本。链校验失败不挡备份，只记 `verified:false`；清单写失败 ⇒ 该库备份失败并删除新备份。裁剪备份时清单一并裁剪。实现在 `server/lib/audit-anchor-manifest.js`。
+2. `audit-verify-chain --against-backup <备份|清单>`：先交叉核对（明文 vs 密文清单；清单 vs 备份文件 sha256；清单 vs 从备份内容重算的链尾 / 锚点摘要），任何不符 = `manifest-mismatch`。再判断在用链是备份链尾的后代：同 id 行 `row_hash` 相同 ⇒ `ok`；不同 ⇒ `rewrite/tip-row-differs`；在用链落后 ⇒ `rewrite/behind`；尾行已被归档 ⇒ 需 `--archive-dir`，校验 JSONL 的 SHA-256 与行哈希并沿摘要的 `boundary_id` / `first_prev_hash` 接到在用库的 `archive` 锚点，缺则 `unverifiable`（退出 1）。锚点做增删清单：新增的列出（`--strict-anchors` 使其失败），备份里登记过、仍在 id 范围内却消失的 ⇒ `rewrite/anchors-removed`。
+3. `audit-archive --resume`：崩溃窗口里事务未提交，库回滚到归档前，导出文件完整。`--resume`（同样先演练取口令再 `--confirm`）在写锁内核对：摘要字段 = 重算的计划、JSONL SHA-256 = 摘要、读回链校验、**JSONL 与库里该段逐字节相同**（对未进哈希的 `user_name` / `module` / `ip` 是唯一防线）、段内锚点 = 摘要，然后只做删除 + 锚点 + 审计，不重写导出；任何不符退出 1 且不删导出文件。已归档完成 ⇒ `already-archived`（幂等）。仅有 JSONL ⇒ `RESUME_INCOMPLETE`；无导出 ⇒ `RESUME_NOTHING`。
+4. 测试钩子 `GML_TEST_ARCHIVE_PAUSE_AFTER_EXPORT=1`（仅 `GML_RUNTIME_MODE=test`，否则退出 2）：导出 fsync 后写 `<out>/.archive-paused` 并等待 `<out>/.archive-continue`。`tests/audit-chain.test.mjs` 对该子进程 `SIGKILL`，断言库未变（行数、无锚点、无 `AUDIT_ARCHIVE`、链完好）与文件完整，再 `--resume` 并重复一次验证幂等。
+
+**后果**：运维须把清单、归档摘要离机保存（docs/operations/audit-integrity.md §6）；离机保存才是对“能写库的攻击者”的防线，清单本身不防同时改库、清单、备份与离机副本。
+
+**局限**：备份之后合法的隐私抹除若恰好改写了备份链尾那一行，会被报成 `tip-row-differs`，需对照操作记录；备份链尾被保留清理删除时无法证明后代关系（`unverifiable`）；`--resume` 依赖 `--before` 与上次一致（文件名含日期与 id 区间）。

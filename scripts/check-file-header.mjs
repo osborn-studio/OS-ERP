@@ -36,6 +36,7 @@ const DECLARED = [
   // 审计哈希链（AB6，ADR-0049）
   'server/db/migrations/_audit_chain.cjs',
   'server/lib/audit-chain-verify.js',
+  'server/lib/audit-anchor-manifest.js',
   'server/db/migrations/068_audit_hash_chain.cjs',
   'scripts/audit-verify-chain.mjs',
   'scripts/audit-archive.mjs',
