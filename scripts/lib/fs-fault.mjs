@@ -18,7 +18,7 @@ const runtimeMode = (env) => String(env.GML_RUNTIME_MODE ?? '').trim().toLowerCa
 
 export const FAULT_POINTS = Object.freeze({
   archive: ['archive.after-export-write', 'archive.after-export-fsync', 'archive.before-delete', 'archive.after-delete', 'archive.after-anchor'],
-  backup: ['backup.after-db-copy', 'backup.before-sidecar', 'backup.after-sidecar'],
+  backup: ['backup.after-db-copy', 'backup.after-enc-rename-fsync', 'backup.before-sidecar', 'backup.after-manifest-fsync', 'backup.after-sidecar'],
   log: ['log.after-lock', 'log.after-write-before-fsync', 'log.after-fsync-before-unlock']
 })
 const ALL = new Set(Object.values(FAULT_POINTS).flat())
