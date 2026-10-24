@@ -129,6 +129,12 @@ append). It creates no tag, no GitHub Release, and does not commit the log line 
 **托管候选未签名，正式发行须持钥者在受控机器重签** (hosted candidates are unsigned: `built_by: hosted-ci`, `signature: null`;
 the job never holds `GML_RELEASE_SIGN_KEY`). The artifact is a development candidate, not release or production acceptance.
 
+**Status (AE8, 2026-10-24): not run by AE8; no run is recorded.** `main` has no `candidate` job in `.github/workflows/ci.yml` (only `checks`, `docker`
+and `regression`); the job exists only on unmerged branches (PRs #4 to #8 are still open). `workflow_dispatch` uses the
+workflow file on the ref, so the job cannot be dispatched on `main` until it is merged; nothing was dispatched, there is no run
+id, and no hosted-candidate result is recorded here. After the merge, dispatch it once (`gh workflow run ci.yml --ref main`),
+poll with `gh run view <id>`, and record run id, conclusion, duration and the three uploaded files; the first run is unverified.
+
 ## RELEASE-NOTES.md
 
 The `CHANGELOG.md` section whose heading contains the version, else the newest batch section (stated in the notes),
