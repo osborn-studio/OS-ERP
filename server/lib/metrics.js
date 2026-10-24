@@ -38,6 +38,9 @@ import { stampDef, defStale } from '../db/migrations/_helpers.cjs'
 import { countBelowSafe, stockScopeSql } from './stock.js'
 import { purchaseOrderScopeSql, PO_READ_PERMS } from './purchase.js'
 import { readSetting } from './settings.js'
+import { salesScopeSql, omsOrderScopeSql } from './sales-order.js'
+import { ocScope } from './order-center.js'
+import { boundStoreId, isExternalSubject } from './store-binding.js'
 
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100
 const num = (v) => Number(v) || 0
@@ -57,6 +60,52 @@ const poSc = (p, alias = 'po') => purchaseOrderScopeSql(p?.orgScope, alias)
 /** 调用者是否受限（非全局范围）；不传 = 不受限 */
 export const isScopeRestricted = (orgScope) => !!orgScope && orgScope.scope !== 'all'
 
+// AF2（ADR-0057 补充）：销售 / 线上 OMS / 订货中心 / POS 指标也按范围计算，**复用各自路由的同一份谓词**，不另写第二份：
+//   · 销售：`salesScopeSql`（ADR-0026，出货仓或门店所属组织任一在范围内；退货经来源订单）；
+//   · 线上：`omsOrderScopeSql`（ADR-0039 / Y4，平台履约仓 `platforms.warehouse_id` 所属组织）；
+//   · 订货中心：`ocScope`（ADR-0027，客户自身组织；外部订货主体只看自己的客户）；
+//   · POS：绑定门店的账号只看本店；其余受限账号取门店所属组织（与销售"门店方"同一判据；POS 路由本身没有组织谓词）。
+// 计算参数 `p = { days, orgScope, user, subjectBound }`。**绑定主体（门店 / 经销商账号）即使 data_scope=all 也不能拿全局数**：
+// 指标的 `bound` 字段声明绑定主体如何处理 ——
+//   · `deny`          销售 / 线上是内部组织口径，绑定主体不可见（可见性判据 `boundAllows`；compute 兜底为空范围）；
+//   · `self-customer` 订货中心：仅外部订货主体（role=dealer|store）且只算自己的客户，其余绑定账号不可见；
+//   · `own-store`     POS：仅绑定了门店的账号，且只算本店；
+//   · 不声明（存货 / 采购订单类，AD1 既有指标）行为不变。
+const ALL_SQL = { sql: '1=1', params: [], empty: false }
+const NONE_SQL = { sql: '1=0', params: [], empty: true }
+const salesSc = (p, kind = 'order', alias = 'so') => (p?.subjectBound ? NONE_SQL : salesScopeSql(p?.orgScope, kind, alias))
+const omsSc = (p, alias = 'o') => (p?.subjectBound ? NONE_SQL : omsOrderScopeSql(p?.orgScope, alias))
+const posSc = (p, alias = 'po') => {
+  if (p?.subjectBound) {
+    const sid = boundStoreId(p.user)
+    return sid ? { sql: `${alias}.store_id = ?`, params: [sid], empty: false } : NONE_SQL
+  }
+  const s = p?.orgScope
+  if (!s || s.scope === 'all') return ALL_SQL
+  const ids = Array.isArray(s.orgIds) ? s.orgIds.map(Number).filter(Number.isFinite) : []
+  if (s.scope === 'dealer' || s.scope === 'none' || !ids.length) return NONE_SQL
+  return { sql: `${alias}.store_id IN (SELECT id FROM stores WHERE org_id IN (${ids.map(() => '?').join(',')}))`, params: ids, empty: false }
+}
+const ocSc = (db, p, column = 'o.customer_id') => {
+  if (!p?.subjectBound && !isScopeRestricted(p?.orgScope)) return ALL_SQL
+  // 绑定主体里只有外部订货主体有"自己的客户"；其余（如绑了门店的内部角色）不能借 data_scope=all 读全量
+  if (p?.subjectBound && !isExternalSubject(p.user)) return NONE_SQL
+  try {
+    const sc = ocScope(db, { user: p?.user || {}, orgScope: p?.orgScope }, column)
+    return { sql: sc.sql, params: sc.params, empty: sc.empty }
+  } catch {
+    return NONE_SQL // 订货主体未绑定档案等 ⇒ 失败关闭
+  }
+}
+
+/** 绑定主体（subjectBound）能否看到该指标。未声明 `bound` 的既有指标行为不变（恒真）。 */
+export function boundAllows(m, user) {
+  if (!m.bound) return true
+  if (m.bound === 'self-customer') return isExternalSubject(user)
+  if (m.bound === 'own-store') return boundStoreId(user) !== null
+  return false // 'deny' 及任何未知值
+}
+
 /**
  * 指标字典。分组顺序即字典展示顺序。
  * compute 一律返回数字（金额取两位小数），不返回对象 —— 便于前端直接排队比较。
@@ -74,10 +123,14 @@ export const METRICS = [
     exclusions: '排除 status IN (draft, cancelled)：草稿与已取消不构成销售',
     source: 'sales_orders',
     note: '应收口径（已含运费、已扣折扣）。线上/线下都算，若要拆分用 channel 维度',
-    compute: (db) =>
-      round2(num(db.prepare(
-        `SELECT COALESCE(SUM(receivable_amount),0) v FROM sales_orders WHERE status NOT IN ('draft','cancelled')`
-      ).get().v))
+    scopeAware: true,
+    bound: 'deny',
+    compute: (db, p) => {
+      const sc = salesSc(p)
+      return round2(num(db.prepare(
+        `SELECT COALESCE(SUM(so.receivable_amount),0) v FROM sales_orders so WHERE so.status NOT IN ('draft','cancelled') AND ${sc.sql}`
+      ).get(...sc.params).v))
+    }
   },
   {
     key: 'sales_qty',
@@ -90,10 +143,14 @@ export const METRICS = [
     exclusions: '同销售额：排除 draft / cancelled',
     source: 'sales_orders',
     note: '按单据头的汇总数量，与明细 SUM(qty) 应当一致；不一致说明写入时没同步汇总',
-    compute: (db) =>
-      num(db.prepare(
-        `SELECT COALESCE(SUM(total_qty),0) v FROM sales_orders WHERE status NOT IN ('draft','cancelled')`
-      ).get().v)
+    scopeAware: true,
+    bound: 'deny',
+    compute: (db, p) => {
+      const sc = salesSc(p)
+      return num(db.prepare(
+        `SELECT COALESCE(SUM(so.total_qty),0) v FROM sales_orders so WHERE so.status NOT IN ('draft','cancelled') AND ${sc.sql}`
+      ).get(...sc.params).v)
+    }
   },
   {
     key: 'sales_order_count',
@@ -106,10 +163,14 @@ export const METRICS = [
     exclusions: '同销售额：排除 draft / cancelled',
     source: 'sales_orders',
     note: '客单价与连带率的分母，必须与销售额用同一状态集 —— 否则算出来的比值没有意义',
-    compute: (db) =>
-      num(db.prepare(
-        `SELECT COUNT(*) v FROM sales_orders WHERE status NOT IN ('draft','cancelled')`
-      ).get().v)
+    scopeAware: true,
+    bound: 'deny',
+    compute: (db, p) => {
+      const sc = salesSc(p)
+      return num(db.prepare(
+        `SELECT COUNT(*) v FROM sales_orders so WHERE so.status NOT IN ('draft','cancelled') AND ${sc.sql}`
+      ).get(...sc.params).v)
+    }
   },
   {
     key: 'avg_order_value',
@@ -122,9 +183,11 @@ export const METRICS = [
     exclusions: '分子分母同用「排除 draft / cancelled」的口径',
     source: 'sales_orders',
     note: '订单数为 0 时返回 0，不返回 null —— 界面上 null 会显示成空白，看不出是 0 还是没算',
-    compute: (db) => {
-      const a = METRIC_BY_KEY.sales_amount.compute(db)
-      const n = METRIC_BY_KEY.sales_order_count.compute(db)
+    scopeAware: true,
+    bound: 'deny',
+    compute: (db, p) => {
+      const a = METRIC_BY_KEY.sales_amount.compute(db, p)
+      const n = METRIC_BY_KEY.sales_order_count.compute(db, p)
       return n > 0 ? round2(a / n) : 0
     }
   },
@@ -139,9 +202,11 @@ export const METRICS = [
     exclusions: '同销售额口径',
     source: 'sales_orders',
     note: '反映「一单带几件」。低于 1 说明有订单头数量没同步（正常业务不可能 < 1）',
-    compute: (db) => {
-      const q = METRIC_BY_KEY.sales_qty.compute(db)
-      const n = METRIC_BY_KEY.sales_order_count.compute(db)
+    scopeAware: true,
+    bound: 'deny',
+    compute: (db, p) => {
+      const q = METRIC_BY_KEY.sales_qty.compute(db, p)
+      const n = METRIC_BY_KEY.sales_order_count.compute(db, p)
       return n > 0 ? round2(q / n) : 0
     }
   },
@@ -156,11 +221,14 @@ export const METRICS = [
     exclusions: '退货只取 sales_returns 里 status<>cancelled 的；销售额分母同「销售额」口径',
     source: 'sales_returns, sales_orders',
     note: '分子分母如果一边含运费一边不含，退货率会系统性偏离 —— 这里两边都取单据金额口径',
-    compute: (db) => {
+    scopeAware: true,
+    bound: 'deny',
+    compute: (db, p) => {
+      const sc = salesSc(p, 'return', 'sr')
       const r = num(db.prepare(
-        `SELECT COALESCE(SUM(total_amount),0) v FROM sales_returns WHERE status NOT IN ('cancelled')`
-      ).get().v)
-      const a = METRIC_BY_KEY.sales_amount.compute(db)
+        `SELECT COALESCE(SUM(sr.total_amount),0) v FROM sales_returns sr WHERE sr.status NOT IN ('cancelled') AND ${sc.sql}`
+      ).get(...sc.params).v)
+      const a = METRIC_BY_KEY.sales_amount.compute(db, p)
       return a > 0 ? round2((r / a) * 100) : 0
     }
   },
@@ -175,11 +243,15 @@ export const METRICS = [
     exclusions: '排除 draft / cancelled；负数（超收）按原样保留，便于发现录入错误',
     source: 'sales_orders',
     note: '"超过已收" 时若取 GREATEST(0, ...) 会把错账抹平 —— 宁可让它显示负数',
-    compute: (db) =>
-      round2(num(db.prepare(
-        `SELECT COALESCE(SUM(receivable_amount - paid_amount),0) v FROM sales_orders
-          WHERE status NOT IN ('draft','cancelled')`
-      ).get().v))
+    scopeAware: true,
+    bound: 'deny',
+    compute: (db, p) => {
+      const sc = salesSc(p)
+      return round2(num(db.prepare(
+        `SELECT COALESCE(SUM(so.receivable_amount - so.paid_amount),0) v FROM sales_orders so
+          WHERE so.status NOT IN ('draft','cancelled') AND ${sc.sql}`
+      ).get(...sc.params).v))
+    }
   },
 
   // ------------------------------------------------------------------ 线上
@@ -194,10 +266,14 @@ export const METRICS = [
     exclusions: '排除 status = refunded（已退款不计成交）；pending（未支付）另计',
     source: 'oms_orders',
     note: '平台成交口径。与「销售额」不是一回事：GMV 含未转销售订单的部分，两者不应相等',
-    compute: (db) =>
-      round2(num(db.prepare(
-        `SELECT COALESCE(SUM(pay_amount),0) v FROM oms_orders WHERE status <> 'refunded'`
-      ).get().v))
+    scopeAware: true,
+    bound: 'deny',
+    compute: (db, p) => {
+      const sc = omsSc(p)
+      return round2(num(db.prepare(
+        `SELECT COALESCE(SUM(o.pay_amount),0) v FROM oms_orders o WHERE o.status <> 'refunded' AND ${sc.sql}`
+      ).get(...sc.params).v))
+    }
   },
   {
     key: 'oms_order_count',
@@ -210,8 +286,12 @@ export const METRICS = [
     exclusions: '排除 status = refunded',
     source: 'oms_orders',
     note: '与 GMV 同口径，便于算线上客单价',
-    compute: (db) =>
-      num(db.prepare(`SELECT COUNT(*) v FROM oms_orders WHERE status <> 'refunded'`).get().v)
+    scopeAware: true,
+    bound: 'deny',
+    compute: (db, p) => {
+      const sc = omsSc(p)
+      return num(db.prepare(`SELECT COUNT(*) v FROM oms_orders o WHERE o.status <> 'refunded' AND ${sc.sql}`).get(...sc.params).v)
+    }
   },
 
   // ------------------------------------------------------------------ 存货
@@ -400,10 +480,14 @@ export const METRICS = [
     exclusions: '排除 status = cancelled',
     source: 'oc_orders',
     note: '门店要货与经销商订货的合计口径 —— 两者已统一收口为一张单，这里不拆',
-    compute: (db) =>
-      round2(num(db.prepare(
-        `SELECT COALESCE(SUM(total_amount),0) v FROM oc_orders WHERE status <> 'cancelled'`
-      ).get().v))
+    scopeAware: true,
+    bound: 'self-customer',
+    compute: (db, p) => {
+      const sc = ocSc(db, p)
+      return round2(num(db.prepare(
+        `SELECT COALESCE(SUM(o.total_amount),0) v FROM oc_orders o WHERE o.status <> 'cancelled' AND ${sc.sql}`
+      ).get(...sc.params).v))
+    }
   },
   {
     key: 'oc_fill_rate',
@@ -416,9 +500,12 @@ export const METRICS = [
     exclusions: '分母排除 cancelled；分母含在途（submitted/approved/allocated/shipped）',
     source: 'oc_orders',
     note: '在途算「未满足」是刻意的 —— 满足率看的是「客户已经拿到货的比例」，在途还没拿到',
-    compute: (db) => {
-      const all = num(db.prepare(`SELECT COUNT(*) v FROM oc_orders WHERE status <> 'cancelled'`).get().v)
-      const done = num(db.prepare(`SELECT COUNT(*) v FROM oc_orders WHERE status = 'completed'`).get().v)
+    scopeAware: true,
+    bound: 'self-customer',
+    compute: (db, p) => {
+      const sc = ocSc(db, p)
+      const all = num(db.prepare(`SELECT COUNT(*) v FROM oc_orders o WHERE o.status <> 'cancelled' AND ${sc.sql}`).get(...sc.params).v)
+      const done = num(db.prepare(`SELECT COUNT(*) v FROM oc_orders o WHERE o.status = 'completed' AND ${sc.sql}`).get(...sc.params).v)
       return all > 0 ? round2((done / all) * 100) : 0
     }
   },
@@ -435,8 +522,12 @@ export const METRICS = [
     exclusions: '按实收（pay_amount）而不是吊牌额（total_amount）；已作废单不在表内',
     source: 'pos_orders',
     note: '门店口径用「实收」—— 折扣与抹零都发生在收银台，用 total_amount 会高估',
-    compute: (db) =>
-      round2(num(db.prepare(`SELECT COALESCE(SUM(pay_amount),0) v FROM pos_orders`).get().v))
+    scopeAware: true,
+    bound: 'own-store',
+    compute: (db, p) => {
+      const sc = posSc(p)
+      return round2(num(db.prepare(`SELECT COALESCE(SUM(po.pay_amount),0) v FROM pos_orders po WHERE ${sc.sql}`).get(...sc.params).v))
+    }
   },
 
   // ------------------------------------------------------------------ 往来
@@ -450,7 +541,8 @@ export const METRICS = [
     formula: 'SUM(credit_used) / SUM(credit_limit) × 100',
     exclusions: '授信额度为 0 或空的经销商不参与分母（未授信就没有占用率）',
     source: 'dealers',
-    note: '整体口径。单客户超限请用 dealer 维度看明细 —— 整体 60% 里可能藏着几个 120%',
+    note: '整体口径。单客户超限请用 dealer 维度看明细 —— 整体 60% 里可能藏着几个 120%。' +
+      '无范围语义（AF2）：经销商档案路由本身没有组织谓词，指标不另造；受限范围下默认隐藏',
     compute: (db) => {
       const r = db.prepare(
         `SELECT COALESCE(SUM(credit_used),0) u, COALESCE(SUM(credit_limit),0) l
@@ -556,10 +648,11 @@ export const METRICS_GLOBAL_MODE_KEY = 'metrics_global_for_restricted'
  * @param {(code: string) => boolean} p.canPerm 调用者是否持有某权限点（由路由用 permContext/hasPerm 构造；超管恒真）
  * @param {object|null} p.orgScope 调用者数据范围
  * @param {boolean} [p.subjectBound] 账号绑定了门店 / 经销商或是外部订货主体（视同受限，即使数据范围为全部）
+ * @param {object|null} [p.user] 调用者（绑定主体对声明了 `bound` 的指标需要看 role / store_id，见 `boundAllows`）
  * @param {string[]|null} [p.keys] 只对这些 key 计数（`/values?keys=`）；不传 = 全部
  * @returns {{ allow: Set<string>, hidden: number }} hidden = 在统计范围内被隐藏的已知指标数
  */
-export function metricVisibility(db, { canPerm, orgScope = null, keys = null, subjectBound = false } = {}) {
+export function metricVisibility(db, { canPerm, orgScope = null, keys = null, subjectBound = false, user = null } = {}) {
   // 绑定了门店 / 经销商的账号即使 data_scope=all 也是受限调用者（其余模块各自按绑定收口，指标没有）
   const restricted = isScopeRestricted(orgScope) || subjectBound
   // 非法 / 未知值读成默认 hide（readSetting 本身对不合法库值回落默认）；只有精确的 label 才放宽
@@ -568,7 +661,8 @@ export function metricVisibility(db, { canPerm, orgScope = null, keys = null, su
   let hidden = 0
   const considered = Array.isArray(keys) && keys.length ? keys.filter((k) => METRIC_BY_KEY[k]) : METRICS.map((m) => m.key)
   for (const m of METRICS) {
-    const ok = (m.perms || []).some((c) => canPerm(c)) && !(hideScopeless && m.scopeAware !== true)
+    const ok = (m.perms || []).some((c) => canPerm(c)) && !(hideScopeless && m.scopeAware !== true) &&
+      !(subjectBound && !boundAllows(m, user))
     if (ok) allow.add(m.key)
   }
   for (const k of new Set(considered)) if (!allow.has(k)) hidden++
@@ -576,14 +670,14 @@ export function metricVisibility(db, { canPerm, orgScope = null, keys = null, su
 }
 
 /** 取指标值。keys 不传则算全部；返回 { key: value } */
-export function metricValues(db = getDb(), { keys = null, days: d = 30, orgScope = null, allow = null } = {}) {
+export function metricValues(db = getDb(), { keys = null, days: d = 30, orgScope = null, allow = null, user = null, subjectBound = false } = {}) {
   const want = wantKeys(keys, allow)
   const out = {}
   for (const k of want) {
     const m = METRIC_BY_KEY[k]
     if (!m) continue
     try {
-      out[k] = m.compute(db, { days: d, orgScope })
+      out[k] = m.compute(db, { days: d, orgScope, user, subjectBound })
     } catch (e) {
       // 某条算不出来不该把整页拖垮 —— 但也不能假装它是 0
       out[k] = { error: e.message }
@@ -605,8 +699,8 @@ export function metricScopedFlags(orgScope = null, keys = null, allow = null, su
 }
 
 /** 定义 + 当前值（字典页主接口）；每项带 `scoped`（见 metricScopedFlags） */
-export function metricCatalog(db = getDb(), { days: d = 30, withValues = true, orgScope = null, allow = null, subjectBound = false } = {}) {
-  const values = withValues ? metricValues(db, { days: d, orgScope, allow }) : {}
+export function metricCatalog(db = getDb(), { days: d = 30, withValues = true, orgScope = null, allow = null, subjectBound = false, user = null } = {}) {
+  const values = withValues ? metricValues(db, { days: d, orgScope, allow, user, subjectBound }) : {}
   const scoped = metricScopedFlags(orgScope, null, allow, subjectBound)
   const defs = Object.fromEntries(metricDefinitions().map((x) => [x.key, x]))
   return METRICS.filter((m) => !allow || allow.has(m.key)).map((m) => ({
@@ -658,8 +752,8 @@ export function metricDefsStale(db = getDb()) {
 }
 
 /** 分组后的字典（前端分组渲染用） */
-export function metricGroups(db = getDb(), { days: d = 30, withValues = true, orgScope = null, allow = null, subjectBound = false } = {}) {
-  const list = metricCatalog(db, { days: d, withValues, orgScope, allow, subjectBound })
+export function metricGroups(db = getDb(), { days: d = 30, withValues = true, orgScope = null, allow = null, subjectBound = false, user = null } = {}) {
+  const list = metricCatalog(db, { days: d, withValues, orgScope, allow, subjectBound, user })
   const order = []
   const map = new Map()
   for (const m of list) {
@@ -674,5 +768,5 @@ export function metricGroups(db = getDb(), { days: d = 30, withValues = true, or
 
 export default {
   METRICS, METRIC_BY_KEY, metricDefinitions, metricValues, metricCatalog, metricScopedFlags, isScopeRestricted,
-  syncMetricDefs, metricDefsStale, metricGroups, metricVisibility
+  syncMetricDefs, metricDefsStale, metricGroups, metricVisibility, boundAllows
 }
