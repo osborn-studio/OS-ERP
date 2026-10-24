@@ -18,6 +18,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import Database from 'better-sqlite3'
 import { parseArgs, makeRng, verifyInvariants } from '../scripts/synth-data.mjs'
+import { parseArgs as parsePipelineArgs, LARGE_CI } from '../scripts/synth-pipeline.mjs'
 import { isWithin, resolveThroughSymlinks } from '../scripts/lib/safe-path.mjs'
 import { sourceIdentity } from '../scripts/lib/source-identity.mjs'
 
@@ -247,4 +248,87 @@ test('pipeline runs generate, plain+encrypted backup, both restore drills, expla
   // 秘密不进报告
   assert.doesNotMatch(readFileSync(out, 'utf8'), /Synthetic-Pass|GML_BACKUP_KEY/)
   assert.equal(existsSync(path.join(work, 'w')), false, 'working dir removed when --out given without --keep')
+})
+
+// ---- AB11: large-ci 分批 / 时间预算 / partial ----
+test('AB11 parseArgs: batch-txns, time-budget and min-free-mb are validated', () => {
+  const o = parseArgs(['--batch-txns', '200000', '--time-budget', '1.5', '--min-free-mb', '3072'])
+  assert.equal(o.batchTxns, 200000); assert.equal(o.timeBudget, 1.5); assert.equal(o.minFreeMb, 3072)
+  assert.equal(parseArgs([]).batchTxns, 0); assert.equal(parseArgs([]).timeBudget, 0)
+  assert.throws(() => parseArgs(['--batch-txns', '-1']), /batch-txns/)
+  assert.throws(() => parseArgs(['--batch-txns', '1.5']), /整数/)
+  assert.throws(() => parseArgs(['--time-budget', '0']), /time-budget/)
+  assert.throws(() => parseArgs(['--time-budget', 'abc']), /time-budget/)
+  assert.throws(() => parseArgs(['--min-free-mb', '-5']), /min-free-mb/)
+})
+
+test('AB11 batching checkpoints+VACUUMs between batches, keeps invariants and the same business digest', { timeout: 480000 }, (t) => {
+  const go = (extra) => {
+    const dir = tmp(t, 'os-synth-b-')
+    const out = path.join(tmp(t, 'os-synth-bo-'), 's.json')
+    const r = run([...SMALL, '--out', out, ...extra], prodEnv(path.join(dir, 'data')))
+    assert.equal(r.status, 0, r.stderr + r.stdout)
+    return JSON.parse(readFileSync(out, 'utf8'))
+  }
+  const plain = go([])
+  const batched = go(['--batch-txns', '80'])
+  assert.equal(plain.partial, false); assert.equal(batched.partial, false)
+  assert.equal(plain.batching.vacuums, 0)
+  assert.ok(batched.batching.vacuums >= 2, `vacuums ${batched.batching.vacuums}`)
+  assert.equal(batched.batching.batch_txns, 80)
+  assert.equal(batched.invariants.ok, true)
+  assert.equal(batched.digest, plain.digest, 'VACUUM must not change business content')
+  assert.equal(batched.reached.txns, batched.table_counts.inventory_transactions)
+})
+
+test('AB11 time budget stops early: partial true, reached scale recorded, exit 0, invariants still hold', { timeout: 240000 }, (t) => {
+  const dir = tmp(t, 'os-synth-tb-')
+  const out = path.join(tmp(t, 'os-synth-tbo-'), 's.json')
+  // 0.0005 分钟 = 30 ms：迁移与主数据已经超出，采购循环第一次检查即停
+  const r = run(['--skus', '24', '--txns', '2400', '--docs', '600', '--quiet', '--time-budget', '0.0005', '--out', out], prodEnv(path.join(dir, 'data')))
+  assert.equal(r.status, 0, r.stderr + r.stdout)
+  const s = JSON.parse(readFileSync(out, 'utf8'))
+  assert.equal(s.partial, true)
+  assert.equal(s.partial_reason, 'time_budget')
+  assert.ok(['purchase', 'sales', 'adjust'].includes(s.partial_phase), s.partial_phase)
+  assert.equal(s.reached.skus, 24)
+  assert.ok(s.reached.txns < 2400, `reached ${s.reached.txns}`)
+  assert.equal(s.reached.txns_target, 2400)
+  assert.equal(s.reached.txns, s.table_counts.inventory_transactions)
+  assert.equal(s.invariants.ok, true)
+  assert.equal(JSON.parse(r.stdout.trim().split('\n').at(-1)).partial, true)
+})
+
+test('AB11 disk guard: an unreachable min-free-mb stops at the first batch boundary as partial/disk_low', { timeout: 240000 }, (t) => {
+  const dir = tmp(t, 'os-synth-dg-')
+  const out = path.join(tmp(t, 'os-synth-dgo-'), 's.json')
+  const r = run([...SMALL, '--batch-txns', '50', '--min-free-mb', '999999999', '--out', out], prodEnv(path.join(dir, 'data')))
+  assert.equal(r.status, 0, r.stderr + r.stdout)
+  const s = JSON.parse(readFileSync(out, 'utf8'))
+  assert.equal(s.partial, true); assert.equal(s.partial_reason, 'disk_low')
+  assert.equal(s.batching.vacuums, 0, 'no VACUUM when there is not enough free space for it')
+  assert.equal(s.invariants.ok, true)
+})
+
+test('AB11 pipeline --profile large-ci sets the roadmap scale; explicit flags win; bad profile refused', (t) => {
+  const d = path.join(tmp(t, 'os-pipe-p-'), 'w')
+  const a = parsePipelineArgs(['--dir', d, '--profile', 'large-ci', '--time-budget', '240'])
+  assert.equal(a.scale.skus, '100000'); assert.equal(a.scale.txns, '1000000')
+  assert.equal(a.scale['batch-txns'], '200000'); assert.equal(a.scale['time-budget'], '240')
+  assert.equal(a.scale['min-free-mb'], String(LARGE_CI['min-free-mb']))
+  const b = parsePipelineArgs(['--dir', d, '--profile', 'large-ci', '--skus', '5000', '--txns', '50000'])
+  assert.equal(b.scale.skus, '5000'); assert.equal(b.scale.txns, '50000'); assert.equal(b.scale['batch-txns'], '200000')
+  assert.throws(() => parsePipelineArgs(['--dir', d, '--profile', 'huge']), /profile/)
+})
+
+test('AB11 pipeline with a tiny time budget exits 0, stays ok and reports partial honestly', { timeout: 600000 }, (t) => {
+  const work = tmp(t, 'os-pipe-pb-')
+  const out = path.join(tmp(t, 'os-pipe-pbo-'), 'report.json')
+  const r = pipe(['--dir', path.join(work, 'w'), '--skus', '24', '--txns', '2400', '--docs', '600', '--time-budget', '0.0005', '--iterations', '5', '--concurrency', '2', '--out', out])
+  assert.equal(r.status, 0, r.stderr + r.stdout)
+  const rep = JSON.parse(readFileSync(out, 'utf8'))
+  assert.equal(rep.ok, true)
+  assert.equal(rep.partial, true); assert.equal(rep.partial_reason, 'time_budget')
+  assert.ok(rep.reached.txns < rep.reached.txns_target)
+  assert.equal(rep.steps.bench_api.totals.errors, 0)
 })
