@@ -113,7 +113,7 @@ test('GET /api/meta/role-matrix', { timeout: 300000 }, async (t) => {
     const r = await get(f.admin)
     assert.equal(r.status, 200, JSON.stringify(r.body))
     const d = r.body.data
-    assert.deepEqual(Object.keys(d).sort(), ['cells', 'doc_types', 'me', 'roles'])
+    assert.deepEqual(Object.keys(d).sort(), ['cells', 'doc_types', 'me', 'restricted', 'roles'])
     const codes = d.doc_types.map((x) => x.code)
     assert.deepEqual([...codes].sort(), Object.keys(DOC_VIEW_PERMS).filter((c) => db.prepare('SELECT 1 FROM doc_types WHERE code=?').get(c)).sort())
     const roleCodes = d.roles.map((x) => x.code)
@@ -129,6 +129,18 @@ test('GET /api/meta/role-matrix', { timeout: 300000 }, async (t) => {
     assert.equal(d.cells.store.PO, 'none')
     assert.equal(d.cells.admin.VOUCHER, 'full')
     assert.ok(Object.values(d.cells.finance).includes('global_only'))
+  })
+
+  await t.test('non-admin callers only get their own role column (no cross-role permission inference)', async () => {
+    for (const [acct, role] of [[warehouse, 'warehouse'], [store, 'store']]) {
+      const d = (await get(acct.token)).body.data
+      assert.equal(d.restricted, true)
+      assert.deepEqual(d.roles.map((r) => r.code), [role])
+      assert.deepEqual(Object.keys(d.cells), [role])
+      const full = (await get(f.admin)).body.data
+      assert.equal(full.restricted, false)
+      assert.deepEqual(d.cells[role], full.cells[role], 'the single column equals the admin view of that role')
+    }
   })
 
   await t.test('no permission codes or other principals leak', async () => {

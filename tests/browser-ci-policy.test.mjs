@@ -193,7 +193,7 @@ test('AC11 scenarios assert the hint modes, the disabled/blocked query, the serv
 
 test('AD11 role-matrix scenario asserts the highlighted column, server-equal cells, the external-role none cell and zero external requests', () => {
   const src = read('tests/browser/role-matrix.mjs')
-  for (const needle of ["'/api/meta/role-matrix'", 'thead th[data-current="true"]', 'data-access', 'data.cells.warehouse', 'data.cells.store.PO, \'none\'', "col.cells.VOUCHER, 'full'", 'role-matrix-me-store', 'role-matrix-filter', 'status, 200', 'externalRequests, 0', 'blockedbyclient', 'screenshotPages']) {
+  for (const needle of ["'/api/meta/role-matrix'", 'thead th[data-current="true"]', 'data-access', 'data.cells.warehouse', 'data.cells.store.PO, \'none\'', "col.cells.VOUCHER, 'full'", 'role-matrix-me-store', 'role-matrix-filter', 'data.restricted', 'status, 200', 'externalRequests, 0', 'blockedbyclient', 'screenshotPages']) {
     assert.ok(src.includes(needle), `role-matrix must assert ${needle}`)
   }
   assert.match(src, /from '\.\/lib\.mjs'/, 'uses the shared loopback/Linux helpers')

@@ -7,7 +7,7 @@
  * 【入口】/system/role-matrix（系统管理菜单"角色与数据范围"；MyScope 页有链接；接口只要求登录，不要求权限点）
  * 【主要接口】GET /meta/role-matrix、GET /auth/my-scope（均只读）
  *
- * 【说明】可见度的推演只在服务端 `server/lib/role-matrix.js`；本页不重算，只展示。五档含义（下面 LEGEND）与该文件的 ACCESS 一一对应。
+ * 【说明】非管理员只收到自己角色那一列（其它角色的可见度会反推出它们的权限点分配），管理员收到全表。可见度的推演只在服务端 `server/lib/role-matrix.js`；本页不重算，只展示。五档含义（下面 LEGEND）与该文件的 ACCESS 一一对应。
  *   矩阵是说明性视图，不是授权判据：真正放行与否仍由各接口的权限点与数据范围决定；账号被授予多个角色时取并集，矩阵按单个角色展示。
  * 【改它要注意什么】不要在这里补权限点码、其他用户 / 组织的名字——接口不提供，也不应该提供。
  * ============================================================================
@@ -22,6 +22,7 @@ type RoleMatrixData = {
   roles: { code: string; name: string }[]
   doc_types: { code: string; name: string; module: string; binding: string | null; global_only: boolean }[]
   cells: Record<string, Record<string, Access>>
+  restricted: boolean
   me: { role: string; role_name: string; is_admin: boolean; data_scope_effective: string; store_bound: boolean; dealer_bound: boolean }
 }
 type Named = { id: number; name: string } | null
@@ -93,7 +94,7 @@ export default function RoleMatrix() {
           <Card>
             <div className="mb-3 flex items-center gap-2 flex-wrap">
               <input className="input" style={{ width: 260 }} placeholder="按单据类型 / 编码 / 模块筛选" value={kw} onChange={(e) => setKw(e.target.value)} data-testid="role-matrix-filter" />
-              <span className="text-[11px] text-slate-400">你所属角色的一列已高亮；共 {rows.length} 类单据 x {data.roles.length} 个角色</span>
+              <span className="text-[11px] text-slate-400">你所属角色的一列已高亮；共 {rows.length} 类单据 x {data.roles.length} 个角色{data.restricted ? '（非管理员只显示你自己的角色）' : ''}</span>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-sm" data-testid="role-matrix-table">

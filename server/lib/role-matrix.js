@@ -16,7 +16,7 @@
  * 【边界】矩阵按"单一角色"推演；账号被授予多个角色（user_roles）时取权限点并集，页面上不展开。
  *   它是说明性视图，不是授权判据——真正的判据在各路由的 requirePerm / docScopeOf，与本文件无关。
  * 【不返回】权限点码、用户 / 组织 / 门店 / 经销商名称——调用者只拿到角色名、单据类型名与五档可见度，
- *   以及自己的角色 / 数据范围 / 是否绑定门店或经销商。
+ *   以及自己的角色 / 数据范围 / 是否绑定门店或经销商；非管理员只拿自己角色那一列（见 roleMatrixFor）。
  * ============================================================================
  */
 import { permContext, resolveOrgScope } from '../middleware/auth.js'
@@ -86,6 +86,19 @@ export function describeCaller(db, user) {
   }
 }
 
+/**
+ * 接口出口：管理员 / 超管拿全表（与 admin-only 的 /auth/roles-permissions 同级的信息）；其余账号只拿**自己角色**那一列——
+ * 其它角色的可见度反推得出它们的权限点分配（Codex 审计 P2），不能交给任意登录者。`restricted` 告诉页面当前是自视图。
+ */
 export function roleMatrixFor(db, user) {
-  return { ...buildRoleMatrix(db), me: describeCaller(db, user) }
+  const me = describeCaller(db, user)
+  const full = buildRoleMatrix(db)
+  if (me.is_admin) return { ...full, restricted: false, me }
+  return {
+    roles: full.roles.filter((r) => r.code === me.role),
+    doc_types: full.doc_types,
+    cells: full.cells[me.role] ? { [me.role]: full.cells[me.role] } : {},
+    restricted: true,
+    me
+  }
 }
