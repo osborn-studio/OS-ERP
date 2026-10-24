@@ -1,11 +1,12 @@
 /**
  * ============================================================================
- * 文件标识：tests/candidate-ci-policy.test.mjs ｜ CI candidate job 的静态守卫（AD10）
+ * 文件标识：tests/release-candidate-policy.test.mjs ｜ 发行候选工作流的静态守卫（AD10，AF1 起独立成文件）
  * ============================================================================
- * 便宜、诚实的文本断言：证明 .github/workflows/ci.yml 的 candidate job 仅由 workflow_dispatch 与 v* 标签推送触发
- * （不由 PR / main 推送触发）、固定 Actions SHA、超时 ≤ 90 分钟、有互斥并发组、权限只读、只上传白名单文件（14 天）、
- * 不含任何发布 / 打标签 / 回推步骤，且 README 声明托管候选未签名。
- * 它们不证明 job 在 GitHub 上能跑通 —— 那是托管 runner 上 candidate job 本身的事。
+ * 便宜、诚实的文本断言：证明 .github/workflows/release-candidate.yml 仅由 workflow_dispatch 与 v* 标签推送触发
+ * （不由 PR / 分支推送触发）、固定 Actions SHA、超时 ≤ 90 分钟、有互斥并发组、权限只读、只上传白名单文件（14 天）、
+ * 不含任何发布 / 打标签 / 回推步骤，且 ci.yml 不含任何标签逻辑、不含 candidate job（AF1：避免被跳过的 job 在同一 SHA 上
+ * 冒充通过状态）；README 声明托管候选未签名。
+ * 它们不证明工作流在 GitHub 上能跑通 —— 那是托管 runner 上第一次运行的事。
  * ============================================================================
  */
 import test from 'node:test'
@@ -16,21 +17,22 @@ import { fileURLToPath } from 'node:url'
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url))
 const read = (file) => readFileSync(path.join(ROOT, file), 'utf8')
-const workflow = read('.github/workflows/ci.yml')
+const ci = read('.github/workflows/ci.yml')
+const workflow = read('.github/workflows/release-candidate.yml')
 const m = workflow.match(/^  candidate:\n([\s\S]*?)(?=^  \S|(?![\s\S]))/m)
 const job = m ? m[0] : null
 const code = job?.replace(/^\s*#.*$/gm, '') ?? ''
+const stripComments = (t) => t.replace(/^\s*#.*$/gm, '').replace(/\s+#.*$/gm, '')
 
-test('candidate job runs only on workflow_dispatch or v* tag pushes, never on PR or main push', () => {
+test('release-candidate.yml triggers only on v* tag pushes and workflow_dispatch', () => {
   assert.ok(job, 'jobs.candidate must exist')
-  const cond = code.match(/^\s+if:\s*(.+)$/m)?.[1] ?? ''
-  assert.equal(cond, "github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))")
-  assert.doesNotMatch(cond, /pull_request|refs\/heads|main/)
   const on = workflow.slice(workflow.indexOf('\non:'), workflow.indexOf('\npermissions:'))
-  assert.match(on, /tags:\s*\['v\*'\]/)
-  assert.match(on, /branches:\s*\[main\]/)
-  assert.match(on, /^\s+workflow_dispatch:/m)
-  assert.doesNotMatch(on, /pull_request_target/)
+  assert.match(on, /^  push:\n    tags: \['v\*'\]\n(?!    branches)/m)
+  assert.match(on, /^  workflow_dispatch:/m)
+  assert.doesNotMatch(on, /pull_request|schedule|branches|workflow_run|release:/)
+  assert.deepEqual([...on.matchAll(/^  (\w+):/gm)].map((x) => x[1]).sort(), ['push', 'workflow_dispatch'])
+  // the job itself carries no ref-based skip (a skipped job would be a passing status context)
+  assert.doesNotMatch(code, /^\s+if:/m)
 })
 
 test('candidate job is time-boxed (<= 90 min), read-only, and serialised by its own concurrency group', () => {
@@ -42,10 +44,10 @@ test('candidate job is time-boxed (<= 90 min), read-only, and serialised by its 
   assert.match(code, /concurrency:\s*\n\s+group:\s*candidate-\$\{\{ github\.repository \}\}\s*\n\s+cancel-in-progress:\s*false/)
 })
 
-test('workflow-level concurrency never cancels dispatch or tag runs', () => {
-  const top = workflow.match(/^concurrency:\n((?:  .+\n)+)/m)?.[1] ?? ''
-  assert.match(top, /group:.*github\.event_name/)
-  assert.match(top, /cancel-in-progress:\s*\$\{\{ github\.event_name != 'workflow_dispatch' && github\.ref_type != 'tag' \}\}/)
+test('workflow-level token is read-only and no job grants write scopes', () => {
+  const top = workflow.match(/^permissions:\n((?:  .+\n)+)/m)?.[1] ?? ''
+  assert.match(top, /contents:\s*read/)
+  assert.doesNotMatch(stripComments(workflow), /:\s*write\b|id-token/)
 })
 
 test('candidate job pins every action by SHA and does not persist checkout credentials', () => {
@@ -92,28 +94,48 @@ test('docs/release/README.md states hosted candidates are unsigned and need a ke
   assert.match(readme, /14 days|14 天/)
 })
 
-test('AE10: checks, docker, browser and regression skip tag pushes; the candidate job condition is unchanged', () => {
-  for (const name of ['checks', 'docker', 'browser', 'regression']) {
-    const body = workflow.match(new RegExp(`^  ${name}:\\n([\\s\\S]*?)(?=^  \\S|(?![\\s\\S]))`, 'm'))?.[0]
-    assert.ok(body, `${name} job exists`)
-    const cond = body.replace(/^\s*#.*$/gm, '').match(/^    if:\s*(.+?)(?:\s+#.*)?$/m)?.[1]
-    assert.equal(cond, "${{ !startsWith(github.ref, 'refs/tags/') }}", `${name} must skip refs/tags/* pushes`)
-    assert.doesNotMatch(cond, /pull_request|refs\/heads|main/, `${name} keeps running for PR and main`)
+test('AF1: ci.yml has no tag trigger, no ref-based job skips and no candidate job', () => {
+  const code = stripComments(ci)
+  const on = ci.slice(ci.indexOf('\non:'), ci.indexOf('\npermissions:'))
+  assert.doesNotMatch(on, /tags:/)
+  assert.match(on, /branches:\s*\[main\]/)
+  assert.match(on, /^  pull_request:/m)
+  assert.match(on, /^  workflow_dispatch:/m)
+  assert.doesNotMatch(code, /refs\/tags|startsWith\(github\.ref|ref_type|v\*/)
+  assert.doesNotMatch(code, /^  candidate:/m)
+  assert.doesNotMatch(code, /release-candidate\.mjs|candidate-upload|CAND_OUT/)
+  // required-check semantics: no job in ci.yml has a ref/event-conditional skip except the explicit manual-dispatch-only jobs
+  for (const [, name, body] of ci.matchAll(/^  ([\w-]+):\n([\s\S]*?)(?=^  \S|(?![\s\S]))/gm)) {
+    if (!/^    runs-on:/m.test(body)) continue
+    const cond = stripComments(body).match(/^    if:\s*(.+)$/m)?.[1]
+    if (cond) assert.equal(cond, "github.event_name == 'workflow_dispatch'", `${name}: only dispatch-only jobs may carry a job-level if`)
   }
-  // PR 的 github.ref 是 refs/pull/N/merge、main 推送是 refs/heads/main，都不以 refs/tags/ 开头，分支保护所依赖的检查不受影响
-  assert.match(workflow, /^    if: github\.event_name == 'workflow_dispatch' \|\| \(github\.event_name == 'push' && startsWith\(github\.ref, 'refs\/tags\/v'\)\)$/m)
 })
 
-test('AE10: no job in ci.yml has a publish, release, tag or push-back step', () => {
-  const all = workflow.replace(/^\s*#.*$/gm, '')
-  assert.doesNotMatch(all, /gh release|softprops|action-gh-release|create-release|npm publish|docker push|docker login/i)
-  assert.doesNotMatch(all, /git (push|tag|commit)\b/)
-  assert.doesNotMatch(all, /contents:\s*write|packages:\s*write|id-token/)
+test('AF1: ci.yml concurrency cancels only superseded runs and never a manual dispatch', () => {
+  const top = ci.match(/^concurrency:\n((?:  .+\n)+)/m)?.[1] ?? ''
+  assert.match(top, /group:.*github\.ref/)
+  assert.match(top, /cancel-in-progress:\s*\$\{\{ github\.event_name != 'workflow_dispatch' \}\}/)
+  assert.doesNotMatch(top, /ref_type|tag/)
 })
 
-test('AE10: README documents the artifact, ingest, commit maintainer flow and the self-referential CI record', () => {
+test('AF1: the candidate job lives only in release-candidate.yml', () => {
+  assert.equal([...ci.matchAll(/^  candidate:/gm)].length, 0)
+  assert.equal([...workflow.matchAll(/^  candidate:/gm)].length, 1)
+})
+
+test('no workflow job has a publish, release, tag or push-back step (ci.yml and release-candidate.yml)', () => {
+  for (const text of [ci, workflow]) {
+    const all = stripComments(text)
+    assert.doesNotMatch(all, /gh release|softprops|action-gh-release|create-release|npm publish|docker push|docker login/i)
+    assert.doesNotMatch(all, /git (push|tag|commit)\b/)
+    assert.doesNotMatch(all, /contents:\s*write|packages:\s*write|id-token/)
+  }
+})
+
+test('AE10/AF1: README documents the artifact, ingest, commit maintainer flow, the self-referential CI record and the workflow split', () => {
   const readme = read('docs/release/README.md')
+  assert.match(readme, /release-candidate\.yml/)
   assert.match(readme, /evidence-log-ingest\.mjs --line/)
   assert.match(readme, /hosted-ci-self/)
-  assert.match(readme, /refs\/tags\//)
 })
