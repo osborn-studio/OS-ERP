@@ -33,7 +33,7 @@ const COLUMNS = [
   ['audit_row_id', 'INTEGER']
 ]
 
-const CREATE = (name) => `CREATE TABLE ${name} (
+const DDL = `CREATE TABLE IF NOT EXISTS audit_anchor_intents (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
     created_at       TEXT NOT NULL DEFAULT (datetime('now','localtime')),
     operation        TEXT NOT NULL CHECK (operation IN ('retention','archive','erase')),
@@ -54,7 +54,7 @@ const hasOperationCheck = (db) => /CHECK\s*\(\s*operation\s+IN\s*\(/i.test(db.pr
 module.exports.up = (db) => {
   if (!tableExists(db, 'audit_logs')) return
   if (!tableExists(db, 'audit_anchor_intents')) {
-    db.exec(CREATE('audit_anchor_intents'))
+    db.exec(DDL)
     return
   }
   // 残表自愈：缺 id 无法修（主键不能 ALTER 加），其余缺列补上；没有 CHECK 的表重建为标准形态并保留行
@@ -63,7 +63,7 @@ module.exports.up = (db) => {
   if (keepsId && hasOperationCheck(db)) return
   const rebuild = () => {
     db.exec('ALTER TABLE audit_anchor_intents RENAME TO audit_anchor_intents_old')
-    db.exec(CREATE('audit_anchor_intents'))
+    db.exec(DDL)
     const cols = (keepsId ? NAMES : COLUMNS.map(([c]) => c)).join(', ')
     db.exec(`INSERT INTO audit_anchor_intents (${cols}) SELECT ${cols} FROM audit_anchor_intents_old`)
     db.exec('DROP TABLE audit_anchor_intents_old')
