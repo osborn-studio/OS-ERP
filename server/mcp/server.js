@@ -38,7 +38,7 @@ import { requireAuth, requirePerm } from '../middleware/auth.js'
 import * as engine from '../lib/stock.js'
 import { versionInfo } from '../version.js'
 import { logger } from '../lib/logger.js'
-import { incCounter } from '../lib/process-counters.js'
+import { incCounter, incMcpToolCall, registerMcpTools } from '../lib/process-counters.js'
 
 const r = Router()
 
@@ -95,6 +95,7 @@ const VIRTUAL_TOOLS = {
     handler: ({ db }) => ({ data: db.prepare('SELECT param_key, param_value, remark FROM inv_params ORDER BY id').all() })
   }
 }
+registerMcpTools([...TOOLS.map((t) => t.name), ...Object.keys(VIRTUAL_TOOLS)])
 function resolveTool(name) {
   return TOOL_MAP.get(name) || VIRTUAL_TOOLS[name] || null
 }
@@ -194,6 +195,7 @@ function insertCallLog(db, { token, tool, ok, errorCode, errorMessage, args, sum
     incCounter('audit_strict_write_failures_total', 'mcp_call_log')
     throw err
   }
+  incMcpToolCall(tool?.name, ok ? null : errorCode ?? 'other') // AB10：仅审计行落地的调用计数；label 在计数器内折成封闭集合
 }
 
 /**

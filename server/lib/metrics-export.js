@@ -18,7 +18,7 @@
  */
 import { createHash, timingSafeEqual } from 'node:crypto'
 import { opsCounters } from './ops-status.js'
-import { COUNTER_DEFS } from './process-counters.js'
+import { COUNTER_DEFS, HISTOGRAM_DEFS } from './process-counters.js'
 
 export const METRICS_TOKEN_MIN_LENGTH = 32
 export const PROMETHEUS_CONTENT_TYPE = 'text/plain; version=0.0.4; charset=utf-8'
@@ -27,17 +27,23 @@ const digest = (s) => createHash('sha256').update(s, 'utf8').digest()
 
 /** 令牌是否匹配。`presented` 非字符串 / 空、或服务端未配置有效令牌 ⇒ false。 */
 export function metricsTokenOk(presented, env = process.env) {
-  const configured = env.GML_METRICS_TOKEN
-  if (typeof configured !== 'string' || configured.length < METRICS_TOKEN_MIN_LENGTH) return false
+  // AB10 轮换：GML_METRICS_TOKEN（当前）与 GML_METRICS_TOKEN_NEXT（下一把）同时有效。
+  // 两把**都**比较、不提前返回，耗时不泄露命中的是哪一把。
+  const configured = [env.GML_METRICS_TOKEN, env.GML_METRICS_TOKEN_NEXT]
+    .filter((c) => typeof c === 'string' && c.length >= METRICS_TOKEN_MIN_LENGTH)
+  if (configured.length === 0) return false
   if (typeof presented !== 'string' || presented.length === 0) return false
-  return timingSafeEqual(digest(presented), digest(configured))
+  const p = digest(presented)
+  let matched = false
+  for (const c of configured) matched = timingSafeEqual(p, digest(c)) || matched
+  return matched
 }
 
 const escLabel = (v) => String(v).replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n')
 const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
 
 /** 渲染。ops 来自 computeOpsStatus；retry 来自 writeRetryStats()；counters 来自 counterSnapshot()。 */
-export function renderPrometheus({ ops, retry, counters, version }) {
+export function renderPrometheus({ ops, retry, counters, histograms = {}, version }) {
   const lines = []
   const family = (name, type, help, samples) => {
     lines.push(`# HELP os_erp_${name} ${help}`, `# TYPE os_erp_${name} ${type}`)
@@ -60,6 +66,18 @@ export function renderPrometheus({ ops, retry, counters, version }) {
       ? def.values.map((v) => [`{${def.labelName}="${escLabel(v)}"}`, value?.[v]])
       : [['', value]]
     family(name, 'counter', def.help, samples)
+  }
+
+  // AB10：MCP 工具调用（tool/code 两个 label，值域在 process-counters 内封闭）
+  family('mcp_tool_calls_total', 'counter', 'MCP tool calls whose call-log row was written, by tool and result code (ok or a registered error code; unregistered values fold into unknown/other).',
+    Object.entries(counters?.mcp_tool_calls_total ?? {}).flatMap(([tool, codes]) =>
+      Object.entries(codes).map(([code, n]) => [`{tool="${escLabel(tool)}",code="${escLabel(code)}"}`, n])))
+
+  for (const [name, def] of Object.entries(HISTOGRAM_DEFS)) {
+    const h = histograms?.[name]
+    lines.push(`# HELP os_erp_${name} ${def.help}`, `# TYPE os_erp_${name} histogram`)
+    for (const b of h?.buckets ?? def.buckets.map((le) => ({ le, count: 0 }))) lines.push(`os_erp_${name}_bucket{le="${b.le}"} ${num(b.count)}`)
+    lines.push(`os_erp_${name}_bucket{le="+Inf"} ${num(h?.count)}`, `os_erp_${name}_sum ${num(h?.sum).toFixed(6)}`, `os_erp_${name}_count ${num(h?.count)}`)
   }
 
   family('write_calls_total', 'counter', 'withWriteRetry invocations (since process start).', [['', retry?.calls]])

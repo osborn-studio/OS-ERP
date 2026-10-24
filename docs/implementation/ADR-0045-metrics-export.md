@@ -68,3 +68,23 @@ ADR-0036 的 CSP 目前只发 `Content-Security-Policy-Report-Only`，头里没�
 ## 验证
 
 `tests/metrics-export.test.mjs`：计数器注册表（未登记名/值被忽略）；渲染形状（每族 HELP/TYPE、前缀、label 转义、未知 = -1）；令牌函数（未配置/过短/不等长/大小写/非字符串；源码使用 SHA-256 + `timingSafeEqual`）；三处真实增量点（严格审计的 INSERT 抛错、`RAISE(IGNORE)` 零行、事务外；限流器 429；`withWriteRetry` 重试与用尽）；真实服务进程上匿名 401 / 非 admin 403 / admin 200 与响应头、JSON 形态不变、非法 format 400、令牌只对 prometheus 有效且不被 `/health`、`/settings`、JSON 形态、查询参数接受、令牌不出现在服务输出、未设/过短令牌禁用、登录被限流后抓取值 +1 且不含账号名。运维文档：`docs/operations/monitoring.md`。
+
+## 补充（AB10，batch eleven）：端点加固与新指标
+
+### 节流
+`/api/meta/metrics` 增加按来源 IP 的固定窗口节流（`server/lib/metrics-throttle.js`），**独立桶**、位于鉴权之前（猜令牌的请求同样计数，并覆盖 JSON 形态与 admin JWT）。来源 IP 取 `req.ip`（`GML_TRUST_PROXY` 单一策略，ADR-0040），IPv4 映射的 IPv6 与 IPv4 同桶，无法解析的来源不豁免，桶数上限 10000、满且无可清理项时 fail closed。默认 120 次 / 60 s / IP，`GML_METRICS_IP_LIMIT`、`GML_METRICS_IP_WINDOW_MS` 可调，非法值回退默认。超限：429、`bizFail` 形状、业务码 `METRICS_RATE_LIMITED`、`Retry-After`。
+与登录节流的差别（有意）：登录节流为 SQLite 持久化，且其接口绑定"IP 桶 + 账号桶"并带策略冻结校验；指标端点只读，重启清零无安全后果，因此复用其**口径**（IP 归一化、桶上限、fail closed、独立桶）而非其存储，避免把抓取流量写进登录节流库、也避免存储故障连带拖垮抓取。
+
+### 令牌轮换
+`GML_METRICS_TOKEN` 与 `GML_METRICS_TOKEN_NEXT` 同时有效（各自须 ≥32 字符，过短者忽略）。两把**都**做 SHA-256 + `timingSafeEqual` 比较，不提前返回。轮换流程见 `docs/operations/monitoring.md` §1。
+
+### 新指标
+- `os_erp_dashboard_cache_total{result=hit|miss}`：`db-ttl-cache.js` 的 `cachedForDb`（缓存关闭时不计）。
+- `os_erp_audit_write_duration_seconds`（histogram，固定桶 0.5 ms … 1 s + `+Inf`）：`audit-trail.js` 的 `insertAuditRow`（唯一 INSERT 点），失败的尝试同样计时。
+- `os_erp_mcp_tool_calls_total{tool,code}`：`mcp/server.js` 的 `insertCallLog` 成功落行后计数。
+**基数与注入**：`tool` 只接受启动时从工具目录登记的名字（含虚拟工具），其余 `unknown`；`code` 只接受 `process-counters.js` 内登记的结果码，其余 `other`；成功为 `ok`。用户可控字符串因此不能产生新序列，label 值另经转义。直方图桶边界与名字写死在 `HISTOGRAM_DEFS`。
+`ok` 与 `AUDIT_UNAVAILABLE` 对每个已登记工具预置为 0（`increase()` 无法还原首次出现即为 1 的序列），其它码在首次发生时出现。
+**限制**：MCP 计数以审计行落地为准——审计写入本身失败的调用不计入该计数（见 `audit_strict_write_failures_total{reason="mcp_call_log"}`）；多进程各自计数。
+
+### 验证
+`tests/metrics-export.test.mjs` 增：轮换（两把有效、仅 NEXT、过短忽略）、缓存命中/未命中、MCP 计数封闭集合与注入、直方图累计桶与 `insertAuditRow` 计时（含失败）、节流单元（独立桶、窗口过期、容量 fail closed、非法配置回退、映射地址）、真实服务进程上的 429 形状 / `Retry-After` / 错误令牌也计数 / 两把令牌均可抓取。

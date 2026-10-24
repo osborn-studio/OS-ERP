@@ -15,7 +15,7 @@
 
 import { Router } from 'express'
 import { getDb } from '../db/index.js'
-import { ok, wrap, fail, failFromError, paged, pageParams } from '../lib/http.js'
+import { ok, wrap, fail, bizFail, failFromError, paged, pageParams } from '../lib/http.js'
 import { requireAuth, requireRole, requirePerm, requireGlobalData, sessionToken } from '../middleware/auth.js'
 import { auditStrict } from '../middleware/audit.js'
 import {
@@ -41,7 +41,8 @@ import { versionInfo } from '../version.js'
 import { computeOpsStatus, opsCounters } from '../lib/ops-status.js'
 // Prometheus 文本导出（ADR-0045）：admin JWT 或 GML_METRICS_TOKEN Bearer
 import { renderPrometheus, metricsTokenOk, PROMETHEUS_CONTENT_TYPE } from '../lib/metrics-export.js'
-import { counterSnapshot } from '../lib/process-counters.js'
+import { counterSnapshot, histogramSnapshot } from '../lib/process-counters.js'
+import { createMetricsThrottle } from '../lib/metrics-throttle.js'
 import { writeRetryStats } from '../lib/tx.js'
 import { DATA_DIR } from '../db/index.js'
 import { ROLES } from '../middleware/auth.js'
@@ -139,6 +140,18 @@ function bearerOf(req) {
  * 令牌不对 / 未配置 ⇒ 落到 `requireAuth`（admin JWT），所以错误令牌得 401，与"没带凭据"不可区分。
  * 令牌对 JSON 形态与其它任何路由都无效。
  */
+/**
+ * AB10：按来源 IP 的节流（独立桶，鉴权之前 —— 猜令牌的请求同样计数）。429 带业务码 + Retry-After。
+ * 策略在进程启动时由环境变量读定（`GML_METRICS_IP_LIMIT` / `GML_METRICS_IP_WINDOW_MS`）。
+ */
+const metricsThrottle = createMetricsThrottle()
+function metricsRateLimit(req, res, next) {
+  const verdict = metricsThrottle.consume(req.ip)
+  if (verdict.allowed) return next()
+  res.set('Retry-After', String(verdict.retryAfter))
+  return bizFail(res, Object.assign(new Error('指标抓取过于频繁，请稍后重试'), { status: 429, code: 'METRICS_RATE_LIMITED' }))
+}
+
 function metricsAuth(req, res, next) {
   if (req.query?.format === 'prometheus' && metricsTokenOk(bearerOf(req))) return next()
   return requireAuth(req, res, next)
@@ -150,6 +163,7 @@ function metricsAuth(req, res, next) {
  */
 r.get(
   '/metrics',
+  metricsRateLimit,
   metricsAuth,
   wrap((req, res) => {
     const format = req.query?.format
@@ -161,7 +175,7 @@ r.get(
     res.status(200)
     res.setHeader('Content-Type', PROMETHEUS_CONTENT_TYPE)
     res.setHeader('Cache-Control', 'no-store')
-    return res.end(Buffer.from(renderPrometheus({ ops, retry: writeRetryStats(), counters: counterSnapshot(), version: versionInfo().version }), 'utf8'))
+    return res.end(Buffer.from(renderPrometheus({ ops, retry: writeRetryStats(), counters: counterSnapshot(), histograms: histogramSnapshot(), version: versionInfo().version }), 'utf8'))
   })
 )
 
