@@ -264,7 +264,10 @@ section('D. 预留位 `ledger_subject_code` 任何入口都不可写（`INV_TYPE
       throw new Error(`Test child did not close; preserving owned data at ${OWN_DIR}`)
     }
     const result = await ended
-    if (endedBeforeStop || result.code !== null || !requestedSignals.has(result.signal)) {
+    // AC9 起服务对 SIGTERM 做受控关闭（写指标快照后 exit 0）：收到我们请求的 SIGTERM 后 code=0 也是正常结束；
+    // 仍然拒绝「我们没发信号就先死了」与「非零退出码」。
+    const graceful = result.code === 0 && result.signal === null && requestedSignals.has('SIGTERM')
+    if (endedBeforeStop || (!graceful && (result.code !== null || !requestedSignals.has(result.signal)))) {
       throw new Error(`Test server terminated before controlled shutdown or exited abnormally: code=${result.code}; signal=${result.signal}; requested=${[...requestedSignals].join(',') || 'none'}`)
     }
   }
