@@ -163,7 +163,7 @@ PRs #1 to #3 are merged; #4 to #9 are open and unmerged; `gh` cannot find a PR #
 
 **Status (AG8, 2026-10-24): still not run; no run is recorded.** `main` (commit `a524d3b`) has only `ci.yml` (`checks`, `docker`,
 `regression`) and `linux-validation.yml`; `release-candidate.yml` and `nightly-capacity.yml` return HTTP 404 there. PRs #1 to #3 are
-merged; #4 to #10 are open and unmerged; PR #11 does not exist yet. Dispatched 0 times (no `dry_run` run, no full run); no run id exists.
+merged; #4 to #10 are open and unmerged; PR #11 could not be found (HTTP 404). Dispatched 0 times (no `dry_run` run, no full run); no run id exists.
 
 ## RELEASE-NOTES.md
 
