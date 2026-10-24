@@ -422,8 +422,8 @@
 | `meta.js:318` | GET | `/api/meta/settings/defs` | GATED | requireAuth → requireRole | — | — | users |
 | `meta.js:345` | GET | `/api/meta/settings/audit` | GATED | requireAuth → requireRole | lib/settings.js: listSettingAudit | — | setting_audit_log, users |
 | `meta.js:361` | GET | `/api/meta/settings/audit/check` | GATED | requireAuth → requireRole | lib/settings.js: auditSettingTrail, ensureSettings | — | setting_audit_log, settings, users |
-| `meta.js:395` | GET | `/api/meta/audit-logs` | GATED | requireAuth → requirePerm → requireGlobalData | lib/audit-view.js: buildWhere, countCapped, ftsState, keywordUsesFts, orderOf, parseFilters, viewRow<br>lib/settings.js: readSetting | audit_logs | orgs, role_permissions, roles, settings, user_roles, users |
-| `meta.js:424` | GET | `/api/meta/audit-logs/export.csv` | GATED | requireAuth → requirePerm → requireGlobalData | lib/audit-view.js: buildWhere, exportChunks, keywordUsesFts, orderOf, parseFilters | audit_logs | orgs, role_permissions, roles, user_roles, users |
+| `meta.js:395` | GET | `/api/meta/audit-logs` | GATED | requireAuth → requirePerm → requireGlobalData | lib/audit-view.js: auditQueryPlan, countCapped, ftsState, orderOf, parseFilters, viewRow<br>lib/settings.js: readSetting | audit_logs | orgs, role_permissions, roles, settings, user_roles, users |
+| `meta.js:428` | GET | `/api/meta/audit-logs/export.csv` | GATED | requireAuth → requirePerm → requireGlobalData | lib/audit-view.js: auditQueryPlan, countSql, exportChunks, orderOf, parseFilters | audit_logs | orgs, role_permissions, roles, user_roles, users |
 
 ## server/routes/metrics.js
 

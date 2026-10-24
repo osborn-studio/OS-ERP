@@ -74,6 +74,7 @@ node scripts/audit-fts-maintain.mjs --data-dir /abs/path/to/data --industry cosm
 
 - 重复执行同一动作是幂等的（`changed_objects` / `setting_changed` 为 false）；缺 `--reason` 退出 2、什么都不改；构建不支持 FTS5 时 `--enable` 报 `unsupported`、退出 1、设置不改。
 - 步骤 4 持写锁到回填结束；100 万行的实测见 capacity-baseline "AE4"（复现：`node scripts/bench-audit-fts-toggle.mjs --rows 1000000`，在系统临时目录建库、结束即删）。期间并发写入等 `busy_timeout`，可能收到 `SQLITE_BUSY`——低峰执行。
-- 并发与失败：设置与对象在同一个 `BEGIN IMMEDIATE` 事务里改，拿不到锁 → `status: busy`、二者都不变；中途失败 → 整体回滚。两个运维脚本同时执行时后到者等锁，之后看到的是已改好的状态（幂等）。
-- 已知窗口（未修）：`--disable` 恰好提交于某个在途关键词请求「选定走 FTS」与「执行查询」之间时，那一个请求会失败（`no such table: audit_logs_fts`；CSV 导出跨批次可能中途失败），重试即可——低峰执行，或先以 `GML_AUDIT_FTS=0` 重启切走查询路径再 `--disable`。启动自愈与维护脚本恰好重叠时，启动可能得到 `SQLITE_BUSY_SNAPSHOT` 而失败，重启即可。
+- 并发与失败：设置与对象在同一个 `BEGIN IMMEDIATE` 事务里改，拿不到锁 → `status: busy`、二者都不变；中途失败 → 整体回滚。
+- **在途请求与 `--disable`（AF4 已处理）**：检索请求「选定走 FTS」与「执行查询」之间索引表被删时，查询路径捕获 `no such table: audit_logs_fts`，**只重试一次**，换 LIKE 重跑（结果与 FTS 路径逐行相同），并使 `os_erp_audit_fts_fallback_total{reason="query"}` +1；CSV 导出跨批次时在原游标处换 LIKE 继续（`reason="export_batch"`），行不重不漏。重试后再失败、或别的错误，照常报错——不吞错。
+- **启动自愈与维护脚本重叠（AF4 已处理）**：启动自愈（迁移 071 经 `supersedesVerifyOf` 接管 067 的自检）与 `--enable`/`--disable` 都用 `BEGIN IMMEDIATE` 先取写锁（遇 `SQLITE_BUSY` / `SQLITE_BUSY_SNAPSHOT` 有上限地重试，脚本总等待不超过 `--busy-ms`），**拿到锁后重读设置与对象**：状态已被对方收敛则什么都不做（脚本报告 `already_in_state: true`；启动日志出现 `heal-skip 071`）。所以「后到者」的结论是：它不会撤销先到者的决定，也不会因陈旧快照使启动失败。仍然成立的边界：重叠的 `--enable` 持写锁到回填结束，等待超过上限的一方得到 `busy`（脚本）或启动失败（重启即可）。
 - 无 FTS5 构建：CI 的 `audit-no-fts5` job（`ci.yml`）从源码重编译去掉 `SQLITE_ENABLE_FTS5` 的 better-sqlite3 并跑审计视图与维护测试；该 job 在托管 runner 上的首次运行结果尚未验证（见 ADR-0054）。

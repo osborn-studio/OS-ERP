@@ -34,6 +34,8 @@ import { createHash } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
 import { runtimeMode } from '../../runtime.js'
+import { withWriteRetry } from '../../lib/tx.js'
+import { testPause } from '../../lib/test-pause.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const require = createRequire(import.meta.url)
@@ -174,13 +176,22 @@ export function runMigrations(db, { log, warn = (m) => console.warn(m), migratio
       let ok = true
       try { ok = verify(db) === true } catch { ok = false }
       if (ok) continue
-      const tx = db.transaction(() => {
+      // AF4：上面的 verify 是锁外的陈旧读。维护脚本（--enable/--disable）可能恰在此刻提交——旧实现的延迟事务先读设置再写，会得到
+      // SQLITE_BUSY_SNAPSHOT（busy_timeout 解决不了陈旧快照）。现在：BEGIN IMMEDIATE 先取写锁（遇 BUSY/BUSY_SNAPSHOT 有上限地重试），
+      // 在锁内**重读**状态——已收敛（verify 为真）则什么都不做，否则按此刻的设置重跑 up。
+      testPause('GML_TEST_MIGRATE_HEAL_PAUSE', 'migrate-heal', { env: { ...process.env, GML_RUNTIME_MODE: mode } })
+      const didHeal = withWriteRetry(db, () => {
+        let stillBad = true
+        try { stillBad = verify(db) !== true } catch { stillBad = true }
+        if (!stillBad) return false
         up(db)
         record.run(id, name, sum, 'healed')
-      })
-      tx()
-      healed.push(id)
-      if (log) log(`[migrate] heal ${id}  ${name}（结构缺失，已重跑修复）`)
+        return true
+      }, { label: `migrate-heal:${id}` })
+      if (didHeal) {
+        healed.push(id)
+        if (log) log(`[migrate] heal ${id}  ${name}（结构缺失，已重跑修复）`)
+      } else if (log) log(`[migrate] heal-skip ${id}  ${name}（取得写锁后重读，状态已被并发的维护动作收敛，无需修复）`)
       continue
     }
 

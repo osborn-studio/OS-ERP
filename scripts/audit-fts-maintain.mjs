@@ -19,6 +19,10 @@
  *   · 退出码：0 成功；1 操作失败（corrupt / busy / absent+写操作 / 其它错误）；2 参数 / 环境错误。
  *   · `--busy-ms`（默认 5000，0..300000）：等写锁的上限；拿不到则 status=busy、退出 1，索引不被改动（事务未开始）。
  *
+ * 【AF4 并发】两个维护动作（或维护脚本与启动自愈）重叠时：都用 `BEGIN IMMEDIATE` 取写锁（BUSY / BUSY_SNAPSHOT 有上限地重试，总等待不超过 `--busy-ms`），
+ *   拿到锁后**重读**设置与对象；状态已与目标一致 → 什么都不做（报告 `already_in_state: true`、`changed_objects`/`setting_changed` 为 false，退出 0）。
+ *   测试暂停点 `GML_TEST_FTS_MAINTAIN_PAUSE=<目录>`（仅 `GML_RUNTIME_MODE=test`）在"已读状态、未开事务"处暂停，见 `server/lib/test-pause.js`。
+ *
  * 【诚实边界】持锁探针是**写入者**视角（WAL 下读者不被挡）；`max_blocked_ms` 近似上界、`max_busy_span_ms` 下界，见 lock-probe.mjs。
  *   `elapsed_ms` 是本进程从 BEGIN 到 COMMIT 的墙钟，是持写锁时间的粗上界。脚本不创建缺失的库、不跑迁移、不碰 `GML_AUDIT_FTS` 开关
  *   （该开关只影响查询路径，不影响本脚本；维护索引与是否使用索引是两件事）。
@@ -28,11 +32,13 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { performance } from 'node:perf_hooks'
+import { setTimeout as delay } from 'node:timers/promises'
 import { createRequire } from 'node:module'
 import Database from 'better-sqlite3'
 import { parseArgs, locateDatabases, die } from './lib/audit-chain-cli.mjs'
 import { startLockProbe } from './lib/lock-probe.mjs'
 import { ensureSettings, writeSetting } from '../server/lib/settings.js'
+import { testPause } from '../server/lib/test-pause.js'
 
 const m071 = createRequire(import.meta.url)('../server/db/migrations/071_audit_fts_optional.cjs')
 const m067 = createRequire(import.meta.url)('../server/db/migrations/067_audit_fts.cjs')
@@ -103,12 +109,13 @@ const outFile = args.out ? path.resolve(args.out) : path.join(path.dirname(file)
 
 const exists = (db, type, name) => !!db.prepare('SELECT 1 FROM sqlite_master WHERE type=? AND name=?').get(type, name)
 const sizeOf = (f) => ['', '-wal'].reduce((n, s) => { try { return n + fs.statSync(f + s).size } catch { return n } }, 0)
-const isBusy = (e) => e && (e.code === 'SQLITE_BUSY' || e.code === 'SQLITE_LOCKED' || /database is locked/.test(String(e.message)))
+const isBusy = (e) => e && (/^SQLITE_(BUSY|LOCKED)/.test(String(e.code)) || /database is locked/.test(String(e.message)))
+const MAX_ATTEMPTS = 5 // AF4：取写锁 / 事务内遇 BUSY 的总尝试次数上限（同时受 --busy-ms 总预算约束）
 
 const readStoredSetting = (db) => db.prepare("SELECT value FROM settings WHERE key='audit_fts_enabled'").get()?.value ?? null
 const report = {
   schema_version: 1, action, industry: args.industry, data_file: path.basename(file), started_at: new Date().toISOString(),
-  ok: false, status: 'error', error: null, rows: null, fts_present: null, triggers_present: null, busy_timeout_ms: busyMs,
+  ok: false, status: 'error', error: null, already_in_state: false, rows: null, fts_present: null, triggers_present: null, busy_timeout_ms: busyMs,
   bytes_before: sizeOf(file), bytes_after: null, elapsed_ms: null, lock_probe: null
 }
 
@@ -130,16 +137,43 @@ try {
       probe = await startLockProbe(file)
       const t0 = performance.now()
       try {
-        db.exec('BEGIN IMMEDIATE')
-        try {
-          // 补键 + 基线放在同一个事务里：后面任何一步失败都整体回滚，不留下半截设置行
-          ensureSettings(db, { actor: { id: null, name: 'audit-fts-maintain', source: 'script' } })
-          if (action === 'disable') report.changed_objects = m071.dropFts(db)
-          else { const had = exists(db, 'table', FTS); m071.enableFts(db); report.changed_objects = !had }
-          const w = writeSetting(db, { key: 'audit_fts_enabled', value: action === 'enable' ? '1' : '0', reason: args.reason.trim(), actor: { id: null, name: 'audit-fts-maintain', source: 'script' }, source: 'script' })
-          report.setting_changed = w.changed
-          db.exec('COMMIT')
-        } catch (e) { try { db.exec('ROLLBACK') } catch { /* 没有打开的事务 */ } throw e }
+        // 测试暂停点（仅 GML_RUNTIME_MODE=test）：已读到当前状态、尚未开事务——让另一个进程确定性地先提交
+        testPause('GML_TEST_FTS_MAINTAIN_PAUSE', 'fts-maintain')
+        const want = action === 'enable' ? '1' : '0'
+        const actor = { id: null, name: 'audit-fts-maintain', source: 'script' }
+        // AF4：BEGIN IMMEDIATE + 有上限的重试（SQLITE_BUSY / BUSY_SNAPSHOT；总等待不超过 --busy-ms）；拿到写锁后**重读**设置与对象，
+        // 状态已与目标一致（并发的另一次 --enable/--disable、或启动自愈已经做完）就什么都不做。
+        const deadline = Date.now() + busyMs
+        for (let attempt = 1; ; attempt++) {
+          db.pragma(`busy_timeout = ${Math.max(0, deadline - Date.now())}`)
+          try {
+            db.exec('BEGIN IMMEDIATE')
+          } catch (e) {
+            if (isBusy(e) && attempt < MAX_ATTEMPTS && Date.now() < deadline) { await delay(Math.min(25 * 2 ** (attempt - 1), 200, Math.max(0, deadline - Date.now()))); continue }
+            throw e
+          }
+          try {
+            const present = exists(db, 'table', FTS) && TRIGGERS.every((n) => exists(db, 'trigger', n))
+            const absent = !exists(db, 'table', FTS) && TRIGGERS.every((n) => !exists(db, 'trigger', n))
+            if (readStoredSetting(db) === want && (action === 'enable' ? present : absent)) {
+              report.already_in_state = true; report.changed_objects = false; report.setting_changed = false
+              db.exec('ROLLBACK')
+              break
+            }
+            // 补键 + 基线放在同一个事务里：后面任何一步失败都整体回滚，不留下半截设置行
+            ensureSettings(db, { actor })
+            if (action === 'disable') report.changed_objects = m071.dropFts(db)
+            else { const had = exists(db, 'table', FTS); m071.enableFts(db); report.changed_objects = !had }
+            const w = writeSetting(db, { key: 'audit_fts_enabled', value: want, reason: args.reason.trim(), actor, source: 'script' })
+            report.setting_changed = w.changed
+            db.exec('COMMIT')
+            break
+          } catch (e) {
+            try { db.exec('ROLLBACK') } catch { /* 没有打开的事务 */ }
+            if (isBusy(e) && attempt < MAX_ATTEMPTS && Date.now() < deadline) { await delay(Math.min(25 * 2 ** (attempt - 1), 200)); continue }
+            throw e
+          }
+        }
         report.status = 'ok'
       } catch (e) {
         report.status = isBusy(e) ? 'busy' : 'error'

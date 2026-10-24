@@ -12,12 +12,16 @@
  *   · （AA6）关键词只搜 action / entity / user_name 且至少 2 个有效字符（`assertKeyword`，buildWhere 内也强制，绕不过）；
  *   · （AB3）迁移 067 的 FTS5 外部内容表 `audit_logs_fts`（trigram）可用、关键词 ≥3 字符且命中稀少（≤ FTS_RARE_MAX）时关键词走 FTS，否则（无 FTS5 构建 / 2 字关键词 / 命中很多）走 LIKE；
  *     仅按 action 过滤必须带 module（`AUDIT_ACTION_NEEDS_MODULE`，400）。
+ *   · （AF4）`auditQueryPlan`：选 FTS 与执行之间索引可能被 `--disable` 删掉（`no such table: audit_logs_fts`）；`plan.run` 捕获它**一次**，换 LIKE 重跑
+ *     并计 `audit_fts_fallback_total{reason}`；导出跨批次时同样（游标不变，两条路径同序同结果）。其它错误、LIKE 计划上的错误、重跑后的再次失败都原样抛出。
  *   · （AA6）排序随过滤选择：命中 module / user_id 索引（末列 created_at）时按 `created_at DESC, id DESC`，索引直接给出顺序、无排序临时表；
  *     其余按 `id DESC`（rowid 倒扫）。导出的游标与列表排序同一份（`orderOf` / `exportChunks`）。
  * ============================================================================
  */
 import { redactValue, redactText } from './redact.js'
 import { readSetting } from './settings.js'
+import { incCounter } from './process-counters.js'
+import { testPause } from './test-pause.js'
 
 export const AUDIT_EXPORT_MAX_ROWS = 50000
 export const AUDIT_PAGE_MAX = 200
@@ -122,6 +126,38 @@ export function keywordUsesFts(db, keyword) {
 export const ftsPhrase = (kw) => `"${String(kw).replace(/"/g, '""')}"`
 export const useFtsFor = (keyword, fts) => !!fts && [...String(keyword)].length >= KEYWORD_FTS_MIN_CHARS
 
+/** 唯一的"索引表在执行时已不存在"判据：SQLITE_ERROR 且信息点名 audit_logs_fts */
+export function isFtsMissingError(e) {
+  return !!e && e.code === 'SQLITE_ERROR' && new RegExp(`no such table: (?:\\w+\\.)?${FTS_TABLE}\\b`).test(String(e.message))
+}
+
+/**
+ * 查询计划（AF4）：一次请求内 where / args 的唯一持有者。`run(fn)` 以当前计划执行 `fn(plan)`；
+ * 若计划用了 FTS 且 `fn` 抛 `isFtsMissingError`，就把计划换成 LIKE、计一次 `audit_fts_fallback_total{reason}`、再跑一次 `fn`——只此一次，
+ * 重跑再失败则原样抛出。`fn` 必须在 `run` 里自己 `prepare`（旧语句引用的是旧 where）。结果两条路径逐行相同（见 buildWhere 的候选集说明）。
+ * 测试暂停点 `GML_TEST_AUDIT_FTS_PAUSE`（仅 test 模式）在"已选 FTS、尚未执行"处暂停，让真实的 `--disable` 确定性地落在这个窗口里。
+ */
+export function auditQueryPlan(db, filters) {
+  let fts = keywordUsesFts(db, filters.keyword)
+  let built = buildWhere(filters, { fts })
+  const plan = {
+    get where() { return built.where },
+    get args() { return built.args },
+    get fts() { return fts },
+    run(fn, reason = 'query') {
+      if (fts) testPause('GML_TEST_AUDIT_FTS_PAUSE', 'audit-fts')
+      try { return fn(plan) } catch (e) {
+        if (!fts || !isFtsMissingError(e)) throw e
+        fts = false
+        built = buildWhere(filters, { fts: false })
+        incCounter('audit_fts_fallback_total', reason)
+        return fn(plan)
+      }
+    }
+  }
+  return plan
+}
+
 /** 过滤 → { where, args }（列表与导出共用）。opts.fts（由 keywordUsesFts 决定）：true 且关键词 ≥3 字符时走 FTS，否则 LIKE */
 export function buildWhere(f, { fts = false } = {}) {
   const c = []
@@ -185,18 +221,23 @@ export function exportSql(where, order) {
   }
 }
 
-/** 导出分批（游标与 orderOf 同序；snapshotMax 之后的新行不进文件）。同步生成器：每批 ≤ batch 行的 CSV 文本 */
-export function* exportChunks(db, { where, args, order, snapshotMax, exported, batch = 1000 }) {
-  const sql = exportSql(where, order)
-  const first = db.prepare(sql.first)
-  const next = db.prepare(sql.next)
+/**
+ * 导出分批（游标与 orderOf 同序；snapshotMax 之后的新行不进文件）。同步生成器：每批 ≤ batch 行的 CSV 文本。
+ * 传 `plan`（auditQueryPlan）时每批经 `plan.run(…, 'export_batch')` 执行：索引在批次之间被删，则本批起换 LIKE 从原游标继续（行不重不漏）；
+ * 不传 `plan` 时用 `where` / `args`（基准脚本等）。
+ */
+export function* exportChunks(db, { where, args, plan = null, order, snapshotMax, exported, batch = 1000 }) {
   let last = null
   let sent = 0
   while (sent < exported) {
     const n = Math.min(batch, exported - sent)
-    const rows = last === null
-      ? first.all(...args, snapshotMax, n)
-      : next.all(...args, snapshotMax, ...(order.byTime ? [last.created_at, last.id] : [last.id]), n)
+    const read = (p) => {
+      const sql = exportSql(p.where, order)
+      return last === null
+        ? db.prepare(sql.first).all(...p.args, snapshotMax, n)
+        : db.prepare(sql.next).all(...p.args, snapshotMax, ...(order.byTime ? [last.created_at, last.id] : [last.id]), n)
+    }
+    const rows = plan ? plan.run(read, 'export_batch') : read({ where, args })
     if (!rows.length) return
     let chunk = ''
     for (const row of rows) chunk += csvLine(viewRow(row))
