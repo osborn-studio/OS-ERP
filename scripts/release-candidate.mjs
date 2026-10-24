@@ -242,7 +242,8 @@ function main() {
   if (hosted && signKeyPath !== undefined) throw new Error(`${KEY_ENV} is set on a hosted CI runner; hosted CI must not hold the signing key (formal releases are re-signed by the key holder on a controlled machine)`)
   const commit = git('rev-parse', 'HEAD')
   const version = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version
-  const name = `RC-${version}-${commit.slice(0, 7)}`
+  // AG1：演练的 zip / 证据目录名带 -dry-run 后缀；该名字不符合透明日志的候选命名（以 7+ 位十六进制 SHA 结尾），本身就无法入日志。
+  const name = `RC-${version}-${commit.slice(0, 7)}${opts['skip-focused'] ? '-dry-run' : ''}`
   const output = path.resolve(opts.output || path.join(ROOT, 'release'))
   const zipFile = path.join(output, `${name}.zip`)
   const evidenceDir = path.join(output, `${name}.evidence`)

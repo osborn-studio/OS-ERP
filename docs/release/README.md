@@ -174,7 +174,8 @@ venv, native build hooks, production acceptance) without paying for the long foc
    `GITHUB_ACTIONS=true` (refused on a workstation with a clear message) and cannot be combined with `--run-tests`, `--focused-result`
    or `--log`. Consequences, all on purpose:
    - `EVIDENCE.json` carries `dry_run: true` and `focused_tests: {result: "not run", origin: "skipped-dry-run"}`;
-   - the artifact is named `os-erp-candidate-<run>-<attempt>-dry-run` (the normal name has no suffix) and contains no
+   - the archive is `RC-<version>-<sha>-dry-run.zip` (that name is not a valid evidence-log candidate name, so it cannot be logged or ingested even by hand),
+     the artifact is named `os-erp-candidate-<run>-<attempt>-dry-run` (the normal name has no suffix) and contains no
      `evidence-log-line.jsonl`: a dry run never reads or appends the evidence log, so there is nothing to ingest or commit;
    - `verify-release` prints a prominent `DRY RUN, NOT A CANDIDATE` warning, and `--log` / `--require-signature` fail for it
      (a dry run is never log-eligible and cannot be signed); the SBOM diff of later runs ignores dry-run artifacts.

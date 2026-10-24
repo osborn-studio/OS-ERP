@@ -503,7 +503,7 @@ test('AG1: --skip-focused is refused outside GitHub Actions, and never combines 
   assert.ok(!existsSync(out), 'nothing is built')
 })
 
-test('AG1: a hosted --skip-focused build records dry_run, skipped-dry-run focused tests; verify-release warns, is never log-eligible and rejects forgeries', { timeout: 290000 }, (t) => {
+test('AG1: a hosted --skip-focused build records dry_run, skipped-dry-run focused tests; verify-release warns, is never log-eligible and rejects forgeries', { timeout: 290000 }, async (t) => {
   const src = minimalSource(t)
   const head = git(src, 'rev-parse', 'HEAD').stdout.trim()
   const gh = fakeGh(t, { stdout: '[]' })
@@ -515,6 +515,8 @@ test('AG1: a hosted --skip-focused build records dry_run, skipped-dry-run focuse
   const zip = path.join(out, name.replace('.evidence', '.zip'))
   const ev = JSON.parse(readFileSync(path.join(dir, 'EVIDENCE.json'), 'utf8'))
   assert.equal(ev.dry_run, true)
+  assert.match(name, /^RC-.+-[0-9a-f]{7}-dry-run\.evidence$/, 'the archive and evidence directory names carry -dry-run')
+  assert.match(ev.artifact.name, /-dry-run\.zip$/)
   assert.equal(ev.focused_tests.origin, 'skipped-dry-run')
   assert.equal(ev.focused_tests.result, 'not run')
   assert.equal(ev.built_by, 'hosted-ci')
@@ -540,6 +542,8 @@ test('AG1: a hosted --skip-focused build records dry_run, skipped-dry-run focuse
     assert.notEqual(x.status, 0, label)
     assert.match(x.stderr, re, label)
   }
+  const { LOG_FILE: _l, ...logLib } = await import(pathToFileURL(path.join(ROOT, 'scripts/lib/evidence-log.mjs')).href)
+  assert.throws(() => logLib.appendEntry(path.join(dir, 'x.jsonl'), { name: ev.artifact.name.replace(/\.zip$/, ''), evidence: ev, sigText: null, builtBy: 'hosted-ci' }), /bad candidate name|dry run is never log-eligible/)
   forge('dry_run removed but still skipped', e => { delete e.dry_run }, /skipped-dry-run/)
   forge('dry_run false but still skipped', e => { e.dry_run = false }, /dry_run/)
   forge('dry_run true but focused passed', e => { e.focused_tests = { result: 'passed', origin: 'operator-attested', source: 'x' } }, /dry_run/)
