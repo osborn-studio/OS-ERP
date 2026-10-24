@@ -125,7 +125,7 @@ try {
   }
   // AE3 "前"：/stats 四条与 AI 平台分析的旧 SQL，无索引；全局与受限组织范围（org 1 = 平台 1、2）
   const SCOPES = { global: scopeOf({ scope: 'all' }), org1: scopeOf({ orgIds: [1] }) }
-  result.ae3 = { before: {}, after: {}, results_identical: true }
+  result.ae3 = { before: {}, after: {}, results_identical: true, mismatches: [] }
   for (const [sname, sc] of Object.entries(SCOPES)) {
     for (const days of [30, 90]) {
       for (const [k, [sql, params]] of Object.entries(OLD_AE3(days, sc))) {
@@ -158,7 +158,7 @@ try {
         const st = news[k]
         result.ae3.after[`${k}.${sname}.${days}d`] = { ms: time(() => db.prepare(st.sql).all(...st.params), Math.min(REPEAT, 11)), plan: plan(db, st.sql, st.params) }
         const same = JSON.stringify(db.prepare(olds[k][0]).all(...olds[k][1])) === JSON.stringify(db.prepare(st.sql).all(...st.params))
-        result.ae3.results_identical = result.ae3.results_identical && same
+        if (!same) { result.ae3.results_identical = false; result.ae3.mismatches.push(`${k}.${sname}.${days}d`) }
       }
     }
   }
@@ -208,6 +208,7 @@ try {
   const txt = JSON.stringify(result, null, 2)
   if (OUT) fs.writeFileSync(path.resolve(OUT), txt + '\n')
   console.log(txt)
+  if (!result.results_identical || !result.ae3.results_identical) { console.error(`新旧 SQL 结果不一致：${result.ae3.mismatches.join(', ') || 'trend/channel'}`); process.exitCode = 1 }
 } finally {
   fs.rmSync(dir, { recursive: true, force: true })
 }

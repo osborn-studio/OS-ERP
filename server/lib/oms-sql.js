@@ -5,7 +5,8 @@
  * 【职责】把 `server/routes/oms.js` GET /stats 的四条语句与 `server/routes/ai.js` `channel_compare` 的线上平台分析 SQL 放在一处：
  *   路由从这里取、`scripts/explain-audit.mjs` 也从这里取，索引审计审的就是路由真正执行的语句。
  *   旧写法 `date(order_time) >= date('now','localtime','-N day')` 对列套函数，用不上 `idx_oms_order_time`（迁移 070）；
- *   这里沿用 AD3 的做法：`order_time >= :lo AND date(order_time) >= :since`——前者走索引缩小范围，后者是旧谓词原样复核，所以结果与旧 SQL 逐行相同。
+ *   这里沿用 AD3 的做法：`order_time >= :lo AND date(order_time) >= :since`——前者走索引缩小范围，后者是旧谓词原样复核，所以对应用自身写入的格式（`YYYY-MM-DD HH:MM:SS`）结果与旧 SQL 逐行相同；
+ *   与 AD3 相同的已知残余（Codex 审计）：文本序低于 `lo`、但 SQLite `date()` 能解析的非规范值（儒略日数字串 `'2.4613375e6'`、`2026-02-31` 之类溢出日期）会被区间谓词挡掉，旧 SQL 会计入（ADR-0044 补充 3、4）。
  * 【边界】只产生 `{ sql, params }`，不碰数据库。窗口日期**不重复实现**，一律取 `dashboard-sql.js` 的 `onlineWindow()`（含非法 / 超范围窗口 → 绑定 NULL → 结果为空）。
  *   范围谓词（`omsPlatformScopeSql` / `omsOrderScopeSql` 的输出）由调用方传入、原样拼进 WHERE，参数紧跟在窗口两个参数之后，范围语义不变。
  * 【改它要注意】窗口参数 `[lo, since]` 永远排在 params 最前（SQL 里 `?` 的出现顺序决定绑定顺序：byPlatform 的窗口在 ON 子句，先于 WHERE 的范围谓词）。
