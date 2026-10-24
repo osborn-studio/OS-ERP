@@ -92,3 +92,41 @@ MCP 的范围依据从 `owner_org_id` 改为仓库所属组织，是 ADR-0038 �
 - **低 1（已修）**：`/top` 等价性夹具叠加在演示种子上，`LIMIT 10` 可能把新增的"无品牌 / 并列"商品挤出榜外。→ 夹具先清空演示销售单，并断言榜单恰为 4 个商品、两个品牌（含"未标品牌"）、2 个经销商、1 个门店。
 - **低 2（已修）**：测试在 HTTP 响应后立即读子进程 stdout 里的 profile 行，二者无先后保证。→ 改为 `waitProfile`（轮询到期望条数，最多 5 s）；负向断言（受限账号不产生新行）保留固定等待。
 - 审计未跑全套测试（只读沙箱）；变异检查由本工作流自己做：去掉 `data_version` 后键控缓存单元与两进程用例变红。
+
+---
+
+# 补充 2（AC4，roadmap-v8）：`/channel`、`/recent` 剖析，explain-audit 登记，缓存命中率阈值依据
+
+状态：开发实现，尚非产品上线验收｜数字见 `capacity-baseline.md` 的 AC4 一节（Mac mini + 合成 medium 库 + 2 万 OMS 单叠加 + 整机高负载，量级为准）
+
+## 决定
+
+### 1. 剖析结论与缓存范围
+`/dashboard/channel`、`/recent` 接入 `createProfiler`（`label=dashboard.channel|recent`，响应体永远不含剖析数据）。合成 medium 库上**没有块 ≥ 50 ms**：`channel.offline` ≈ 4–5 ms（`idx_so_order_date`），`channel.online` ≈ 5–12 ms（2 万行 OMS 整表读取，`date(order_time)` 套函数无索引可用，**随订单量线性增长**），`recent` 四条合计 < 0.2 ms。
+
+- **`/channel` 缓存**，键 `channel:<days>`（`Number(req.query.days || 90)` 的数值），与 AB2 同一套 `cachedRead`：路由器第一行已要求全局数据范围，响应只由库内容、日期、`days` 决定，不含用户 / 组织；任何写入、跨零点、TTL 到期都失效；32 键上限同样约束 `?days`。理由是线上分支的线性增长，而不是当前耗时。
+- **`/recent` 不缓存**，只剖析（日志里 `cache=off`）：四条"按主键倒序取 8 条"的查询合计 < 0.2 ms，缓存的收益小于每次读取的版本校验；它是"最新动态"，任何写入都使缓存失效，命中率天然低。若生产数据量下块耗时 ≥ 50 ms，再按 `cachedRead` 推广（同一键规则）。
+
+### 2. SQL 文本单一来源
+新 `server/lib/dashboard-sql.js` 放 `/top`（四条）、`/inventory-dist`（一遍扫描的聚合）、`/channel`（两条）、`/recent`（四条）的 SQL 文本；路由与 `scripts/explain-audit.mjs` 同取。**为什么新建模块而不是从路由导出**：路由模块一导入就拉起 `getDb()` 等依赖，审计脚本是只读打开种子库的独立进程。AB2 的 `CROSS JOIN` / 单遍扫描语句因此不再有"路由改了、审计没跟上"的漂移面；`summary` / `trend` 的既有登记仍是人工镜像（未动）。
+
+### 3. explain-audit 登记
+11 条新语句（`dash.top_*` ×4、`dash.inventory_dist_agg`、`dash.channel_*` ×2、`dash.recent_*` ×4）。`expectIndex`：`/top` 四条与 `channel_offline` 为 `idx_so_order_date`——守的是 AB2 的 `CROSS JOIN` 决定：变异（改回普通 JOIN）使计划退回 `SCAN i` 并报红（本工作流做过）。豁免：`recent_*`（按主键倒序取页，`noSort` 前提由审计脚本继续检查）；`channel_online`（整表读取，谓词无法索引，理由写在 ALLOW 里）。`inventory_dist_agg` 是 `idx_stock_wh_sku` 上的索引全扫，不报红，只记录。
+
+### 4. 缓存命中率告警阈值的依据
+见 `docs/operations/monitoring.md`「缓存命中率告警阈值怎么来的」。要点：20% 与样本量条件是按模型选的，**不是生产标定**；模型用真实 `cachedForDb` + 注入时钟，并在测试里核对 AB10 计数器；命中率上限是 `floor(ttl/poll)/(floor(ttl/poll)+1)`，写入平均间隔短于一个轮询周期时降到 20% 以下。
+
+## 测试
+`tests/dashboard-perf.test.mjs` 的 AC4 用例（初版 6 个，Codex 审计后补到 9 个）：登记语句与模块导出逐字相同且路由不内联、`expectIndex`/豁免齐全；已迁移结构上登记语句 0 违规、`/top` 计划顺序、`expectIndex` 守卫真会检查；`/channel` 逐字对照原 SQL、`?days` 分键、写入失效、块计时齐全、响应无 cache / profile 字段；`/recent` 剖析且 `cache=off`、写入后立即可见；默认静默、受限账号 403 且不预热；命中率模型（单调、上限、20% 线位置、计数器核对、`ttl=0` 不计数）。
+
+## 已知限制
+- 数字来自 Mac mini + 合成库（OMS 单为叠加灌入），整机负载 27–35，不是 `dmserver` 结果；`/channel` 随 OMS 订单量越过 50 ms 的点是外推。
+- `oms_orders.order_time` 无可用索引（`/channel` 线上与 `/trend` 线上共有的残余），根治需新迁移（给 `order_time` 建索引并把谓词改成区间），不在 AC4 范围。`dash.trend_*` 的登记仍是人工镜像且缺 `trend.online`。
+- 压测副本上 `oc.overview_credit_used` 因演示种子叠加越过行数阈值而报违规，在 `batch-eleven` 上同样存在，与本补充无关，未处理。
+
+## Codex 审计（AC4，`gpt-6.1-sol`，只读）
+范围：`git diff batch-eleven...HEAD`；关注缓存正确性、explain-audit 语句保真、跨范围泄漏、新测试与命中率推导的弱点。
+- **高：无。** 确认：范围闸门（`requireAuth, requireInternal, requireGlobalData`）在缓存之前；`channel` 的缓存值不含与调用者相关的内容；键含规范化的 `days`；登记的 SQL 与路由调用一致；`expectIndex` / ALLOW 条目有查询与结构支撑。
+- **中 1（已修，文档 + 测试）**：命中率推导只看单键与写入，没有说明计数器是所有端点 / 键的合计，且命中率取决于每个键的读取间隔与 TTL——5 个键各 1 分钟读一次，30 分钟 150 次全未命中、零写入，会满足样本条件让告警一直亮；上限公式的 `floor(30/r)` 有边界效应（15 s → 2/3，16 s → 1/2）。→ `monitoring.md` 写明"命中率低不一定是写入密"、触发后的两步排查与处置、样本条件按聚合查找次数解释；新增测试 `AC4 hit ratio can be zero with no writes at all` 固定这些事实（含 150 次全未命中的多键用例）。
+- **低 1（已修）**：保真测试只比较文本与导入，路由若调错构建函数 / 窗口仍绿。→ 新增 `AC4 route responses equal the results of the registered explain-audit statements`：HTTP 响应与登记语句在同一库上的执行结果逐项相等（`/top` 四条、`/channel` 两条、`/recent` 四条，默认窗口与登记一致）。仍不是"抓取路由实际 prepare 的 SQL"（路由在独立进程，没有注入点）——按行为而非文本比对。
+- **低 2（已修）**：受限账号"不预热"只在已预热的键上测过。→ 新增 `AC4 a rejected caller on a cold /channel key …`：未用过的 `days=45` 被 403 / 401 后日志无处理器行，管理员第一次读该键仍是 `miss`。

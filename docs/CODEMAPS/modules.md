@@ -3,7 +3,7 @@
 <!-- generated -->
 <!-- 由 `node scripts/gen-codemap.mjs` 生成，勿手改；CI 校验不漂移 -->
 
-共 82 个模块。“路由”只列在处理器区域内直接引用该函数的路由（路由超过 5 条时按路由文件汇总，明细见 [routes.md](routes.md)）；“MCP 工具”来自 `server/mcp/tools.js` 的 40 个工具；“被模块调用”是其它 lib/mcp 模块里的跨文件引用。“—”表示静态扫描没找到调用方，不等于死代码。
+共 83 个模块。“路由”只列在处理器区域内直接引用该函数的路由（路由超过 5 条时按路由文件汇总，明细见 [routes.md](routes.md)）；“MCP 工具”来自 `server/mcp/tools.js` 的 40 个工具；“被模块调用”是其它 lib/mcp 模块里的跨文件引用。“—”表示静态扫描没找到调用方，不等于死代码。
 
 ## 扫描边界（必读）
 
@@ -462,6 +462,21 @@ BOM 服务层（模块 10B · 一个 BOM + 三类执行单）
 | `crudRouter` | fn | 6 条：master.js×6 | — | — |
 | `tableColumns` | fn | — | — | — |
 
+## `server/lib/dashboard-sql.js`
+
+看板接口 /top /inventory-dist /channel /recent 的 SQL 文本唯一来源（AC4，ADR-0044 补充 2）
+
+| 导出 | 类型 | 路由 | MCP 工具 | 被模块调用 |
+|---|---|---|---|---|
+| `INVENTORY_DIST_AGG_SQL` | const | — | — | — |
+| `RECENT_SQL` | const | — | — | — |
+| `channelOfflineSql` | fn | GET /api/dashboard/channel | — | — |
+| `channelOnlineSql` | fn | GET /api/dashboard/channel | — | — |
+| `topBrandsSql` | fn | GET /api/dashboard/top | — | — |
+| `topDealersSql` | fn | GET /api/dashboard/top | — | — |
+| `topProductsSql` | fn | GET /api/dashboard/top | — | — |
+| `topStoresSql` | fn | GET /api/dashboard/top | — | — |
+
 ## `server/lib/dates.js`
 
 业务日期的**唯一来源**。
@@ -482,7 +497,7 @@ BOM 服务层（模块 10B · 一个 BOM + 三类执行单）
 |---|---|---|---|---|
 | `cacheKeyCount` | fn | — | — | — |
 | `cacheTtlMs` | fn | GET /api/dashboard/trend<br>GET /api/dashboard/todos<br>GET /api/dashboard/top<br>GET /api/dashboard/inventory-dist | — | — |
-| `cachedForDb` | fn | GET /api/dashboard/summary<br>GET /api/dashboard/trend<br>GET /api/dashboard/todos<br>GET /api/dashboard/top<br>GET /api/dashboard/inventory-dist | — | — |
+| `cachedForDb` | fn | 6 条：dashboard.js×6 | — | — |
 | `invalidateForDb` | fn | — | — | — |
 
 ## `server/lib/dealer-statement.js`
@@ -1015,7 +1030,7 @@ Prometheus 文本指标渲染 + 抓取令牌校验（ADR-0045）
 
 | 导出 | 类型 | 路由 | MCP 工具 | 被模块调用 |
 |---|---|---|---|---|
-| `createProfiler` | fn | GET /api/dashboard/summary<br>GET /api/dashboard/trend<br>GET /api/dashboard/todos<br>GET /api/dashboard/top<br>GET /api/dashboard/inventory-dist | — | — |
+| `createProfiler` | fn | 7 条：dashboard.js×7 | — | — |
 | `profilingEnabled` | fn | — | — | — |
 
 ## `server/lib/promotion.js`
