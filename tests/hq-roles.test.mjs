@@ -141,13 +141,23 @@ test('docflow strict store binding: both switch states, HQ exemption, bound acco
     assert.equal(hist.status, 404)
     const trace = await api('/api/docflow/trace?doc_no=RBJ-AC2-1', { token: boss.token })
     assert.equal(trace.status, 200)
-    assert.equal((trace.body.data.events || trace.body.data.list || []).length, 0)
+    assert.ok(Array.isArray(trace.body.data), 'trace returns an array')
+    assert.equal(trace.body.data.length, 0)
   })
 
   await t.test('default: HQ roles, admin and is_super are exempt and still see everything', async () => {
     for (const who of [finance, purchase, scm, superBoss]) assert.deepEqual(mine(await events(who.token)), sorted('rc1', 'rc2', 'po'), who.username)
     assert.deepEqual(mine(await events(f.admin)), sorted('rc1', 'rc2', 'po'))
     assert.equal((await api(`/api/docflow/history/RC/${rc1}`, { token: finance.token })).status, 200)
+  })
+
+  await t.test('POST /transition does not reveal RC documents to unbound non-HQ accounts (same 404 as missing)', async () => {
+    const probe = (tk, id) => api('/api/docflow/transition', { token: tk, body: { doc_type: 'RC', id, action: 'probe' } })
+    const hidden = await probe(boss.token, rc1)
+    const missing = await probe(boss.token, 999999)
+    assert.equal(hidden.status, 404)
+    assert.deepEqual(hidden.body, missing.body)
+    assert.notEqual((await probe(finance.token, rc1)).status, 404, 'HQ role is not blocked by the binding gate')
   })
 
   await t.test('default: store-bound account is still limited to its own store', async () => {

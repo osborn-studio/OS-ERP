@@ -44,6 +44,7 @@ import {
   docEventScope,
   docScopeOf,
   docInScope,
+  DOC_SCOPE_RESOLVERS,
   explainLifecycle,
   createPermOf
 } from '../lib/docflow.js'
@@ -237,6 +238,9 @@ r.post(
       const owner = effectOwnerOf(type.code)
       const access = owner && owner.canAccess ? owner.canAccess(db, req, row) : assertCanRead(req, row)
       if (!access.ok) return fail(res, access.message, access.status)
+      // ADR-0051（Codex 审计）：带门店绑定的类型（RC / YQ / SH）在驱动前也过绑定闸，否则对未绑门店的非总部账号，
+      // 错误响应（409 的 docNo 等）会泄露其不可见单据；与读接口同一份 docInScope，范围外与不存在同形 404
+      if (row && DOC_SCOPE_RESOLVERS[type.code]?.binding && !docInScope(scopeCtx(req), type.code, row.id)) return fail(res, '记录不存在', 404)
 
       // ② 外部主体不得驱动内部单据域
       if (INTERNAL_MODULES.has(type.module) && isExternalUser(req)) {
