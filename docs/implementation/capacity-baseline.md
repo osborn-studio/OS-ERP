@@ -765,3 +765,47 @@ gh run view <run-id> --log-failed
 - 复现：`node scripts/bench-mcp-rate-store.mjs [--n=20000] [--tokens=50]`。
 - 未覆盖：`dmserver`；多进程同时写时的锁等待分布（正确性由 `tests/mcp-rate-store-db.test.mjs` 的 4 进程竞速用例验证：恰好放行 `rpm` 次，不是性能数据）；与业务写入争用下的尾延迟；`synchronous=FULL` / 网络盘；表在长期运行后的体积（每令牌每分钟至多 2 个窗口 × 2 种 kind 的行，清理线之外的行由定时器删除）。
 
+
+## AE3 OMS `/stats` 与 AI 平台分析：区间谓词前后（**Mac mini / 合成 20 万 OMS 单 + 每单一行明细 / 非目标主机 / 整机负载 8–21**）
+
+脚本：`node scripts/bench-oms-order-time.mjs --rows 200000 --span 365|60 --repeat 21|31`（输出 `ae3` 键；全新临时目录；不跑 `ANALYZE`）。"前"= AE3 之前的 SQL（`date(order_time) >= …`，无迁移 070 索引）；"后"= `server/lib/oms-sql.js` 的新 SQL + 迁移 070 索引。新旧 SQL 在全局与受限组织范围（org 1 = 平台 1、2）、30 / 90 天窗口上逐条返回相同行（脚本断言 `ae3.results_identical: true`，三次运行均为真）。**负载高、同机并行，绝对值抖动可达 2×，只看量级；同计划的语句（`stats_top_skus`、受限范围）前后差异是噪声，不是改动效果。不是 `dmserver` 结果。**
+
+### 计划（全局范围）
+| 语句 | 前 | 后 |
+|---|---|---|
+| `/stats` trend | `SCAN oms_orders` + 临时 B 树分组 | `SEARCH oms_orders USING COVERING INDEX idx_oms_order_time (order_time>?)` + 分组 |
+| `/stats` total | `SCAN oms_orders` | `SEARCH … COVERING INDEX idx_oms_order_time (order_time>?)` |
+| AI 平台分析 | `SCAN pf` + `SEARCH o USING INDEX sqlite_autoindex_oms_orders_1 (platform_id=?)`（逐平台读该平台全部订单） | `SEARCH o USING COVERING INDEX idx_oms_order_time (order_time>?)` + `SEARCH pf … (rowid=?)` |
+| `/stats` byPlatform | `SCAN pf` + `SEARCH o USING INDEX sqlite_autoindex_oms_orders_1 (platform_id=?) LEFT-JOIN` | **不变**（平台驱动，platform_id 等值走自动索引；区间谓词只作过滤） |
+| `/stats` topSkus | `SCAN i` + `SEARCH o (rowid=?)` | **不变**（明细表驱动） |
+| 受限组织范围的 trend / total / topSkus / byPlatform | 范围子查询 `platform_id IN (…)` → `SEARCH oms_orders … (platform_id=?)` | **不变**（规划器按 platform_id 走；区间谓词只作过滤） |
+
+### 延迟（ms，中位数，20 万行；仅列计划改变的语句）
+数据铺满 365 天（负载 ≈ 8）：
+
+| 窗口 / 语句 | 前 | 后 |
+|---|---|---|
+| 30 天 trend | 21.1 | **3.2** |
+| 30 天 total | 19.3 | **2.0** |
+| 30 天 AI 平台分析 | 64.3 | **3.5** |
+| 90 天 trend | 30.9 | 20.8 |
+| 90 天 total | 22.2 | 10.1 |
+| 90 天 AI 平台分析 | 73.8 | 16.4 |
+
+数据全部在最近 60 天内（窗口覆盖 100% 的行，最坏情形；两次运行，负载 15 / 21）：
+
+| 窗口 / 语句 | 前 | 后（第 1 次 / 第 2 次） |
+|---|---|---|
+| 30 天 trend | 90.3 / 74.4 | 34.6 / 29.0 |
+| 30 天 total | 27.4 / 42.1 | 27.1 / 17.5 |
+| 30 天 AI 平台分析 | 86.5 / 86.1 | 59.9 / 29.0 |
+| 90 天 trend | 120.1 / 108.3 | 96.3 / 58.1 |
+| 90 天 total | 32.4 / 40.6 | 47.6 / 54.5 |
+| 90 天 AI 平台分析 | 79.3 / 87.8 | 126.5 / 77.8 |
+
+读法：窗口较窄时（30 天、数据跨一年）收益显著（trend 约 6×、total 约 10×、AI 约 18×）；窗口覆盖多数行时覆盖索引与整表扫描量级相当，**90 天 total、90 天 AI 在最坏分布下可能略慢于前（47–55 vs 32–41、78–127 vs 79–88，噪声范围内但方向不利）**——与 AD3 对 `/trend`、`/channel` 的结论一致。`/stats` 无缓存，每次请求都付这个代价。受限范围、byPlatform、topSkus 未改计划，没有收益也没有回退声明。
+
+### 未覆盖
+- `dmserver` 与生产规模副本；机器空闲时的数字；真实订单时间分布。
+- 受限范围与 topSkus 仍不走 `idx_oms_order_time`：前者要把范围子查询改写成对 `platform_id` 的非等值形式，后者要改连接顺序（浮点求和顺序可能变，不能保证逐位相同）——均未做，见 ADR-0044 补充 4。
+- explain-audit（合成库，见 ADR 补充 4 记录）：`oms.stats_trend`、`oms.stats_total`、`ai.platform_analysis` 声明 `expectIndex` + `expectSearch`；其余六条 `oms.stats_*` 登记只守"无裸 SCAN"，`oms.stats_top_skus*` 的明细表扫描有书面豁免。

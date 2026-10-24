@@ -25,6 +25,8 @@ import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import Database from 'better-sqlite3'
 import { buildWhere, orderOf, countSql, exportSql, AUDIT_COUNT_CAP } from '../server/lib/audit-view.js'
+import { omsStatsByPlatformStmt, omsStatsTrendStmt, omsStatsTotalStmt, omsStatsTopSkusStmt, aiPlatformAnalysisStmt } from '../server/lib/oms-sql.js'
+import { omsPlatformScopeSql, omsOrderScopeSql } from '../server/lib/sales-order.js'
 import { onlineWindow, trendSalesSql, trendPurchaseSql, trendOnlineSql, topProductsSql, topBrandsSql, topDealersSql, topStoresSql, INVENTORY_DIST_AGG_SQL, channelOfflineSql, channelOnlineSql, RECENT_SQL } from '../server/lib/dashboard-sql.js'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -69,6 +71,26 @@ function auditStatementsFor() {
   return out
 }
 
+/** AE3：登记 oms-sql.js 的语句（全局 + 受限范围两种形态）。每条 { sql, params } 与路由同形。 */
+function omsStatsAudit() {
+  const out = []
+  // expect=true：计划必须是 idx_oms_order_time 的带约束 SEARCH。其余形态（平台驱动 / 受限范围 / 明细驱动）规划器按别的索引走，如实登记、只守"无裸 SCAN"
+  const reg = (id, mirrors, st, expect = false) => out.push({ id, mirrors, bench: null, ...(expect ? { expectIndex: 'idx_oms_order_time', expectSearch: true } : {}), sql: st.sql, params: st.params })
+  const g = { ps: omsPlatformScopeSql({ scope: 'all' }, 'pf'), os: omsOrderScopeSql({ scope: 'all' }, 'o'), os0: omsOrderScopeSql({ scope: 'all' }, 'oms_orders') }
+  const r = { ps: omsPlatformScopeSql({ orgIds: [1] }, 'pf'), os: omsOrderScopeSql({ orgIds: [1] }, 'o'), os0: omsOrderScopeSql({ orgIds: [1] }, 'oms_orders') }
+  const M = 'server/routes/oms.js GET /stats (server/lib/oms-sql.js '
+  reg('oms.stats_by_platform', `${M}omsStatsByPlatformStmt)`, omsStatsByPlatformStmt(30, g.ps))
+  reg('oms.stats_by_platform_scoped', `${M}omsStatsByPlatformStmt, 受限组织范围)`, omsStatsByPlatformStmt(30, r.ps))
+  reg('oms.stats_trend', `${M}omsStatsTrendStmt)`, omsStatsTrendStmt(30, g.os0), true)
+  reg('oms.stats_trend_scoped', `${M}omsStatsTrendStmt, 受限组织范围)`, omsStatsTrendStmt(30, r.os0))
+  reg('oms.stats_total', `${M}omsStatsTotalStmt)`, omsStatsTotalStmt(30, g.os0), true)
+  reg('oms.stats_total_scoped', `${M}omsStatsTotalStmt, 受限组织范围)`, omsStatsTotalStmt(30, r.os0))
+  reg('oms.stats_top_skus', `${M}omsStatsTopSkusStmt)`, omsStatsTopSkusStmt(30, g.os))
+  reg('oms.stats_top_skus_scoped', `${M}omsStatsTopSkusStmt, 受限组织范围)`, omsStatsTopSkusStmt(30, r.os))
+  reg('ai.platform_analysis', 'server/routes/ai.js POST /query#channel_compare (server/lib/oms-sql.js aiPlatformAnalysisStmt)', aiPlatformAnalysisStmt(30), true)
+  return out
+}
+
 export const STATEMENTS = [
   // ---- 看板 dashboard_summary（server/routes/dashboard.js） ----
   { id: 'dash.sales_today', mirrors: 'server/routes/dashboard.js summary', bench: 'dashboard_summary',
@@ -109,6 +131,9 @@ export const STATEMENTS = [
   { id: 'dash.inventory_dist_agg', mirrors: 'server/routes/dashboard.js GET /inventory-dist (server/lib/dashboard-sql.js INVENTORY_DIST_AGG_SQL)', bench: null, sql: INVENTORY_DIST_AGG_SQL },
   { id: 'dash.channel_offline', mirrors: 'server/routes/dashboard.js GET /channel (server/lib/dashboard-sql.js channelOfflineSql)', bench: null, expectIndex: 'idx_so_order_date', sql: channelOfflineSql(90) },
   { id: 'dash.channel_online', mirrors: 'server/routes/dashboard.js GET /channel (server/lib/dashboard-sql.js channelOnlineSql)', bench: null, expectIndex: 'idx_oms_order_time', expectSearch: true, params: onlineWindow(90), sql: channelOnlineSql() },
+  // AE3：OMS /stats 与 AI 平台分析的 SQL 取自 server/lib/oms-sql.js（路由执行的同一份）；窗口取 /stats 默认 30 天，全局范围（1=1）。
+  // 受限组织范围另登记 *_scoped：范围谓词是 platform_id IN (子查询)，计划形态不同，也要守住 SEARCH idx_oms_order_time。
+  ...omsStatsAudit(),
   { id: 'dash.recent_sales', mirrors: 'server/routes/dashboard.js GET /recent (server/lib/dashboard-sql.js RECENT_SQL.salesOrders)', bench: null, sql: RECENT_SQL.salesOrders },
   { id: 'dash.recent_purchase', mirrors: 'server/routes/dashboard.js GET /recent (server/lib/dashboard-sql.js RECENT_SQL.purchaseOrders)', bench: null, sql: RECENT_SQL.purchaseOrders },
   { id: 'dash.recent_oms', mirrors: 'server/routes/dashboard.js GET /recent (server/lib/dashboard-sql.js RECENT_SQL.omsOrders)', bench: null, sql: RECENT_SQL.omsOrders },
@@ -278,6 +303,9 @@ export const ALLOW = [
   { statement: 'dash.recent_purchase', table: 'purchase_orders', noSort: true, reason: PAGE_REASON },
   { statement: 'dash.recent_oms', table: 'oms_orders', noSort: true, reason: PAGE_REASON },
   { statement: 'dash.recent_txn', table: 'inventory_transactions', noSort: true, reason: PAGE_REASON },
+  // AE3：/stats topSkus 由 oms_order_items 驱动（SCAN i → 按主键找 o），oms_orders 上的区间谓词在这个计划里只是过滤，不能缩小读取范围
+  { statement: 'oms.stats_top_skus', table: 'oms_order_items', reason: 'AE3：明细表驱动（无统计信息时规划器先扫 oms_order_items 再按主键取订单），order_time 区间谓词只做过滤；改成订单驱动（CROSS JOIN）会改变浮点求和顺序，不能保证与旧结果逐位相同，留作已知残余，见 ADR-0044 补充 4' },
+  { statement: 'oms.stats_top_skus_scoped', table: 'oms_order_items', reason: '同 oms.stats_top_skus（受限组织范围形态）' },
   // AD3：/channel 线上渠道的豁免已移除——谓词改成 order_time >= ?，走 idx_oms_order_time（迁移 070），由 expectIndex 守卫
   { statement: 'dash.sales_unpaid', table: 'sales_orders', reason: AGG_REASON },
   { statement: 'dash.stock_total', table: 'inventory_stocks', reason: '整表聚合（SUM 全库存），没有谓词；索引只能做覆盖扫描，不改变量级；AA5 起由看板 30 s 缓存吸收重复读取' },

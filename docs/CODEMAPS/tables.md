@@ -104,8 +104,8 @@
 | `oc_statement_items` | 010 | 010·idx | lib/order-center.js | — |
 | `oc_statements` | 010 | 010·idx | lib/docflow.js, lib/order-center.js | routes/order-center.js |
 | `oc_visibility_rules` | 010 | — | lib/order-center.js | routes/order-center.js |
-| `oms_order_items` | schema.sql | 025 | — | routes/mall.js, routes/oms.js |
-| `oms_orders` | schema.sql | — | lib/dashboard-sql.js, lib/docflow.js, lib/metrics.js | routes/ai.js, routes/dashboard.js, routes/mall.js, routes/oms.js |
+| `oms_order_items` | schema.sql | 025 | lib/oms-sql.js | routes/mall.js, routes/oms.js |
+| `oms_orders` | schema.sql | — | lib/dashboard-sql.js, lib/docflow.js, lib/metrics.js, lib/oms-sql.js | routes/ai.js, routes/dashboard.js, routes/mall.js, routes/oms.js |
 | `oms_sync_logs` | schema.sql | — | — | routes/mall.js, routes/oms.js, routes/qimen.js |
 | `org_brands` | 005 | — | — | — |
 | `org_functions` | 001 | — | lib/admin-bootstrap.js | — |
@@ -120,7 +120,7 @@
 | `payment_release_ledger` | 057 | 057·idx | lib/purchase.js | — |
 | `period_audit_log` | 037 | 037·idx | lib/period-audit.js | — |
 | `permissions` | 005 | 005·idx | lib/account-security.js, lib/approval.js, middleware/auth.js | routes/approval.js, routes/auth.js |
-| `platforms` | schema.sql | 060 | lib/dashboard-sql.js, lib/qimen-auth.js, lib/sales-order.js | routes/ai.js, routes/dashboard.js, routes/mall.js, routes/master.js, routes/oms.js, routes/qimen.js, routes/sales.js |
+| `platforms` | schema.sql | 060 | lib/dashboard-sql.js, lib/oms-sql.js, lib/qimen-auth.js, lib/sales-order.js | routes/ai.js, routes/dashboard.js, routes/mall.js, routes/master.js, routes/oms.js, routes/qimen.js, routes/sales.js |
 | `pos_cash_drop_items` | 024 | 024·idx | lib/pos2.js | routes/pos.js |
 | `pos_cash_drops` | 024 | 024·idx | lib/pos2.js | routes/pos.js |
 | `pos_daily_closes` | schema.sql | 024 | lib/docflow.js, lib/pos2.js | routes/pos.js |
