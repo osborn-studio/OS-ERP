@@ -198,7 +198,7 @@
 | 导出 | 类型 | 路由 | MCP 工具 | 被模块调用 |
 |---|---|---|---|---|
 | `chainColumnsPresent` | fn | — | — | — |
-| `verifyChain` | fn | — | — | — |
+| `verifyChain` | fn | — | — | lib/audit-trail.js |
 | `verifyJsonlSegment` | fn | — | — | — |
 
 ## `server/lib/audit-trail.js`

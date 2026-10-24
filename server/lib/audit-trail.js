@@ -23,9 +23,10 @@
 
 import { createRequire } from 'node:module'
 import { redactValue } from './redact.js'
+import { verifyChain } from './audit-chain-verify.js'
 import { incCounter } from './process-counters.js'
 
-const { GENESIS, hashRow, adoptOrphans } = createRequire(import.meta.url)('../db/migrations/_audit_chain.cjs')
+const { GENESIS, hashRow, adoptOrphans, anchorAccepts } = createRequire(import.meta.url)('../db/migrations/_audit_chain.cjs')
 export { GENESIS }
 
 export const SECURITY_AUDIT_UNAVAILABLE = 'SECURITY_AUDIT_UNAVAILABLE'
@@ -119,12 +120,23 @@ function chainedInsert(db, row, options) {
     if (info.changes === 1) {
       // 列亲和性会改写存入值（'005' → 5 之类）：以**读回的存储值**为准，与校验器同一口径；绝大多数行读回后哈希不变，这里不写
       const exact = hashRow(back.get(slot.id), prev)
-      if (exact !== rowHash) fix.run(exact, slot.id)
+      if (exact !== rowHash && fix.run(exact, slot.id).changes !== 1) throw fault('AUDIT_CHAIN_FIX_FAILED', '审计行哈希校正未生效', 500)
     }
     return info
   }
-  // 已在事务里：整个函数只有一条 INSERT 会写库，语句本身是原子的（失败不留半截），不需要再开 SAVEPOINT。
-  if (db.inTransaction) return run()
+  // 已在调用方事务里：用 SAVEPOINT 包住"读槽位 + INSERT + 可能的哈希校正"，任何一步抛错都整体撤销本行，
+  // 调用方即使 catch 了异常继续提交，也不会留下哈希不对的半成品行。
+  if (db.inTransaction) {
+    db.exec('SAVEPOINT audit_chain_row')
+    try {
+      const info = run()
+      db.exec('RELEASE audit_chain_row')
+      return info
+    } catch (e) {
+      if (db.inTransaction) { db.exec('ROLLBACK TO audit_chain_row'); db.exec('RELEASE audit_chain_row') }
+      throw e
+    }
+  }
   db.exec('BEGIN IMMEDIATE')
   try {
     const info = run()
@@ -150,6 +162,10 @@ export function insertAuditRow(db, row, options) {
 export function deleteAuditRowsAnchored(db, where, params, { kind, reason } = {}) {
   if (!db.inTransaction) throw fault(AUDIT_OUTSIDE_TX, '受控删除审计行必须在事务内（锚点与删除要一起提交）', 500)
   if (!hasChainColumns(db)) return db.prepare(`DELETE FROM audit_logs WHERE ${where}`).run(...params).changes
+  // 先验整条链：删除会把"删掉的区间"登记成合法断口，如果链里本来就有未登记的缺口 / 篡改，登记锚点会把它一并洗白（审计 AB6 二轮）。
+  adoptOrphans(db) // 表尾的裸 INSERT 孤儿先接上链（与追加路径、迁移自愈同一规则）；夹在中间的空哈希不动，下面的验链会把它当断点
+  const before = verifyChain(db)
+  if (!before.ok) throw fault('AUDIT_CHAIN_BROKEN', `审计哈希链已有断点（id=${before.brk.id} ${before.brk.kind}），拒绝在其上登记锚点并删除；先查清篡改`, 409)
   // better-sqlite3 在 iterate() 期间不许执行别的语句：先收集锚点（数量 = 被删区间数，很小），遍历完再写
   const found = []
   let prevDeleted = false
@@ -176,6 +192,12 @@ export function rehashAuditRow(db, id, { kind = 'rewrite', reason } = {}) {
   if (!r?.row_hash) return false
   const next = hashRow(r, r.prev_hash)
   if (next === r.row_hash) return false
+  // 局部验链：本行与下一行之间必须本来就是连着的（或已有锚点承认），否则登记锚点会把此处的未登记缺口洗白
+  const following0 = db.prepare('SELECT id, prev_hash FROM audit_logs WHERE id > ? ORDER BY id LIMIT 1').get(id)
+  if (following0 && following0.prev_hash !== r.row_hash &&
+      !anchorAccepts(db.prepare('SELECT anchor_hash, prev_id, prev_row_hash FROM audit_chain_anchors WHERE at_row_id=?').all(following0.id), following0, id, r.row_hash)) {
+    throw fault('AUDIT_CHAIN_BROKEN', `审计行 ${id} 与其后一行之间的哈希链已断，拒绝改写并登记锚点`, 409)
+  }
   db.prepare('UPDATE audit_logs SET row_hash=? WHERE id=?').run(next, id)
   // 下一行的 prev_hash 仍指向旧哈希：给它登记锚点，绑定"前驱 = 本行（新哈希）"。同一行被改写多次时每次追加一条（旧锚点绑的是旧哈希，不再匹配）
   const following = db.prepare('SELECT id, prev_hash FROM audit_logs WHERE id > ? ORDER BY id LIMIT 1').get(id)

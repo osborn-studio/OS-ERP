@@ -26,7 +26,19 @@ export function chainColumnsPresent(db) {
   return cols.includes('row_hash') && cols.includes('prev_hash')
 }
 
-export function verifyChain(db, { maxId = Number.MAX_SAFE_INTEGER, expectTip } = {}) {
+export function verifyChain(db, opts = {}) {
+  // 锚点与所有分批读取必须看同一个快照：否则校验途中提交的合法保留清理会让"看到删除、没看到锚点"误报断点。
+  // 已在调用方事务里就沿用它的快照；否则自己开一个只读事务。
+  if (db.inTransaction) return walk(db, opts)
+  db.exec('BEGIN')
+  try {
+    return walk(db, opts)
+  } finally {
+    db.exec('ROLLBACK')
+  }
+}
+
+function walk(db, { maxId = Number.MAX_SAFE_INTEGER, expectTip } = {}) {
   const anchors = new Map()
   const hasAnchors = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='audit_chain_anchors'").get()
   if (hasAnchors) {
@@ -78,15 +90,14 @@ export function verifyJsonlSegment(file, anchorList = []) {
     if (!anchors.has(a.at_row_id)) anchors.set(a.at_row_id, [])
     anchors.get(a.at_row_id).push(a)
   }
-  const text = fs.readFileSync(file, 'utf8')
   const out = { ok: true, rows: 0, firstId: null, lastId: null, firstPrevHash: null, tipHash: null, brk: null }
   let prev = null
   let prevId = null
-  for (const line of text.split('\n')) {
-    if (!line) continue
+  const checkLine = (line) => {
+    if (!line) return true
     let r
-    try { r = JSON.parse(line) } catch { out.ok = false; out.brk = { id: null, kind: 'parse' }; return out }
-    const fail = (kind) => { out.ok = false; out.brk = { id: r.id, kind }; return out }
+    try { r = JSON.parse(line) } catch { out.ok = false; out.brk = { id: null, kind: 'parse' }; return false }
+    const fail = (kind) => { out.ok = false; out.brk = { id: r.id, kind }; return false }
     if (hashRow(r, r.prev_hash) !== r.row_hash) return fail('content')
     if (prev !== null && r.prev_hash !== prev && !anchorAccepts(anchors.get(r.id), r, prevId, prev)) return fail('link')
     if (prev === null) out.firstPrevHash = r.prev_hash
@@ -96,6 +107,29 @@ export function verifyJsonlSegment(file, anchorList = []) {
     out.firstId ??= r.id
     out.lastId = r.id
     out.tipHash = r.row_hash
+    return true
+  }
+  // 分块读、按字节找换行：内存只与块大小和最长一行有关，百万行 / 数百 MB 的导出也能验（整文件读成字符串在 Node 上超过约 512 MB 会直接抛错）
+  const fd = fs.openSync(file, 'r')
+  try {
+    const chunk = Buffer.allocUnsafe(1 << 20)
+    let carry = Buffer.alloc(0)
+    for (;;) {
+      const n = fs.readSync(fd, chunk, 0, chunk.length, null)
+      if (n === 0) break
+      let start = 0
+      const data = n === chunk.length ? chunk : chunk.subarray(0, n)
+      for (let nl = data.indexOf(10, start); nl !== -1; nl = data.indexOf(10, start)) {
+        const line = carry.length ? Buffer.concat([carry, data.subarray(start, nl)]) : data.subarray(start, nl)
+        carry = Buffer.alloc(0)
+        if (!checkLine(line.toString('utf8'))) return out
+        start = nl + 1
+      }
+      if (start < data.length) carry = Buffer.concat([carry, data.subarray(start)])
+    }
+    if (carry.length && !checkLine(carry.toString('utf8'))) return out
+  } finally {
+    fs.closeSync(fd)
   }
   return out
 }

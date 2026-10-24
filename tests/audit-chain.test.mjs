@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url'
 import Database from 'better-sqlite3'
 import { runMigrations, MIGRATIONS_DIR } from '../server/db/migrations/runner.js'
 import { insertAuditRow, auditStrictRow, deleteAuditRowsAnchored, rehashAuditRow, GENESIS } from '../server/lib/audit-trail.js'
-import { verifyChain } from '../server/lib/audit-chain-verify.js'
+import { verifyChain, verifyJsonlSegment } from '../server/lib/audit-chain-verify.js'
 import { applyPlan } from '../scripts/lib/privacy-common.mjs'
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url))
@@ -513,4 +513,48 @@ test('audit-archive.mjs failure after export removes its files so a retry is not
   db.exec('DROP TRIGGER no_archive_audit')
   assert.equal(A(['--confirm', token]).status, 0, 'retry succeeds')
   db.close()
+})
+
+test('controlled delete / rewrite refuse to launder an existing unauthorised gap', (t) => {
+  const db = mkDb(tmp(t))
+  fill(db, 8)
+  db.prepare('DELETE FROM audit_logs WHERE id = 2').run() // 未登记的删除
+  assert.equal(verifyChain(db).ok, false)
+  assert.throws(() => db.transaction(() => deleteAuditRowsAnchored(db, 'id = 4', [], { kind: 'retention' }))(), { code: 'AUDIT_CHAIN_BROKEN' })
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM audit_logs WHERE id = 4').get().n, 1, 'nothing deleted')
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM audit_chain_anchors').get().n, 0)
+  // 改写某行时，它与下一行之间若本来就断了，不登记锚点
+  const db2 = mkDb(tmp(t))
+  fill(db2, 8)
+  db2.prepare('DELETE FROM audit_logs WHERE id = 4').run()
+  assert.throws(() => db2.transaction(() => applyPlan(db2, { ops: [{ table: 'audit_logs', id: 3, set: { detail: '{"x":1}' } }] }))(), { code: 'AUDIT_CHAIN_BROKEN' })
+  assert.equal(db2.prepare('SELECT detail FROM audit_logs WHERE id = 3').get().detail, '{"n":2}', 'rolled back')
+})
+
+test('insertAuditRow inside a caller transaction is all-or-nothing even when the hash-correction UPDATE aborts and the caller swallows the error', (t) => {
+  const db = mkDb(tmp(t))
+  fill(db, 3)
+  db.exec("CREATE TRIGGER no_fix BEFORE UPDATE OF row_hash ON audit_logs BEGIN SELECT RAISE(ABORT,'no hash updates'); END")
+  db.transaction(() => {
+    try { insertAuditRow(db, { action: 'N', userId: '005' }) } catch { /* 调用方吞掉异常继续提交 */ }
+  })()
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM audit_logs').get().n, 3, 'the half-written row was rolled back with its savepoint')
+  assert.equal(verifyChain(db).ok, true)
+})
+
+test('verifyJsonlSegment streams: lines straddling 1 MiB read chunks verify, a flipped byte is caught', (t) => {
+  const dir = tmp(t)
+  const db = mkDb(dir)
+  db.transaction(() => { for (let i = 0; i < 700; i++) insertAuditRow(db, { action: 'BIG', module: 'm', entity: 'e', entityId: i, detail: { pad: 'x'.repeat(3000 + (i % 7) * 211), i } }) })()
+  const rows = db.prepare('SELECT * FROM audit_logs ORDER BY id').all()
+  const file = path.join(dir, 'seg.jsonl')
+  writeFileSync(file, rows.map((r) => JSON.stringify(r) + '\n').join(''))
+  assert.ok(readFileSync(file).length > 2 * 1024 * 1024, 'spans several read chunks')
+  const ok = verifyJsonlSegment(file)
+  assert.deepEqual([ok.ok, ok.rows, ok.firstId, ok.lastId], [true, 700, rows[0].id, rows[699].id])
+  const bytes = readFileSync(file)
+  const at = Math.floor(bytes.length / 2)
+  bytes[at] = bytes[at] === 0x78 ? 0x79 : 0x78
+  writeFileSync(file, bytes)
+  assert.equal(verifyJsonlSegment(file).ok, false)
 })

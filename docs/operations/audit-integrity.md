@@ -45,8 +45,8 @@ node scripts/audit-archive.mjs --data-dir /abs/data --industry cosmetic --before
 
 ## 3. 保留清理与隐私抹除对链的影响
 
-- `scripts/retention.mjs --execute` 删除白名单模块的过期审计行时，会在每个被删区间之后登记锚点；校验仍为 OK，输出的锚点计数会增加。
-- `scripts/privacy-erase.mjs --confirm` 改写含号码的审计行 `detail` 时，会重算该行哈希并给下一行登记锚点。
+- `scripts/retention.mjs --execute` 删除白名单模块的过期审计行时，会在每个被删区间之后登记锚点；校验仍为 OK，输出的锚点计数会增加。**链已有断点时它会拒绝执行**（该库失败、什么都不删），先用第 1 节查清。
+- `scripts/privacy-erase.mjs --confirm` 改写含号码的审计行 `detail` 时，会重算该行哈希并给下一行登记锚点；被改写行与下一行之间若本来就断了，会拒绝并回滚。
 - 其它任何直接改 / 删 `audit_logs` 的操作（手写 SQL、第三方工具）都会被报成断点。需要这么做时，走归档或保留清理，不要手写。
 
 ## 4. 恢复与排障

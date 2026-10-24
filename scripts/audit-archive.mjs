@@ -79,17 +79,24 @@ function plan(db) {
 
 const tokenOf = (code, p) => 'ARCHIVE-' + createHash('sha256').update(JSON.stringify([code, args.before, p.count, p.firstId, p.lastId, p.tipHash])).digest('hex').slice(0, 16).toUpperCase()
 
-/** fsync 一个目录（让新建文件的目录项落盘）；不支持的平台忽略 */
+/** fsync 一个目录（让新建文件 / 子目录的目录项落盘）。失败必须上抛（删除一旦提交就不可逆）；Windows 不支持目录 fsync，直接跳过 */
 function fsyncDir(dir) {
-  try {
-    const fd = fs.openSync(dir, 'r')
-    try { fs.fsyncSync(fd) } finally { fs.closeSync(fd) }
-  } catch { /* Windows 等不支持目录 fsync */ }
+  if (process.platform === 'win32') return
+  const fd = fs.openSync(dir, 'r')
+  try { fs.fsyncSync(fd) } finally { fs.closeSync(fd) }
+}
+
+/** `mkdir -p` 并返回本次新建的目录（由浅到深），之后对它们及其父目录逐个 fsync */
+function mkdirpTracked(dir) {
+  const missing = []
+  for (let cur = dir; !fs.existsSync(cur) && path.dirname(cur) !== cur; cur = path.dirname(cur)) missing.unshift(cur)
+  fs.mkdirSync(dir, { recursive: true })
+  return missing
 }
 
 /** 导出 + 读回校验 + 落盘（文件与目录项都 fsync）；任何一步失败都删掉本次创建的文件再抛，不挡重试 */
 function exportSegment(db, code, p) {
-  fs.mkdirSync(outDir, { recursive: true })
+  const createdDirs = mkdirpTracked(outDir)
   const base = `audit-archive-${code}-${args.before}-${p.firstId}-${p.lastId}`
   const file = path.join(outDir, `${base}.jsonl`)
   const digestFile = path.join(outDir, `${base}.digest.json`)
@@ -134,7 +141,7 @@ function exportSegment(db, code, p) {
     }
     // 删除一旦提交就不可逆：先让导出文件和它们的目录项（含刚创建的目录及其父目录）落盘
     fsyncDir(outDir)
-    fsyncDir(path.dirname(outDir))
+    for (const d of createdDirs) fsyncDir(path.dirname(d)) // 每个新建目录的目录项都在它父目录里
     return { file, digestFile, digest }
   } catch (e) {
     for (const f of owned) fs.rmSync(f, { force: true })
