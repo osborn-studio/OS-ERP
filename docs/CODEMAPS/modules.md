@@ -1549,10 +1549,10 @@ Prometheus 文本指标渲染 + 抓取令牌校验（ADR-0045）
 
 | 导出 | 类型 | 路由 | MCP 工具 | 被模块调用 |
 |---|---|---|---|---|
-| `boundDealerId` | fn | — | — | lib/approval.js, lib/docflow.js |
-| `boundStoreId` | fn | 36 条：pos.js×31, requisitions.js×5 | — | lib/approval.js, lib/docflow.js |
-| `isExternalSubject` | fn | — | — | lib/approval.js, lib/docflow.js |
-| `storeBindingExempt` | fn | — | — | lib/approval.js, lib/docflow.js |
+| `boundDealerId` | fn | GET /api/metrics<br>GET /api/metrics/values<br>GET /api/metrics/catalog | — | lib/approval.js, lib/docflow.js |
+| `boundStoreId` | fn | 39 条：metrics.js×3, pos.js×31, requisitions.js×5 | — | lib/approval.js, lib/docflow.js |
+| `isExternalSubject` | fn | GET /api/metrics<br>GET /api/metrics/values<br>GET /api/metrics/catalog | — | lib/approval.js, lib/docflow.js |
+| `storeBindingExempt` | fn | GET /api/metrics<br>GET /api/metrics/values<br>GET /api/metrics/catalog | — | lib/approval.js, lib/docflow.js |
 
 ## `server/lib/transfer.js`
 

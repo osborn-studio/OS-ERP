@@ -214,4 +214,23 @@ test('AE1: metrics_global_for_restricted hides scope-less metrics from restricte
     assert.deepEqual(Object.keys(v.values).sort(), [...SCOPE_AWARE].sort())
     assert.ok(Object.values(v.values).every((x) => x === 0))
   })
+
+  await t.test('subject-bound accounts (store / dealer binding) are restricted even with data_scope=all (Codex AE1 high)', async () => {
+    const store = db.prepare('SELECT id FROM stores ORDER BY id LIMIT 1').get()
+    const B = await f.account('ae1_bound_store', 'warehouse', { data_scope: 'all' })
+    db.prepare('UPDATE users SET data_scope=?, store_id=? WHERE id=?').run('all', store.id, B.id)
+    const tok = await f.login(B.username, B.password)
+    const v = okData(await api(`/api/metrics/values?keys=${ALL}`, { token: tok }))
+    assert.deepEqual(Object.keys(v.values).sort(), [...SCOPE_AWARE].sort())
+    assert.equal(v.hidden_count, GLOBAL_ONLY.length)
+    const D = await f.account('ae1_bound_dealer', 'warehouse', { data_scope: 'all' })
+    const dealer = db.prepare('SELECT id FROM dealers ORDER BY id LIMIT 1').get()
+    db.prepare('UPDATE users SET data_scope=?, dealer_id=? WHERE id=?').run('all', dealer.id, D.id)
+    const dv = okData(await api(`/api/metrics/values?keys=${ALL}`, { token: await f.login(D.username, D.password) }))
+    assert.deepEqual(Object.keys(dv.values).sort(), [...SCOPE_AWARE].sort())
+    // 同一个无绑定的 data_scope=all 账号不受影响
+    const U = await f.account('ae1_unbound', 'warehouse', { data_scope: 'all' })
+    const uv = okData(await api(`/api/metrics/values?keys=${ALL}`, { token: await f.login(U.username, U.password) }))
+    assert.equal(Object.keys(uv.values).length, METRICS.length)
+  })
 })

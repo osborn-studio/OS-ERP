@@ -11,7 +11,7 @@
 
 - **每条指标登记 `perms`**（`server/lib/metrics.js`，该指标揭示的业务查看权限，**任一命中**即可）。25 条全覆盖，测试逐条校验非空且都是库里已有的权限点：销售类 `sales.order.view`（`unpaid` 另可 `finance.receivable.view`）；线上 `oms.order.view`；库存 `inventory.stock.view`，库存金额 `inventory.cost.view`；采购订单类复用 `PO_READ_PERMS`（与采购订单读路由、dealer summary 同一常量）；应付 `finance.payable.view` / `purchase.settle.view` / `purchase.payment.view`；订货中心 `order.view`；POS `pos.view`；经销商信用 `credit.view`；审批 `approval.instance.view` / `system:approval:view` / `system:approval:manage`。`perms` 不进 `metricDefinitions()`，因此 `metric_defs` 指纹与定义视图不变。
 - **三个端点按可见集合过滤**：缺权限的指标**缺席**（不是 403），`system:metrics:view` 仍是到达端点的前置条件。`/values` 里被隐藏的 key 既不在 `values`/`scoped`，也不进 `unknown`（`unknown` 只表示字典里没有）。响应新增 `hidden_count`（被隐藏的条数；`/values` 带 `keys` 时只统计所请求的已知 key）；`/` 的 `total` 与 `modules` 随可见集合收缩。可见性判据只有一份：`metricVisibility()`，路由用 `permContext`/`hasPerm`（超管 / admin 恒真）构造 `canPerm`。
-- **新增危险设置键 `metrics_global_for_restricted`**（enum `hide` | `label`，默认 `hide`，`is_danger`，改动要写理由）：`hide` = 数据范围非"全部"（含 `none`、`dealer`、无组织账号）的调用者不返回 `scopeAware !== true` 的指标；`label` = AD1 行为（返回全局数字并带 `scoped:false`）。全局范围调用者不受该键影响。库里存了不合法值时 `readSetting` 回落默认 `hide`（fail-closed）；只有精确的 `label` 才放宽。
+- **新增危险设置键 `metrics_global_for_restricted`**（enum `hide` | `label`，默认 `hide`，`is_danger`，改动要写理由）：`hide` = 数据范围非"全部"（含 `none`、`dealer`、无组织账号）的调用者不返回 `scopeAware !== true` 的指标；`label` = AD1 行为（返回全局数字并带 `scoped:false`）。全局范围调用者不受该键影响。**绑定了门店 / 经销商（或 role=dealer|store）的账号视同受限，即使 `data_scope=all`**（Codex 审计高项，见下）；admin / 超管豁免。库里存了不合法值时 `readSetting` 回落默认 `hide`（fail-closed）；只有精确的 `label` 才放宽。
 - **fail-closed 细节**：`metricValues` 的 `keys` 空数组原本等于"全部"；新增的 `allow` 集合与之取交集，**空集合得到空结果**而不是回落到全部。
 - **前端**：`Metrics.tsx` 渲染接口返回的集合（指标数 / 模块数 / Tab 计数取自响应），`hidden_count > 0` 时在统计卡下显示一行说明（`hiddenMetricsNote`）。布局由 AE11 负责，本处只改数据层与该说明。
 
@@ -34,7 +34,12 @@
 
 ## Codex 审计
 
-（见下，审计完成后填写。）
+`codex exec -m gpt-6.1-sol --sandbox read-only`，静态审查，对象 `batch-thirteen...HEAD`。发现与处理：
+
+- **高** 门店 / 经销商绑定账号若 `data_scope=all`，`isScopeRestricted` 判为不受限，默认 `hide` 对其不生效（例如持 `pos.view` 的门店账号拿到全公司 `pos_sales`）：**已修**。`metricVisibility` / `metricScopedFlags` 新增 `subjectBound`，路由按 `store-binding.js` 的同一判据（`boundStoreId` / `boundDealerId` / `isExternalSubject`，`storeBindingExempt` 豁免）传入；`tests/metrics-perms.test.mjs` 增"绑定账号即使 data_scope=all 也受限"用例（先红后绿）。
+- 设置默认安全与前端渲染：审计未发现问题。
+
+仍保留的边界：绑定主体账号视同受限后，按范围收窄的库存 / 采购订单类指标仍按其 `orgScope`（可能是"全部"）计算——这与改动前一致，不属于本 ADR。
 
 ## 验证入口
 

@@ -555,11 +555,13 @@ export const METRICS_GLOBAL_MODE_KEY = 'metrics_global_for_restricted'
  * @param {object} p
  * @param {(code: string) => boolean} p.canPerm 调用者是否持有某权限点（由路由用 permContext/hasPerm 构造；超管恒真）
  * @param {object|null} p.orgScope 调用者数据范围
+ * @param {boolean} [p.subjectBound] 账号绑定了门店 / 经销商或是外部订货主体（视同受限，即使数据范围为全部）
  * @param {string[]|null} [p.keys] 只对这些 key 计数（`/values?keys=`）；不传 = 全部
  * @returns {{ allow: Set<string>, hidden: number }} hidden = 在统计范围内被隐藏的已知指标数
  */
-export function metricVisibility(db, { canPerm, orgScope = null, keys = null } = {}) {
-  const restricted = isScopeRestricted(orgScope)
+export function metricVisibility(db, { canPerm, orgScope = null, keys = null, subjectBound = false } = {}) {
+  // 绑定了门店 / 经销商的账号即使 data_scope=all 也是受限调用者（其余模块各自按绑定收口，指标没有）
+  const restricted = isScopeRestricted(orgScope) || subjectBound
   // 非法 / 未知值读成默认 hide（readSetting 本身对不合法库值回落默认）；只有精确的 label 才放宽
   const hideScopeless = restricted && readSetting(db, METRICS_GLOBAL_MODE_KEY) !== 'label'
   const allow = new Set()
@@ -594,8 +596,8 @@ export function metricValues(db = getDb(), { keys = null, days: d = 30, orgScope
  * 每个指标是否「按调用者范围算」：受限调用者下，`scopeAware` 指标为 true，没有组织归属的全局指标为 false
  * （值仍是全局口径，前端标「全局口径」）；全局调用者一律 true。keys 不传 = 全部。
  */
-export function metricScopedFlags(orgScope = null, keys = null, allow = null) {
-  const restricted = isScopeRestricted(orgScope)
+export function metricScopedFlags(orgScope = null, keys = null, allow = null, subjectBound = false) {
+  const restricted = isScopeRestricted(orgScope) || subjectBound
   const want = wantKeys(keys, allow)
   const out = {}
   for (const k of want) if (METRIC_BY_KEY[k]) out[k] = !restricted || METRIC_BY_KEY[k].scopeAware === true
@@ -603,9 +605,9 @@ export function metricScopedFlags(orgScope = null, keys = null, allow = null) {
 }
 
 /** 定义 + 当前值（字典页主接口）；每项带 `scoped`（见 metricScopedFlags） */
-export function metricCatalog(db = getDb(), { days: d = 30, withValues = true, orgScope = null, allow = null } = {}) {
+export function metricCatalog(db = getDb(), { days: d = 30, withValues = true, orgScope = null, allow = null, subjectBound = false } = {}) {
   const values = withValues ? metricValues(db, { days: d, orgScope, allow }) : {}
-  const scoped = metricScopedFlags(orgScope, null, allow)
+  const scoped = metricScopedFlags(orgScope, null, allow, subjectBound)
   const defs = Object.fromEntries(metricDefinitions().map((x) => [x.key, x]))
   return METRICS.filter((m) => !allow || allow.has(m.key)).map((m) => ({
     ...defs[m.key],
@@ -656,8 +658,8 @@ export function metricDefsStale(db = getDb()) {
 }
 
 /** 分组后的字典（前端分组渲染用） */
-export function metricGroups(db = getDb(), { days: d = 30, withValues = true, orgScope = null, allow = null } = {}) {
-  const list = metricCatalog(db, { days: d, withValues, orgScope, allow })
+export function metricGroups(db = getDb(), { days: d = 30, withValues = true, orgScope = null, allow = null, subjectBound = false } = {}) {
+  const list = metricCatalog(db, { days: d, withValues, orgScope, allow, subjectBound })
   const order = []
   const map = new Map()
   for (const m of list) {
