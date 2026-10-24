@@ -38,7 +38,7 @@
 //    理由与后果见文件中部「口径④」一节 —— 一句话：只翻状态会留下"状态对了、账不对"的单。
 
 import { getDb } from '../db/index.js'
-import { userPermissions } from '../middleware/auth.js'
+import { userPermissions, splitRolesByStatus } from '../middleware/auth.js'
 import { setApprovalGate, effectOwnerOf, docInScope, DOC_SCOPE_RESOLVERS } from './docflow.js'
 import { boundStoreId, boundDealerId, isExternalSubject, storeBindingExempt } from './store-binding.js'
 // 采购订单（PO）本体的业务入口实现。**这里 import 业务模块是刻意的**，理由见下方「口径④」：
@@ -477,9 +477,8 @@ export function canApproveStep(db, step, actor) {
   if (u?.is_super || u?.role === 'admin') return true
   if (step.approver_type === 'user') return Number(step.approver_value) === Number(actor.id)
   if (step.approver_type === 'role') {
-    if (u?.role === step.approver_value) return true
-    const hit = db.prepare('SELECT 1 FROM user_roles WHERE user_id=? AND role_code=?').get(actor.id, step.approver_value)
-    return !!hit
+    // AF10：按角色指派的审批人同样只认 active 角色（停用角色不再能审）
+    return splitRolesByStatus(db, actor.id, u?.role).active.includes(step.approver_value)
   }
   if (step.approver_type === 'perm') {
     return userPermissions(db, actor.id, u?.role).includes(step.approver_value)

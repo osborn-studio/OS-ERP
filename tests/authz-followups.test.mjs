@@ -315,6 +315,92 @@ test('agent token list reports an effective status after the owner auth_version 
 // ③ AD2：角色矩阵（docs/operations/role-matrix.md）与真实 docflow 路由行为一致（抽样 10 格）
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// AF10（ADR-0051 补充 3）：有效权限只合并 status='active' 的角色
+// ---------------------------------------------------------------------------
+
+test('AF10: permContext ignores inactive roles (primary included); login discloses roles_inactive + ROLE_INACTIVE_NOTICE; no cache', { timeout: 300000 }, async (t) => {
+  const f = await server(t)
+  const { db, api } = f
+  const permsOf = (roles) => new Set(db.prepare(`SELECT perm_code FROM role_permissions WHERE role_code IN (${roles.map(() => '?').join(',')})`).all(...roles).map((r) => r.perm_code))
+  const setStatus = (code, status) => db.prepare('UPDATE roles SET status=? WHERE code=?').run(status, code)
+  const addRole = (id, code) => db.prepare('INSERT OR IGNORE INTO user_roles (user_id, role_code) VALUES (?, ?)').run(id, code)
+  const meOf = async (token) => okData(await api('/api/auth/me', { token }))
+  const gate = (token) => api('/api/purchase/chain/todos', { token })
+  assert.ok(permsOf(['purchase']).size > 0 && permsOf(['viewer']).size > 0)
+
+  const extraOnly = await f.account('af10_extra', 'sales', { data_scope: 'all' })
+  addRole(extraOnly.id, 'purchase')
+  const primaryInactive = await f.account('af10_primary', 'purchase', { data_scope: 'all' })
+  addRole(primaryInactive.id, 'viewer')
+  const lone = await f.account('af10_lone', 'purchase', { data_scope: 'all' })
+
+  await t.test('baseline: every role active', async () => {
+    assert.equal((await gate(extraOnly.token)).status, 200)
+    assert.deepEqual(new Set((await meOf(extraOnly.token)).permissions), permsOf(['sales', 'purchase']))
+    assert.deepEqual((await meOf(extraOnly.token)).roles_inactive, [])
+  })
+
+  setStatus('purchase', 'inactive')
+
+  await t.test('an inactive secondary role grants nothing (no cache: effective on the next request with the old token)', async () => {
+    forbidden(await gate(extraOnly.token))
+    const me = await meOf(extraOnly.token)
+    assert.deepEqual(new Set(me.permissions), permsOf(['sales']))
+    assert.deepEqual(me.roles_inactive, ['purchase'])
+  })
+
+  await t.test('an inactive PRIMARY role is ignored too: only the other active roles contribute', async () => {
+    const me = await meOf(primaryInactive.token)
+    assert.deepEqual(new Set(me.permissions), permsOf(['viewer']))
+    assert.deepEqual(me.roles_inactive, ['purchase'])
+  })
+
+  await t.test('an account left with no permissions still logs in (200), carries the notice, and every gate denies', async () => {
+    const r = await api('/api/auth/login', { body: { username: 'af10_lone', password: lone.password, industry: 'cosmetic' } })
+    assert.equal(r.status, 200, JSON.stringify(r.body))
+    assert.equal(r.body.success, true)
+    assert.deepEqual(r.body.data.roles_inactive, ['purchase'])
+    assert.equal(r.body.data.notice_code, 'ROLE_INACTIVE_NOTICE')
+    assert.match(r.body.data.notice_message, /停用|未启用|inactive/)
+    const token = r.body.data.token
+    assert.deepEqual((await meOf(token)).permissions, [])
+    forbidden(await gate(token))
+    forbidden(await api('/api/approval/todos', { token }))
+    const scope = okData(await api('/api/auth/my-scope', { token }))
+    assert.deepEqual(scope.roles_inactive, ['purchase'])
+    assert.equal(scope.notice_code, 'ROLE_INACTIVE_NOTICE')
+  })
+
+  await t.test('the disclosure is only the caller\'s own inactive roles; accounts without any get none', async () => {
+    const r = await api('/api/auth/login', { body: { username: 'admin', password: '12345', industry: 'cosmetic' } })
+    assert.deepEqual(r.body.data.roles_inactive, [])
+    assert.equal(r.body.data.notice_code, null)
+    const sales = await f.account('af10_plain', 'sales')
+    assert.deepEqual((await meOf(sales.token)).roles_inactive, [])
+    assert.ok(!JSON.stringify(await meOf(extraOnly.token)).includes('viewer'))
+  })
+
+  await t.test('role-typed approval steps and MCP delegation use the same active-only rule', async () => {
+    const { canApproveStep } = await import('../server/lib/approval.js')
+    const { permContext, hasPerm } = await import('../server/middleware/auth.js')
+    const step = { approver_type: 'role', approver_value: 'purchase' }
+    assert.equal(canApproveStep(db, step, { id: extraOnly.id }), false, 'secondary inactive role cannot approve')
+    assert.equal(canApproveStep(db, step, { id: lone.id }), false, 'primary inactive role cannot approve')
+    assert.equal(hasPerm(permContext(db, { uid: lone.id, role: 'purchase' }), [...permsOf(['purchase'])][0]), false)
+    setStatus('purchase', 'active')
+    assert.equal(canApproveStep(db, step, { id: lone.id }), true)
+    setStatus('purchase', 'inactive')
+  })
+
+  setStatus('purchase', 'active')
+  await t.test('re-activating restores the grants at once', async () => {
+    assert.equal((await gate(extraOnly.token)).status, 200)
+    assert.deepEqual(new Set((await meOf(lone.token)).permissions), permsOf(['purchase']))
+    assert.deepEqual((await meOf(lone.token)).roles_inactive, [])
+  })
+})
+
 test('role matrix cells match real /api/docflow/events behaviour (10 sampled role x type cells)', { timeout: 300000 }, async (t) => {
   // 期望值写死在这里：生成器若画错，光靠"矩阵 = 路由"的自证循环抓不到；这里同时钉住字面结论
   const SAMPLES = [

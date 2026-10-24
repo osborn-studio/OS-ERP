@@ -64,7 +64,10 @@ export function unionCells(cells, roleCodes, docTypes) {
   return out
 }
 
-/** 账号的角色集合：user_roles 并上 users.role（与 permContext 同一口径），去重排序 */
+/**
+ * 账号的角色集合：user_roles 并上 users.role，去重排序。
+ * 这里是**授予**的全集；停用角色在使用处按 `known`（= 矩阵里的 active 角色）过滤，与 permContext 的"只合并 active"同一口径（AF10）。
+ */
 function roleSetsOfActiveUsers(db) {
   const sets = new Map() // user_id -> { role, set, scope }
   for (const u of db.prepare("SELECT id, role, data_scope, is_super FROM users WHERE status='active'").all()) {
