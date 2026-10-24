@@ -49,7 +49,7 @@
 | 0040 | [ADR-0040 受信代理配置（Z4）](ADR-0040-trust-proxy.md) | 第九批 | 已采纳 | — | — |
 | 0041 | [ADR-0041：MCP `order.trace_document` 与 `doc.query` 按单据解析器表判归属](ADR-0041-mcp-trace-query-scope.md) | 第十批 | 开发实现，尚非产品上线验收 | `check-mcp-coverage.mjs` | — |
 | 0042 | [ADR-0042：OMS 写路由与 MCP 库存工具按组织范围收口](ADR-0042-oms-write-mcp-inventory-scope.md) | 第十批 | 开发实现，尚非产品上线验收 | `check-mcp-coverage.mjs`<br>`check-route-authz.mjs`<br>`test-mcp.mjs`<br>`test-stock-v2.mjs` | — |
-| 0044 | [ADR-0044：低库存口径统一与看板热点块（AA5）](ADR-0044-dashboard-hot-blocks.md) | 第十批 | 开发实现，尚非产品上线验收 | `explain-audit.mjs` | — |
+| 0044 | [ADR-0044：低库存口径统一与看板热点块（AA5）](ADR-0044-dashboard-hot-blocks.md) | 第十批 | 开发实现，尚非产品上线验收 | `bench-oms-order-time.mjs`<br>`explain-audit.mjs` | — |
 | 0045 | [ADR-0045 Prometheus 指标导出与抓取令牌（AA10）](ADR-0045-metrics-export.md) | 第十批 | 开发实现，尚非产品上线验收 | — | — |
 | 0046 | [ADR-0046：主数据下拉仓库项、采购订单读与 QC 聚合按仓库组织范围收口](ADR-0046-master-options-qc-scope.md) | 第十一批（进行中） | 开发实现，尚非产品上线验收 | `check-route-authz.mjs` | — |
 | 0047 | [ADR-0047：发行候选证据 Ed25519 签名（AB4）](ADR-0047-evidence-signing.md) | 第十一批（进行中） | 开发实现，尚非产品上线验收 | `lib/evidence-sign.mjs`<br>`release-keygen.mjs` | — |

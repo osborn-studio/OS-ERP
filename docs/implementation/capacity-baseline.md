@@ -675,3 +675,53 @@ gh run view <run-id> --log-failed
 - `dmserver` 上用生产规模副本复跑；large 规模未跑；机器空闲时的数字未取。
 - `dash.trend_*` 的 explain-audit 登记仍是人工镜像（只有 sales / purchase 两条，没有 `trend.online`，其 `date(order_time)` 同样整表读取 `oms_orders`）；本工作流只登记新增语句。
 - `oms_orders.order_time` 没有可用索引（`/channel` 线上分支与 `/trend` 线上分支共同的残余），根治需要新迁移，不在本工作流范围。
+
+## AD3 `oms_orders.order_time` 覆盖索引：迁移 070 前后（**Mac mini / 合成 20 万 OMS 单 / 非目标主机 / 整机高负载**）
+
+脚本：`node scripts/bench-oms-order-time.mjs --rows 200000 --span 365|60 --rounds 5 --writes 5000 --repeat 31`（全新临时目录、真实迁移运行器后删掉 070 的索引造出"迁移前"，结束即删；不跑 `ANALYZE`——应用从不跑，统计表会让规划器改选 `idx_oms_status` 的 skip-scan）。**机器负载很高（运行时 1 分钟平均负载 34–43，同机并行其它工作流）**，绝对值抖动大、只看量级；中位数取 31 次。**不是 `dmserver` 结果、不是容量承诺。**
+
+"前"= 旧 SQL（`date(order_time) >= …`，无索引）；"后"= 新 SQL（`dashboard-sql.js`，`order_time >= ? AND date(order_time) >= ?`）+ 迁移 070 的覆盖索引；"单列"= 仅作对比、**未发布**的 `oms_orders(order_time)`。新旧 SQL 在两个窗口上返回的行逐项相同（脚本断言，`results_identical: true`）。
+
+### 计划
+| 语句 | 前 | 后 |
+|---|---|---|
+| `/trend` 线上 | `SCAN oms_orders` + 临时 B 树分组 | `SEARCH oms_orders USING COVERING INDEX idx_oms_order_time (order_time>?)` + 临时 B 树分组 |
+| `/channel` 线上 | `SCAN o` + `SEARCH pf …` + 临时 B 树分组 | `SEARCH o USING COVERING INDEX idx_oms_order_time (order_time>?)` + `SEARCH pf …` + 临时 B 树分组 |
+
+### 延迟（ms，中位数；20 万行）
+数据铺满 365 天（30 天窗口约含 8% 的行，90 天约 25%）：
+
+| 窗口 / 语句 | 前（SCAN） | 后（覆盖索引） | 单列索引（未发布） |
+|---|---|---|---|
+| 30 天 trend | 40.4 | **6.5** | 27.7 |
+| 30 天 channel | 38.4 | **6.4** | 27.0 |
+| 90 天 trend | 68.7 | **24.4** | 88.3 |
+| 90 天 channel | 44.6 | **15.9** | 87.7 |
+
+数据全部落在最近 60 天内（两个窗口都覆盖 100% 的行，最坏情形，如新开业的店）：
+
+| 窗口 / 语句 | 前（SCAN） | 后（覆盖索引） | 单列索引（未发布） |
+|---|---|---|---|
+| 30 天 trend | 119.1 | **49.7** | 195.5 |
+| 30 天 channel | 61.9 | 58.7 | 200.6 |
+| 90 天 trend | 208.7 | **102.7** | 423.6 |
+| 90 天 channel | 88.1 | 76.6 | 411.9 |
+
+读法：单列索引在窗口覆盖多数行时**比整表扫描慢 2–5×**（每行一次回表），这是迁移 070 用覆盖索引而不是路线图字面的单列索引的原因；覆盖索引在各分布下都不比扫描慢，窗口窄时快 6×（trend 30 天），最坏情形与扫描持平或略好。`/trend`、`/channel` 另有 30 s 缓存，这里是未命中路径。
+
+### 建索引与库体积
+`CREATE INDEX`（20 万行）约 175–215 ms；库文件 49.96 MB → 59.45 MB（**+9.5 MB，约 +19%**；单列索引约 +5.6 MB）。大库上建索引持写锁，量级随行数线性。
+
+### 写放大（独立库交替、逐行自动提交的 INSERT，种子 10 万行，5 轮 × 5000 行；µs/行，最小值 / 中位数）
+| 状态 | 数据铺满 365 天 | 数据在 60 天内 |
+|---|---|---|
+| 无索引 | 59.5 / 62.0 | 58.5 / 68.7 |
+| 迁移 070（覆盖索引） | 86.1 / 103.0（**最小值 ×1.45，约 +27 µs/行**） | 90.3 / 107.2（×1.54，约 +32 µs/行） |
+| 单列索引（未发布） | 68.3 / 95.2（×1.15） | 81.9 / 103.1（×1.40） |
+
+写放大的绝对量级：每笔平台同步订单 / H5 商城订单落一行 `oms_orders`，多付约 30–40 µs（含机器负载抖动，倍数随负载变化、量级稳定）。
+
+### 复现与未覆盖
+- 复现：`node scripts/bench-oms-order-time.mjs --rows 200000 --span 365 --out result.json`（`--span 60` 为最坏情形）。
+- 未覆盖：`dmserver` 与生产规模副本；机器空闲时的数字；真实 OMS 订单的时间分布；并发写入下的索引争用；`oms.js` `/stats` 等其它 `date(order_time)` 查询（未改）。
+- explain-audit（合成库，`synth-data --skus 300 --docs 300 --txns 1500`，只读）：111 条语句，**0 违规**，裸 SCAN 27（豁免 26、小表 1），索引全扫 6；`dash.trend_*` 与 `dash.channel_online` 的计划见上表，`dash.channel_online` 的豁免已移除。
