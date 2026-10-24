@@ -40,6 +40,7 @@ evidence records it (`acceptance.reuse_node_modules`).
 | `ci_run_id`, `ci_lookup` | `--ci-run=<id>`: the operator's reference, not looked up (`ci_lookup.mode: operator-supplied`). `--ci-run=auto`: `gh run list --commit <HEAD> --workflow ci.yml --json databaseId,conclusion,...`; the newest run with `conclusion: success` for exactly this commit. If `gh` is missing or not logged in, no run exists for the commit, or none succeeded, `ci_run_id` is `null` and `ci_lookup.reason` says why; nothing is guessed. No flag: `null`, `ci_lookup.mode: none`. |
 | `synthetic_drill` | Names and sha256 of the committed capacity-evidence files (shipped in the package). These are synthetic rehearsals on a development host, not target-host results. |
 | `verify_release`, `acceptance`, `secret_scan` | Produced by the script on the fresh extraction. |
+| `built_by` | `hosted-ci`, `key-holder` or `local` (see the transparency log). Part of the signed content. |
 | `signature` | `null` (unsigned) or `{algorithm, canonicalization, key_id, sig_file}` when signed with `GML_RELEASE_SIGN_KEY`. |
 | `not_a_release` | Always `true`. |
 
@@ -82,6 +83,35 @@ Key custody:
 - Rotation: generate a new pair, publish the new public key and `key_id`; old candidates keep verifying with the old public key.
   If the private key may be exposed, stop trusting its `key_id` and re-issue candidates.
 - A signature shows that the key holder approved this exact evidence; it does not make `operator-attested` results true.
+
+## Evidence transparency log (ADR-0052)
+
+`docs/release/EVIDENCE-LOG.jsonl` is an append-only, hash-chained log in the repository: one JSON line per candidate with
+`name` (`RC-<version>-<shortsha>`), `evidence_sha256` (sha256 of the canonicalized `EVIDENCE.json`, the same bytes that are
+signed), `signature` (sha256 of the `EVIDENCE.sig` text, or `null`), `built_by`, `timestamp` and `prev` (sha256 of the previous
+line's exact text; the first line uses a fixed genesis constant). Lines must be in canonical form; blank lines, reordering,
+edits, duplicates and backwards timestamps break the chain.
+
+```
+node scripts/release-candidate.mjs --log [...]                 # or --log=<file>; checks the chain and the name before building, appends after self-verification
+node scripts/verify-release.mjs --evidence=<EVIDENCE.json> --log[=<file>]   # chain intact, this candidate present and matching
+```
+
+- `built_by`: `hosted-ci` when `GITHUB_ACTIONS=true` (the script then refuses `GML_RELEASE_SIGN_KEY`: hosted CI holds no key and
+  records `signature: null`), `key-holder` for a signed local build, `local` for an unsigned local build. It is self-reported
+  by the building process and also stored in the signed evidence.
+- The append modifies a tracked file: commit the new line before the next build (the dirty-tree check applies as usual).
+- A candidate name can appear once. Re-signing a candidate means a new commit, hence a new name.
+- Limits: a hash chain detects edits in the middle, not removal of the newest lines or replacement of the whole file by another
+  valid chain; git history and an out-of-band copy of the latest line's hash cover that. The log does not prove the evidence true.
+
+### Unsigned candidates and formal releases
+
+`verify-release --evidence` prints a prominent `WARNING: UNSIGNED CANDIDATE` banner to stderr when `signature` is `null`; the
+exit code is unchanged. `--require-signature` (needs `--pubkey`) turns it into a failure and also fails a signed candidate whose
+signature was not verified. **A formal release must be re-signed by the key holder on a controlled machine**: rebuild the
+same commit there with `GML_RELEASE_SIGN_KEY` set (and `--log`), distribute the public key out of band, and verify with
+`--pubkey --require-signature --log`. Hosted-CI candidates are development candidates only and are never release-grade.
 
 ## RELEASE-NOTES.md
 
