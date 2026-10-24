@@ -161,6 +161,30 @@ poll with `gh run view <id>`, and record run id, conclusion, duration and the th
 `regression` in `ci.yml` (no `candidate`, `capacity-smoke`, `dependency-review` or `audit-no-fts5`) and no `nightly-capacity.yml`.
 PRs #1 to #3 are merged; #4 to #9 are open and unmerged; `gh` cannot find a PR #10. Dispatched 0 times; no run id exists.
 
+### 首跑步骤 (first run: dry run first, then the full run) (AG1)
+
+`release-candidate.yml` has never run on GitHub, and `workflow_dispatch` only works on a workflow file present on the target ref, so it can be
+dispatched only after the workflow is merged to `main`. To find runner-environment problems quickly (missing tools, network, Python
+venv, native build hooks, production acceptance) without paying for the long focused suite, the dispatch has a `dry_run` choice input
+(`false` or `true`, default `false`; a tag push has no inputs and is always a full run).
+
+1. **Dry run first**: `gh workflow run release-candidate.yml --ref main -f dry_run=true`, then `gh run watch <id>` / `gh run view <id>`.
+   With `dry_run=true` the build step runs `release-candidate --skip-focused --run-guards --ci-run=auto --output=...`: the focused
+   suite is skipped, the five guards and the production acceptance still run. `--skip-focused` is accepted only when
+   `GITHUB_ACTIONS=true` (refused on a workstation with a clear message) and cannot be combined with `--run-tests`, `--focused-result`
+   or `--log`. Consequences, all on purpose:
+   - `EVIDENCE.json` carries `dry_run: true` and `focused_tests: {result: "not run", origin: "skipped-dry-run"}`;
+   - the artifact is named `os-erp-candidate-<run>-<attempt>-dry-run` (the normal name has no suffix) and contains no
+     `evidence-log-line.jsonl`: a dry run never reads or appends the evidence log, so there is nothing to ingest or commit;
+   - `verify-release` prints a prominent `DRY RUN, NOT A CANDIDATE` warning, and `--log` / `--require-signature` fail for it
+     (a dry run is never log-eligible and cannot be signed); the SBOM diff of later runs ignores dry-run artifacts.
+   A green dry run says only that the runner environment, guards and acceptance work; it is not a candidate, not release acceptance and not
+   production acceptance. Do not hand it to the key holder.
+2. **Then the full run**: `gh workflow run release-candidate.yml --ref main -f dry_run=false` (the default). This is the run whose artifact,
+   `evidence-log-line.jsonl` included, follows the maintainer flow above (download, `evidence-log-ingest`, commit).
+3. Record run ids, conclusions, durations and uploaded files in the status notes for both runs. Until that is done, both remain
+   unverified; nothing has been dispatched as of this section being written.
+
 ## RELEASE-NOTES.md
 
 The `CHANGELOG.md` section whose heading contains the version, else the newest batch section (stated in the notes),

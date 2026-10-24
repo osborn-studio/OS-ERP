@@ -26,6 +26,9 @@
  *     证据通过自验后追加一行 {name, evidence_sha256, signature 摘要|null, built_by, timestamp, prev}。GITHUB_ACTIONS=true 记
  *     built_by: hosted-ci（此时拒绝配置签名密钥：托管 CI 不持钥）；有签名记 key-holder；否则 local。EVIDENCE 里也带 built_by。
  *     追加会修改被跟踪文件：下一次构建前须先提交该行。
+ *   --skip-focused（AG1，首跑演练）：跳过焦点套件，其余（守卫、验收）照常；仅当 GITHUB_ACTIONS=true 才允许（本机拒绝），
+ *     不能与 --run-tests / --focused-result / --log 同用。证据写 dry_run:true 与 focused_tests:{result:'not run',origin:'skipped-dry-run'}；
+ *     演练不是候选：永不进透明日志，verify-release 以醒目警告提示，且 --log / --require-signature 对它一律失败。
  *   --focused-result=passed|failed --focused-source=<说明>  --regression-result=… --regression-source=<说明>
  * ============================================================================
  */
@@ -44,7 +47,7 @@ import { assertFsFaultAllowed } from './lib/fs-fault.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const RESULTS = new Set(['passed', 'failed'])
-const KNOWN = new Set(['output', 'skip-build', 'skip-docs', 'reuse-node-modules', 'run-guards', 'run-tests', 'ci-run', 'log',
+const KNOWN = new Set(['output', 'skip-build', 'skip-docs', 'reuse-node-modules', 'run-guards', 'run-tests', 'skip-focused', 'ci-run', 'log',
   'focused-result', 'focused-source', 'regression-result', 'regression-source'])
 export const GUARDS = [
   ['tsc', ['node_modules/typescript/bin/tsc', '--noEmit']],
@@ -77,7 +80,7 @@ export function extractNotes(changelog, version, { commit, builtAt }) {
 
 function parseArgs(argv) {
   const opts = {}
-  const flagOnly = ['skip-build', 'skip-docs', 'reuse-node-modules', 'run-guards', 'run-tests']
+  const flagOnly = ['skip-build', 'skip-docs', 'reuse-node-modules', 'run-guards', 'run-tests', 'skip-focused']
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     const m = /^--([a-z-]+)(?:=(.*))?$/.exec(a)
@@ -90,6 +93,12 @@ function parseArgs(argv) {
   for (const k of Object.keys(opts)) if (k !== 'log' && flagOnly.includes(k) === (typeof opts[k] !== 'boolean')) throw new Error(`--${k} ${flagOnly.includes(k) ? 'takes no value' : 'needs a value'}`)
   if (opts['ci-run'] !== undefined && opts['ci-run'] !== 'auto' && !/^\d{1,20}$/.test(opts['ci-run'])) throw new Error('--ci-run must be a numeric GitHub Actions run id or "auto"')
   if (opts['run-tests'] && opts['focused-result'] !== undefined) throw new Error('--run-tests produces the focused result itself; do not combine it with --focused-result')
+  if (opts['skip-focused']) { // AG1：演练只许托管 CI，且与任何"产生/声明焦点结果"或日志追加互斥
+    if (process.env.GITHUB_ACTIONS !== 'true') throw new Error('--skip-focused is only allowed when GITHUB_ACTIONS=true (a hosted dry run); refusing locally: a candidate without the focused suite is not a candidate')
+    if (opts['run-tests']) throw new Error('--skip-focused cannot be combined with --run-tests')
+    if (opts['focused-result'] !== undefined || opts['focused-source'] !== undefined) throw new Error('--skip-focused cannot be combined with --focused-result / --focused-source')
+    if (opts.log !== undefined) throw new Error('--skip-focused: a dry run is never appended to the evidence log; do not pass --log')
+  }
   for (const k of ['focused', 'regression']) {
     const r = opts[`${k}-result`]
     if (r !== undefined && !RESULTS.has(r)) throw new Error(`--${k}-result must be passed or failed (omit it for "not run")`)
@@ -314,7 +323,7 @@ function main() {
     const evidence = {
       schema: 1, version, commit, built_at: builtAt, node: process.version,
       artifact: { name: `${name}.zip`, sha256: zipHash, bytes: zipBytes.length, files: Object.keys(manifest.files).length },
-      focused_tests: focused ?? attested('focused'), guards, regression: attested('regression'),
+      focused_tests: focused ?? (opts['skip-focused'] ? { result: 'not run', origin: 'skipped-dry-run', source: 'dry run (--skip-focused): the focused suite was deliberately not run; this is not a candidate' } : attested('focused')), guards, regression: attested('regression'),
       ci_run_id: ci.id,
       ci_lookup: ci.lookup,
       synthetic_drill: drillReference(),
@@ -322,6 +331,7 @@ function main() {
       acceptance: { result: smoke.result, origin: 'produced', mode: smoke.mode, checks: smoke.checks.length, reuse_node_modules: Boolean(opts['reuse-node-modules']) },
       secret_scan: secretScan,
       not_a_release: true,
+      ...(opts['skip-focused'] ? { dry_run: true } : {}),
       built_by: builtByFor({ signed: Boolean(signKey) }),
       signature: null
     }

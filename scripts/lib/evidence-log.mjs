@@ -106,6 +106,7 @@ export function assertAppendable(file, name) {
 export function appendEntry(file, { name, evidence, sigText, builtBy, timestamp = new Date().toISOString() }) {
   if (!BUILT_BY.includes(builtBy)) throw new Error(`built_by must be one of ${BUILT_BY.join(', ')}`)
   if (!NAME.test(name)) throw new Error(`bad candidate name ${name}`)
+  if (evidence && (evidence.dry_run !== undefined || evidence.focused_tests?.origin === 'skipped-dry-run')) throw new Error('a dry run is never log-eligible (AG1): refusing to append it to the evidence log') // AG1
   assertFsFaultAllowed() // 注入配置在生产模式下误设 ⇒ 在加锁、写入之前就失败
   fs.mkdirSync(path.dirname(file), { recursive: true })
   const lock = `${file}.lock`
