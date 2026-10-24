@@ -69,6 +69,8 @@ const DECLARED = [
   'scripts/check-mcp-coverage.mjs',
   'scripts/gen-sbom.mjs',
   'scripts/release-candidate.mjs',
+  'scripts/evidence-log-ingest.mjs',
+  'tests/evidence-log-ingest.test.mjs',
   'scripts/release-keygen.mjs',
   'scripts/lib/evidence-sign.mjs',
   'scripts/gen-changelog.mjs',
