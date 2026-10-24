@@ -119,6 +119,7 @@
 <a class="toc-l2" data-depth="2" href="#六-端口多实例与访问范围">六 端口、多实例与访问范围</a>
 <a class="toc-l3" data-depth="3" href="#61-反向代理后的受信配置gml_trust_proxyadr-0040">6.1 反向代理后的受信配置（GML_TRUST_PROXY，ADR-0040）</a>
 <a class="toc-l3" data-depth="3" href="#62-后台会话传输与安全响应头gml_session_transport--gml_csp_modeadr-0036">6.2 后台会话传输与安全响应头（GML_SESSION_TRANSPORT / GML_CSP_MODE，ADR-0036）</a>
+<a class="toc-l3" data-depth="3" href="#63-监控令牌看板缓存与分段计时gml_metrics_token--gml_dashboard_cache_ms--gml_profile">6.3 监控令牌、看板缓存与分段计时（GML_METRICS_TOKEN / GML_DASHBOARD_CACHE_MS / GML_PROFILE）</a>
 <a class="toc-l2" data-depth="2" href="#七-备份校验与恢复演练">七 备份、校验与恢复演练</a>
 <a class="toc-l3" data-depth="3" href="#71-日常校验备份">7.1 日常校验备份</a>
 <a class="toc-l3" data-depth="3" href="#72-恢复演练">7.2 恢复演练</a>
@@ -211,6 +212,8 @@ node scripts/local-manage.mjs doctor --instance=$INSTANCE</code></pre>
 <tr><td><code>GML_BACKUP_KEY</code>（可选，至少 32 字节）</td><td>备份加密密钥（AES-256-GCM），见 7.6；<strong>必须与备份分开保管</strong>，丢失即加密备份永久不可恢复</td></tr>
 <tr><td><code>GML_TRUST_PROXY</code>（可选，默认 <code>off</code>）</td><td>反向代理受信配置，见 6.1</td></tr>
 <tr><td><code>GML_SESSION_TRANSPORT</code>、<code>GML_CSP_MODE</code>、<code>GML_COOKIE_SECURE</code>（可选）</td><td>后台会话传输方式与安全响应头，见 6.2</td></tr>
+<tr><td><code>GML_METRICS_TOKEN</code>（可选，至少 32 字符）</td><td>Prometheus 抓取令牌，只对 <code>GET /api/meta/metrics?format=prometheus</code> 有效，见 6.3；与 <code>GML_JWT_SECRET</code> 一样只经环境变量传入，不进仓库和日志</td></tr>
+<tr><td><code>GML_DASHBOARD_CACHE_MS</code>、<code>GML_PROFILE</code>（可选）</td><td>经营看板汇总缓存时长与分段计时日志，见 6.3</td></tr>
 <tr><td>直接部署 / Docker</td><td>必须自行设置强随机 <code>GML_JWT_SECRET</code>；缺失或公开值时服务拒绝启动</td></tr></tbody></table></div>
 <p>上表可选环境变量在启动时放在 <code>node scripts/local-manage.mjs start</code> 前面（会传给服务）。敏感值不要写进手册、聊天或工单。</p>
 <h3 id="55-迁移与健康核对">5.5 迁移与健康核对</h3>
@@ -239,6 +242,12 @@ node scripts/local-manage.mjs start</code></pre>
 <tr><td><code>cookie</code></td><td>登录响应不含令牌，改下发 HttpOnly 的 <code>gml_session</code> 与可读的 <code>gml_csrf</code> 两个 Cookie；非读请求必须带与 Cookie 一致的 <code>x-csrf-token</code> 头，否则 403 <code>CSRF_TOKEN_INVALID</code>；登录拒绝跨站浏览器请求（403 <code>CROSS_SITE_LOGIN_REJECTED</code>）；全部退出（<code>logout-all</code>）或改密会清除两个 Cookie</td><td>要避免登录令牌被页面脚本读走时</td></tr></tbody></table></div>
 <p>要点与限制：</p>
 <ul><li><code>cookie</code> 模式要求全程 HTTPS 且前后端同源：令 Cookie 带 <code>Secure</code> 的条件是请求被判为 HTTPS（见 6.1 配置 <code>GML_TRUST_PROXY</code>），或设置 <code>GML_COOKIE_SECURE=always</code> 强制 Cookie 带 <code>Secure</code>（该项只影响 Cookie，不触发 HSTS；只有 <code>always</code> 有意义）。</li><li>脚本、运维调用与 MCP 令牌继续使用 <code>Authorization: Bearer</code>，不受 CSRF 要求影响；<code>bearer</code> 模式下带 Cookie 的请求不会被当作登录凭据。</li><li>切换传输方式后，已登录用户需要重新登录。</li><li>如实边界：<code>cookie</code> 模式缩小的是&quot;令牌被带走后在别处重放&quot;的窗口，<strong>不能防御</strong>页面脚本注入（XSS）——同源脚本仍能以当前用户身份发请求；ADR 自述本批只有 Node 级测试，<strong>没有</strong>真实浏览器里的登录 / 刷新 / 多标签 / 退出验收。把 <code>cookie</code> 作为缺省之前，需要在目标环境做这一轮浏览器验收。</li><li>依据：ADR-0036 安全响应头与后台会话传输（<code>docs/implementation/ADR-0036-security-headers-and-session-transport.md</code>）。</li></ul>
+<h3 id="63-监控令牌看板缓存与分段计时gml_metrics_token--gml_dashboard_cache_ms--gml_profile">6.3 监控令牌、看板缓存与分段计时（GML_METRICS_TOKEN / GML_DASHBOARD_CACHE_MS / GML_PROFILE）</h3>
+<p>三项都是可选环境变量，和 5.4 的其他变量一样放在 <code>node scripts/local-manage.mjs start</code> 前面（会传给服务）；改值后需要重启服务。</p>
+<div class="table-wrap"><table><thead><tr><th>变量</th><th>缺省</th><th>取值与行为</th></tr></thead><tbody><tr><td><code>GML_METRICS_TOKEN</code></td><td>未设置（令牌路径关闭）</td><td>至少 32 字符（例如 <code>openssl rand -hex 32</code>）。设置后，Prometheus 可用 <code>Authorization: Bearer &lt;令牌&gt;</code> 读取 <code>GET /api/meta/metrics?format=prometheus</code>；令牌<strong>只读</strong>，对 JSON 形态、<code>/health</code> 和其他接口无效，不能放在 URL 里。短于 32 字符等同于未设置（令牌路径整体关闭，不会降级成弱口令）。未设置时仍可用管理员登录凭据读取该端点。令牌轮换 = 换值并重启。接入步骤见操作手册第三十一章</td></tr>
+<tr><td><code>GML_DASHBOARD_CACHE_MS</code></td><td><code>30000</code>（30 秒）</td><td>总部经营看板汇总（<code>GET /api/dashboard/summary</code>）的进程内结果缓存时长，单位毫秒。<code>0</code> 关闭缓存（每次重新聚合）；未设置、为空、负数或不是数字都回落到缺省 30000，不会报错。命中缓存需同时满足：未过期、本进程自上次计算以来没有任何数据库写入、没有其他进程提交过写入、本地日期没变（今日/本月指标跨零点会重算），所以显示的数字最多比库内容旧一个有效期，而写入频繁的实例命中率会低。调试数字对不上时可先设为 <code>0</code> 排除缓存。当前只缓存汇总这一个接口。依据 ADR-0044</td></tr>
+<tr><td><code>GML_PROFILE</code></td><td>未设置（关闭）</td><td>只有值<strong>恰好是</strong> <code>1</code> 才开启；<code>true</code>、<code>on</code> 等都不算。开启后，看板汇总每次请求把各查询块的耗时写成一行结构化日志 <code>profile_blocks</code>（含接口名、总耗时、每块毫秒数、是否命中缓存），<strong>不进接口响应</strong>，也不改变任何业务结果。用于定位看板慢在哪一块；每个请求多写一行日志，<strong>不要在生产长期开启</strong>，排查完关闭并重启。日志格式和级别受 <code>GML_LOG_FORMAT</code>、<code>GML_LOG_LEVEL</code> 控制</td></tr></tbody></table></div>
+<p>上述缓存与计时只影响看板汇总的响应速度和日志量，不改变数据；<code>GML_DASHBOARD_CACHE_MS</code> 的 30 秒缺省值适合大多数实例，没有必要调大。Docker 部署时 <code>docker-compose.yml</code> 当前只透传 <code>GML_TRUST_PROXY</code> 和 <code>GML_JWT_SECRET</code>，要使用这三项需自行在 <code>environment</code> 中加入，或改用直接部署。这三项在目标主机上的效果（缓存命中率、日志量）没有实测，缓存命中的耗时数字见 <code>docs/implementation/capacity-baseline.md</code>，且不是目标主机结果。</p>
 <h2 id="七-备份校验与恢复演练">七 备份、校验与恢复演练</h2>
 <p>有两套备份工具，用途不同：</p>
 <div class="table-wrap"><table><thead><tr><th>工具</th><th>产物</th><th>校验</th><th>适用</th></tr></thead><tbody><tr><td><code>scripts/db-backup.mjs</code></td><td><code>$GML_DATA_DIR/backups/</code> 下每库快照 + <code>backup-report-&lt;stamp&gt;.json</code></td><td>强制：integrity_check、foreign_key_check、表数与迁移数、只读打开 COUNT，通过后才裁剪旧备份</td><td><strong>生产的日常备份</strong>，也是恢复演练的输入</td></tr>
@@ -274,6 +283,7 @@ echo $?</code></pre>
 <h2 id="八-升级">八 升级</h2>
 <p>升级顺序：①对当前版本做 7.1 备份；②对该备份集跑 7.3 回退演练，必须通过（它只证明&quot;这份备份 + 当时运行演练的代码&quot;能起来，<strong>不证明新版本的迁移与回退兼容</strong>）；③再在新目录解压新版本并 <code>setup</code>，用<strong>新版本的代码</strong>对同一备份集重跑 7.2 恢复演练与 7.3 回退演练，通过后才继续；④实例目录保持不变（<code>--instance=</code> 指向同一个绝对目录），停旧服务、启动新版本；⑤运行 <code>migrate.mjs --status</code> 与 <code>verify-migrations.mjs</code>，登录并对数。</p>
 <p>迁移报错（含 <code>MIGRATION_CHECKSUM_MISMATCH</code>）时：<strong>不要</strong>重试、不要手工改 <code>schema_migrations</code>、不要使用 <code>--adopt-checksums</code>；停服、切回旧代码，按恢复手册第 5 节回退。<code>--adopt-checksums</code> 只用于经评审确认&quot;库结构与新文件一致&quot;的历史迁移文件修订。</p>
+<p>可选的第 2.5 步：想在<strong>你的</strong>数据量上预先知道这批迁移要多久、会把写入者挡多久，在升级前用同一份备份集运行升级演练 <code>scripts/upgrade-rehearsal.mjs</code>（参数、判据和读报告方法见操作手册第三十二章）。它在隔离副本上重放迁移，不改动线上数据，但耗时数字来自运行它的机器，不是承诺。</p>
 <p>行为变化提示：升级到包含 ADR-0008、0015、0017 的版本后，内置 <code>purchase</code> 角色默认的子树范围在账号没有组织归属时会看到空的采购工作台与待办，需管理员为账号挂组织或设置数据范围（见操作手册对应一节）；收款确认与付款执行默认需要凭证号和第二人复核（ADR-0018）。这些是收口的直接后果，不是故障。</p>
 <h2 id="九-演示模式仅-demo不得用于真实数据">九 演示模式（仅 demo，不得用于真实数据）</h2>
 <p>演示模式必须显式开启，且只能使用全新的、专用于演示的实例目录：</p>

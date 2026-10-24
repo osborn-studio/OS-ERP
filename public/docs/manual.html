@@ -168,11 +168,29 @@
 <a class="toc-l3" data-depth="3" href="#283-脚本做了什么">28.3 脚本做了什么</a>
 <a class="toc-l3" data-depth="3" href="#284-读证据时的注意">28.4 读证据时的注意</a>
 <a class="toc-l3" data-depth="3" href="#285-仍需人工完成">28.5 仍需人工完成</a>
+<a class="toc-l3" data-depth="3" href="#286-接收方复核verify-release-与---evidence">28.6 接收方复核：verify-release 与 --evidence</a>
 <a class="toc-l2" data-depth="2" href="#二十九-夜间容量基线摘要的解读">二十九 夜间容量基线摘要的解读</a>
 <a class="toc-l3" data-depth="3" href="#291-它是什么">29.1 它是什么</a>
 <a class="toc-l3" data-depth="3" href="#292-怎么读摘要">29.2 怎么读摘要</a>
 <a class="toc-l3" data-depth="3" href="#293-正确的使用方式">29.3 正确的使用方式</a>
 <a class="toc-l2" data-depth="2" href="#三十-库存列表分页">三十 库存列表分页</a>
+<a class="toc-l2" data-depth="2" href="#三十一-指标导出接入-prometheus">三十一 指标导出：接入 Prometheus</a>
+<a class="toc-l3" data-depth="3" href="#311-开启抓取令牌">31.1 开启抓取令牌</a>
+<a class="toc-l3" data-depth="3" href="#312-prometheus-侧抓取配置">31.2 Prometheus 侧抓取配置</a>
+<a class="toc-l3" data-depth="3" href="#313-读指标的要点">31.3 读指标的要点</a>
+<a class="toc-l3" data-depth="3" href="#314-排障与边界">31.4 排障与边界</a>
+<a class="toc-l2" data-depth="2" href="#三十二-升级演练迁移重放与读报告">三十二 升级演练：迁移重放与读报告</a>
+<a class="toc-l3" data-depth="3" href="#321-前提与输入">32.1 前提与输入</a>
+<a class="toc-l3" data-depth="3" href="#322-命令">32.2 命令</a>
+<a class="toc-l3" data-depth="3" href="#323-读报告-upgrade-rehearsal-json">32.3 读报告 `upgrade-rehearsal-&lt;stamp&gt;.json`</a>
+<a class="toc-l2" data-depth="2" href="#三十三-审批模板维护权限与审批管理员的分离">三十三 审批模板维护权限与审批管理员的分离</a>
+<a class="toc-l3" data-depth="3" href="#331-两个权限点两件事">33.1 两个权限点，两件事</a>
+<a class="toc-l3" data-depth="3" href="#332-谁能改模板">33.2 谁能改模板</a>
+<a class="toc-l3" data-depth="3" href="#333-升级后的复核存量">33.3 升级后的复核（存量）</a>
+<a class="toc-l2" data-depth="2" href="#三十四-pos-差异结案与作废订单的权限">三十四 POS 差异结案与作废订单的权限</a>
+<a class="toc-l3" data-depth="3" href="#341-长短款差异结案posshiftsettle">34.1 长短款差异结案：`pos.shift.settle`</a>
+<a class="toc-l3" data-depth="3" href="#342-作废订单posrefund">34.2 作废订单：`pos.refund`</a>
+<a class="toc-l3" data-depth="3" href="#343-授权与排错">34.3 授权与排错</a>
   </nav>
   <main id="doc">
 <h1 id="伴圆ai原生erp-操作手册">伴圆AI原生ERP 操作手册</h1>
@@ -387,7 +405,7 @@
 <ul><li>需要权限点 <code>system:audit:view</code>（查看与导出审计日志）。首次迁移只授予 admin；需要给审计员或财务经理时，由管理员在 /system/roles 为对应角色添加该权限点。</li><li>侧栏「系统管理」分组目前只对管理员角色显示；被授予该权限点的非管理员看不到菜单入口，需要直接访问 /system/audit-logs（接口权限由服务端判定，不依赖菜单）。</li><li>还要求账号数据范围为&quot;全部&quot;：受限范围账号返回 403 <code>GLOBAL_DATA_FORBIDDEN</code>，因为审计日志没有可靠的组织列，无法诚实地按范围缩小。</li><li>旧接口 <code>GET /api/auth/audit-logs</code> 仍只对管理员开放，是无过滤的只读全量分页，不含新页面的脱敏二次处理和导出，日常请用新页面。</li></ul>
 <h3 id="272-查询">27.2 查询</h3>
 <p>过滤项（页面输入框与接口查询参数同名）：<code>module</code>、<code>action</code>、<code>entity</code>、<code>entity_id</code>、<code>user</code>（操作人名称或用户 ID）、<code>keyword</code>、<code>from</code>、<code>to</code>（日期格式 <code>YYYY-MM-DD</code>，<code>from</code> 不能晚于 <code>to</code>，格式错误返回 400）。每页最多 200 条，按编号倒序。要点：</p>
-<ul><li><code>keyword</code> 只匹配动作、模块、对象、对象 ID 和操作人，<strong>不搜索明细</strong>，避免通过关键字间接探测被脱敏的内容。</li><li>明细读取时会再脱敏一次：密码、令牌、密钥类字段，以及自由文本里的 <code>password: …</code> 和 11 位手机号（显示为 <code>138****5678</code>），超长明细截断。写入时已脱敏，读取时再做是因为旧行或直接写库的行不保证。</li><li>页面顶部的保留提示来自系统参数 <code>retention_audit_days</code>，同时说明哪些模块会被清理。</li></ul>
+<ul><li><code>keyword</code> 只匹配动作、模块、对象、对象 ID 和操作人，<strong>不搜索明细</strong>，避免通过关键字间接探测被脱敏的内容。</li><li>明细读取时会再脱敏一次：密码、令牌、密钥类字段，以及自由文本里的 <code>password: …</code> 和 11 位手机号（显示为 <code>138****5678</code>），超长明细截断。写入时已脱敏，读取时再做是因为旧行或直接写库的行不保证。</li><li>页面顶部的保留提示来自系统参数 <code>retention_audit_days</code>，同时说明哪些模块会被清理。</li><li><strong>总数是封顶估算，不是精确命中数。</strong> 接口为避免对大表整表计数，最多数到 10,001 行：响应里 <code>total</code> 最大为 10,001，<code>has_more</code> 为 <code>true</code> 表示命中超过 10,000 条（此时 <code>total</code> 只是下界），<code>total_cap</code> 固定返回 10000。页面在命中超过 10,000 条时会提示&quot;总数是估算&quot;，底部分页的&quot;共 10,000 条&quot;指<strong>可翻阅的范围</strong>（按当前排序的前 10,000 条），不是命中总数。翻页深度同样封顶：偏移量达到 10,000 的请求返回 400，要看更早的记录请加 <code>module</code>、<code>user</code>、<code>from</code>/<code>to</code> 等过滤条件缩小范围，或使用 27.3 的导出（单次上限 50000 行）。核对&quot;本月到底有多少条&quot;这类问题不要读分页总数。</li></ul>
 <h3 id="273-导出-csv">27.3 导出 CSV</h3>
 <p>点页面上的「导出 CSV」按钮，或调用 <code>GET /api/meta/audit-logs/export.csv</code>（带同一组过滤参数与权限；需要带 <code>Authorization: Bearer</code> 令牌）。</p>
 <ul><li>与列表共用同一过滤实现；UTF-8 带 BOM，便于 Excel 直接打开；列为 <code>id, created_at, user_id, user_name, module, action, entity, entity_id, detail, ip</code>。</li><li>单次最多 50000 行。超出被截断，响应头 <code>X-Export-Truncated: 1</code>、<code>X-Export-Max-Rows: 50000</code>；需要完整数据时缩小日期范围分批导出。</li><li>导出先写一条严格审计 <code>AUDIT_LOG_EXPORT</code>（含过滤条件、行数、是否截断、列清单），写不进去则不外发数据；导出文件不含这条导出自身的审计行，也不含导出期间新增的行。</li><li>所有单元格加引号，以 <code>=</code>、<code>+</code>、<code>-</code>、<code>@</code>、制表符等开头的值前置 <code>'</code>，防止在电子表格里被当作公式。</li><li>导出文件含操作人和 IP，属于个人信息：用加密渠道交付，用完销毁。</li></ul>
@@ -399,22 +417,33 @@
 <p><code>node scripts/release-candidate.mjs</code> 在<strong>干净、已提交</strong>的检出上构建一个候选包：<code>release/RC-&lt;version&gt;-&lt;shortsha&gt;.zip</code>、<code>.zip.sha256</code>，以及 <code>release/RC-&lt;version&gt;-&lt;shortsha&gt;.evidence/</code> 下的 <code>EVIDENCE.json</code> 与 <code>RELEASE-NOTES.md</code>。</p>
 <p>它<strong>不是</strong>发布：不打 tag、不创建 GitHub release、不部署，也<strong>不代表生产就绪</strong>或商用承诺；验收状态以 <code>docs/implementation/backlog.md</code> 为准。证据里的 <code>not_a_release</code> 恒为 <code>true</code>。</p>
 <h3 id="282-命令与参数">28.2 命令与参数</h3>
-<pre><code>node scripts/release-candidate.mjs [--output=&lt;dir&gt;] [--run-guards] [--ci-run=&lt;数字&gt;] \
+<pre><code>node scripts/release-candidate.mjs [--output=&lt;dir&gt;] [--run-tests] [--run-guards] [--ci-run=&lt;数字&gt;|auto] \
   [--focused-result=passed --focused-source=&quot;&lt;在哪里跑的&gt;&quot;] \
   [--regression-result=passed --regression-source=&quot;&lt;在哪里跑的&gt;&quot;] [--reuse-node-modules]</code></pre>
 <div class="table-wrap"><table><thead><tr><th>参数</th><th>含义</th></tr></thead><tbody><tr><td><code>--output=&lt;dir&gt;</code></td><td>产物目录，缺省 <code>release/</code></td></tr>
 <tr><td><code>--run-guards</code></td><td>由脚本自己运行类型检查和四个静态守卫并记入证据（<code>origin: produced</code>）</td></tr>
-<tr><td><code>--ci-run=&lt;数字&gt;</code></td><td>托管 CI 的 run 编号，仅作引用，脚本不联网核实</td></tr>
+<tr><td><code>--run-tests</code></td><td>由脚本自己运行焦点测试套件 <code>node --test --test-concurrency=1 tests/*.test.mjs</code>，并顺带运行上述五项守卫（所以不必再加 <code>--run-guards</code>）。结果记为 <code>origin: produced</code>，含通过/失败计数、耗时和 <code>tests/</code> 目录树哈希。<strong>不能与 <code>--focused-result</code> 同用</strong>；套件不是干净通过、计数解析不出来、或运行期间 <code>tests/</code> 或 <code>HEAD</code> 被改动，整次构建中止，不写证据。耗时等于一次完整焦点套件</td></tr>
+<tr><td><code>--ci-run=&lt;数字&gt;</code></td><td>托管 CI 的 run 编号，仅作引用，脚本不联网核实（<code>ci_lookup.mode</code> 为 <code>operator-supplied</code>）</td></tr>
+<tr><td><code>--ci-run=auto</code></td><td>由脚本用 <code>gh run list --commit &lt;HEAD&gt; --workflow ci.yml</code> 查本提交最新一次结论为 <code>success</code> 的 run，记入 <code>ci_run_id</code>。本机没有 <code>gh</code>、未登录、该提交没有记录或没有成功的 run 时，<code>ci_run_id</code> 为 <code>null</code>，原因写在 <code>ci_lookup.reason</code>，<strong>不会猜、不会让构建失败</strong>。这是&quot;查到了&quot;的证据，仍不是目标平台验收</td></tr>
 <tr><td><code>--focused-result</code> / <code>--focused-source</code></td><td>声明焦点测试结果（只接受 <code>passed</code>）及运行位置，必须成对出现；记为&quot;操作者声明&quot;，脚本不替你验证</td></tr>
 <tr><td><code>--regression-result</code> / <code>--regression-source</code></td><td>同上，针对隔离回归</td></tr>
 <tr><td><code>--reuse-node-modules</code></td><td>验收复用本检出的依赖而不联网安装，证据会如实记录</td></tr></tbody></table></div>
-<p>写 <code>--*-result=failed</code> 会被拒绝（不拿失败的运行造候选包）；未给 <code>--*-result</code> 的项在证据里记为 <code>not run</code>。另有仅供最小包测试用的 <code>--skip-build</code>、<code>--skip-docs</code>，运维不用。</p>
+<p>两个取值选项既接受 <code>--k=v</code> 也接受 <code>--k v</code>。<code>--run-tests</code> 与 <code>--ci-run=auto</code> 是互相独立的可选项：不带它们时对应字段仍是 <code>not run</code> / <code>null</code>。写 <code>--*-result=failed</code> 会被拒绝（不拿失败的运行造候选包）；未给 <code>--*-result</code> 的项在证据里记为 <code>not run</code>。另有仅供最小包测试用的 <code>--skip-build</code>、<code>--skip-docs</code>，运维不用。</p>
 <h3 id="283-脚本做了什么">28.3 脚本做了什么</h3>
-<ol><li>拒绝脏工作树（已修改、已暂存、未跟踪文件均算），构建前后各查一次，没有跳过开关。</li><li>运行 <code>npm run release</code> 到临时目录，核对 <code>MANIFEST.baseCommit</code> 等于当前 <code>HEAD</code>、版本号与 <code>package.json</code> 一致。</li><li>对该 zip 的<strong>全新解压</strong>依次执行：<code>verify-release</code>、密钥与数据库文件扫描、生产模式验收（<code>scripts/test-local-delivery.mjs</code>）。任一步失败则删除本次产物并以非零退出。</li><li>写出证据与发行说明，再用 <code>verify-release --evidence</code> 校验证据本身。接收方可在解压后的包根目录运行 <code>node scripts/verify-release.mjs --evidence=&lt;EVIDENCE.json&gt;</code> 复核。</li></ol>
+<ol><li>拒绝脏工作树（已修改、已暂存、未跟踪文件均算），构建前后各查一次，没有跳过开关。</li><li>运行 <code>npm run release</code> 到临时目录，核对 <code>MANIFEST.baseCommit</code> 等于当前 <code>HEAD</code>、版本号与 <code>package.json</code> 一致。</li><li>对该 zip 的<strong>全新解压</strong>依次执行：<code>verify-release</code>、密钥与数据库文件扫描、生产模式验收（<code>scripts/test-local-delivery.mjs</code>）。任一步失败则删除本次产物并以非零退出。</li></ol>
+<p>3b. 给了 <code>--run-tests</code> 时，在第 3 步的 verify-release 与密钥扫描之后、守卫与生产模式验收之前运行焦点套件（对比工作树 <code>tests/</code> 与包内 <code>release/tests-tree.json</code> 的哈希必须一致）；<code>--run-guards</code> 或 <code>--run-tests</code> 任一出现，才会运行五项守卫。</p>
+<ol><li>写出证据与发行说明，再用 <code>verify-release --evidence</code> 校验证据本身。接收方可在解压后的包根目录运行 <code>node scripts/verify-release.mjs --evidence=&lt;EVIDENCE.json&gt; --artifact=&lt;RC-….zip&gt;</code> 复核（见 28.6）。</li></ol>
 <h3 id="284-读证据时的注意">28.4 读证据时的注意</h3>
 <ul><li><code>EVIDENCE.json</code> 只检查一致性，不检查真实性：操作者声明的结果只和操作者一样可信。</li><li><code>synthetic_drill</code> 记录随包提供的合成容量演练文件哈希，是开发机上的合成演练，不是目标主机结果。</li><li>候选包的验收在<strong>构建它的那台机器</strong>上跑，不是目标平台验收。</li></ul>
+<ul><li><code>focused_tests.origin</code> 为 <code>produced</code> 表示脚本自己跑过并解析了计数；为 <code>operator-attested</code> 才是操作者声明。看到 <code>produced</code> 时仍要核对 <code>summary_counts</code>（<code>skipped</code>、<code>todo</code> 不为零说明有未执行的用例）与 <code>duration_ms</code>。</li><li><code>ci_run_id</code> 为 <code>null</code> 不是错误：看 <code>ci_lookup</code>（<code>mode</code> 为 <code>auto</code> 时读 <code>reason</code>，<code>none</code> 表示没给 <code>--ci-run</code>）。<code>ci_lookup.gh_override</code> 为真说明查询用的是测试替身而非真实 <code>gh</code>，验证脚本会警告，此类证据不可当作托管 CI 凭据。</li></ul>
 <h3 id="285-仍需人工完成">28.5 仍需人工完成</h3>
 <p>在指定主机上跑焦点测试与隔离回归（Linux 在 <code>dmserver</code>，macOS 专属项在 Mac Studio）并用 <code>--*-result</code> 登记，或对照托管 CI；确认该提交的托管 CI 并用 <code>--ci-run</code> 记录；在目标平台做验收；审阅 <code>RELEASE-NOTES.md</code>、依赖公告和 backlog 未结项；打 tag、发布或部署需要所有者明确授权；传输 zip 时一并带 <code>.sha256</code> 并在接收端复核哈希。</p>
+<h3 id="286-接收方复核verify-release-与---evidence">28.6 接收方复核：verify-release 与 --evidence</h3>
+<p>在<strong>解压后的包根目录</strong>（有 <code>MANIFEST.json</code> 的那一层）运行：</p>
+<pre><code>node scripts/verify-release.mjs
+node scripts/verify-release.mjs --evidence=&lt;EVIDENCE.json 的路径&gt; --artifact=&lt;RC-…zip 的路径&gt;</code></pre>
+<p>两个参数都必须写成 <code>--名称=值</code> 的形式（空格分隔的写法不被识别）。不带参数时只核对 <code>MANIFEST.json</code> 的文件清单与哈希、SBOM 结构、禁入文件（数据库、实例状态、密钥）以及清单之外的多余文件；带 <code>--evidence</code> 时再核对证据本身：必填字段齐全、<code>version</code> 与 <code>commit</code> 等于包内 <code>MANIFEST.json</code>、<code>not_a_release</code> 为 <code>true</code>、没有 <code>failed</code> 的结果、<code>passed</code> 的结果带来源、五项守卫齐全、<code>produced</code> 的焦点测试计数自洽且 <code>tests_tree_sha256</code> 与包内清单一致、演练文件哈希与包内文件一致；再加 <code>--artifact</code> 才会核对 zip 的名称、sha256 与字节数。成功时最后一行是 <code>[verify] N files; 0 errors</code>，退出码 0；任何一项不符都会逐条打印并以退出码 1 结束。</p>
+<p>边界：它核对的是<strong>一致性</strong>，不是真实性。能同时改证据和包的人可以伪造它；操作者声明的结果只和操作者一样可信。通过也不是发布批准、不是目标平台验收。</p>
 <h2 id="二十九-夜间容量基线摘要的解读">二十九 夜间容量基线摘要的解读</h2>
 <p>面向运维与开发。依据 Z10，工作流 <code>.github/workflows/nightly-capacity.yml</code>，说明见 <code>docs/implementation/ci.md</code> 与 <code>docs/implementation/capacity-baseline.md</code>。</p>
 <h3 id="291-它是什么">29.1 它是什么</h3>
@@ -434,6 +463,80 @@
 <h2 id="三十-库存列表分页">三十 库存列表分页</h2>
 <p>依据 Z3。库存查询页（/inventory/stocks）和接口 <code>GET /api/inventory/stocks</code> 已改为强制游标分页，翻页（第二页起）的代价不再随总行数增长。第一页仍要对满足条件的全部行做一次计数与合计，大库上进入页面或改过滤条件时仍有这一次整表聚合，目标主机上的实测尚未做。</p>
 <ul><li>每页缺省 50 行，<code>pageSize</code> 上限 500（超出按 500 处理）。页面底部是「下一页」翻页，每页 50 行。</li><li>接口翻页用游标：第一页不带游标；响应里的 <code>has_more</code> 为真时，把 <code>next_after_id</code> 作为下一次请求的 <code>after_id</code> 参数继续取，直到 <code>has_more</code> 为假。<code>after_id</code> 必须是非负整数，否则返回错误。行按库存记录编号升序。</li><li><code>total</code>（总行数）和 <code>summary</code>（数量与金额合计）<strong>只在第一页</strong>（不带 <code>after_id</code> 的请求）返回，翻页的后续请求不再计算，所以翻到后面页时页面上的合计取自第一页。</li><li>旧的 <code>page</code>、<code>offset</code> 参数不再支持，会被忽略；自己写的导出脚本或报表需要改成游标方式，否则永远只拿到第一页。过滤参数不变（仓库、品牌、品类、SKU、批次、关键字、仅可用、临期天数等）。</li><li>库存按你的数据范围过滤，范围外的仓库不出现（见第二十六章）。按商品汇总的 <code>/inventory/stocks/by-sku</code> 仍使用页码分页。</li><li>本次改造同时补了热点查询索引（迁移 061）；前后性能数字的口径与限制见 <code>capacity-baseline.md</code>，那些数字不是目标主机结果。</li></ul>
+<h2 id="三十一-指标导出接入-prometheus">三十一 指标导出：接入 Prometheus</h2>
+<p>依据 ADR-0045（<code>docs/implementation/ADR-0045-metrics-export.md</code>）。完整抓取配置、指标清单和五条告警规则示例在仓库内 <code>docs/operations/monitoring.md</code>，这里给接入步骤和排障要点。指标只读，只含备份年龄、迁移校验和、磁盘、登录节流、严格审计写失败、写重试等数字，不含账号、路径和业务数据。</p>
+<h3 id="311-开启抓取令牌">31.1 开启抓取令牌</h3>
+<ol><li>生成至少 32 字符的令牌并交给密码管理器：<code>openssl rand -hex 32</code>（输出 64 个字符）。</li><li>只通过环境变量交给服务，和 <code>GML_JWT_SECRET</code> 一样不进仓库、工单和日志。本机安装在启动命令前面设置：<code>GML_METRICS_TOKEN=&quot;$(cat /secure/metrics.token)&quot; node scripts/local-manage.mjs start</code>（安装手册 5.4、6.3）。令牌轮换 = 换值并重启服务，同时更新 Prometheus 侧的令牌文件。</li><li>未设置或短于 32 字符时，令牌路径<strong>整体关闭</strong>，不会因为&quot;设了&quot;就变成弱口令；此时只有管理员登录凭据能读指标。</li><li>令牌<strong>只</strong>对 <code>GET /api/meta/metrics?format=prometheus</code> 有效，<strong>只读</strong>。对 JSON 形态、<code>/health</code> 和其他任何接口无效；令牌不能放在 URL 查询参数里。</li></ol>
+<p>自测（令牌从文件读取，不要写进命令行和 shell 历史）：</p>
+<pre><code>curl -sS -H &quot;Authorization: Bearer $(cat /secure/metrics.token)&quot; 'http://127.0.0.1:3001/api/meta/metrics?format=prometheus' | head</code></pre>
+<p>端口按你的实例填写（安装手册第六章；Docker 的映射端口见 <code>docker-compose.yml</code>）。返回内容类型为 <code>text/plain; version=0.0.4</code>，指标名统一以 <code>os_erp_</code> 开头。</p>
+<h3 id="312-prometheus-侧抓取配置">31.2 Prometheus 侧抓取配置</h3>
+<pre><code>scrape_configs:
+  - job_name: os-erp
+    metrics_path: /api/meta/metrics
+    params:
+      format: [prometheus]
+    scrape_interval: 30s
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/secrets/os-erp-metrics-token   # 文件内容只有令牌本身
+    scheme: https            # 经反向代理终结 TLS 时；内网直连则 http
+    static_configs:
+      - targets: ['erp.example.internal:443']</code></pre>
+<p>令牌放 <code>credentials_file</code> 而不是配置文件正文，配置文件才能入库；令牌走 <code>Authorization</code> 头，不会出现在访问日志的 URL 里。Prometheus 与服务之间不是回环或可信内网时必须走 TLS（反向代理配置见安装手册 6.1）。再加一条 <code>up{job=&quot;os-erp&quot;} == 0</code> 监控抓取本身是否中断。</p>
+<h3 id="313-读指标的要点">31.3 读指标的要点</h3>
+<ul><li>备份相关四项（<code>os_erp_backup_age_seconds</code>、<code>os_erp_backup_last_failed</code>、<code>os_erp_backup_missing</code>、<code>os_erp_disk_free_bytes</code>）里 <strong>-1 表示未知</strong>，不要当成&quot;0 秒前刚备份&quot;。备份没跑（定时任务挂了）只有备份年龄告警能发现。</li><li>计数器（<code>*_total</code>）在进程内累计，<strong>重启归零</strong>；用 <code>increase()</code>、<code>rate()</code>，不要比较绝对值。</li><li><code>os_erp_csp_violation_reports_total</code> <strong>恒为 0</strong>：当前内容安全策略没有违规上报端点，该指标表示&quot;未采集&quot;，不要据此告警或据此认为没有违规。</li><li><code>os_erp_security_audit_unavailable_total</code> 增加意味着有业务变更因安全审计写不进去而回滚，任何一次都要查（审计表、磁盘空间、数据库只读或锁）。</li></ul>
+<h3 id="314-排障与边界">31.4 排障与边界</h3>
+<ul><li>抓取返回 401：令牌与服务端 <code>GML_METRICS_TOKEN</code> 不一致、服务端令牌短于 32 字符、用了不带 <code>format=prometheus</code> 的地址（令牌对 JSON 形态无效），或未带 <code>Authorization</code> 头。错误令牌与没带凭据返回同样的 401，不提示令牌机制是否存在。<code>format</code> 取值不是 <code>json</code> 或 <code>prometheus</code> 返回 400。</li><li>备份指标全是 -1：指标读的是备份目录里最新的 <code>backup-report-*.json</code>，还没跑过 <code>db-backup</code> 就是这个状态（第二十三章）。</li><li>计数器为 0 但日志里有对应事件：多半是进程重启过，或抓到的是另一个实例。</li><li>如实边界：本节的抓取配置和告警规则是按 ADR 与端点实现写出的，<strong>没有</strong>在真实 Prometheus 实例上做过端到端验证；告警阈值需按你的备份周期、磁盘规模调整。Docker 部署时 <code>docker-compose.yml</code> 当前只透传 <code>GML_TRUST_PROXY</code> 与 <code>GML_JWT_SECRET</code>，要用令牌需自行在 <code>environment</code> 里加入 <code>GML_METRICS_TOKEN</code>。</li></ul>
+<h2 id="三十二-升级演练迁移重放与读报告">三十二 升级演练：迁移重放与读报告</h2>
+<p>依据 <code>scripts/upgrade-rehearsal.mjs</code> 与 <code>docs/implementation/capacity-baseline.md</code>。它回答三个问题：这批迁移在<strong>你的</strong>数据量上要多久、会把写入者挡多久、失败后能不能退回去。它和第二十三章的升级回退演练（<code>upgrade-rollback-drill.mjs</code>）不同：回退演练只证明&quot;一个必败的迁移会整条回滚&quot;，本演练用<strong>真实待上线的迁移</strong>逐个重放；演练失败时会自动调用回退演练并把结论写进报告。</p>
+<h3 id="321-前提与输入">32.1 前提与输入</h3>
+<ul><li>在仓库（代码副本）根目录运行，Node 22。输入是 <code>db-backup.mjs</code> 生成的备份集（带 <code>backup-report-&lt;stamp&gt;.json</code>），库必须是生产模式库；加密备份需要环境变量 <code>GML_BACKUP_KEY</code>（同安装手册 7.6，缺失为 <code>DRILL_BACKUP_KEY_REQUIRED</code>）。</li><li><code>--target-dir</code> 必须是<strong>不存在或为空的绝对路径</strong>，不能是线上数据目录、不能是备份来源数据目录，也不能位于仓库 <code>data/</code> 内。演练在里面恢复一份副本并写报告，<strong>源备份和线上数据不会被改动</strong>。演练完归档报告，再删除目录（里面是数据副本）。</li><li><code>--from=N</code> 的含义：编号不大于 N 的迁移视为已应用的基线，编号大于 N 的会被重放。N 取<strong>这份备份对应的库已应用的最高迁移编号</strong>（在线上实例上运行 <code>node scripts/migrate.mjs --status</code> 查看，环境变量同安装手册 5.5）。N 高于库里真实版本会被拒绝（<code>REHEARSAL_BASELINE_NOT_APPLIED</code>，退出码 2）；N 已经是仓库最高编号则没有可演练的迁移（<code>REHEARSAL_NOTHING_TO_APPLY</code>）。</li></ul>
+<h3 id="322-命令">32.2 命令</h3>
+<p>所有参数写成 <code>--名称=值</code>（空格分隔不被识别），未知参数直接拒绝（<code>DRILL_USAGE</code>）：</p>
+<pre><code># 用真实备份集
+TARGET=/srv/drills/rehearsal-$(date +%Y%m%d-%H%M)
+node scripts/upgrade-rehearsal.mjs --from=58 --backup-dir=$INSTANCE/data/backups --target-dir=$TARGET
+
+# 指定非最新的备份集
+node scripts/upgrade-rehearsal.mjs --from=58 --backup-dir=$INSTANCE/data/backups --stamp=&lt;yyyyMMdd-HHmmss&gt; --target-dir=$TARGET
+
+# 用合成库目录（须由 synth-data.mjs 生成，带合成指纹；多行业库目录被拒绝）
+node scripts/upgrade-rehearsal.mjs --from=58 --synth-dir=/abs/synth-data-dir --target-dir=$TARGET</code></pre>
+<p>示例里的 <code>58</code> 只是占位，按 32.1 取你的库的值。可选参数：<code>--stamp</code>（只用于 <code>--backup-dir</code>）、<code>--extra-migrations-dir=&lt;绝对目录&gt;</code>（在大库上预演<strong>尚未合入仓库</strong>的迁移：目录里编号大于仓库最大编号的 <code>NNN_名称.cjs</code> 追加到序列末尾，只复制进暂存目录，不写进 <code>server/db/migrations/</code>）、<code>--keep-post-baseline-indexes</code>（不删除后续迁移创建的索引，默认会删，使这些迁移真的重新建索引）。<code>--backup-dir</code> 与 <code>--synth-dir</code> 必须二选一，<code>--from</code> 与 <code>--target-dir</code> 必填。</p>
+<p>退出码：<strong>0</strong> 升级和全部核对通过；<strong>1</strong> 升级或核对失败（已执行回退，见报告 <code>rollback</code>）；<strong>2</strong> 参数、目录或基线被拒绝（不创建、不改动任何文件）。屏幕上逐库打印每个迁移一行（状态、耗时、净耗时、写锁区间、<code>结构原本存在</code>）和各项核对的 ✓/✗，末尾是回退结果和失败原因。</p>
+<h3 id="323-读报告-upgrade-rehearsal-json">32.3 读报告 <code>upgrade-rehearsal-&lt;stamp&gt;.json</code></h3>
+<p>报告写在 <code>--target-dir</code> 内，权限 0600，不含密码和密钥。先看顶层，再看每库：</p>
+<div class="table-wrap"><table><thead><tr><th>字段</th><th>看什么</th></tr></thead><tbody><tr><td><code>passed</code>、<code>failures</code>、<code>warnings</code></td><td><code>passed</code> 为 <code>true</code> 且 <code>failures</code> 为空才算通过；<code>warnings</code> 要读，例如旧登记行无校验和、基线迁移被自愈</td></tr>
+<tr><td><code>scope_notice</code>、<code>host</code></td><td>固定声明：单次墙钟、运行它的这台机器当时的负载（<code>loadavg_start</code>/<code>loadavg_end</code>），不是目标主机结果，不是容量承诺，不是验收证据</td></tr>
+<tr><td><code>input</code>、<code>baseline</code></td><td>用了哪个备份集，<code>baseline.from</code> 和 <code>baseline.replay[]</code>（被重放的迁移编号）、<code>extra_migrations</code>、<code>post_baseline_indexes</code></td></tr>
+<tr><td><code>databases[].steps[]</code></td><td>每个迁移一项：<code>status</code>（<code>ok</code>、<code>failed</code>、<code>unexpected</code>、<code>pending</code>）、<code>duration_ms</code>、<code>overhead_ms</code>、<code>net_ms</code>（约等于该迁移本身的执行加登记提交）、<code>structure_preexisting</code>、<code>healed</code>、<code>lock</code>、<code>error</code></td></tr>
+<tr><td><code>databases[].invariants[]</code></td><td>升级后核对，每项 <code>passed</code>：<code>all_steps_applied</code>、<code>checksums_verified</code>、<code>repo_files_match_registry</code>、<code>production_rerun_is_noop</code>、<code>registry_covers_all_migrations</code>、<code>replayed_rows_recorded_as_applied</code>、<code>integrity_ok</code>、<code>foreign_keys_not_worse</code>、<code>probes_retained</code>（用户、商品、采购单、收款单计数和应收余额升级前后相同）、<code>seed_invariants_not_regressed</code>（不变量不得从绿变红）</td></tr>
+<tr><td><code>rollback</code></td><td>仅失败时出现：<code>in_process.passed</code>（删副本、重新核对 sha256 复制、版本表和探针与升级前相同）与 <code>drill.exit_code</code>、<code>report_passed</code>（回退演练结论）</td></tr>
+<tr><td><code>timing</code></td><td>恢复、升级等总耗时</td></tr></tbody></table></div>
+<p>判读要点：</p>
+<ol><li><strong>只有 <code>structure_preexisting</code> 为 <code>false</code> 的步骤，耗时才代表真实升级成本。</strong> 为 <code>true</code> 说明这个迁移要建的表、列在副本里本来就存在（备份是用当前代码产生的），重放只是幂等空转，耗时偏低；为 <code>null</code> 表示该迁移没有自检。要演练真正的旧库，应使用<strong>旧版本代码产生的备份集</strong>，并把 <code>--from</code> 取为它的最高已应用编号。</li><li><strong>写锁等待是区间，不是精确值。</strong> <code>lock.max_busy_span_ms</code> 是下界（探测到锁被占用的最长连续时间），<code>lock.max_blocked_ms</code> 是含调度噪声的近似上界，高负载下可能明显偏大；真实持锁时长在两者之间。一个迁移是一个事务，迁移期间持有写事务的粗上界是 <code>duration_ms</code>。写入者在这段时间内会等待或遇到忙错误，WAL 模式下读者不被挡住，本演练不量读者。</li><li><code>lock.other_errors</code> 大于 0 表示探针本身出错，该步判失败（没有有效的锁时间证据），不要采信其锁时间。</li><li>失败原因码要对照 <code>failures</code>：<code>PRE_UPGRADE_CHECKSUM_MISMATCH</code>（升级前已登记迁移与当前文件校验和不一致，生产启动本来就会被拒绝，<strong>不要升级</strong>）、<code>PRE_UPGRADE_REGISTRY_FILE_MISSING</code>（版本表有登记而仓库没有对应文件）、<code>MIGRATION_CHECKSUM_MISMATCH</code>、<code>ROLLBACK_CHECK_FAILED</code>、<code>ROLLBACK_DRILL_FAILED</code>。演练从不调整校验和，也不收养校验和。</li><li>一次通过只说明：在这份备份副本上，这批迁移能按顺序应用、核对项全绿。它<strong>不</strong>证明目标主机上的耗时（数字来自运行它的机器，需在 <code>dmserver</code> 或目标主机用生产规模副本实测后才能引用）、不证明业务回归、不代表生产就绪。失败时按第二十三章的&quot;升级失败&quot;处理：不重试、不手工改迁移登记表、不收养校验和，把报告交开发。</li></ol>
+<p>夜间容量工作流有一个默认关闭的手动输入 <code>rehearsal</code>，用合成库做同样的演练，只把各迁移一行摘要写进日志；定时运行永不执行它（第二十九章）。</p>
+<h2 id="三十三-审批模板维护权限与审批管理员的分离">三十三 审批模板维护权限与审批管理员的分离</h2>
+<p>依据 ADR-0037 的 AA3 补充与迁移 063。</p>
+<h3 id="331-两个权限点两件事">33.1 两个权限点，两件事</h3>
+<div class="table-wrap"><table><thead><tr><th>权限点</th><th>管什么</th></tr></thead><tbody><tr><td><code>system:approval:template</code></td><td><strong>维护审批模板</strong>：新建/修改模板（含级次整体重建）<code>POST /api/approval/templates</code>，启用/停用 <code>POST /api/approval/templates/:id/toggle</code>。没有删除接口，模板只能新建、覆盖、启停，三者同一个门</td></tr>
+<tr><td><code>system:approval:manage</code></td><td><strong>审批管理员&quot;全见&quot;</strong>：在&quot;待我审批&quot;、待办、列表、总览里看到全库的待审实例（受设置项 <code>approval_manager_global</code> 影响，见 ADR-0037 Z9 开关）。<strong>不再</strong>允许改模板</td></tr></tbody></table></div>
+<p>升级前持有 <code>manage</code> 就能改模板的账号，升级后改模板会得到 403，这是预期的收口。</p>
+<h3 id="332-谁能改模板">33.2 谁能改模板</h3>
+<ul><li>迁移 063 只在这个权限点<strong>第一次出现</strong>时把它授给 <code>admin</code>；其他角色（财务经理、流程管理员等）需要时，由管理员在 /system/roles 为对应角色添加。管理员事后收回的授权不会被后续升级恢复。</li><li>除权限点外还要求账号数据范围为<strong>全局</strong>：受限范围（组织、子树、经销商、本人、无组织）的账号即使持有 <code>template</code>，写模板也返回 403 <code>GLOBAL_DATA_FORBIDDEN</code>。原因：审批模板没有组织列，无法诚实地按范围缩小。</li><li>指定审批人时：用户必须存在（否则 400 <code>APPROVER_NOT_FOUND</code>）；维护者范围受限时，审批人必须在维护者的组织范围内（否则 403 <code>APPROVER_OUT_OF_SCOPE</code>），角色型、权限型审批人受限维护者一律拒绝。</li><li>读模板（<code>GET /api/approval/templates</code>）仍是登录即可，沿用原门。</li></ul>
+<h3 id="333-升级后的复核存量">33.3 升级后的复核（存量）</h3>
+<p>升级<strong>不会</strong>自动清理升级前受限管理员已写入的&quot;把自己设为审批人&quot;的级次。请用全局范围账号做一次：</p>
+<ol><li>打开审批模板列表（接口 <code>GET /api/approval/templates</code>），检查各模板级次里 <code>approver_type</code> 为&quot;指定人员&quot;的指派，确认每个审批人确实应该处理该模板覆盖的单据。</li><li>在 /system/roles 里，对不需要的受限账号<strong>收回</strong> <code>system:approval:manage</code>，需要改模板的少数人再单独授予 <code>system:approval:template</code>，并确认其数据范围为&quot;全部&quot;。</li><li>用被收权的原账号重新登录，确认改模板返回 403、他组织的待审单在待办和详情里不可见。</li></ol>
+<p>如实边界：角色型、权限型审批人&quot;看得到、批不了&quot;的口径不变；MCP <code>approval.approve</code> 的签字人范围口径不变；模板修改都有审计记录。</p>
+<h2 id="三十四-pos-差异结案与作废订单的权限">三十四 POS 差异结案与作废订单的权限</h2>
+<p>依据 ADR-0025 的 AA9 补充与迁移 066。第十二章讲业务流程，这里讲谁能做、做不了时看什么。</p>
+<h3 id="341-长短款差异结案posshiftsettle">34.1 长短款差异结案：<code>pos.shift.settle</code></h3>
+<ul><li>班次核款时选择&quot;挂账待查&quot;的差异，由有 <code>pos.shift.settle</code> 权限的账号落案（<code>charge</code> 责任人承担，或 <code>absorb</code> 公司承担，按页面按钮选择），接口 <code>POST /api/pos/shifts/:id/settle-variance</code>。原来按角色名（admin、finance）放行，现在按权限点。</li><li>迁移 066 在权限点<strong>首次出现</strong>时授予 <code>admin</code>、内置 <code>finance</code>（保持原有能力）和内置 <code>store</code>（店长）。<strong>店长默认就能结案本店的挂账差异，包括自己核款时挂账的那一笔。</strong> 若要保持&quot;门店挂账、总部落案&quot;，由管理员在 /system/roles 从 <code>store</code> 角色收回该权限点；收回后不会被后续升级恢复。</li><li>范围规则：绑定了门店的非管理员账号只能结<strong>本店</strong>班次，结别家的返回 404 <code>SHIFT_NOT_FOUND</code>（班次状态不变）；没有门店绑定的账号，只有总部角色（admin、finance 等）可结任意门店，未绑门店的店长等账号返回 403。管理员不要求门店绑定。</li><li>页面上&quot;长短款落案&quot;（班次详情）和&quot;责任人承担 / 公司承担&quot;（总部监控页）按钮在没有该权限时不显示。撤权后接口同样 403，状态不动。</li></ul>
+<h3 id="342-作废订单posrefund">34.2 作废订单：<code>pos.refund</code></h3>
+<p>作废本地单 <code>POST /api/pos/orders/:id/void</code> 与退货 <code>POST /api/pos/returns</code> 同属权限点 <code>pos.refund</code>，另需账号是管理员或绑定了门店。POS 本机单据列表里的&quot;作废&quot;按钮在没有 <code>pos.refund</code>（含权限还没加载完）时隐藏。作废会在同一事务里回退已用的营销优惠和积分，<strong>已完成的销售不要直接删除</strong>，按第十二章走作废或退货。</p>
+<h3 id="343-授权与排错">34.3 授权与排错</h3>
+<ol><li>先用原账号复现：按钮不显示通常是缺权限点；按钮显示但提示无权限，多半是服务端判定（权限、门店范围、班次不属于本店）。</li><li>管理员在 /system/roles 核对该角色是否持有 <code>pos.shift.settle</code> 或 <code>pos.refund</code>；改完让用户重新登录，用原账号验证，不要只看管理员页面上的勾选。</li><li>结案返回 404 <code>SHIFT_NOT_FOUND</code> 时，先核对账号绑定的门店与班次所属门店是否一致；该提示对&quot;不存在&quot;与&quot;不属于本店&quot;文案相同，这是有意为之。</li></ol>
   </main>
 </div>
 <div class="foot">
