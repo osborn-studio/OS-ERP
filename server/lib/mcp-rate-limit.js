@@ -214,6 +214,33 @@ export function createMcpRateLimiter({ env = process.env, now = Date.now, ...ove
   }
 }
 
+/**
+ * db 模式下"近期触顶"统计（AF11，管理端只读展示用）。→ Map<令牌 id, 0..2>。
+ * 桶表只记**已放行**的调用（被拒绝的调用只读不写），所以拿不到 429 的精确次数；这里数的是「当前 + 上一窗口」里该令牌
+ * 总额度（kind='all'）或写额度（kind='write'）已达上限的**窗口数**——触顶的窗口里再来的调用必然是 429。同一窗口两类都触顶只算 1。
+ * memory 模式、表缺失、读失败 ⇒ 空 Map（展示用，永不抛、不影响限流）。
+ */
+export function recentLimitedByToken(db, { scope = '', policy = mcpRatePolicy(), now = Date.now } = {}) {
+  const out = new Map()
+  if (policy.store !== 'db') return out
+  try {
+    const W = policy.windowMs
+    const t = now()
+    const ws = t - (t % W)
+    const rows = db.prepare('SELECT token_key, window_start AS ws, kind, count FROM mcp_rate_buckets WHERE window_start IN (?,?)').all(ws, ws - W)
+    const hit = new Set()
+    for (const r of rows) {
+      if (!r.token_key.startsWith(`${scope}|`)) continue
+      const id = Number(r.token_key.slice(scope.length + 1))
+      if (!Number.isSafeInteger(id) || id <= 0 || r.token_key !== `${scope}|${id}`) continue
+      const limit = r.kind === 'write' ? policy.writeRpm : policy.rpm
+      if (r.count >= limit) hit.add(`${id}|${r.ws}`)
+    }
+    for (const k of hit) { const id = Number(k.split('|')[0]); out.set(id, (out.get(id) ?? 0) + 1) }
+  } catch { /* 展示用统计，读失败按空处理 */ }
+  return out
+}
+
 /** 已配置的日配额（0 = 关闭）。只读展示用：读失败按 0 显示不影响限流（限流自己走 `dailyQuotaState`，读失败 fail closed）。 */
 export function dailyQuotaConfigured(db) {
   const n = Number(readSetting(db, 'mcp_token_daily_quota'))
@@ -251,4 +278,4 @@ export function dailyQuotaState(db, tokenId, { now = () => new Date() } = {}) {
   }
 }
 
-export default { createMcpRateLimiter, rateStoreFromEnv, dailyQuotaState, DEFAULT_MCP_RATE, mcpRatePolicy, dailyQuotaConfigured }
+export default { createMcpRateLimiter, recentLimitedByToken, rateStoreFromEnv, dailyQuotaState, DEFAULT_MCP_RATE, mcpRatePolicy, dailyQuotaConfigured }

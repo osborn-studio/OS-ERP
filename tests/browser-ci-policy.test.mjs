@@ -205,6 +205,29 @@ test('AD11 role-matrix scenario asserts the highlighted column, server-equal cel
   assert.ok(read('src/App.tsx').includes('/system/role-matrix'))
 })
 
+test('AF11 scenarios are registered, assert real outcomes and the page hooks exist', () => {
+  const declared = driver.match(/const SCENARIOS = \[([^\]]+)\]/)[1].split(',').map((x) => x.trim().replace(/'/g, ''))
+  const needles = {
+    'metrics-scoped-marker': ['metric-scoped-marker', 'metric-value-', 'restricted', 'scoped = false', 'route.fulfill', '全局口径', 'count(), 0', 'externalRequests'],
+    'mcp-token-429': ['/api/mcp/limits/tokens', 'mcp-token-429', 'mcp-token-429-row', 'data-recent', 'busy-agent', 'route.fulfill', 'status, 403', 'status, 401', 'count(), 0', 'externalRequests']
+  }
+  for (const [f, list] of Object.entries(needles)) {
+    assert.ok(declared.includes(f), `${f} must be registered in SCENARIOS`)
+    const src = read(`tests/browser/${f}.mjs`)
+    for (const needle of list) assert.ok(src.includes(needle), `${f} must assert ${needle}`)
+    assert.match(src, /from '\.\/lib\.mjs'/)
+    assert.match(src, /blockedbyclient/)
+    assert.match(src, /浏览器部分只在 Linux 托管 CI 运行/)
+    assert.doesNotMatch(src, /https?:\/\/(?!127\.0\.0\.1|localhost)/)
+  }
+  const metrics = read('src/pages/system/Metrics.tsx')
+  for (const hook of ['metric-scoped-marker', 'metric-value-', '按范围计算', 'showsScopedMarker']) assert.ok(metrics.includes(hook), `Metrics.tsx must expose ${hook}`)
+  const mcp = read('src/pages/system/McpCenter.tsx')
+  for (const hook of ['mcp-token-429', 'mcp-token-429-row', 'data-recent', "'/mcp/limits/tokens'"]) assert.ok(mcp.includes(hook), `McpCenter.tsx must expose ${hook}`)
+  assert.ok(read('src/pages/system/AuditLogs.tsx').includes('audit-fts-fallback'), 'AuditLogs.tsx exposes the FTS fallback slot')
+  assert.match(read('server/mcp/admin.js'), /'\/limits\/tokens',\s*requireAuth,\s*requirePerm\('system\.mcp\.manage'\)/)
+})
+
 test('AE11 scenarios are registered, assert real outcomes, restore what they change, and the page hooks exist', () => {
   const declared = driver.match(/const SCENARIOS = \[([^\]]+)\]/)[1].split(',').map((x) => x.trim().replace(/'/g, ''))
   for (const need of ['audit-fts-state', 'mcp-token-limits', 'metrics-hidden-note']) assert.ok(declared.includes(need), `${need} must be registered in SCENARIOS`)
