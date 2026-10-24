@@ -122,7 +122,7 @@ test('AF5 keygen --purpose anchor-intent writes anchor-intent.* with the same re
   assert.notEqual(keygen('relative/dir', ['--purpose', 'anchor-intent']).status, 0)
   // 用途校验
   const x = path.join(tempDir(t, 'os-erp-intent-x-'), 'k')
-  for (const extra of [['--purpose', 'bogus'], ['--purpose'], ['--purpose', 'anchor-intent', '--purpose', 'release'], ['--purpose=']]) {
+  for (const extra of [['--purpose', 'constructor'], ['--purpose', 'toString'], ['--purpose', '__proto__'], ['--purpose', 'bogus'], ['--purpose'], ['--purpose', 'anchor-intent', '--purpose', 'release'], ['--purpose=']]) {
     const bad2 = keygen(x, extra)
     assert.notEqual(bad2.status, 0, extra.join(' '))
     assert.ok(!existsSync(x), 'nothing created for a refused purpose')

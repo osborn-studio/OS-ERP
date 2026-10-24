@@ -35,7 +35,7 @@ function main() {
     else { if (purpose !== undefined) throw new Error(`Unknown or repeated argument: ${argv[i]} (${USAGE})`); purpose = m[2] ?? argv[++i] ?? '' }
   }
   purpose ??= 'release'
-  const spec = PURPOSES[purpose]
+  const spec = Object.hasOwn(PURPOSES, purpose) ? PURPOSES[purpose] : null // 不能用 PURPOSES[purpose]：'constructor' / '__proto__' 会命中原型上的属性
   if (!spec) throw new Error(`--purpose must be one of: ${Object.keys(PURPOSES).join(', ')} (got ${JSON.stringify(purpose)})`)
   if (typeof out !== 'string' || !out || out.startsWith('--')) throw new Error(USAGE)
   if (!path.isAbsolute(out)) throw new Error('--out must be an absolute path')

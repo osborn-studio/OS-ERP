@@ -14,6 +14,7 @@
  *     链尾已被归档搬出库时，用 `--archive-dir` 指向归档摘要目录证明。`--strict-anchors`：备份之后新增 / 消失的锚点也算失败。
  *     AF5（ADR-0055 补充 2）：备份之后在备份链尾范围内（`at_row_id` ≤ 备份链尾 id）新增的锚点同样要求匹配的操作意图 + 审计行印证（同 `--offbox`），
  *     否则 `rewrite`（anchor-without-intent / intent-uncorroborated / …，`intent_problems` 逐条列出）；链尾之后追加区间里的锚点是正常增长。
+ *     已被后来的归档搬出库的锚点（只剩在归档摘要里）也同样对账，需要 `--archive-dir`；没给而基线之后有新的 archive 锚点时输出 `notes` 明说未覆盖。
  *     意图签名用 `--intent-pubkey <公钥PEM>` 验证；`--require-signed-intents` 在这个模式下必须同时给 `--intent-pubkey`（没有 `--pubkey` 可回落）。
  *   · `--offbox <anchor-*.json> --pubkey <公钥PEM>`（AD5，ADR-0055）：验 `offbox-anchor.mjs` 写出的签名锚点（改文件 / 换钥 / 去签名都失败），
  *     并要求每个被锚定的行业库的在用链是锚定链尾的**后代**（同 `--against-backup` 的 ok / rewrite / unverifiable 口径；`--archive-dir` 同样适用）。
@@ -44,28 +45,39 @@ if (!!args.offbox !== !!args.pubkey) die('USAGE', '--offbox 与 --pubkey 必须�
 if ((args['archive-dir'] || args['strict-anchors']) && !args['against-backup'] && !(args['archive-dir'] && args.offbox && !args['strict-anchors'])) die('USAGE', '--archive-dir / --strict-anchors 只与 --against-backup 一起使用')
 
 const { verifyChain, chainColumnsPresent } = await import('../server/lib/audit-chain-verify.js')
-const { loadBackupManifest, compareLiveToBackup } = await import('../server/lib/audit-anchor-manifest.js')
+const { loadBackupManifest, compareLiveToBackup, openArchiveIndex, archivedAnchorsSince, archivedRowLookup } = await import('../server/lib/audit-anchor-manifest.js')
 const { loadBackupKey } = await import('../server/lib/backup-crypto.js')
 const { loadPublicKey } = await import('./lib/evidence-sign.mjs')
 const { loadAnchor, asManifest } = await import('./lib/offbox-anchor.mjs')
 const { verifyAnchorIntents } = await import('../server/lib/audit-anchor-intent.js')
 
 /**
- * 锚点之后在“已锚定范围内”（at_row_id ≤ 基线链尾 id）新增的库内锚点逐个做操作意图对账（--offbox 与 --against-backup 共用）。
- * `cmp` 是 compareLiveToBackup 的结果（原地补字段）；只在 cmp.status === 'ok' 时对账。基线链尾 id 为空（空链基线）⇒ 没有已锚定范围。
+ * 基线（离机锚点 / 备份清单）之后在“已锚定范围内”（at_row_id ≤ 基线链尾 id）新增的锚点逐个做操作意图对账（--offbox 与 --against-backup 共用）。
+ * `cmp` 是 compareLiveToBackup 的结果（原地补字段）；只在 cmp.status === 'ok' 时对账。`base` = { first_id, last_id, anchors }（基线链摘要）；链尾为空 ⇒ 没有已锚定范围。
+ * 两类来源：① 仍在库里的新增锚点；② （AF5）已被后来的归档搬出库、但仍记在验证通过的归档摘要里的锚点——伪造的桥锚点可以借一次归档洗出库而躲过 ①。
+ * ② 需要 --archive-dir；没给而基线之后又确有新增的 archive 锚点时，在 notes 里注明“归档段内的锚点没有对账”。
  */
-function reconcileInRange(db, cmp, baselineLastId, notes) {
-  const inRange = (cmp.anchors_added || []).filter((a) => baselineLastId != null && a.at_row_id <= baselineLastId)
+function reconcileInRange(db, code, cmp, base, notes) {
+  const lastId = base.last_id ?? null
+  const live = (cmp.anchors_added || []).filter((a) => lastId != null && a.at_row_id <= lastId)
+  const archiveDir = args['archive-dir'] ? path.resolve(args['archive-dir']) : null
+  const index = archiveDir ? openArchiveIndex(archiveDir, code) : null
+  const archived = index && cmp.status === 'ok' ? archivedAnchorsSince(index, base) : []
+  const inRange = [...live, ...archived]
   cmp.anchors_added_in_range = inRange.length
-  if (!inRange.length || cmp.status !== 'ok') return
-  const iv = verifyAnchorIntents(db, inRange, { publicKey: intentPublicKey, requireSigned: !!args['require-signed-intents'], minAuditRowId: baselineLastId })
+  if (archived.length) cmp.archived_anchors_in_range = archived.length
+  const extra = []
+  if (!archiveDir && cmp.status === 'ok' && (cmp.anchors_added || []).some((a) => a.kind === 'archive')) extra.push('基线之后做过归档，但没有给 --archive-dir：已被归档搬出库的锚点没有对账（给 --archive-dir 指向归档摘要目录才能覆盖）')
+  if (!inRange.length || cmp.status !== 'ok') { if (extra.length) cmp.notes = [...(notes || []), ...extra]; return }
+  const iv = verifyAnchorIntents(db, inRange, { publicKey: intentPublicKey, requireSigned: !!args['require-signed-intents'], minAuditRowId: lastId, archivedRow: index ? archivedRowLookup(index) : null })
   cmp.intents_checked = iv.checked
-  if (!intentPublicKey) cmp.notes = [...(notes || []), '意图签名未验证：没有给公钥（--intent-pubkey）；未签名的意图只能挡住只改了锚点表的伪造']
+  if (!intentPublicKey) extra.push('意图签名未验证：没有给公钥（--intent-pubkey）；未签名的意图只能挡住只改了锚点表的伪造')
+  if (extra.length) cmp.notes = [...(notes || []), ...extra]
   if (iv.ok) return
   cmp.status = 'rewrite'
   cmp.kind = iv.problems[0].kind
   cmp.intent_problems = iv.problems.map((p) => ({ kind: p.kind, anchor: `${p.anchor.kind}@${p.anchor.at_row_id}`, message: p.message }))
-  cmp.message = `基线之后在已锚定范围内新增了 ${inRange.length} 条库内锚点，其中 ${iv.problems.length} 条没有通过操作意图对账：${iv.problems.map((p) => `${p.anchor.kind}@${p.anchor.at_row_id}=${p.kind}`).join(', ')}（伪造的桥锚点？或操作发生在迁移 072 之前——对照操作记录，必要时重新做一份离机锚点 / 备份）`
+  cmp.message = `基线之后在已锚定范围内新增了 ${inRange.length} 条锚点（其中 ${archived.length} 条已被归档搬出库），其中 ${iv.problems.length} 条没有通过操作意图对账：${iv.problems.map((p) => `${p.anchor.kind}@${p.anchor.at_row_id}=${p.kind}`).join(', ')}（伪造的桥锚点？或操作发生在迁移 072 之前——对照操作记录，必要时重新做一份离机锚点 / 备份）`
 }
 
 // 离机锚点先验签：验不过就是失败，不是跳过
@@ -122,7 +134,7 @@ for (const { code, file } of targets) {
     let against = null
     if (backupCheck && r.ok) {
       against = { ...compareLiveToBackup(db, backupCheck.manifest, { archiveDir: args['archive-dir'] ? path.resolve(args['archive-dir']) : null }), manifest_source: backupCheck.source, notes: backupCheck.notes }
-      reconcileInRange(db, against, backupCheck.manifest.audit_chain.last_id ?? null, backupCheck.notes)
+      reconcileInRange(db, code, against, backupCheck.manifest.audit_chain, backupCheck.notes)
       if (against.status !== 'ok') report.ok = false
       else if (args['strict-anchors'] && (against.anchors_added?.length || against.anchors_removed?.length)) { against.status = 'anchors-changed'; report.ok = false }
     }
@@ -138,7 +150,7 @@ for (const { code, file } of targets) {
         // AE5（ADR-0055 补充）：合法的保留清理 / 归档 / 隐私抹除在新增锚点的同一事务里写 audit_anchor_intents，并由 RETENTION_PURGE / AUDIT_ARCHIVE /
         // PRIVACY_ERASE 审计行引用；这里逐个要求匹配的意图 + 审计行印证（+ 签名，若有）。没有 ⇒ rewrite。
         // AF5：--accept-new-anchors 已无效果。锚点之后的追加区间里新增的锚点是正常增长，不在此列。
-        reconcileInRange(db, off, entry.last_id ?? null, null)
+        reconcileInRange(db, code, off, entry, null)
       }
       if (off.status !== 'ok' && off.status !== 'not-anchored') report.ok = false
     } else if (offbox) report.ok = false

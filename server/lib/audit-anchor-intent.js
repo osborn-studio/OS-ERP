@@ -12,9 +12,9 @@
  *       ③ 有签名且持有对应公钥时验签（失败 `intent-signature-invalid`）；`requireSigned` 时无签名 `intent-unsigned`、无法验证 `intent-signature-unverifiable`；
  *       ④ 意图被审计行印证：`audit_row_id` 指向的行存在、id 大于离机锚点的链尾（不能拿锚点之前就有的行冒充）、action 与操作类型对应
  *          （retention→RETENTION_PURGE，archive→AUDIT_ARCHIVE，erase→PRIVACY_ERASE）、明细里 `anchor_intent` 的 id 与哈希与意图一致 —— 否则 `intent-uncorroborated`。
- *          印证行不在库里就是 `intent-uncorroborated`。AF5 删除了原先“印证行已被归档”的放行路径：印证行（id 必晚于离机锚点 / 备份的链尾）能被后来的归档搬出库，
- *          意味着那次归档的段尾 ≥ 该行 id，而归档在同一事务里会删除 `at_row_id <= 段尾` 的全部旧锚点——被印证的范围内锚点（at_row_id ≤ 链尾 < 印证行 id）必然一起消失，
- *          两者不可能同时存在；能让它们同时出现的只有伪造（见 ADR-0055 补充 2）。
+ *          印证行不在库里就是 `intent-uncorroborated`，除非调用方给了 `archivedRow`（AF5）：它在**验证通过的归档 JSONL** 里按 id 找行，用来对账“已被归档搬出库的锚点”。
+ *          （库内锚点的印证行不可能被归档：印证行 id 必晚于基线链尾，要被归档搬走，那次归档在同一事务里会连这个范围内锚点一起删除；所以 AE5 的
+ *          “印证行已归档”放行路径与 `--accept-new-anchors` 已删除。被归档搬出库的锚点改由摘要里的锚点清单 + 归档 JSONL 证据对账，见 ADR-0055 补充 2。）
  * 【规范化】intent_hash = sha256(JSON.stringify([格式标识, operation, range_desc, operator_user_id, operator_name, created_at, 锚点元组列表]))，
  *   锚点元组 = [kind, at_row_id, anchor_hash, prev_id, prev_row_hash]；签名 = Ed25519(`${格式标识}:${intent_hash}`)，key_id = 公钥 SPKI DER 的 sha256。
  * 【诚实边界】能同时写库、写审计链并伪造未签名意图的攻击者，仍能造出自洽的“意图 + 审计行”；签名（`GML_ANCHOR_INTENT_KEY`，私钥不在业务主机上）
@@ -79,7 +79,7 @@ export function linkIntentAuditRow(db, intent) {
   if (n !== 1) throw fault('INTENT_LINK_FAILED', '锚点意图回填审计行 id 失败', 500)
 }
 
-function checkIntent(db, it, { publicKey, requireSigned, minAuditRowId }) {
+function checkIntent(db, it, { publicKey, requireSigned, minAuditRowId, rowLookup }) {
   let anchors
   try { anchors = JSON.parse(it.anchors_json) } catch { return { kind: 'intent-hash-mismatch', message: `意图 #${it.id} 的锚点列表无法解析` } }
   const want = intentHash({ operation: it.operation, range: it.range_desc, operatorUserId: it.operator_user_id, operatorName: it.operator_name, createdAt: it.created_at, anchors })
@@ -95,7 +95,7 @@ function checkIntent(db, it, { publicKey, requireSigned, minAuditRowId }) {
   const uncorroborated = (why) => ({ kind: 'intent-uncorroborated', message: `意图 #${it.id}（${it.operation}）没有被操作审计行印证：${why}` })
   if (id === null || id === undefined) return uncorroborated('未记录审计行 id')
   if (id <= minAuditRowId) return uncorroborated(`审计行 #${id} 不晚于离机锚点的链尾 #${minAuditRowId}`)
-  const row = db.prepare('SELECT id, action, detail FROM audit_logs WHERE id=?').get(id)
+  const row = rowLookup(id)
   if (!row) return uncorroborated(`审计行 #${id} 不存在`)
   if (row.action !== OPERATION_ACTIONS[it.operation]) return uncorroborated(`审计行 #${id} 的 action 是 ${row.action}，应为 ${OPERATION_ACTIONS[it.operation]}`)
   let ref = null
@@ -108,7 +108,7 @@ function checkIntent(db, it, { publicKey, requireSigned, minAuditRowId }) {
  * 逐个核对“离机锚点之后在已锚定范围内新增的库内锚点”。`anchors` 是 { kind, at_row_id, anchor_hash, prev_id, prev_row_hash } 列表。
  * 返回 { ok, checked, problems: [{ kind, message, anchor }] }。
  */
-export function verifyAnchorIntents(db, anchors, { publicKey = null, requireSigned = false, minAuditRowId = 0 } = {}) {
+export function verifyAnchorIntents(db, anchors, { publicKey = null, requireSigned = false, minAuditRowId = 0, archivedRow = null } = {}) {
   const problems = []
   const byAnchor = new Map()
   if (hasTable(db, 'audit_anchor_intents')) {
@@ -123,7 +123,9 @@ export function verifyAnchorIntents(db, anchors, { publicKey = null, requireSign
       }
     }
   }
-  const opts = { publicKey, requireSigned, minAuditRowId }
+  // 印证行先在库里找；库里没有时（只在对账“已被归档搬出库的锚点”时有意义）才去验证通过的归档 JSONL 里找
+  const rowLookup = (id) => db.prepare('SELECT id, action, detail FROM audit_logs WHERE id=?').get(id) ?? (archivedRow ? archivedRow(id) : null)
+  const opts = { publicKey, requireSigned, minAuditRowId, rowLookup }
   for (const a of anchors) {
     const cands = byAnchor.get(tupleKey(tuple(a))) || []
     if (!cands.length) { problems.push({ kind: 'anchor-without-intent', message: `锚点 ${a.kind}@${a.at_row_id} 没有匹配的操作意图（伪造的桥锚点？）`, anchor: a }); continue }

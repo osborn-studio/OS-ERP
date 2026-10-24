@@ -164,7 +164,7 @@ node scripts/audit-verify-chain.mjs --data-dir /abs/data --against-backup /path/
 - 先交叉核对清单：明文 vs 密文清单、清单 vs 备份内容（备份在本机时从备份本身重算）、锚点明细 vs `anchors_digest`。对不上 = `manifest-mismatch`，说明清单或备份被动过。**密文备份 / 密文清单必须设置 `GML_BACKUP_KEY`**，否则 `key-required`（退出 1）——不会只凭明文清单放行。备份时链就已不通过（`verified:false`）的备份不能当基线（`unverifiable`）。
 - 再要求在用链是备份链尾的**后代**：同 id 行的 `row_hash` 相同 = `ok`（输出备份之后前进的行数）；不同 = `rewrite/tip-row-differs`（链被改写并重算；备份之后若做过隐私抹除需对照操作记录）；在用链尾落后于备份 = `rewrite/behind`（尾部截断或回滚到更早状态）。
 - 备份链尾已被归档搬走：必须给 `--archive-dir`（含对应 `.digest.json` + `.jsonl`），脚本校验 JSONL 的 SHA-256、逐行哈希与链衔接（并与摘要的行数 / 端点 / 段尾一致），并沿 `boundary_id` 接到在用库的 `archive` 锚点；缺摘要 = `unverifiable`（退出 1，不当作通过）。
-- 锚点：输出备份之后**新增**的锚点。AF5 起，其中落在备份链尾范围内（`at_row_id` ≤ 备份链尾 id）的锚点与 `--offbox` 一样要做**操作意图对账**（§8b）：没有匹配意图、或意图没有被备份之后的审计行印证 ⇒ `rewrite`（`anchor-without-intent` / `intent-uncorroborated` / …，`intent_problems` 逐条列出），退出 1；备份链尾之后追加区间里的新锚点是正常增长，只列出。`--intent-pubkey <公钥PEM>` 验意图签名，`--require-signed-intents`（此模式下必须同时给 `--intent-pubkey`）要求每条意图都带可验证签名；没给公钥时输出会注明“意图签名未验证”。`--strict-anchors` 仍让新增 / 消失的锚点（含追加区间里的）也算失败。备份里登记过、现在仍在 id 范围内却消失的锚点 = `rewrite/anchors-removed`。
+- 锚点：输出备份之后**新增**的锚点。AF5 起，其中落在备份链尾范围内（`at_row_id` ≤ 备份链尾 id）的锚点与 `--offbox` 一样要做**操作意图对账**（§8b）：没有匹配意图、或意图没有被备份之后的审计行印证 ⇒ `rewrite`（`anchor-without-intent` / `intent-uncorroborated` / …，`intent_problems` 逐条列出），退出 1；备份链尾之后追加区间里的新锚点是正常增长，只列出。`--intent-pubkey <公钥PEM>` 验意图签名，`--require-signed-intents`（此模式下必须同时给 `--intent-pubkey`）要求每条意图都带可验证签名；没给公钥（`--offbox` 模式下 `--pubkey` 兼作意图公钥，所以只会出现在 `--against-backup`）且确实有锚点被对账时，输出会注明“意图签名未验证”。`--strict-anchors` 仍让新增 / 消失的锚点（含追加区间里的）也算失败。备份里登记过、现在仍在 id 范围内却消失的锚点 = `rewrite/anchors-removed`。
 - 退出码：0 通过；1 任一非 `ok`（含清单缺失、`unverifiable`）；2 用法错误。
 - 局限：同时改库、清单、备份与离机副本的攻击者不在防护范围；清单明文含链尾哈希和锚点，不含审计内容。
 
@@ -197,9 +197,9 @@ export GML_ANCHOR_INTENT_KEY=/abs/intent-keys/anchor-intent.key.pem
 node scripts/offbox-anchor.mjs --data-dir /abs/data --dest /Volumes/OFFBOX/os-erp-anchors --key /abs/keys/release-sign.key.pem
 #    目的地 B：经 ssh/scp 的远端。别名必须是 ~/.ssh/config 里已有的；脚本不改 SSH 配置或认证，只用 BatchMode（不会弹密码）
 node scripts/offbox-anchor.mjs --data-dir /abs/data --dest ssh://backup-box/srv/os-erp-anchors --key /abs/keys/release-sign.key.pem
-# 3) 复核（复核方持两把公钥，带外获得）：对最新锚点 / 最新备份清单各验一次，**推荐总是带 --require-signed-intents**
-node scripts/audit-verify-chain.mjs --data-dir /abs/data --offbox /path/anchor-20261024T020000000Z.json --pubkey /abs/keys/release-sign.pub.pem --intent-pubkey /abs/intent-keys/anchor-intent.pub.pem --require-signed-intents
-node scripts/audit-verify-chain.mjs --data-dir /abs/data --against-backup /path/gml_cosmetic_20261024-020000.db.enc --intent-pubkey /abs/intent-keys/anchor-intent.pub.pem --require-signed-intents   # 加密备份需 GML_BACKUP_KEY
+# 3) 复核（复核方持两把公钥，带外获得）：对最新锚点 / 最新备份清单各验一次，**推荐总是带 --require-signed-intents，并在做过归档时带 --archive-dir**（离机保存的归档摘要目录；见 §8b）
+node scripts/audit-verify-chain.mjs --data-dir /abs/data --offbox /path/anchor-20261024T020000000Z.json --pubkey /abs/keys/release-sign.pub.pem --intent-pubkey /abs/intent-keys/anchor-intent.pub.pem --require-signed-intents --archive-dir /abs/archive-dir
+node scripts/audit-verify-chain.mjs --data-dir /abs/data --against-backup /path/gml_cosmetic_20261024-020000.db.enc --intent-pubkey /abs/intent-keys/anchor-intent.pub.pem --require-signed-intents --archive-dir /abs/archive-dir   # 加密备份需 GML_BACKUP_KEY
 ```
 
 - `--require-signed-intents` 是推荐的日常口径：不带它时未签名的意图也算通过，只能挡住“只改了锚点表”的伪造（§8b 密钥保管）。意图是否带签名取决于执行清理 / 归档 / 抹除的那台机器有没有配置 `GML_ANCHOR_INTENT_KEY`——没配的机器写出的意图会在 `--require-signed-intents` 下失败（`intent-unsigned`），这是有意的。
@@ -210,7 +210,7 @@ node scripts/audit-verify-chain.mjs --data-dir /abs/data --against-backup /path/
 复核（定期，或怀疑被动过时）：把最近几个锚点取回，用**带外获得的公钥**：
 
 ```sh
-node scripts/audit-verify-chain.mjs --data-dir /abs/data --offbox /path/anchor-20261024T020000000Z.json --pubkey /abs/keys/release-sign.pub.pem --intent-pubkey /abs/intent-keys/anchor-intent.pub.pem --require-signed-intents
+node scripts/audit-verify-chain.mjs --data-dir /abs/data --offbox /path/anchor-20261024T020000000Z.json --pubkey /abs/keys/release-sign.pub.pem --intent-pubkey /abs/intent-keys/anchor-intent.pub.pem --require-signed-intents --archive-dir /abs/archive-dir
 node scripts/verify-release.mjs --log=/abs/repo/docs/release/EVIDENCE-LOG.jsonl --offbox /path/anchor-20261024T020000000Z.json --pubkey /abs/keys/release-sign.pub.pem   # 在发行包里执行
 ```
 
@@ -224,7 +224,8 @@ node scripts/verify-release.mjs --log=/abs/repo/docs/release/EVIDENCE-LOG.jsonl 
 保留清理（`retention.mjs --execute`）、归档（`audit-archive.mjs --confirm`）和隐私抹除（`privacy-erase.mjs --confirm`）每次**新增**审计锚点时，在同一个事务里写一行 `audit_anchor_intents`（操作类型、范围描述、操作者、本次新增的全部锚点、意图哈希、可选签名），并把意图 id 与哈希写进该操作自己的审计行（`RETENTION_PURGE` / `AUDIT_ARCHIVE` / `PRIVACY_ERASE` 的明细里的 `anchor_intent`），再把审计行 id 回填到意图。三者同提交同回滚：审计写不进，意图与锚点一起撤销。
 
 - `audit-verify-chain --offbox` 对“锚点之后在已锚定范围内新增”的每个锚点要求：有匹配意图 → 意图哈希按字段重算一致 → （有签名且有对应公钥时）验签通过 → 意图指向的审计行存在、晚于离机锚点的链尾、action 与操作类型对应、明细引用的意图 id 与哈希一致。任何一环缺失 = `rewrite`。**正常的清理 / 归档 / 抹除不再需要任何开关**即可通过。
-- **`--accept-new-anchors` 已无效（AF5 删除）**：AE5 时它只放行“意图齐全、但印证它的审计行已被后来的归档搬出库”（`corroboration-archived`）的锚点。AF5 证明这条路径不可达：印证行的 id 必晚于离机锚点 / 备份的链尾，要被归档搬出库，那次归档的段尾就 ≥ 它；归档在同一事务里删除 `at_row_id` ≤ 段尾的全部旧锚点，被印证的锚点（`at_row_id` ≤ 链尾）因此一起消失，两者不会同时存在（回归测试用“两次归档”夹具验证，并验证补回一条锚点 + 指向已归档行的意图仍判 `intent-uncorroborated`）。能让它们同时出现的只有伪造，所以代码路径连同这个开关的作用一起删除：旧脚本里写着 `--accept-new-anchors` 不会报错，但只会打印提示、不改变结果。无意图或没有被印证的锚点的唯一处理方式是：对照操作记录后，立刻做一份新的离机锚点 / 备份，以后用新基线复核。
+- **`--accept-new-anchors` 已无效（AF5 删除）**：AE5 时它只放行“意图齐全、但印证它的审计行已被后来的归档搬出库”（`corroboration-archived`）的**库内**锚点。AF5 证明这条路径对库内锚点不可达：印证行的 id 必晚于离机锚点 / 备份的链尾，要被归档搬出库，那次归档的段尾就 ≥ 它；归档在同一事务里删除 `at_row_id` ≤ 段尾的全部旧锚点，被印证的库内锚点（`at_row_id` ≤ 链尾）因此一起消失。能让它们同时出现的只有伪造，所以代码路径连同这个开关的作用一起删除：旧脚本里写着 `--accept-new-anchors` 不会报错，但只会打印提示、不改变结果。
+- **被归档搬出库的锚点（AF5）**：归档把段内的锚点导出到摘要（`.digest.json` 的 `anchors`）再从库里删除；伪造的桥锚点若先于一次合法归档被登记，就会从库里消失，只留在摘要里。给了 `--archive-dir` 时，两种比对都会读验证通过的摘要（JSONL 逐行重算哈希），把基线时存活行（`first_id ≤ at_row_id ≤ last_id`）上、不在基线锚点清单里的摘要锚点同样要求意图；它们的印证行如果也已被归档，就从验证通过的归档 JSONL 里取。早于基线的归档只涉及 `< first_id` 的行，不算新增。**没有 `--archive-dir` 而基线之后确有新的 `archive` 锚点时，这部分没有对账，输出的 `notes` 会明说**——所以做过归档之后，复核必须带上离机保存的归档摘要目录。
 - 签名（可选，但推荐）：设置 `GML_ANCHOR_INTENT_KEY`（缺省回落 `GML_RELEASE_SIGN_KEY`，生产应单独一把）指向 Ed25519 私钥（与证据签名同一套检查：仓库外、0600）时，三个脚本给意图签名；配置了却读不出来则脚本在动手前退出，不会写出无签名的意图。复核时 `--require-signed-intents` 要求每个意图都带可验证签名，公钥取 `--intent-pubkey`（`--offbox` 模式缺省同 `--pubkey`；`--against-backup` 模式必须显式给）。
 - **意图密钥保管（AF5）**：
   - 生成：`node scripts/release-keygen.mjs --out <仓库外的新目录> --purpose anchor-intent` → `anchor-intent.key.pem`（0600，O_EXCL）+ `anchor-intent.pub.pem`。拒绝规则与发行密钥完全相同：相对路径、仓库或任何 git 工作树内（含经符号链接）、已存在且非空的目录、未知 / 重复 / 缺值的 `--purpose` 都会失败且不留文件；私钥内容永不打印。
@@ -232,4 +233,4 @@ node scripts/verify-release.mjs --log=/abs/repo/docs/release/EVIDENCE-LOG.jsonl 
   - 轮换 / 丢失：换新密钥后，旧意图的 `key_id` 与新公钥不符，`--require-signed-intents` 会判 `intent-signature-unverifiable`；复核旧基线时用对应的旧公钥，所以**旧公钥要保留**。私钥丢失 ⇒ 生成新密钥并做一份新的离机锚点 / 备份作为新基线。
   - 诚实边界：意图签名只证明“持有意图私钥的机器签过这条意图”，不证明操作本身合理；私钥与业务主机同时被攻破不在防护范围。
 - 升级前（迁移 072 之前）产生、且发生在某份离机锚点之后的锚点没有意图：这份旧锚点会判 `anchor-without-intent`。处理：核对操作记录后，做一份新的离机锚点，以后用新锚点复核。
-- 范围：`--offbox` 与 `--against-backup`（AF5）共用同一套对账：基线（离机锚点 / 备份清单）链尾范围内新增的锚点要对账，链尾之后追加区间里的新锚点是正常增长。`verifyChain` 自身对锚点的承认规则不变。
+- 范围：`--offbox` 与 `--against-backup`（AF5）共用同一套对账：基线（离机锚点 / 备份清单）链尾范围内新增的锚点（含已被归档搬出库的，见上）要对账，链尾之后追加区间里的新锚点是正常增长。`verifyChain` 自身对锚点的承认规则不变。

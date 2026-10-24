@@ -1242,7 +1242,10 @@ test('AF5 the "corroborating row was archived" path is unreachable, so it is gon
   assert.equal(w.db.prepare('SELECT COUNT(*) n FROM audit_chain_anchors WHERE id=?').get(a1.id).n, 0, 'and the in-range anchor went with it: the two never coexist')
   const ok = w.verify(['--archive-dir', w.out])
   assert.equal(ok.status, 0, ok.stdout + ok.stderr)
-  assert.equal(off(ok).anchors_added_in_range, 0)
+  // 库内已没有范围内的锚点；第一次归档的锚点现在只存在于第二次归档的摘要里，由摘要 + 归档 JSONL 里的印证行对账（通过）
+  assert.equal(off(ok).anchors_added_in_range, 1)
+  assert.equal(off(ok).archived_anchors_in_range, 1)
+  assert.equal(off(ok).intents_checked, 1)
   // 攻击者补回一条在范围内的锚点 + 指向已归档行的意图：以前 --accept-new-anchors 会放行它
   const mark = anchorMark(w.db)
   const intent = w.db.transaction(() => {
@@ -1259,4 +1262,70 @@ test('AF5 the "corroborating row was archived" path is unreachable, so it is gon
   assert.match(flagged.stderr, /accept-new-anchors.*(无效|不再)/, 'the removed flag says so instead of silently doing nothing')
   assert.doesNotMatch(readFileSync(path.join(ROOT, 'server/lib/audit-anchor-intent.js'), 'utf8'), /corroboration-archived|acceptArchived/)
   w.db.close()
+})
+
+/** 攻击者先伪造桥锚点（备份 / 离机锚点之后），再跑一次合法归档把它连同被改写的行搬进摘要，库里只剩 archive 锚点 */
+function launderThroughArchive(w) {
+  forgeBridge(w.db)
+  const r = w.archive()
+  assert.equal(r.status, 0, r.stdout + r.stderr)
+  assert.equal(w.db.prepare("SELECT COUNT(*) n FROM audit_chain_anchors WHERE kind='retention'").get().n, 0, 'the forged bridge is gone from the live table')
+  const digest = JSON.parse(readFileSync(path.join(w.out, readdirSync(w.out).find((n) => n.endsWith('.digest.json'))), 'utf8'))
+  assert.ok(digest.anchors.some((a) => a.kind === 'retention' && a.at_row_id === 2), 'but the digest still carries it')
+}
+
+test('AF5 --against-backup: a forged bridge laundered out of the live table by a later archive is still reconciled from the archive digest (Codex AF5-H1)', (t) => {
+  const w = af5World(t)
+  launderThroughArchive(w)
+  const r = w.verify(['--archive-dir', w.out])
+  assert.equal(r.status, 1, r.stdout)
+  assert.deepEqual([ab(r).status, ab(r).kind], ['rewrite', 'anchor-without-intent'])
+  assert.equal(ab(r).archived_anchors_in_range, 1)
+  assert.equal(ab(r).intent_problems[0].anchor, 'retention@2')
+  // 没给 --archive-dir：看不到摘要，不能假装对账过——输出里明说
+  const blind = w.verify()
+  assert.ok(ab(blind).notes.some((n) => /--archive-dir/.test(n)), 'says archived anchors were not reconciled')
+  w.db.close()
+})
+
+test('AF5 --offbox: the same laundering is caught from the archive digest', (t) => {
+  const w = ae5World(t)
+  launderThroughArchive(w)
+  const r = w.verify(['--archive-dir', w.out])
+  assert.equal(r.status, 1, r.stdout)
+  assert.deepEqual([off(r).status, off(r).kind], ['rewrite', 'anchor-without-intent'])
+  assert.equal(off(r).archived_anchors_in_range, 1)
+  w.db.close()
+})
+
+test('AF5 a legitimate retention-style anchor that was later archived verifies via the archived corroborating row, and archives from before the baseline are not mistaken for new anchors', (t) => {
+  const w = af5World(t)
+  // 基线之前的归档：做过一次，再做备份——它的锚点在摘要里、不在备份清单里，但行号早于备份的 first_id
+  assert.equal(w.archive().status, 0)
+  const b = cli(BACKUP, ['cosmetic'], w.dir)
+  assert.equal(b.status, 0, b.stdout)
+  const set2 = path.join(backupDirOf(w.dir), newestBackup(w.dir))
+  const V2 = (extra = []) => cli(VERIFY, ['--data-dir', w.dir, '--against-backup', set2, '--archive-dir', w.out, '--json', ...extra], w.dir)
+  const v = V2()
+  assert.equal(v.status, 0, v.stdout + v.stderr)
+  assert.equal(ab(v).anchors_added_in_range ?? 0, 0, 'the pre-baseline archive is baseline, not growth')
+  w.db.close()
+})
+
+test('AF5 --against-backup --strict-anchors: an empty-chain baseline still reports added anchors (Codex AF5-M1)', (t) => {
+  const dir = tmp(t)
+  const db = mkDb(dir)
+  const b = cli(BACKUP, ['cosmetic'], dir)
+  assert.equal(b.status, 0, b.stdout + b.stderr)
+  const set = path.join(backupDirOf(dir), newestBackup(dir))
+  fill(db, 4)
+  db.transaction(() => deleteAuditRowsAnchored(db, 'id = ?', [2], { kind: 'retention', reason: 'x' }))()
+  const V = (extra = []) => cli(VERIFY, ['--data-dir', dir, '--against-backup', set, '--json', ...extra], dir)
+  const plain = V()
+  assert.equal(plain.status, 0, plain.stdout)
+  assert.equal(ab(plain).anchors_added.length, 1, 'listed even for an empty baseline')
+  const strict = V(['--strict-anchors'])
+  assert.equal(strict.status, 1)
+  assert.equal(ab(strict).status, 'anchors-changed')
+  db.close()
 })
