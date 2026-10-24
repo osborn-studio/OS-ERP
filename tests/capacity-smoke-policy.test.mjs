@@ -43,6 +43,12 @@ test('capacity-smoke actions are SHA-pinned and only the allowlisted summary is 
   assert.match(code, /capacity-summary\.mjs --pipeline/)
 })
 
+test('capacity paths are exported from a step, never from job-level env (runner context is unavailable there)', () => {
+  assert.doesNotMatch(code, /^    env:/m)
+  assert.doesNotMatch(code, /runner\.temp\s*\}\}\/capacity-(run|reports)/)
+  assert.match(code, /CAP_RUN=\$RUNNER_TEMP\/capacity-run/)
+})
+
 test('workflow permissions stay read-only and no trigger was added', () => {
   assert.match(workflow, /^permissions:\s*\n\s+contents:\s*read\s*$/m)
   assert.doesNotMatch(workflow, /pull_request_target|schedule:/)

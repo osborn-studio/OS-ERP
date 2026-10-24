@@ -264,10 +264,6 @@ jobs:
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    env:
-      CAP_RUN: ${{ runner.temp }}/capacity-run
-      CAP_REPORTS: ${{ runner.temp }}/capacity-reports
-      CAP_SUMMARY: ${{ runner.temp }}/capacity-summary
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -284,8 +280,14 @@ jobs:
           npm rebuild better-sqlite3 esbuild --no-audit --no-fund
           pw="$(node -e "process.stdout.write(require('node:crypto').randomBytes(24).toString('hex'))")"
           echo "::add-mask::$pw"
-          echo "GML_PIPELINE_ADMIN_PASSWORD=$pw" >> "$GITHUB_ENV"
-          mkdir -p "$CAP_REPORTS" "$CAP_SUMMARY"
+          # runner.temp is not available in job-level env; export the paths here.
+          {
+            echo "GML_PIPELINE_ADMIN_PASSWORD=$pw"
+            echo "CAP_RUN=$RUNNER_TEMP/capacity-run"
+            echo "CAP_REPORTS=$RUNNER_TEMP/capacity-reports"
+            echo "CAP_SUMMARY=$RUNNER_TEMP/capacity-summary"
+          } >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/capacity-reports" "$RUNNER_TEMP/capacity-summary"
       - name: Synthetic pipeline (medium, 20 min generation budget)
         id: pipeline
         continue-on-error: true
