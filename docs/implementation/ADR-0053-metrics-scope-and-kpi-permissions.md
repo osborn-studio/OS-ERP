@@ -29,7 +29,19 @@
 
 ## 仍 open / 边界
 
-- 全局指标对受限角色仍返回全局数字（仅标注）；是否改为对受限角色隐藏或加 `requireGlobalData` 需要产品决定。
+- 全局指标对受限角色仍返回全局数字（仅标注）；指标端点未逐指标要求业务查看权限（见 Codex 审计）；是否改为对受限角色隐藏或加 `requireGlobalData` 需要产品决定。
 - 未做 EXPLAIN；受限范围下指标子查询多一层仓库子查询，大库成本未评估。
 - `/metrics/stale`、`/defs` 只含定义，未改。
 - 校验在 Mac mini Node 22 上，不等于 Linux / 目标平台验收。
+
+## Codex 审计
+
+`codex exec -m gpt-6.1-sol --sandbox read-only`，静态审查（未跑测试），对象 `batch-twelve...HEAD`。发现与处理：
+
+- **高** 无范围语义的指标对受限调用者仍返回全局数字（`scoped:false` 只是标注）：**未修，open**——这是 roadmap-v9 AD1 明文约定的取舍（见"决定·取舍"）；改为对受限角色隐藏值需产品决定。
+- **高** `/metrics` 三个端点只要 `system:metrics:view`，未逐指标要求对应业务查看权限（采购金额、库存成本）：**未修，open**——超出 AD1 文件清单（需要给每条指标登记所需权限点并改前端对"被省略"指标的展示）；本 ADR 只在 MCP `report.dashboard_kpi` 与 dealer summary 落了功能权限。
+- 低 前端"全局口径"提示文案"没有组织归属"不准确（销售 / OMS 其实有组织谓词，只是指标尚未按其过滤）：**已修**，改为"尚未按组织范围过滤"。"全局口径"标签本身的触发条件（`scoped === false`，仅受限调用者）经确认正确。
+
+## 验证入口
+
+`node --test --test-concurrency=1 --test-name-pattern=AD1 tests/inventory-scope.test.mjs tests/mcp-tool-matrix.test.mjs`

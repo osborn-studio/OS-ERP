@@ -196,7 +196,7 @@ export default function Metrics() {
                     return (
                       <span>
                         <strong className={r.value === 0 ? 'text-ink-400' : 'text-ink-900'}>{fmtMetricValue(r.value, r.unit)}</strong>
-                        {r.scoped === false && <span className="ml-1 text-[11px] text-amber-600" title="该指标没有组织归属，受限账号看到的是全局数字">全局口径</span>}
+                        {r.scoped === false && <span className="ml-1 text-[11px] text-amber-600" title="该指标尚未按组织范围过滤，受限账号看到的是全局数字">全局口径</span>}
                       </span>
                     )
                   } },
