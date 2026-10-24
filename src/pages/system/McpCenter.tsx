@@ -357,6 +357,7 @@ function McpLimitsCard({ nonce }: { nonce: number }) {
         <StatCard label="被限流（429）" value={data.rate_limited_total} tone={data.rate_limited_total > 0 ? 'amber' : 'default'} sub="本进程自启动以来，重启归零" />
       </div>
       <McpTokenLimitsBlock nonce={nonce} />
+      <McpQuotaBlock nonce={nonce} />
     </Card>
   )
 }
@@ -365,7 +366,7 @@ type McpTokenLimits = { store: 'memory' | 'db'; truncated?: boolean; window_seco
 
 /**
  * 每令牌近期限流（AF11，只读，仅 system.mcp.manage）。数字来自 `GET /api/mcp/limits/tokens`，只在 `db` 速率存储模式有数据。
- * 桶表只记放行的调用，所以这里是「当前 + 上一窗口里触顶的窗口数」（0..2），不是 429 的精确次数。读取失败（含 403）时不显示。
+ * `rate_limited_recent` 是当前 + 上一窗口内该令牌被限流（429）的精确次数（AG9：来自拒绝时记的 denied 行）。读取失败（含 403）时不显示。
  */
 function McpTokenLimitsBlock({ nonce }: { nonce: number }) {
   const { data, error } = useFetch<McpTokenLimits>('/mcp/limits/tokens', undefined, [nonce])
@@ -377,13 +378,39 @@ function McpTokenLimitsBlock({ nonce }: { nonce: number }) {
   return (
     <div data-testid="mcp-token-429" data-store="db" data-hit={hit.length} className="mt-3">
       {data.truncated && <div className="text-[12px] text-amber-700 mb-1" data-testid="mcp-token-429-truncated">令牌过多，仅列出前 500 张，触顶令牌优先。</div>}
-      <div className="text-[12px] text-slate-500 mb-1">当前与上一个 {data.window_seconds} 秒窗口内触及上限的令牌（按窗口计，非 429 精确次数）</div>
+      <div className="text-[12px] text-slate-500 mb-1">当前与上一个 {data.window_seconds} 秒窗口内被限流（429）的令牌与次数</div>
       {hit.length === 0
-        ? <div className="text-[12px] text-emerald-700" data-testid="mcp-token-429-empty">没有令牌触顶</div>
+        ? <div className="text-[12px] text-emerald-700" data-testid="mcp-token-429-empty">没有令牌被限流</div>
         : <ul className="text-[13px] divide-y divide-slate-100">{hit.map((t) => (
             <li key={t.id} className="py-1 flex justify-between" data-testid="mcp-token-429-row" data-token-id={t.id} data-recent={t.rate_limited_recent}>
               <span>{t.name} <span className="text-slate-400">#{t.id}</span></span>
-              <span className="text-amber-700">触顶窗口 {t.rate_limited_recent}</span>
+              <span className="text-amber-700">被限流 {t.rate_limited_recent} 次</span>
+            </li>
+          ))}</ul>}
+    </div>
+  )
+}
+
+type McpQuota = { daily_quota: number; enabled: boolean; truncated?: boolean; tokens: { id: number; name: string; used: number; remaining: number }[] }
+
+/**
+ * 每令牌今日配额用量（AG9，只读，仅 system.mcp.manage）。数据来自 `GET /api/mcp/limits/quota`，口径同日配额判定（本地日历日的审计行数）。
+ * 配额关闭时服务端返回空列表，这里整块不显示；读取失败（含 403）同样不显示。
+ */
+function McpQuotaBlock({ nonce }: { nonce: number }) {
+  const { data, error } = useFetch<McpQuota>('/mcp/limits/quota', undefined, [nonce])
+  if (!data || error || !data.enabled) return null
+  const low = data.tokens.filter((t) => t.remaining === 0).length
+  return (
+    <div data-testid="mcp-quota" data-quota={data.daily_quota} data-exhausted={low} className="mt-3">
+      {data.truncated && <div className="text-[12px] text-amber-700 mb-1" data-testid="mcp-quota-truncated">令牌过多，仅列出前 500 张，用量多者优先。</div>}
+      <div className="text-[12px] text-slate-500 mb-1">今日配额用量（每令牌 {data.daily_quota} 次，本地日历日，审计行口径）</div>
+      {data.tokens.length === 0
+        ? <div className="text-[12px] text-slate-500" data-testid="mcp-quota-empty">没有在用令牌</div>
+        : <ul className="text-[13px] divide-y divide-slate-100">{data.tokens.map((t) => (
+            <li key={t.id} className="py-1 flex justify-between" data-testid="mcp-quota-row" data-token-id={t.id} data-used={t.used} data-remaining={t.remaining}>
+              <span>{t.name} <span className="text-slate-400">#{t.id}</span></span>
+              <span className={t.remaining === 0 ? 'text-red-600' : 'text-slate-700'}>已用 {t.used} / 剩余 {t.remaining}</span>
             </li>
           ))}</ul>}
     </div>

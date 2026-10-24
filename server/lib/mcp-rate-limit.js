@@ -21,7 +21,7 @@
  * 【db 模式（AE9，`GML_MCP_RATE_STORE=db`）】桶落在表 `mcp_rate_buckets`（迁移 073），多进程共享、重启不清零：
  *   · 一次放行 = 一个 `withWriteRetry` 的 IMMEDIATE 事务：先读当前 / 上一窗口计数、做与内存模式**同一个**滑动窗口判定，
  *     通过才 `INSERT … ON CONFLICT DO UPDATE SET count=count+1`（总额度与写额度同事务，要么都记要么都不记）。写锁串行化各进程，所以不会超发。
- *   · 被拒绝的调用只读不写（事务里没有写语句）。写失败（锁用尽、表缺失、磁盘错误……）⇒ **fail closed**：拒绝并标 `store_unavailable`，
+ *   · 被拒绝的调用在判定事务里只读不写；判定**之后**另用一个尽力而为的短事务记一行 `kind='denied'`（AG9，迁移 075；失败只计 `denied_write_failed`，不改 429，见 `recordDenied`）。写失败（锁用尽、表缺失、磁盘错误……）⇒ **fail closed**：拒绝并标 `store_unavailable`，
  *     计数器 `mcp_rate_store_failures_total{reason="write_failed"}` +1，绝不因存储故障放开限流。
  *   · 过期桶由后台定时器调用 `purge(db)` 清理（`server/index.js` 注册），**请求路径从不删除**。清理线是「当前窗口起点 − 2 个窗口」，
  *     比上一窗口还早一整个窗口，所以进程间时钟有 ±1 窗口偏差也不会误删仍在用的桶。
@@ -104,13 +104,16 @@ export function rateStoreFromEnv(env = process.env) {
 const PURGE_CHUNK = 5000
 const PURGE_MAX_CHUNKS = 20
 const PURGE_BUSY_MS = 250 // 后台清理最多等这么久的写锁
+const DENIED_BUSY_MS = 250 // 拒绝行的尽力写最多等这么久的写锁（拒绝本身已决定，不值得让事件循环久等）
 const stmts = new WeakMap() // db → 预编译语句（连接关闭后随连接回收）
 function dbStatements(db) {
   let s = stmts.get(db)
   if (!s) {
     s = {
-      sel: db.prepare('SELECT window_start AS ws, kind, count FROM mcp_rate_buckets WHERE token_key=? AND window_start IN (?,?)'),
+      sel: db.prepare('SELECT window_start AS ws, kind, count FROM mcp_rate_buckets WHERE token_key=? AND window_start IN (?,?) AND kind IN (\'all\',\'write\')'),
       up: db.prepare(`INSERT INTO mcp_rate_buckets (token_key, window_start, kind, count) VALUES (?,?,?,1)
+                      ON CONFLICT(token_key, window_start, kind) DO UPDATE SET count=count+1`),
+      denied: db.prepare(`INSERT INTO mcp_rate_buckets (token_key, window_start, kind, count) VALUES (?,?,'denied',1)
                       ON CONFLICT(token_key, window_start, kind) DO UPDATE SET count=count+1`),
       expired: db.prepare('SELECT 1 FROM mcp_rate_buckets WHERE window_start < ? LIMIT 1'),
       purge: db.prepare(`DELETE FROM mcp_rate_buckets WHERE rowid IN (SELECT rowid FROM mcp_rate_buckets WHERE window_start < ? LIMIT ${PURGE_CHUNK})`)
@@ -140,6 +143,25 @@ export function createMcpRateLimiter({ env = process.env, now = Date.now, ...ove
   const deny = (reason, win) => ({ allowed: false, reason, retryAfter: win.retryAfter() })
   const W = policy.windowMs
 
+  /**
+   * 拒绝计数（AG9）：放行判定**已经做完**之后，在独立的短事务里给 kind='denied' 记一行增量。尽力而为——
+   * 任何失败（锁忙、旧 CHECK 未迁移、表问题）都只计 `denied_write_failed` 并吞掉，调用方照常返回原来的 429（reason 不变）。
+   * 只在 busy_timeout 临时降到 250 ms、不重试：拒绝路径不该因为数一下而在事件循环上久等。判定读取只认 all/write，denied 行永远不参与放行。
+   */
+  function recordDenied(db, s, key, ws) {
+    let prevBusy = null
+    try {
+      prevBusy = db.pragma('busy_timeout', { simple: true })
+      db.pragma(`busy_timeout = ${DENIED_BUSY_MS}`)
+      withWriteRetry(db, () => { s.denied.run(key, ws) }, { label: 'mcp_rate_denied', maxAttempts: 1 })
+    } catch (e) {
+      try { incCounter('mcp_rate_store_failures_total', 'denied_write_failed') } catch { /* 计数器不可用也不影响拒绝 */ }
+      try { logger.warn('mcp rate denied-row write failed (best effort; refusal unchanged)', { component: 'mcp', err_code: e?.code ?? '-', err_message: e?.message }) } catch { /* 日志不可用 */ }
+    } finally {
+      if (prevBusy !== null) { try { db.pragma(`busy_timeout = ${Number(prevBusy) || 0}`) } catch { /* 连接已不可用 */ } }
+    }
+  }
+
   /** db 模式的一次额度申请（见文件头）。→ 与内存模式同形；存储失败 ⇒ reason 'store_unavailable' */
   function consumeDb(tokenId, level, scope, db) {
     const key = `${scope}|${tokenId}`
@@ -149,7 +171,7 @@ export function createMcpRateLimiter({ env = process.env, now = Date.now, ...ove
       const s = dbStatements(db)
       // 时刻与窗口必须在拿到写锁**之后**、每次尝试里重新取（Codex 审计 high）：若在事务外取一次并跨重试沿用，
       // 争用跨过分钟边界时会按旧窗口判定与记账，无视新窗口已满，造成超发。
-      const { out, retryAfter } = withWriteRetry(db, () => {
+      const { out, retryAfter, ws } = withWriteRetry(db, () => {
         const t = now()
         const ws = t - (t % W)
         const f = (t % W) / W
@@ -158,13 +180,17 @@ export function createMcpRateLimiter({ env = process.env, now = Date.now, ...ove
         for (const r of s.sel.all(key, ws, ws - W)) cnt[r.kind][r.ws === ws ? 'cur' : 'prev'] = r.count
         const over = (c, limit) => c.prev * (1 - f) + c.cur + 1 > limit
         const isWrite = level === 'write'
-        if (over(cnt.all, policy.rpm)) return { out: 'rpm', retryAfter }
-        if (isWrite && over(cnt.write, policy.writeRpm)) return { out: 'write_rpm', retryAfter }
+        if (over(cnt.all, policy.rpm)) return { out: 'rpm', retryAfter, ws }
+        if (isWrite && over(cnt.write, policy.writeRpm)) return { out: 'write_rpm', retryAfter, ws }
         s.up.run(key, ws, 'all')
         if (isWrite) s.up.run(key, ws, 'write')
-        return { out: null, retryAfter }
+        return { out: null, retryAfter, ws }
       }, { label: 'mcp_rate' })
-      return out ? { allowed: false, reason: out, retryAfter } : { allowed: true }
+      if (out) {
+        recordDenied(db, s, key, ws)
+        return { allowed: false, reason: out, retryAfter }
+      }
+      return { allowed: true }
     } catch (e) {
       incCounter('mcp_rate_store_failures_total', 'write_failed')
       logger.error('mcp rate store write failed; refusing call (fail closed)', { component: 'mcp', outcome: 'store_unavailable', err_code: e?.code ?? '-', err_message: e?.message })
@@ -245,9 +271,10 @@ export function createMcpRateLimiter({ env = process.env, now = Date.now, ...ove
 }
 
 /**
- * db 模式下"近期触顶"统计（AF11，管理端只读展示用）。→ Map<令牌 id, 0..2>。
- * 桶表只记**已放行**的调用（被拒绝的调用只读不写），所以拿不到 429 的精确次数；这里数的是「当前 + 上一窗口」里该令牌
- * 总额度（kind='all'）或写额度（kind='write'）已达上限的**窗口数**——触顶的窗口里再来的调用必然是 429。同一窗口两类都触顶只算 1。
+ * db 模式下每令牌"近期被限流（429）"的**精确**次数（AF11 引入、AG9 改精确，管理端只读展示用）。→ Map<令牌 id, 次数>。
+ * 来源是 `kind='denied'` 行（迁移 075；每次被速率额度拒绝记一次增量），数「当前 + 上一窗口」两个窗口的合计。
+ * 仍是尽力而为：拒绝行写失败（锁忙等，见 `recordDenied`）时那一次不会被数到——所以是"精确（除非写失败，失败有 `denied_write_failed` 计数）"。
+ * 不含日配额拒绝（那是日历日口径，见 `dailyQuotaByToken`）与 `store_unavailable`（写不进表）。
  * memory 模式、表缺失、读失败 ⇒ 空 Map（展示用，永不抛、不影响限流）。
  */
 export function recentLimitedByToken(db, { scope = '', policy = mcpRatePolicy(), now = Date.now } = {}) {
@@ -257,17 +284,31 @@ export function recentLimitedByToken(db, { scope = '', policy = mcpRatePolicy(),
     const W = policy.windowMs
     const t = now()
     const ws = t - (t % W)
-    const rows = db.prepare('SELECT token_key, window_start AS ws, kind, count FROM mcp_rate_buckets WHERE window_start IN (?,?)').all(ws, ws - W)
-    const hit = new Set()
+    const rows = db.prepare("SELECT token_key, SUM(count) n FROM mcp_rate_buckets WHERE kind='denied' AND window_start IN (?,?) GROUP BY token_key").all(ws, ws - W)
     for (const r of rows) {
       if (!r.token_key.startsWith(`${scope}|`)) continue
       const id = Number(r.token_key.slice(scope.length + 1))
       if (!Number.isSafeInteger(id) || id <= 0 || r.token_key !== `${scope}|${id}`) continue
-      const limit = r.kind === 'write' ? policy.writeRpm : policy.rpm
-      if (r.count >= limit) hit.add(`${id}|${r.ws}`)
+      if (r.n > 0) out.set(id, r.n)
     }
-    for (const k of hit) { const id = Number(k.split('|')[0]); out.set(id, (out.get(id) ?? 0) + 1) }
   } catch { /* 展示用统计，读失败按空处理 */ }
+  return out
+}
+
+/**
+ * 每令牌**今日**日配额用量（AG9，管理端只读展示用）。→ Map<令牌 id, 今日 `mcp_call_logs` 行数>，传入的每个 id 都有条目（无记录为 0）。
+ * 口径与 `dailyQuotaState` 完全一致（本地日历日、`token_id` 分组、同一个 `created_at >= date('now','localtime')` 谓词）。
+ * 读不到（表缺失等）⇒ 空 Map，永不抛。注意：限流器还有进程内"影子计数"兜底审计写失败的情形，这里看不到它——展示值是审计表口径。
+ */
+export function dailyQuotaByToken(db, tokenIds) {
+  const out = new Map()
+  const ids = [...new Set(tokenIds)].filter((x) => Number.isSafeInteger(x) && x > 0)
+  if (!ids.length) return out
+  try {
+    const rows = db.prepare(`SELECT token_id, COUNT(*) c FROM mcp_call_logs WHERE created_at >= date('now','localtime') AND token_id IN (${ids.map(() => '?').join(',')}) GROUP BY token_id`).all(...ids)
+    const got = new Map(rows.map((r) => [r.token_id, r.c]))
+    for (const id of ids) out.set(id, got.get(id) ?? 0)
+  } catch { /* 展示用 */ }
   return out
 }
 
@@ -308,4 +349,4 @@ export function dailyQuotaState(db, tokenId, { now = () => new Date() } = {}) {
   }
 }
 
-export default { createMcpRateLimiter, recentLimitedByToken, rateStoreFromEnv, dailyQuotaState, DEFAULT_MCP_RATE, mcpRatePolicy, dailyQuotaConfigured }
+export default { createMcpRateLimiter, recentLimitedByToken, dailyQuotaByToken, rateStoreFromEnv, dailyQuotaState, DEFAULT_MCP_RATE, mcpRatePolicy, dailyQuotaConfigured }

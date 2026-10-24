@@ -28,8 +28,8 @@ export const COUNTER_DEFS = Object.freeze({
     labelName: 'result', values: ['hit', 'miss']
   },
   mcp_rate_store_failures_total: {
-    help: 'MCP rate-limit db store failures by reason (write_failed: a call was refused fail-closed with store_unavailable; purge_failed: background purge of expired buckets failed). Only moves when GML_MCP_RATE_STORE=db.',
-    labelName: 'reason', values: ['write_failed', 'purge_failed']
+    help: 'MCP rate-limit db store failures by reason (write_failed: a call was refused fail-closed with store_unavailable; purge_failed: background purge of expired buckets failed; denied_write_failed: the best-effort per-token refusal row could not be written, the 429 itself is unchanged). Only moves when GML_MCP_RATE_STORE=db.',
+    labelName: 'reason', values: ['write_failed', 'purge_failed', 'denied_write_failed']
   },
   audit_fts_fallback_total: {
     help: 'Audit list/export queries that planned the FTS path but hit "no such table: audit_logs_fts" (the index was dropped by --disable between planning and execution) and were re-run once via LIKE, by reason (query: list or export start; export_batch: mid-export batch).',

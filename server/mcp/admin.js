@@ -22,7 +22,7 @@ import { createToken, revokeToken, SCOPE_LABEL, listTokensWithStatus, getTokenWi
 import { TOOLS } from './tools.js'
 // 「AI 能力目录」的唯一口径（单据矩阵 + 工具清单 + 安全边界都由它算，页面不自己编）
 import { buildMcpCatalog } from './catalog.js'
-import { mcpRatePolicy, dailyQuotaConfigured, recentLimitedByToken } from '../lib/mcp-rate-limit.js'
+import { mcpRatePolicy, dailyQuotaConfigured, recentLimitedByToken, dailyQuotaByToken } from '../lib/mcp-rate-limit.js'
 import { mcpCodeTotal } from '../lib/process-counters.js'
 
 const r = Router()
@@ -78,8 +78,8 @@ r.get(
 )
 
 /**
- * 每令牌近期限流（AF11，只读，仅 system.mcp.manage）：`db` 模式下按桶表算出每张令牌在「当前 + 上一窗口」里触顶的窗口数
- * （`rate_limited_recent`，0..2；桶表只记放行的调用，所以这是触顶窗口数而不是 429 精确次数）。`memory` 模式返回空列表。
+ * 每令牌近期限流（AF11，AG9 改精确，只读，仅 system.mcp.manage）：`db` 模式下 `rate_limited_recent` = 该令牌在「当前 + 上一窗口」里被速率额度
+ * 拒绝（429）的次数，来自迁移 075 的 `denied` 行（拒绝时尽力记一行，不参与放行判定；写失败的那一次不会被数到，见 `denied_write_failed` 计数）。`memory` 模式返回空列表。
  * 只含令牌 id / 名称与计数，不含前缀、哈希、明文；与 `/limits` 同权限，因为逐令牌的触顶情况会暴露调用方的活动节奏。
  */
 r.get(
@@ -105,6 +105,31 @@ r.get(
       .map((t) => ({ id: t.id, name: t.name, rate_limited_recent: hits.get(t.id) ?? 0 }))
       .sort((a, b) => b.rate_limited_recent - a.rate_limited_recent || a.id - b.id)
     return ok(res, { ...base, truncated, tokens })
+  })
+)
+
+/**
+ * 每令牌今日日配额用量（AG9，只读，仅 system.mcp.manage）：`daily_quota`（0 = 关闭）与「在用（active）令牌」今日已用 / 剩余。
+ * 用量与 `dailyQuotaState` 同口径（本地日历日的 `mcp_call_logs` 行数）；配额关闭时 `tokens` 为空（没有可剩余的额度，不披露调用节奏）。
+ * 只含令牌 id / 名称与数字，不含前缀、哈希、明文；至多列 500 张（用量多的在前），超出 `truncated=true`。已吊销令牌不列。
+ */
+r.get(
+  '/limits/quota',
+  requireAuth,
+  requirePerm('system.mcp.manage'),
+  wrap((_req, res) => {
+    const db = getDb()
+    const quota = dailyQuotaConfigured(db)
+    if (!(quota > 0)) return ok(res, { daily_quota: 0, enabled: false, truncated: false, tokens: [] })
+    const CAP = 500
+    const active = db.prepare("SELECT id, name FROM agent_tokens WHERE status='active' ORDER BY id LIMIT ?").all(CAP + 1)
+    const truncated = active.length > CAP
+    const rows = active.slice(0, CAP)
+    const used = dailyQuotaByToken(db, rows.map((t) => t.id))
+    const tokens = rows
+      .map((t) => { const u = used.get(t.id) ?? 0; return { id: t.id, name: t.name, used: u, remaining: Math.max(0, quota - u) } })
+      .sort((a, b) => b.used - a.used || a.id - b.id)
+    return ok(res, { daily_quota: quota, enabled: true, truncated, tokens })
   })
 )
 
