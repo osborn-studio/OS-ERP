@@ -25,7 +25,7 @@ import OpsCountersCard from '../../components/OpsCountersCard'
 import { RefreshCw, ShieldCheck, ShieldAlert, Calculator, Search, Layers } from 'lucide-react'
 import {
   fmtMetricValue, isMetricError, syncMetricDefs,
-  type MetricGroup, type MetricItem
+  type MetricGroup, type MetricItem, type MetricsDictResponse, hiddenMetricsNote
 } from '../../api/metrics'
 
 /**
@@ -58,7 +58,7 @@ export default function Metrics() {
   const [detail, setDetail] = useState<MetricItem | null>(null)
   const [busy, setBusy] = useState(false)
 
-  const { data, loading, reload } = useFetch<{ days: number; groups: MetricGroup[]; total: number; modules: string[] }>(
+  const { data, loading, reload } = useFetch<MetricsDictResponse>(
     '/metrics',
     { days: Math.max(1, Number(days) || 30), with_values: 1 },
     [days]
@@ -67,6 +67,7 @@ export default function Metrics() {
 
   const groups = data?.groups || []
   const total = data?.total || 0
+  const hiddenNote = hiddenMetricsNote(data?.hidden_count)
   const modules = data?.modules || []
 
   const filtered = useMemo(() => {
@@ -143,6 +144,8 @@ export default function Metrics() {
           sub={errCount > 0 ? '缺表或缺数据，不是「等于 0」' : '全部可计算'}
         />
       </div>
+
+      {hiddenNote && <p className="text-[12px] text-ink-600 mb-3" data-testid="metrics-hidden-note">{hiddenNote}</p>}
 
       <Tabs
         tabs={[

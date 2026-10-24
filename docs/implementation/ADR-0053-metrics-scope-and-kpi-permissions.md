@@ -29,6 +29,8 @@
 
 ## 仍 open / 边界
 
+> 前两条已由 [ADR-0057](ADR-0057-metrics-perms-hide.md)（AE1）收口：指标逐条登记业务权限，受限账号默认隐藏无范围语义的指标（`metrics_global_for_restricted=label` 还原本 ADR 的标注行为）。
+
 - 全局指标对受限角色仍返回全局数字（仅标注）；指标端点未逐指标要求业务查看权限（见 Codex 审计）；是否改为对受限角色隐藏或加 `requireGlobalData` 需要产品决定。
 - 未做 EXPLAIN；受限范围下指标子查询多一层仓库子查询，大库成本未评估。
 - `/metrics/stale`、`/defs` 只含定义，未改。

@@ -49,6 +49,21 @@ export interface MetricGroup {
   items: MetricItem[]
 }
 
+/** `GET /metrics` 响应：只含调用者有权看到的指标；`hidden_count` = 因缺业务权限或无范围口径而被隐藏的条数（ADR-0057） */
+export interface MetricsDictResponse {
+  days: number
+  groups: MetricGroup[]
+  total: number
+  modules: string[]
+  hidden_count?: number
+}
+
+/** 被隐藏指标的一行说明；没有隐藏项时返回 null */
+export function hiddenMetricsNote(hidden?: number | null): string | null {
+  const n = Number(hidden) || 0
+  return n > 0 ? `另有 ${n} 项指标未显示：当前账号缺少对应业务查看权限，或其数据范围下该指标没有范围口径（见设置「受限账号可见的全局口径指标」）` : null
+}
+
 export const METRICS_PATH = '/system/metrics'
 
 /** 值是不是「算不出来」——不能当成 0 显示 */

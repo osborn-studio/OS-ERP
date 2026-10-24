@@ -797,6 +797,7 @@ Prometheus 文本指标渲染 + 抓取令牌校验（ADR-0045）
 | 导出 | 类型 | 路由 | MCP 工具 | 被模块调用 |
 |---|---|---|---|---|
 | `METRICS` | const | — | — | — |
+| `METRICS_GLOBAL_MODE_KEY` | const | — | — | — |
 | `METRIC_BY_KEY` | const | — | — | — |
 | `METRIC_DEFS_FINGERPRINT_ID` | const | — | — | — |
 | `isScopeRestricted` | fn | — | — | — |
@@ -806,6 +807,7 @@ Prometheus 文本指标渲染 + 抓取令牌校验（ADR-0045）
 | `metricGroups` | fn | GET /api/metrics | — | — |
 | `metricScopedFlags` | fn | GET /api/metrics/values | — | — |
 | `metricValues` | fn | GET /api/metrics/values | — | — |
+| `metricVisibility` | fn | GET /api/metrics<br>GET /api/metrics/values<br>GET /api/metrics/catalog | — | — |
 | `syncMetricDefs` | fn | POST /api/metrics/sync | — | — |
 
 ## `server/lib/mfg.js`
@@ -1106,7 +1108,7 @@ Prometheus 文本指标渲染 + 抓取令牌校验（ADR-0045）
 | 导出 | 类型 | 路由 | MCP 工具 | 被模块调用 |
 |---|---|---|---|---|
 | `DocFlowError` | 再导出（未解析） | — | — | — |
-| `PO_READ_PERMS` | const | — | — | — |
+| `PO_READ_PERMS` | const | — | — | lib/metrics.js |
 | `PURCHASE_ORDER_FROM` | const | — | — | — |
 | `PURCHASE_ORDER_SELECT` | const | — | — | — |
 | `PurchaseError` | class | — | — | — |
@@ -1497,7 +1499,7 @@ Prometheus 文本指标渲染 + 抓取令牌校验（ADR-0045）
 | `logSettingChange` | fn | — | — | — |
 | `meta` | fn | — | — | — |
 | `normalizeSettingValue` | fn | — | — | lib/mcp-rate-limit.js |
-| `readSetting` | fn | 7 条：docflow.js×5, invoice.js×1, meta.js×1 | — | 15 个：lib/accounting.js, lib/annual.js, lib/approval.js, lib/closing.js, lib/credit.js, lib/funds-review.js … |
+| `readSetting` | fn | 7 条：docflow.js×5, invoice.js×1, meta.js×1 | — | 16 个：lib/accounting.js, lib/annual.js, lib/approval.js, lib/closing.js, lib/credit.js, lib/funds-review.js … |
 | `replaySettings` | fn | — | — | — |
 | `resetSetting` | fn | POST /api/meta/settings/reset | — | — |
 | `settingDef` | fn | — | — | — |
