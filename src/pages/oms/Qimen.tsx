@@ -151,7 +151,7 @@ export default function Qimen() {
                   {r.adapter === 'qimen' ? '奇门标准' : r.adapter === 'direct' ? '直连 API' : r.adapter}
                 </span>
               ) },
-              { key: 'app_key', title: 'AppKey', width: 140, render: (r: any) => <span className="font-mono text-[11px]">{r.app_key || '—'}</span> },
+              { key: 'app_key', title: 'AppKey（前 4 位）', width: 140, render: (r: any) => <span className="font-mono text-[11px]">{r.app_key ? `${r.app_key}…` : '—'}</span> },
               { key: 'has_secret', title: '密钥', width: 70, render: (r: any) => (r.has_secret ? '已签发' : '未签发') },
               { key: 'qimen_wh', title: '奇门仓编', width: 90, render: (r: any) => <span className="font-mono text-[11px]">{r.qimen_wh || '—'}</span> },
               { key: 'warehouse_name', title: '发货仓', render: (r: any) => r.warehouse_name || '—' }
@@ -212,7 +212,7 @@ export default function Qimen() {
               </select>
             </div>
             <div>
-              <div className="text-[11px] text-slate-400 mb-1">app_key（必填，从左侧平台列表复制；缺失或错误网关返回 401）</div>
+              <div className="text-[11px] text-slate-400 mb-1">app_key（必填，完整值在「平台店铺」页查看；左侧列表只显示前 4 位；缺失或错误网关返回 401）</div>
               <input className="input font-mono text-[12px]" value={appKey} placeholder="ak_xxx" onChange={(e) => setAppKey(e.target.value)} />
             </div>
             <div>

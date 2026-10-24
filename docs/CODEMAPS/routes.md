@@ -720,9 +720,9 @@
 
 | 处理器 | 方法 | 路径 | 分类 | 中间件链 | 调用的 lib 函数 | 处理器内 SQL 表 | 经 lib 触达的表 |
 |---|---|---|---|---|---|---|---|
-| `qimen.js:132` | GET | `/api/qimen/capabilities` | GATED | requireAuth → requireInternal → requirePerm | — | platforms, warehouses | role_permissions, user_roles, users |
-| `qimen.js:162` | POST | `/api/qimen/platforms/:id/secret` | GATED | requireAuth → requireInternal → requirePerm | lib/qimen-auth.js: issuePlatformSecret | — | audit_logs, platforms, qimen_nonces, role_permissions, user_roles, users |
-| `qimen.js:185` | POST | `/api/qimen` | NO_AUTH | （无） | lib/qimen-auth.js: verifyQimenRequest<br>lib/redact.js: redactValue | inventory_stocks, oms_sync_logs, platforms, product_skus, warehouses | qimen_nonces |
+| `qimen.js:132` | GET | `/api/qimen/capabilities` | GATED | requireAuth → requireInternal → requirePerm | lib/qimen-auth.js: appKeyPrefix | platforms, warehouses | role_permissions, user_roles, users |
+| `qimen.js:164` | POST | `/api/qimen/platforms/:id/secret` | GATED | requireAuth → requireInternal → requirePerm | lib/qimen-auth.js: issuePlatformSecret | — | audit_logs, platforms, qimen_nonces, role_permissions, user_roles, users |
+| `qimen.js:187` | POST | `/api/qimen` | NO_AUTH | （无） | lib/qimen-auth.js: verifyQimenRequest<br>lib/redact.js: redactValue | inventory_stocks, oms_sync_logs, platforms, product_skus, warehouses | qimen_nonces |
 
 ## server/routes/quote.js
 
