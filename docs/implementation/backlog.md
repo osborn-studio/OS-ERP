@@ -104,3 +104,20 @@
 | 升级演练只在合成 medium 库、Mac mini 上测过；真正旧结构库需旧版本备份集 | 目标主机 | AA11 |
 | 夜间工作流 `rehearsal` 步骤与 AA8 新浏览器场景未在托管 runner 上实跑 | 托管 runner | AA8/AA11 |
 | `dmserver` 上的所有性能数字均未复测 | 目标主机 | 全批 |
+
+## 第十一批后仍 open 的残留
+
+| 位置 | 残留 | 来源 |
+|---|---|---|
+| MCP `purchase.list_orders`、`report.dashboard_kpi` | 采购单按"仓库或目标门店在范围内"放行，宽于 HTTP 的仅按仓库 | AB1 Codex 审计（高） |
+| `POST /api/demand/dealer/summary`、`GET /api/master/products(/:id)` 的 `stock_qty`、`/api/master/overview` 仓库计数 | 接受/汇总范围外仓库 | AB1 Codex 审计（中/低） |
+| `/api/docflow/*` 对未绑定门店、非总部角色、`data_scope=all` 的内部账号仍可读 RC/YQ/SH | 需产品决策统一 `HQ_ROLES`/`HQ` 名单 | AB7 Codex 审计（高，既有） |
+| 解析表中 PS/PSF/DR/OC/OCS/DS/RB 仍无绑定规则（MCP 由 `doc-perms` 兜底） | 范围 | AB7 |
+| `/dashboard/channel`、`/recent` 未剖析未缓存；`explain-audit` 未登记新的 `/top`、`/inventory-dist` 语句 | 性能守卫 | AB2 |
+| 审计 FTS：无 FTS5 的构建只做了模拟验证；FTS 维护（optimize/rebuild 锁）未测 | 性能 | AB3 |
+| 证据签名无时间戳/透明日志；托管 CI 无签名密钥，CI 产出的候选未签名 | 流程 | AB4 |
+| 哈希链锚点/链尾摘要未离机保存则对持写权限者无效；归档崩溃恢复未测 | 运维 | AB6 |
+| `capacity-summary.mjs` 对 large-ci 不显示 `partial`；大规模运行与夜间 `rehearsal`/`snapshot_upto`/`scale=large-ci` 均未在托管 runner 上实跑 | 托管 runner | AB5/AB9/AB11 |
+| `promtool` 未校验新告警规则；MCP 调用计数无端到端测试 | 监控 | AB10 |
+| GHSA-vfj7-8cjw-p6xm 是否已撤回需联网复核 | 依赖 | AB12 |
+| `dmserver` 上的所有性能数字均未复测 | 目标主机 | 全批 |
