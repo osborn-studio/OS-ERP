@@ -55,6 +55,8 @@ const DECLARED = [
   'scripts/check-mcp-coverage.mjs',
   'scripts/gen-sbom.mjs',
   'scripts/release-candidate.mjs',
+  'scripts/release-keygen.mjs',
+  'scripts/lib/evidence-sign.mjs',
   'scripts/gen-changelog.mjs',
   'scripts/gen-codemap.mjs',
   'scripts/lib/runtime-closure.mjs',
@@ -90,6 +92,7 @@ const DECLARED = [
   'server/db/migrations/052_credit_release_ledger.cjs',
   'tests/credit-reversal.test.mjs',
   'tests/release-candidate.test.mjs',
+  'tests/release-signing.test.mjs',
   'tests/credit-effect-format.test.mjs',
   'src/utils/credit-effect.ts',
   // 前端 403 / 空范围 / 功能关闭提示（W3）

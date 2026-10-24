@@ -7,6 +7,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
+import { loadPublicKey, verifyEvidenceSignature, SIG_FILE } from './lib/evidence-sign.mjs'
 import { hashEntries, listTestsTree, TESTS_TREE_FILE } from './lib/tests-tree.mjs'
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const manifest = JSON.parse(fs.readFileSync(path.join(root, 'MANIFEST.json'), 'utf8'))
@@ -63,6 +64,11 @@ for (const [file, expected] of Object.entries(manifest.files)) {
 }
 // 证据包（Z5）：仅在给出 --evidence=<EVIDENCE.json> 时校验。证据必须与本包的 MANIFEST 一致，且不得自称未产生的结果。
 const evidenceArg = process.argv.find(a => a.startsWith('--evidence='))?.slice(11)
+// AB4（ADR-0047）：--pubkey <pem> | --pubkey=<pem>（只验签用的公钥，须带外获得）。没有 --evidence 就没有可验的东西：用法错误。
+const pubkeyIdx = process.argv.findIndex(a => a === '--pubkey' || a.startsWith('--pubkey='))
+const pubkeyArg = pubkeyIdx < 0 ? undefined : (process.argv[pubkeyIdx].startsWith('--pubkey=') ? process.argv[pubkeyIdx].slice(9) : process.argv[pubkeyIdx + 1])
+if (pubkeyIdx >= 0 && (!pubkeyArg || pubkeyArg.startsWith('--'))) fail('--pubkey needs a public key PEM path')
+else if (pubkeyIdx >= 0 && !evidenceArg) fail('--pubkey is only meaningful together with --evidence=<EVIDENCE.json>')
 if (evidenceArg) {
   const bad = (field, why) => fail(`EVIDENCE.${field}: ${why}`)
   try {
@@ -150,6 +156,24 @@ if (evidenceArg) {
         } catch (error) { bad('artifact', `cannot read ${zipArg} (${error.message})`) }
       }
     }
+    // 签名（AB4）：signature 是 null（未签名）或元数据对象；给了 --pubkey 就必须验过。降级（null/缺失/删 sig 文件）在给了公钥时一律失败。
+    if (!('signature' in ev)) bad('signature', 'missing (null for an unsigned candidate)')
+    else if (ev.signature !== null && (typeof ev.signature !== 'object' || Array.isArray(ev.signature))) bad('signature', 'must be null or an object')
+    if (pubkeyArg && !pubkeyArg.startsWith('--')) {
+      try {
+        const pub = loadPublicKey(path.resolve(pubkeyArg))
+        if (ev.signature === null || ev.signature === undefined) bad('signature', 'evidence is unsigned but a public key was supplied; refusing (a signed candidate cannot be downgraded)')
+        else {
+          let sigText = null
+          try { sigText = fs.readFileSync(path.join(path.dirname(path.resolve(evidenceArg)), SIG_FILE), 'utf8') } catch { bad('signature', `${SIG_FILE} not found next to the evidence file`) }
+          if (sigText !== null) {
+            const v = verifyEvidenceSignature(ev, sigText, pub)
+            if (v.ok) console.log(`[verify] signature verified (ed25519, key_id ${ev.signature.key_id.slice(0, 16)}…)`)
+            else bad('signature', v.reason)
+          }
+        }
+      } catch (error) { bad('signature', error.message) }
+    } else if (ev.signature) console.warn(`[verify] NOTE: evidence is signed (key_id ${String(ev.signature.key_id).slice(0, 16)}…) but signature not verified: no --pubkey given`)
     const files = ev.synthetic_drill?.files
     if (!Array.isArray(files) || !files.length) bad('synthetic_drill', 'must reference capacity evidence files')
     else for (const f of files) {
