@@ -31,6 +31,7 @@ import { runtimeMode } from '../runtime.js'
 export const WINDOW_MS = 5 * 60 * 1000
 export const NONCE_RETAIN_MS = 11 * 60 * 1000
 const MAX_DEPTH = 32
+const RETIRED_PUBLIC_DEMO_CONSTANT = 'GML-DEMO-SECRET' // 仅用于拒绝；迁移 069 会把库内同值清空
 const NONCE_RE = /^[A-Za-z0-9_-]{16,64}$/
 const TS_RE = /^\d{13}$/
 
@@ -96,6 +97,8 @@ export function verifyQimenRequest(db, platform, body, now = Date.now()) {
   } catch {
     return fail(QIMEN_CODES.SECRET_NOT_ISSUED, '平台密钥无法读取，请重新签发')
   }
+  // 兜底（审计）：已退役的公开演示常量即使被写进库里也永不接受
+  if (secret === RETIRED_PUBLIC_DEMO_CONSTANT) return fail(QIMEN_CODES.SECRET_NOT_ISSUED, '平台尚未签发密钥，请联系管理员')
   const expected = signQimen(secret, {
     appKey: platform.app_key,
     method: typeof body.method === 'string' ? body.method : '',

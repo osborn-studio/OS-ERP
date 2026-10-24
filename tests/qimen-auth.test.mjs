@@ -398,6 +398,12 @@ test('migration 069 clears rows holding the public demo constant, records it, an
   assert.equal(JSON.parse(fact.value).cleared, 2)
   assert.ok(!JSON.stringify(f.db.prepare('SELECT * FROM settings').all()).includes(DEMO_CONSTANT), 'constant never stored in settings')
   assert.ok(f.db.prepare("SELECT 1 FROM schema_migrations WHERE id LIKE '069_%'").get())
+  // 兜底：即便常量被重新写进库（封存形态），网关也拒绝（1005）
+  const pfDemo = f.db.prepare('SELECT id, app_key FROM platforms WHERE id=?').get(sealedDemo)
+  f.db.prepare('UPDATE platforms SET app_secret_sealed=? WHERE id=?').run(sealSecret(DEMO_CONSTANT, { GML_JWT_SECRET: f.jwtSecret, GML_RUNTIME_MODE: 'test' }), sealedDemo)
+  const viaGateway = await f.api('/api/qimen', { body: gatewayBody(DEMO_CONSTANT, pfDemo) })
+  assert.equal(viaGateway.status, 401)
+  assert.equal(viaGateway.body.code, '1005')
   // 配置审计不把这条事实记录当作"未登记的键"
   const { auditSettingTrail } = await import('../server/lib/settings.js')
   const trail = auditSettingTrail(f.db)

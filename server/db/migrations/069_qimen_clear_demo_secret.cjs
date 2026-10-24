@@ -31,7 +31,10 @@ function box() {
       secretBox = false
     }
   }
-  return secretBox || null
+  // 审计修复：加载失败不能当作"没有常量"（会让 verify 在常量仍在时通过）；有封存值要检查却打不开检查工具 ⇒ 迁移失败，
+  // 由运维在支持 require(esm) 的 Node 22.12+ 上重跑。网关另有一道兜底（qimen-auth.js 拒绝该常量）。
+  if (!secretBox) throw new Error('069: secret-box 无法加载（需要 Node >=22.12 的 require(esm)），无法检查封存的奇门密钥')
+  return secretBox
 }
 
 /** 该库值是否就是公开演示常量（明文，或能用当前密钥打开的封存值）。 */
@@ -39,7 +42,7 @@ function isDemoConstant(stored) {
   if (typeof stored !== 'string' || stored === '') return false
   if (stored === PUBLIC_DEMO_CONSTANT) return true
   const b = box()
-  if (!b || !b.isSealed(stored)) return false
+  if (!b.isSealed(stored)) return false
   try {
     return b.openSecret(stored) === PUBLIC_DEMO_CONSTANT
   } catch {
