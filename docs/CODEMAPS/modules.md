@@ -480,7 +480,7 @@ BOM 服务层（模块 10B · 一个 BOM + 三类执行单）
 
 ## `server/lib/dashboard-sql.js`
 
-看板接口 /top /inventory-dist /channel /recent 的 SQL 文本唯一来源（AC4，ADR-0044 补充 2）
+看板接口 /trend /top /inventory-dist /channel /recent 的 SQL 文本唯一来源（AC4 / AD3，ADR-0044 补充 2、3）
 
 | 导出 | 类型 | 路由 | MCP 工具 | 被模块调用 |
 |---|---|---|---|---|
@@ -488,10 +488,15 @@ BOM 服务层（模块 10B · 一个 BOM + 三类执行单）
 | `RECENT_SQL` | const | — | — | — |
 | `channelOfflineSql` | fn | GET /api/dashboard/channel | — | — |
 | `channelOnlineSql` | fn | GET /api/dashboard/channel | — | — |
+| `onlineWindow` | fn | — | — | — |
+| `sinceDate` | fn | — | — | — |
 | `topBrandsSql` | fn | GET /api/dashboard/top | — | — |
 | `topDealersSql` | fn | GET /api/dashboard/top | — | — |
 | `topProductsSql` | fn | GET /api/dashboard/top | — | — |
 | `topStoresSql` | fn | GET /api/dashboard/top | — | — |
+| `trendOnlineSql` | fn | GET /api/dashboard/trend | — | — |
+| `trendPurchaseSql` | fn | GET /api/dashboard/trend | — | — |
+| `trendSalesSql` | fn | GET /api/dashboard/trend | — | — |
 
 ## `server/lib/dates.js`
 

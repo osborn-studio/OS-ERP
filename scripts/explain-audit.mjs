@@ -25,7 +25,7 @@ import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import Database from 'better-sqlite3'
 import { buildWhere, orderOf, countSql, exportSql, AUDIT_COUNT_CAP } from '../server/lib/audit-view.js'
-import { topProductsSql, topBrandsSql, topDealersSql, topStoresSql, INVENTORY_DIST_AGG_SQL, channelOfflineSql, channelOnlineSql, RECENT_SQL } from '../server/lib/dashboard-sql.js'
+import { onlineWindow, trendSalesSql, trendPurchaseSql, trendOnlineSql, topProductsSql, topBrandsSql, topDealersSql, topStoresSql, INVENTORY_DIST_AGG_SQL, channelOfflineSql, channelOnlineSql, RECENT_SQL } from '../server/lib/dashboard-sql.js'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 export const SCHEMA_VERSION = 1
@@ -95,10 +95,11 @@ export const STATEMENTS = [
     sql: "SELECT COUNT(*) c FROM product_skus sk WHERE sk.status='active' AND sk.safe_stock>0 AND COALESCE((SELECT SUM(st.qty_on_hand) FROM inventory_stocks st WHERE st.sku_id = sk.id),0) < sk.safe_stock" },
   { id: 'dash.stock_alerts', mirrors: 'server/lib/stock.js listBelowSafe (server/routes/dashboard.js stockAlerts)', bench: 'dashboard_summary', params: [10],
     sql: "SELECT x.sku_id, x.sku_code, x.sku_name, p.name AS product_name, x.safe_stock, x.q qty_on_hand, x.safe_stock - x.q shortage FROM (SELECT sk.id AS sku_id, sk.product_id, sk.sku_code, sk.name AS sku_name, sk.safe_stock, COALESCE((SELECT SUM(st.qty_on_hand) FROM inventory_stocks st WHERE st.sku_id = sk.id),0) q FROM product_skus sk WHERE sk.status='active' AND sk.safe_stock>0) x JOIN products p ON p.id = x.product_id WHERE x.q < x.safe_stock ORDER BY shortage DESC, x.sku_id LIMIT ?" },
-  { id: 'dash.trend_sales', mirrors: 'server/routes/dashboard.js trend', bench: null,
-    sql: "SELECT order_date AS date, COUNT(*) orders, COALESCE(SUM(receivable_amount),0) amount FROM sales_orders WHERE status NOT IN ('cancelled','draft') AND order_date >= date('now','localtime','-30 day') GROUP BY order_date ORDER BY date" },
-  { id: 'dash.trend_purchase', mirrors: 'server/routes/dashboard.js trend', bench: null,
-    sql: "SELECT order_date AS date, COALESCE(SUM(total_amount),0) amount FROM purchase_orders WHERE status <> 'cancelled' AND order_date >= date('now','localtime','-30 day') GROUP BY order_date ORDER BY date" },
+  // AD3：trend 三条的 SQL 文本直接取自 server/lib/dashboard-sql.js（路由执行的同一份，不再是人工镜像）；窗口取 /trend 默认 30 天。
+  // online 声明 expectIndex（迁移 070 的 idx_oms_order_time）：缺索引时退化成整表 SCAN，由守卫报红。
+  { id: 'dash.trend_sales', mirrors: 'server/routes/dashboard.js GET /trend (server/lib/dashboard-sql.js trendSalesSql)', bench: null, expectIndex: 'idx_so_order_date', sql: trendSalesSql(30) },
+  { id: 'dash.trend_purchase', mirrors: 'server/routes/dashboard.js GET /trend (server/lib/dashboard-sql.js trendPurchaseSql)', bench: null, sql: trendPurchaseSql(30) },
+  { id: 'dash.trend_online', mirrors: 'server/routes/dashboard.js GET /trend (server/lib/dashboard-sql.js trendOnlineSql)', bench: null, expectIndex: 'idx_oms_order_time', params: onlineWindow(30), sql: trendOnlineSql() },
   // AC4：以下语句的 SQL 文本**直接取自** server/lib/dashboard-sql.js（路由 server/routes/dashboard.js 执行的就是这一份），不是人工镜像；
   // 窗口取各接口的默认值（/top 30 天、/channel 90 天）。AB2 的 /top 改成 CROSS JOIN 固定"先取窗口内订单再取明细"，所以声明 expectIndex。
   { id: 'dash.top_products', mirrors: 'server/routes/dashboard.js GET /top (server/lib/dashboard-sql.js topProductsSql)', bench: null, expectIndex: 'idx_so_order_date', sql: topProductsSql(30) },
@@ -107,7 +108,7 @@ export const STATEMENTS = [
   { id: 'dash.top_stores', mirrors: 'server/routes/dashboard.js GET /top (server/lib/dashboard-sql.js topStoresSql)', bench: null, expectIndex: 'idx_so_order_date', sql: topStoresSql(30) },
   { id: 'dash.inventory_dist_agg', mirrors: 'server/routes/dashboard.js GET /inventory-dist (server/lib/dashboard-sql.js INVENTORY_DIST_AGG_SQL)', bench: null, sql: INVENTORY_DIST_AGG_SQL },
   { id: 'dash.channel_offline', mirrors: 'server/routes/dashboard.js GET /channel (server/lib/dashboard-sql.js channelOfflineSql)', bench: null, expectIndex: 'idx_so_order_date', sql: channelOfflineSql(90) },
-  { id: 'dash.channel_online', mirrors: 'server/routes/dashboard.js GET /channel (server/lib/dashboard-sql.js channelOnlineSql)', bench: null, sql: channelOnlineSql(90) },
+  { id: 'dash.channel_online', mirrors: 'server/routes/dashboard.js GET /channel (server/lib/dashboard-sql.js channelOnlineSql)', bench: null, expectIndex: 'idx_oms_order_time', params: onlineWindow(90), sql: channelOnlineSql() },
   { id: 'dash.recent_sales', mirrors: 'server/routes/dashboard.js GET /recent (server/lib/dashboard-sql.js RECENT_SQL.salesOrders)', bench: null, sql: RECENT_SQL.salesOrders },
   { id: 'dash.recent_purchase', mirrors: 'server/routes/dashboard.js GET /recent (server/lib/dashboard-sql.js RECENT_SQL.purchaseOrders)', bench: null, sql: RECENT_SQL.purchaseOrders },
   { id: 'dash.recent_oms', mirrors: 'server/routes/dashboard.js GET /recent (server/lib/dashboard-sql.js RECENT_SQL.omsOrders)', bench: null, sql: RECENT_SQL.omsOrders },
@@ -277,9 +278,7 @@ export const ALLOW = [
   { statement: 'dash.recent_purchase', table: 'purchase_orders', noSort: true, reason: PAGE_REASON },
   { statement: 'dash.recent_oms', table: 'oms_orders', noSort: true, reason: PAGE_REASON },
   { statement: 'dash.recent_txn', table: 'inventory_transactions', noSort: true, reason: PAGE_REASON },
-  // AC4：/channel 线上渠道按 `date(o.order_time) >= …` 过滤——对列套函数，没有任何索引能用（idx_oms_month 建在 substr(order_time,1,7) 上，谓词不同）；
-  // 读量随 OMS 订单总量线性增长（合成库 2 万行 ≈ 12 ms）。已知残余：由 /channel 的 30 s 缓存吸收重复读取；根治需要新迁移（给 order_time 建索引并把谓词改成可索引的区间），不在 AC4 范围。
-  { statement: 'dash.channel_online', table: 'oms_orders', reason: '谓词对列套函数 date(order_time)，无可用索引，整表读取并随订单量线性增长；缓存吸收重复读取（AC4），根治需新迁移' },
+  // AD3：/channel 线上渠道的豁免已移除——谓词改成 order_time >= ?，走 idx_oms_order_time（迁移 070），由 expectIndex 守卫
   { statement: 'dash.sales_unpaid', table: 'sales_orders', reason: AGG_REASON },
   { statement: 'dash.stock_total', table: 'inventory_stocks', reason: '整表聚合（SUM 全库存），没有谓词；索引只能做覆盖扫描，不改变量级；AA5 起由看板 30 s 缓存吸收重复读取' },
   { statement: 'rpt.stock_value', table: 'inventory_stocks', reason: '整表聚合库存金额，没有谓词' },

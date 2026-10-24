@@ -16,6 +16,8 @@
  * 【AC4（ADR-0044 补充 2）】channel 同样经 `cachedRead`（键 `channel:<days>`）；recent 只剖析不缓存（四条查询合计 < 0.2 ms，理由见处理器注释）。
  *   /top、/inventory-dist、/channel、/recent 的 SQL 文本在 `lib/dashboard-sql.js`（路由与 `scripts/explain-audit.mjs` 共用同一份）。
  *
+ * 【AD3（ADR-0044 补充 3）】trend 的 SQL 也搬进 `lib/dashboard-sql.js`；trend / channel 的线上分支加区间谓词 `order_time >= ?`（JS 按本地日期算，原 date() 谓词保留复核），走迁移 070 的 idx_oms_order_time。
+ *
  * 【通用硬规矩】判据只有一处（不要在第二个地方再抄一遍条件）；
  *   改完跑 `node scripts/regress-all.mjs`（3 轮）与相关 `test-*.mjs`。
  * ============================================================================
@@ -28,7 +30,7 @@ import { requireAuth, requireInternal, requireGlobalData } from '../middleware/a
 import { countBelowSafe, listBelowSafe } from '../lib/stock.js'
 import { createProfiler } from '../lib/profile.js'
 import { cachedForDb, cacheTtlMs } from '../lib/db-ttl-cache.js'
-import { topProductsSql, topBrandsSql, topDealersSql, topStoresSql, INVENTORY_DIST_AGG_SQL, channelOfflineSql, channelOnlineSql, RECENT_SQL } from '../lib/dashboard-sql.js'
+import { onlineWindow, trendSalesSql, trendPurchaseSql, trendOnlineSql, topProductsSql, topBrandsSql, topDealersSql, topStoresSql, INVENTORY_DIST_AGG_SQL, channelOfflineSql, channelOnlineSql, RECENT_SQL } from '../lib/dashboard-sql.js'
 
 const r = Router()
 r.use(requireAuth, requireInternal('总部经营看板'), requireGlobalData('总部经营看板'))
@@ -131,25 +133,10 @@ r.get(
 )
 
 function computeTrend(db, prof, days) {
-  const from = `date('now','localtime','-${days} day')`
-  const sales = prof.time('sales', () => db
-    .prepare(
-      `SELECT order_date AS date, COUNT(*) orders, COALESCE(SUM(receivable_amount),0) amount FROM sales_orders
-       WHERE status NOT IN ('cancelled','draft') AND order_date >= ${from} GROUP BY order_date ORDER BY date`
-    )
-    .all())
-  const purchase = prof.time('purchase', () => db
-    .prepare(
-      `SELECT order_date AS date, COALESCE(SUM(total_amount),0) amount FROM purchase_orders
-       WHERE status <> 'cancelled' AND order_date >= ${from} GROUP BY order_date ORDER BY date`
-    )
-    .all())
-  const online = prof.time('online', () => db
-    .prepare(
-      `SELECT date(order_time) AS date, COALESCE(SUM(pay_amount),0) amount FROM oms_orders
-       WHERE date(order_time) >= ${from} GROUP BY date(order_time) ORDER BY date`
-    )
-    .all())
+  const sales = prof.time('sales', () => db.prepare(trendSalesSql(days)).all())
+  const purchase = prof.time('purchase', () => db.prepare(trendPurchaseSql(days)).all())
+  // AD3：线上分支用区间谓词（迁移 070 的 idx_oms_order_time），日期由 JS 按本地日期算出
+  const online = prof.time('online', () => db.prepare(trendOnlineSql()).all(...onlineWindow(days)))
   const map = new Map()
   const touch = (d) => {
     if (!map.has(d)) map.set(d, { date: d, offline: 0, online: 0, purchase: 0, orders: 0 })
@@ -183,11 +170,11 @@ r.get(
 )
 
 // AC4：与 trend / top 同形——响应只由库内容、当前日期与规范化后的 days 决定（路由器第一行已要求全局数据范围），键 = channel:<days>。
-// 剖析（合成 medium 库，2 万 OMS 单）：offline ≈ 4 ms（idx_so_order_date）、online ≈ 12 ms（`date(order_time)` 无法用索引，随 OMS 订单量线性增长）→ 都 < 50 ms，
-// 但 online 是 explain-audit 里登记的已知整表扫描，缓存把它挪出重复请求路径。
+// 剖析（合成 medium 库，2 万 OMS 单）：offline ≈ 4 ms（idx_so_order_date）、online 改造前 ≈ 12 ms（`date(order_time)` 无法用索引）；
+// AD3（迁移 070）起 online 走 idx_oms_order_time 区间扫描，前后数字见 capacity-baseline 的 AD3 一节。
 function computeChannel(db, prof, days) {
   const offline = prof.time('offline', () => db.prepare(channelOfflineSql(days)).all())
-  const online = prof.time('online', () => db.prepare(channelOnlineSql(days)).all())
+  const online = prof.time('online', () => db.prepare(channelOnlineSql()).all(...onlineWindow(days)))
   const labels = { dealer: '经销商分销', store: '门店零售', online: '自营商城', platform: '平台电商', live: '直播电商' }
   return {
     offline: offline.map((x) => ({ name: labels[x.channel] || x.channel, ...x })),

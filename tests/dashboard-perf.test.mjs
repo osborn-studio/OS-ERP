@@ -705,7 +705,7 @@ test('AC4 explain-audit statements for dashboard come from the route-side SQL mo
     'dash.top_stores': [dsql.topStoresSql(30), 'idx_so_order_date'],
     'dash.inventory_dist_agg': [dsql.INVENTORY_DIST_AGG_SQL, undefined],
     'dash.channel_offline': [dsql.channelOfflineSql(90), 'idx_so_order_date'],
-    'dash.channel_online': [dsql.channelOnlineSql(90), undefined],
+    'dash.channel_online': [dsql.channelOnlineSql(), 'idx_oms_order_time'],
     'dash.recent_sales': [dsql.RECENT_SQL.salesOrders, undefined],
     'dash.recent_purchase': [dsql.RECENT_SQL.purchaseOrders, undefined],
     'dash.recent_oms': [dsql.RECENT_SQL.omsOrders, undefined],
@@ -880,7 +880,8 @@ test('AC4 route responses equal the results of the registered explain-audit stat
   assert.deepEqual(top.stores, f.db.prepare(st('dash.top_stores')).all())
   assert.ok(top.products.length > 0 && top.dealers.length > 0, 'the demo seed gives the comparison something to compare')
   const ch = (await f.api('/api/dashboard/channel')).body.data // 默认窗口 90 天
-  assert.deepEqual(ch.online, f.db.prepare(st('dash.channel_online')).all())
+  const chOn = STATEMENTS.find((x) => x.id === 'dash.channel_online')
+  assert.deepEqual(ch.online, f.db.prepare(chOn.sql).all(...chOn.params))
   assert.deepEqual(ch.offline.map(({ name, ...x }) => x), f.db.prepare(st('dash.channel_offline')).all())
   const rec = (await f.api('/api/dashboard/recent')).body.data
   assert.deepEqual(rec.salesOrders, f.db.prepare(st('dash.recent_sales')).all())
@@ -917,4 +918,201 @@ test('AC4 hit ratio can be zero with no writes at all: the per-key read interval
     const c = counterSnapshot().dashboard_cache_total
     assert.deepEqual(c, { hit: 0, miss: 150 })
   } finally { db.close() }
+})
+
+// ---- AD3：oms_orders.order_time 索引（迁移 070）与 trend / channel 线上分支的区间谓词 ----
+import { execFileSync } from 'node:child_process'
+import { createRequire } from 'node:module'
+const requireCjs = createRequire(import.meta.url)
+
+/** 改写前的 SQL 文本（batch-twelve 的 dashboard.js / dashboard-sql.js，逐字保留作对照） */
+const OLD_ONLINE = (days) => {
+  const from = `date('now','localtime','-${days} day')`
+  return {
+    trend: `SELECT date(order_time) AS date, COALESCE(SUM(pay_amount),0) amount FROM oms_orders
+       WHERE date(order_time) >= ${from} GROUP BY date(order_time) ORDER BY date`,
+    channel: `SELECT COALESCE(pf.name,'未知平台') AS platform_name, COUNT(o.id) orders, COALESCE(SUM(o.pay_amount),0) amount
+         FROM oms_orders o LEFT JOIN platforms pf ON pf.id=o.platform_id
+         WHERE date(o.order_time) >= ${from} AND o.status NOT IN ('refunded','closed') GROUP BY pf.id`
+  }
+}
+const OLD_TREND = (days) => {
+  const from = `date('now','localtime','-${days} day')`
+  return {
+    sales: `SELECT order_date AS date, COUNT(*) orders, COALESCE(SUM(receivable_amount),0) amount FROM sales_orders
+       WHERE status NOT IN ('cancelled','draft') AND order_date >= ${from} GROUP BY order_date ORDER BY date`,
+    purchase: `SELECT order_date AS date, COALESCE(SUM(total_amount),0) amount FROM purchase_orders
+       WHERE status <> 'cancelled' AND order_date >= ${from} GROUP BY order_date ORDER BY date`
+  }
+}
+
+test('AD3 migration 070: creates idx_oms_order_time, idempotent, verify() follows up()', (t) => {
+  const { db } = fixture(t)
+  const mig = requireCjs('../server/db/migrations/070_oms_order_time_index.cjs')
+  const idx = () => db.prepare("SELECT sql FROM sqlite_master WHERE type='index' AND name='idx_oms_order_time'").get()
+  assert.match(idx().sql, /oms_orders\s*\(\s*order_time\s*,\s*status\s*,\s*platform_id\s*,\s*pay_amount\s*\)/, 'order_time-leading covering index for the two dashboard queries')
+  assert.equal(mig.verify(db), true)
+  db.exec('DROP INDEX idx_oms_order_time')
+  assert.equal(mig.verify(db), false, 'verify detects the missing index')
+  mig.up(db); mig.up(db) // 幂等
+  assert.equal(mig.verify(db), true)
+  assert.ok(idx())
+  // 表或列缺失时 up 跳过、verify 视为满足（与 059/065 同约定）
+  const bare = new Database(':memory:'); t.after(() => bare.close())
+  mig.up(bare)
+  assert.equal(mig.verify(bare), true)
+  bare.exec('CREATE TABLE oms_orders (id INTEGER PRIMARY KEY)')
+  mig.up(bare)
+  assert.equal(mig.verify(bare), true)
+  assert.ok(db.prepare("SELECT 1 FROM schema_migrations WHERE id LIKE '070%'").get(), 'recorded by the runner')
+})
+
+test('AD3 sinceDate() equals SQLite date(now,localtime,-N day) for the same instant, incl. fractional / negative / non-finite / out-of-range windows', (t) => {
+  const mem = new Database(':memory:'); t.after(() => mem.close())
+  const instants = ['2026-10-24T00:00:00.000Z', '2026-10-24T15:59:59.000Z', '2026-10-24T16:00:00.000Z', '2026-03-01T23:30:00.000Z', '2026-12-31T23:59:59.000Z', '2024-02-29T12:00:00.000Z']
+  const windows = [0, 1, 7, 30, 90, 365, 1.5, 0.25, 1e-7, 1e6, 2e6, 3e6, -1, -30, -1e6, 1e21, 'abc', NaN, Infinity, -Infinity, '30', '', undefined]
+  for (const iso of instants) {
+    const now = new Date(iso)
+    // SQLite 把无时区字符串当 UTC，再 'localtime' 转本地——与 'now','localtime' 对同一瞬间的处理相同
+    const stamp = iso.replace('T', ' ').replace('Z', '')
+    for (const w of windows) {
+      const n = Number(w) // 路由先 Number() 再拼模板 '-${days} day'；负数拼成 '--N day'，SQLite 返回 NULL（旧行为：空结果）
+      const want = mem.prepare(`SELECT date(?, 'localtime', '-${n} day') d`).get(stamp).d
+      assert.equal(dsql.sinceDate(n, now), want, `${iso} -${n}d (TZ=${process.env.TZ ?? 'system'})`)
+    }
+  }
+})
+
+test('AD3 sinceDate() matches SQLite under several process time zones (child processes, incl. DST and half-hour offsets)', () => {
+  const script = `
+    import Database from 'better-sqlite3'
+    import { sinceDate } from './server/lib/dashboard-sql.js'
+    const db = new Database(':memory:'); const bad = []
+    for (const iso of ['2026-03-08T06:59:59.000Z','2026-03-08T07:00:01.000Z','2026-11-01T05:59:59.000Z','2026-11-01T06:00:01.000Z','2026-10-24T18:29:59.000Z','2026-10-24T18:30:01.000Z','2026-01-01T00:00:00.000Z']) {
+      for (const w of [0, 1, 30, 90, 1.5]) {
+        const want = db.prepare("SELECT date(?, 'localtime', '-' || ? || ' day') d").get(iso.replace('T',' ').replace('Z',''), String(w)).d
+        const got = sinceDate(w, new Date(iso))
+        if (got !== want) bad.push([process.env.TZ, iso, w, got, want])
+      }
+    }
+    console.log(JSON.stringify(bad))`
+  for (const tz of ['UTC', 'Asia/Shanghai', 'America/Los_Angeles', 'Asia/Kolkata', 'Pacific/Auckland', 'Pacific/Kiritimati']) {
+    const out = execFileSync(process.execPath, ['--input-type=module', '-e', script], { cwd: ROOT, env: { PATH: process.env.PATH, TZ: tz }, encoding: 'utf8' })
+    assert.deepEqual(JSON.parse(out.trim()), [], `TZ=${tz}`)
+  }
+})
+
+/** 带边界数据的 OMS 夹具：规范格式（空格 / T 分隔 / 仅日期）、窗口边界、未来日期、NULL、空串 */
+function omsFixture(t, { migrated = true } = {}) {
+  const { db } = fixture(t)
+  if (!migrated) db.exec('DROP INDEX idx_oms_order_time')
+  db.pragma('foreign_keys=OFF')
+  db.prepare("INSERT INTO platforms (code, name) VALUES ('AD3-A', 'AD3甲'), ('AD3-B', 'AD3乙')").run()
+  const [pa, pb] = db.prepare("SELECT id FROM platforms WHERE code LIKE 'AD3-%' ORDER BY code").all().map((x) => x.id)
+  const ins = db.prepare('INSERT INTO oms_orders (platform_id, platform_order_no, order_time, status, pay_amount) VALUES (?,?,?,?,?)')
+  let n = 0
+  const add = (pf, time, status = 'completed', amt = 10.25) => ins.run(pf, `AD3-${++n}`, time, status, amt)
+  for (const days of [0, 1, 5, 29, 30, 31, 89, 90, 91, 200, -3]) {
+    const d = db.prepare(`SELECT date('now','localtime','${days < 0 ? '+' + -days : '-' + days} day') d`).get().d
+    add(pa, `${d} 00:00:00`); add(pa, `${d} 23:59:59`, 'shipped', 3.5); add(pb, `${d}T12:30:00`, 'refunded', 99); add(pb, d, 'pending', 1.1)
+    add(987654, `${d} 08:00:00`, 'completed', 7)
+  }
+  add(pa, null); add(pb, '', 'completed', 5)
+  // 非规范存储值：时区后缀（date() 按 UTC 折算，文本顺序与折算后日期差一天）、脏文本（文本序高于任何日期但 date() 为 NULL）、儒略日数字串
+  const edge = (days) => db.prepare(`SELECT date('now','localtime','-${days} day') d`).get().d
+  for (const days of [0, 29, 30, 31, 89, 90, 91]) {
+    const d = edge(days)
+    add(pa, `${d}T01:00:00+08:00`, 'completed', 4.5); add(pb, `${d}T20:00:00-08:00`, 'shipped', 6.25); add(pa, `${d}T23:30:00Z`, 'completed', 8)
+    add(pb, `${d} 12:00:00.123`, 'completed', 1.5)
+  }
+  add(pa, 'not-a-date', 'completed', 2); add(pb, 'null 00:00:00', 'completed', 3); add(pa, '2461000.5', 'completed', 4); add(pb, 'now', 'completed', 5)
+  db.pragma('foreign_keys=ON')
+  return { db, pa, pb }
+}
+
+test('AD3 trend / channel online: new range SQL returns exactly the rows of the old date(order_time) SQL, for varied windows and boundary data', (t) => {
+  const { db } = omsFixture(t)
+  for (const days of [0, 1, 7, 29, 30, 31, 90, 365, 1.5, -1, 1e9, 'abc', NaN]) {
+    const old = OLD_ONLINE(days)
+    assert.deepEqual(db.prepare(dsql.trendOnlineSql()).all(...dsql.onlineWindow(days)), db.prepare(old.trend).all(), `trend days=${days}`)
+    assert.deepEqual(db.prepare(dsql.channelOnlineSql()).all(...dsql.onlineWindow(days)), db.prepare(old.channel).all(), `channel days=${days}`)
+  }
+  const sanity = db.prepare(dsql.trendOnlineSql()).all(...dsql.onlineWindow(30))
+  assert.ok(sanity.length >= 5 && sanity.every((r) => r.date), 'fixture actually exercises the window')
+  // 边界：窗口起点当天 00:00:00 计入，前一天 23:59:59 不计
+  const from = dsql.sinceDate(30)
+  const dates = db.prepare(dsql.trendOnlineSql()).all(...dsql.onlineWindow(30)).map((r) => r.date)
+  assert.equal(dates[0], from)
+})
+
+test('AD3 onlineWindow(): [lo, since] with lo = since - 1 day; NULL/empty semantics preserved for invalid windows', () => {
+  const now = new Date('2026-10-24T08:00:00.000Z')
+  const [lo, since] = dsql.onlineWindow(30, now)
+  assert.equal(since, dsql.sinceDate(30, now))
+  assert.equal(lo, dsql.sinceDate(31, now))
+  assert.ok(lo < since)
+  assert.deepEqual(dsql.onlineWindow('abc', now), [null, null])
+  assert.deepEqual(dsql.onlineWindow(-1, now), [null, null])
+  assert.deepEqual(dsql.onlineWindow(NaN, now), [null, null])
+})
+
+test('AD3 sales / purchase trend SQL moved into dashboard-sql.js is textually the old SQL and returns the same rows', (t) => {
+  const { db } = fixture(t)
+  for (const days of [7, 30, 90]) {
+    assert.equal(dsql.trendSalesSql(days), OLD_TREND(days).sales)
+    assert.equal(dsql.trendPurchaseSql(days), OLD_TREND(days).purchase)
+  }
+})
+
+test('AD3 explain-audit: trend + channel online use idx_oms_order_time (SEARCH, no SCAN); channel_online exemption is gone; dropping the index turns the guard red', (t) => {
+  const { db } = omsFixture(t)
+  const ids = ['dash.trend_sales', 'dash.trend_purchase', 'dash.trend_online', 'dash.channel_online']
+  const byId = new Map(STATEMENTS.map((s) => [s.id, s]))
+  for (const id of ids) assert.ok(byId.get(id), `${id} registered`)
+  assert.equal(byId.get('dash.trend_sales').sql, dsql.trendSalesSql(30))
+  assert.equal(byId.get('dash.trend_purchase').sql, dsql.trendPurchaseSql(30))
+  assert.equal(byId.get('dash.trend_online').sql, dsql.trendOnlineSql())
+  assert.deepEqual(byId.get('dash.trend_online').params, dsql.onlineWindow(30))
+  assert.equal(byId.get('dash.trend_online').expectIndex, 'idx_oms_order_time')
+  assert.equal(byId.get('dash.channel_online').sql, dsql.channelOnlineSql())
+  assert.deepEqual(byId.get('dash.channel_online').params, dsql.onlineWindow(90))
+  assert.equal(byId.get('dash.channel_online').expectIndex, 'idx_oms_order_time')
+  assert.ok(!ALLOW.some((a) => a.statement === 'dash.channel_online'), 'no exemption left for channel_online')
+  const rep = auditStatements(db, ids.map((i) => byId.get(i)), { allow: ALLOW.filter((a) => ids.includes(a.statement)), threshold: 1 })
+  assert.deepEqual(rep.violations, [])
+  const planOf = (id) => rep.statements.find((s) => s.id === id).plan
+  for (const id of ['dash.trend_online', 'dash.channel_online']) {
+    assert.ok(planOf(id).some((d) => /SEARCH \w+ USING COVERING INDEX idx_oms_order_time \(order_time>\?\)/.test(d)), `${id}: covering range search on the new index: ${planOf(id).join(' | ')}`)
+    assert.ok(!planOf(id).some((d) => /^SCAN (o|oms_orders)\b/.test(d)), `${id}: no table scan of oms_orders`)
+  }
+  // 变异：没有迁移 070 的库（threshold 压到 1 行，夹具表很小）→ 守卫红
+  db.exec('DROP INDEX idx_oms_order_time')
+  const bad = auditStatements(db, ids.map((i) => byId.get(i)), { allow: [], threshold: 1 })
+  assert.equal(bad.ok, false)
+  for (const id of ['dash.trend_online', 'dash.channel_online']) assert.ok(bad.violations.some((v) => v.statement === id && /idx_oms_order_time/.test(v.reason || '') || (v.statement === id && /SCAN/.test(v.detail))), `${id} flagged without the index`)
+})
+
+test('AD3 routes: /trend and /channel (HTTP) equal the old SQL on the seeded instance; trend body unchanged in shape', { timeout: 300000 }, async (t) => {
+  const f = await server(t, { GML_PROFILE: '1' })
+  const db = f.db
+  db.pragma('foreign_keys=OFF')
+  const pf = Number(db.prepare("INSERT INTO platforms (code, name) VALUES ('AD3-R', 'AD3路由')").run().lastInsertRowid)
+  const io = db.prepare("INSERT INTO oms_orders (platform_id, platform_order_no, order_time, status, pay_amount) VALUES (?,?,datetime('now','localtime',?),?,?)")
+  io.run(pf, 'AD3-R1', '-1 day', 'pending', 100.5); io.run(pf, 'AD3-R2', '-29 day', 'shipped', 200); io.run(pf, 'AD3-R3', '-100 day', 'shipped', 999)
+  io.run(pf, 'AD3-R4', '-2 day', 'refunded', 77); io.run(pf, 'AD3-R5', '-45 day', 'completed', 5)
+  db.pragma('foreign_keys=ON')
+  for (const days of [30, 90, 7]) {
+    const tr = (await f.api(`/api/dashboard/trend?days=${days}`)).body.data
+    const old = OLD_ONLINE(days).trend
+    const expectOnline = Object.fromEntries(db.prepare(old).all().map((x) => [x.date, Number(x.amount.toFixed(2))]))
+    for (const row of tr) assert.equal(row.online, expectOnline[row.date] ?? 0, `${days}d ${row.date}`)
+    assert.deepEqual(Object.keys(expectOnline).filter((d) => !tr.some((r) => r.date === d)), [], 'every old online date is present')
+    const ch = (await f.api(`/api/dashboard/channel?days=${days}`)).body.data
+    assert.deepEqual(ch.online, db.prepare(OLD_ONLINE(days).channel).all(), `channel ${days}d`)
+  }
+  const tr30 = (await f.api('/api/dashboard/trend?days=30')).body.data
+  assert.ok(tr30.some((r) => r.online > 0))
+  assert.deepEqual(Object.keys(tr30[0]), ['date', 'offline', 'online', 'purchase', 'orders', 'total'])
+  const route = readFileSync(new URL('../server/routes/dashboard.js', import.meta.url), 'utf8')
+  assert.ok(!/date\(o?\.?order_time\)\s*>=/.test(route), 'route inlines no oms date() predicate')
 })
