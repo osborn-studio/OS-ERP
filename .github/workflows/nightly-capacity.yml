@@ -32,6 +32,12 @@ on:
         options:
           - 'false'
           - 'true'
+      # AB5: optional string, default empty (= off). Only used together with rehearsal=true.
+      snapshot_upto:
+        description: With rehearsal=true, rehearse a genuinely old-structure database instead of the pipeline database - a migration number N (for example 58) builds a version-N backup set with synthetic data at the chosen scale, then replays N+1 onward
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: read
@@ -118,14 +124,36 @@ jobs:
           exit "$rc"
       # AA11 (optional, default off): replay migrations > 058 one by one on a copy of the pipeline's synthetic database and print
       # per-migration timings (fixed-format lines only, no paths). It never changes the gate: a failure here is a warning, not a red job.
+      # AB5: with snapshot_upto=N the step first builds a version-N backup set (scripts/schema-snapshot.mjs: schema.sql + migrations <= N,
+      # synthetic data at the chosen scale; large uses medium) and rehearses that instead; the value is validated as 1-3 digits and never interpolated.
       - name: Upgrade rehearsal (optional, off by default)
         id: rehearsal
         if: inputs.rehearsal == 'true' && steps.pipeline.outcome == 'success'
         continue-on-error: true
+        env:
+          SNAPSHOT_UPTO_INPUT: ${{ inputs.snapshot_upto }}
         run: |
           set -uo pipefail
-          node scripts/upgrade-rehearsal.mjs --from=58 --synth-dir="$CAP_RUN/data" --target-dir="$CAP_RUN/upgrade-rehearsal" > "$CAP_REPORTS/rehearsal.log" 2>&1
-          rc=$?
+          snap="${SNAPSHOT_UPTO_INPUT:-}"
+          if [ -z "$snap" ]; then
+            node scripts/upgrade-rehearsal.mjs --from=58 --synth-dir="$CAP_RUN/data" --target-dir="$CAP_RUN/upgrade-rehearsal" > "$CAP_REPORTS/rehearsal.log" 2>&1
+            rc=$?
+          else
+            case "$snap" in
+              [0-9]|[0-9][0-9]|[0-9][0-9][0-9]) ;;
+              *) echo '::error::snapshot_upto must be a migration number'; exit 1 ;;
+            esac
+            case "$CAP_SCALE" in small) profile=small ;; *) profile=medium ;; esac
+            node scripts/schema-snapshot.mjs --upto="$snap" --synth="$profile" --out="$CAP_RUN/snapshot" > "$CAP_REPORTS/snapshot.log" 2>&1
+            rc=$?
+            if [ "$rc" -eq 0 ]; then
+              node scripts/upgrade-rehearsal.mjs --from="$snap" --backup-dir="$CAP_RUN/snapshot/data/backups" --target-dir="$CAP_RUN/upgrade-rehearsal" > "$CAP_REPORTS/rehearsal.log" 2>&1
+              rc=$?
+            else
+              echo "::warning::schema snapshot exited with code $rc (raw output withheld)"
+              : > "$CAP_REPORTS/rehearsal.log"
+            fi
+          fi
           grep -E '^    [0-9]{3}_[A-Za-z0-9_.-]+ +(ok|failed|unexpected|pending) ' "$CAP_REPORTS/rehearsal.log" || true
           [ "$rc" -eq 0 ] || echo "::warning::upgrade rehearsal exited with code $rc (raw output withheld)"
           exit "$rc"
