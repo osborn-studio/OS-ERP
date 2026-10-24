@@ -155,6 +155,10 @@ workflow file on the ref, so the job cannot be dispatched on `main` until it is 
 id, and no hosted-candidate result is recorded here. After the merge, dispatch it once (`gh workflow run ci.yml --ref main`),
 poll with `gh run view <id>`, and record run id, conclusion, duration and the three uploaded files; the first run is unverified.
 
+**Status (AF8, 2026-10-24): still not run; no run is recorded.** `main` (commit `a524d3b`) still has only `checks`, `docker` and
+`regression` in `ci.yml` (no `candidate`, `capacity-smoke`, `dependency-review` or `audit-no-fts5`) and no `nightly-capacity.yml`.
+PRs #1 to #3 are merged; #4 to #9 are open and unmerged; `gh` cannot find a PR #10. Dispatched 0 times; no run id exists.
+
 ## RELEASE-NOTES.md
 
 The `CHANGELOG.md` section whose heading contains the version, else the newest batch section (stated in the notes),
