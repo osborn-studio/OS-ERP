@@ -2,7 +2,7 @@
 
 # 角色 × 单据类型可见性矩阵
 
-内置角色 10 个 × 单据类型 40 类。每个格子都是对真实门禁函数求值的结果（见 `scripts/gen-role-matrix.mjs` 文件头），不是手写结论。描述的是"该角色的默认账号"：数据范围取角色默认值、放在某个组织里、未绑定门店 / 经销商；单个账号的 `data_scope` 覆盖、多角色叠加与自定义角色不在内。这是开发阶段的文档，不是验收或上线声明。
+内置角色 10 个 × 单据类型 40 类。每个格子都是对真实门禁函数求值的结果（见 `scripts/gen-role-matrix.mjs` 文件头），不是手写结论。描述的是"该角色的默认账号"：数据范围取角色默认值、放在某个组织里、未绑定门店 / 经销商；单个账号的 `data_scope` 覆盖、多角色叠加与自定义角色不在本文件内（后三者见接口管理员出口与 `--json --db=`，只含计数）。这是开发阶段的文档，不是验收或上线声明。
 
 ## 一、单据流转读接口（HTTP `/api/docflow/*`）
 
@@ -166,3 +166,51 @@ docflow 读接口只按数据范围与总部豁免收口，不按查看权限点
 | `dealer` | 经销商 | dealer | 9 | 否 | 否 | 否 |
 | `viewer` | 访客 | all | 28 | 否 | 否 | 否 |
 | `scm` | 供应链主管 | all | 56 | 是 | 否 | 是 |
+
+## 五、可见度五档（`GET /api/meta/role-matrix` 同一份计算）
+
+`server/lib/role-matrix.js` 的 `buildRoleMatrix` 对每个内置角色推演的五档可见度（接口与本脚本共用，管理员出口另含自定义角色，自定义角色只出现在 `--json --db=<库>` 的 `tenant` 字段）。
+`full` 全部｜`scoped` 按范围｜`bound` 须绑定｜`global_only` 仅全局｜`-` 无。
+
+| 单据 | `admin` | `boss` | `scm` | `purchase` | `sales` | `warehouse` | `finance` | `store` | `dealer` | `viewer` |
+|---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
+| `PO` 采购订单 | full | scoped | scoped | scoped | - | scoped | scoped | - | - | scoped |
+| `GR` 采购到货单 | full | scoped | scoped | scoped | - | scoped | scoped | - | - | scoped |
+| `PRT` 采购退货单 | full | scoped | scoped | scoped | - | scoped | scoped | - | - | scoped |
+| `PRQ` 请购单 | full | scoped | scoped | scoped | - | scoped | scoped | - | - | scoped |
+| `PI` 采购发票 | full | scoped | scoped | scoped | - | scoped | scoped | - | - | scoped |
+| `PST` 采购结算单 | full | scoped | scoped | scoped | - | scoped | scoped | - | - | scoped |
+| `PAY` 付款单 | full | scoped | scoped | scoped | - | scoped | scoped | - | - | scoped |
+| `INS` 采购质检单 | full | scoped | scoped | scoped | - | scoped | - | - | - | scoped |
+| `QT` 销售报价单 | full | scoped | scoped | - | scoped | scoped | scoped | - | - | scoped |
+| `SO` 销售订单 | full | scoped | scoped | - | scoped | scoped | scoped | - | - | scoped |
+| `DL` 销售发货单 | full | scoped | scoped | - | scoped | scoped | scoped | - | - | scoped |
+| `SR` 销售退货单 | full | scoped | scoped | - | scoped | scoped | scoped | - | - | scoped |
+| `SI` 销售发票 | full | scoped | scoped | - | scoped | - | scoped | - | - | scoped |
+| `QCR` 报检单 | full | scoped | scoped | - | - | scoped | - | - | - | scoped |
+| `QCI` 检验单 | full | scoped | scoped | - | - | scoped | - | - | - | scoped |
+| `DH` 不良品处理单 | full | scoped | scoped | - | - | scoped | - | - | - | scoped |
+| `TF` 库存调拨单 | full | scoped | scoped | scoped | scoped | scoped | scoped | - | - | scoped |
+| `CK` 库存盘点单 | full | scoped | scoped | scoped | scoped | scoped | scoped | - | - | scoped |
+| `AS` 组装拆卸单 | full | scoped | scoped | scoped | scoped | scoped | scoped | - | - | scoped |
+| `CA` 存货成本调整单 | full | global_only | global_only | - | - | global_only | global_only | - | - | global_only |
+| `AR` 应收单 | full | global_only | - | - | global_only | - | global_only | - | - | global_only |
+| `YQ` 门店要货单 | full | - | - | - | - | - | - | bound | - | - |
+| `RCP` 收款单 | full | global_only | - | - | global_only | - | global_only | - | - | global_only |
+| `SH` 门店发货单 | full | - | - | - | - | - | - | bound | - | - |
+| `VOUCHER` 记账凭证 | full | global_only | - | global_only | global_only | - | global_only | - | - | global_only |
+| `RFD` 退款单 | full | global_only | - | - | global_only | - | global_only | - | - | global_only |
+| `MO` 生产订单 | full | scoped | scoped | scoped | - | scoped | - | - | - | scoped |
+| `WW` 委外订单 | full | - | scoped | scoped | - | scoped | - | - | - | - |
+| `WM` 委外发料单 | full | - | scoped | scoped | - | scoped | - | - | - | - |
+| `WR` 委外收货单 | full | - | scoped | scoped | - | scoped | - | - | - | - |
+| `MR` 生产领料单 | full | scoped | scoped | scoped | - | scoped | - | - | - | scoped |
+| `OM` 商城订单 | full | global_only | - | - | - | - | global_only | - | - | global_only |
+| `PS` 门店零售单 | full | - | - | - | - | - | - | bound | - | - |
+| `PSF` 收银交班单 | full | - | - | - | - | - | - | bound | - | - |
+| `RC` 门店日结单 | full | - | - | - | - | - | - | bound | - | - |
+| `DR` 经销商要货单 | full | scoped | scoped | - | scoped | - | - | - | - | bound |
+| `DS` 经销商对账单 | full | scoped | scoped | - | scoped | - | - | - | - | scoped |
+| `RB` 经销商返利单 | full | scoped | scoped | - | scoped | - | - | - | - | scoped |
+| `OC` 订货单 | full | scoped | scoped | scoped | scoped | scoped | scoped | bound | bound | - |
+| `OCS` 订货对账单 | full | scoped | scoped | - | scoped | - | scoped | bound | bound | - |
