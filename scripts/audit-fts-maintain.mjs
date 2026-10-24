@@ -20,7 +20,7 @@
  *   · `--busy-ms`（默认 5000，0..300000）：等写锁的上限；拿不到则 status=busy、退出 1，索引不被改动（事务未开始）。
  *
  * 【AF4 并发】两个维护动作（或维护脚本与启动自愈）重叠时：都用 `BEGIN IMMEDIATE` 取写锁（BUSY / BUSY_SNAPSHOT 有上限地重试，总等待不超过 `--busy-ms`），
- *   拿到锁后**重读**设置与对象；状态已与目标一致 → 什么都不做（报告 `already_in_state: true`、`changed_objects`/`setting_changed` 为 false，退出 0）。
+ *   拿到锁后**重读**设置与对象（`--busy-ms` 是「取写锁」阶段的总预算，重试的退避不超出它；提交阶段另算一份同样的预算）；状态已与目标一致 → 什么都不做（报告 `already_in_state: true`、`changed_objects`/`setting_changed` 为 false，退出 0）。
  *   测试暂停点 `GML_TEST_FTS_MAINTAIN_PAUSE=<目录>`（仅 `GML_RUNTIME_MODE=test`）在"已读状态、未开事务"处暂停，见 `server/lib/test-pause.js`。
  *
  * 【诚实边界】持锁探针是**写入者**视角（WAL 下读者不被挡）；`max_blocked_ms` 近似上界、`max_busy_span_ms` 下界，见 lock-probe.mjs。
@@ -166,11 +166,12 @@ try {
             else { const had = exists(db, 'table', FTS); m071.enableFts(db); report.changed_objects = !had }
             const w = writeSetting(db, { key: 'audit_fts_enabled', value: want, reason: args.reason.trim(), actor, source: 'script' })
             report.setting_changed = w.changed
+            db.pragma(`busy_timeout = ${busyMs}`) // 提交阶段单独一份 --busy-ms 预算（回填耗时不应让提交以 0 超时失败）
             db.exec('COMMIT')
             break
           } catch (e) {
             try { db.exec('ROLLBACK') } catch { /* 没有打开的事务 */ }
-            if (isBusy(e) && attempt < MAX_ATTEMPTS && Date.now() < deadline) { await delay(Math.min(25 * 2 ** (attempt - 1), 200)); continue }
+            if (isBusy(e) && attempt < MAX_ATTEMPTS && Date.now() < deadline) { await delay(Math.min(25 * 2 ** (attempt - 1), 200, Math.max(0, deadline - Date.now()))); continue }
             throw e
           }
         }

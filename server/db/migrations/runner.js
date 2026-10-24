@@ -179,7 +179,7 @@ export function runMigrations(db, { log, warn = (m) => console.warn(m), migratio
       // AF4：上面的 verify 是锁外的陈旧读。维护脚本（--enable/--disable）可能恰在此刻提交——旧实现的延迟事务先读设置再写，会得到
       // SQLITE_BUSY_SNAPSHOT（busy_timeout 解决不了陈旧快照）。现在：BEGIN IMMEDIATE 先取写锁（遇 BUSY/BUSY_SNAPSHOT 有上限地重试），
       // 在锁内**重读**状态——已收敛（verify 为真）则什么都不做，否则按此刻的设置重跑 up。
-      testPause('GML_TEST_MIGRATE_HEAL_PAUSE', 'migrate-heal', { env: { ...process.env, GML_RUNTIME_MODE: mode } })
+      testPause('GML_TEST_MIGRATE_HEAL_PAUSE', 'migrate-heal') // 守卫看真实进程环境 GML_RUNTIME_MODE，不看 mode 选项（Codex 复核）
       const didHeal = withWriteRetry(db, () => {
         let stillBad = true
         try { stillBad = verify(db) !== true } catch { stillBad = true }
