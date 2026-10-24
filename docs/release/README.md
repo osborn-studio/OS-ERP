@@ -129,7 +129,7 @@ append). It creates no tag, no GitHub Release, and does not commit the log line 
 skipped job as a passing status context for the SHA, which could stand in for checks that never ran). A `v*` tag push now starts only
 `release-candidate.yml`; pull requests and pushes to `main` run `ci.yml` exactly as before, so the checks branch protection requires keep
 their normal meaning. Still tag only commits that have already passed `ci.yml` on `main`. `--ci-run=auto` accepts only a `ci.yml` run
-with `event` `pull_request` or `push` (on a non-`v*` branch), `conclusion: success` and `headSha` equal to the commit; `workflow_dispatch` runs,
+with `event` `pull_request`, or `push` on `main` (the only branch `ci.yml` pushes run on), `conclusion: success` and `headSha` equal to the commit; `workflow_dispatch` runs,
 legacy `v*` tag-push runs from before AF1 and runs for other commits are ignored. Because no successful `ci.yml` run
 exists for a tagged commit in that case, `--ci-run=auto` falls back (hosted CI only, `GITHUB_ACTIONS=true` and a numeric `GITHUB_RUN_ID`
 for this commit) to recording the current run with `ci_lookup.ci_run_origin: "hosted-ci-self"` and a `SELF-REFERENTIAL` note. That run

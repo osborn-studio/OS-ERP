@@ -463,12 +463,12 @@ test('AF1: resolveCiRun accepts only ci.yml pull_request/push runs; dispatch run
   const run = (id, event, headBranch) => ({ databaseId: id, conclusion: 'success', status: 'completed', headSha: HEAD40, createdAt: `2026-01-0${id - 200}T00:00:00Z`, event, headBranch })
   const r = resolveCiRun(HEAD40, { gh: fakeGh(t, { stdout: JSON.stringify([run(206, 'workflow_dispatch', 'main'), run(205, 'schedule', 'main'), run(204, 'push', 'v1.2.3'), run(203, 'push', 'main'), run(202, 'pull_request', 'feat/x')]) }).file })
   assert.equal(r.id, '203')
-  const pr = resolveCiRun(HEAD40, { gh: fakeGh(t, { stdout: JSON.stringify([run(204, 'push', 'v1.2.3'), run(202, 'pull_request', 'feat/x')]) }).file })
+  const pr = resolveCiRun(HEAD40, { gh: fakeGh(t, { stdout: JSON.stringify([run(204, 'push', 'v1.2.3'), run(203, 'push', 'vnext'), run(202, 'pull_request', 'v2-fix')]) }).file })
   assert.equal(pr.id, '202')
-  for (const bad of [run(204, 'push', 'v1.2.3'), run(206, 'workflow_dispatch', 'main'), { databaseId: 207, conclusion: 'success', status: 'completed', headSha: HEAD40, createdAt: '2026-01-07T00:00:00Z' }]) {
+  for (const bad of [run(204, 'push', 'v1.2.3'), run(208, 'push', 'vnext'), run(209, 'push', 'feat/x'), run(206, 'workflow_dispatch', 'main'), { databaseId: 207, conclusion: 'success', status: 'completed', headSha: HEAD40, createdAt: '2026-01-07T00:00:00Z' }]) {
     const only = resolveCiRun(HEAD40, { gh: fakeGh(t, { stdout: JSON.stringify([bad]) }).file })
     assert.equal(only.id, null)
-    assert.match(only.lookup.reason, /none with conclusion success on a pull_request or push event/)
+    assert.match(only.lookup.reason, /none with conclusion success on a pull_request or main push event/)
   }
 })
 
