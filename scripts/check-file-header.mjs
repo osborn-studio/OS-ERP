@@ -40,6 +40,7 @@ const DECLARED = [
   'server/db/migrations/068_audit_hash_chain.cjs',
   'scripts/audit-verify-chain.mjs',
   'scripts/audit-archive.mjs',
+  'scripts/gen-role-matrix.mjs',
   'scripts/lib/audit-chain-cli.mjs',
   'tests/audit-chain.test.mjs',
   'server/lib/logger.js',

@@ -56,6 +56,6 @@
 | 0048 | [ADR-0048：旧结构快照备份集与免截断的升级演练（AB5）](ADR-0048-schema-snapshot-rehearsal.md) | 第十一批（进行中） | 开发实现，尚非产品上线验收 | `schema-snapshot.mjs` | — |
 | 0049 | [ADR-0049 审计日志防篡改哈希链与归档（AB6）](ADR-0049-audit-hash-chain.md) | 第十一批（进行中） | 开发实现，尚非产品上线验收 | `audit-archive.mjs`<br>`audit-verify-chain.mjs`<br>`lib/audit-chain-cli.mjs`<br>`lib/privacy-common.mjs`<br>`retention.mjs` | — |
 | 0050 | [ADR-0050：MCP 采购订单读工具与剩余聚合读口和 HTTP 范围对齐（AC1）](ADR-0050-mcp-purchase-scope-parity.md) | 第十二批（进行中） | 开发实现，尚非产品上线验收 | — | — |
-| 0051 | [ADR-0051 总部角色名单单点与 docflow 严格门店绑定（AC2）](ADR-0051-hq-roles-docflow-binding.md) | 第十二批（进行中） | 开发实现，尚非产品上线验收 | `test-setting-audit.mjs` | — |
+| 0051 | [ADR-0051 总部角色名单单点与 docflow 严格门店绑定（AC2）](ADR-0051-hq-roles-docflow-binding.md) | 第十二批（进行中） | 开发实现，尚非产品上线验收 | `gen-role-matrix.mjs`<br>`test-setting-audit.mjs` | — |
 | 0052 | [ADR-0052：发行证据透明日志与 CI 签名口径（AC6）](ADR-0052-evidence-transparency-log.md) | 第十二批（进行中） | 开发实现，尚非产品上线验收 | `lib/evidence-log.mjs` | — |
 | 0053 | [ADR-0053：指标接口按范围收口，`report.dashboard_kpi` 与 dealer summary 补功能权限（AD1）](ADR-0053-metrics-scope-and-kpi-permissions.md) | 第十三批（进行中） | 开发实现，尚非产品上线验收 | `test-metrics.mjs` | — |
