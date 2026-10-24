@@ -96,3 +96,67 @@ test('committed allowlist is structurally valid (expiry is time-dependent, so on
   const { errors } = validateAllowlist(doc, new Date('2026-10-24T00:00:00Z'))
   assert.deepEqual(errors, [])
 })
+
+// ---- AE7: dev-dependency mode (critical-only, separate "dev" section) ----
+const DEV = { includeDev: true }
+const devAudit = (sev = 'critical') => ({
+  auditReportVersion: 2,
+  vulnerabilities: { tw: { name: 'tw', severity: sev, via: [{ name: 'tw', severity: sev, url: `https://github.com/advisories/${ID}` }] } }
+})
+const devDoc = (over = {}, allowList = []) => ({ allow: allowList, dev: [{ advisory: ID, package: 'tw', reason, expires: '2026-12-15', ...over }] })
+
+test('dev mode: listed critical passes; high is below the dev threshold', () => {
+  assert.equal(evaluate(devAudit(), devDoc(), NOW, DEV).ok, true)
+  const r = evaluate(devAudit('high'), { allow: [], dev: [] }, NOW, DEV)
+  assert.equal(r.ok, true)
+  assert.deepEqual(r.covered, [])
+  assert.equal(evaluate(devAudit('high'), { allow: [], dev: [] }, NOW).ok, false, 'runtime mode still gates high')
+})
+
+test('dev mode: unlisted critical fails; entries in "allow" do not cover it (no cross-section bypass)', () => {
+  assert.equal(evaluate(devAudit(), { allow: [], dev: [] }, NOW, DEV).ok, false)
+  const onlyAllow = { allow: [{ advisory: ID, package: 'tw', reason, expires: '2026-12-15' }], dev: [] }
+  const r = evaluate(devAudit(), onlyAllow, NOW, DEV)
+  assert.equal(r.ok, false)
+  assert.match(r.failures[0], /not in the allowlist/)
+})
+
+test('runtime mode: entries in "dev" do not cover a runtime finding', () => {
+  const onlyDev = { allow: [], dev: [{ advisory: ID, package: 'zod', reason, expires: '2026-12-15' }] }
+  const r = evaluate(audit(), onlyDev, NOW)
+  assert.equal(r.ok, false)
+  assert.match(r.failures[0], /not in the allowlist/)
+})
+
+test('dev mode: expiry rules match runtime (expired, today, malformed, over 180 days fail)', () => {
+  for (const expires of ['2026-10-01', '2026-10-24', '2026-13-40', 'soon', '', '2027-12-31']) {
+    assert.equal(evaluate(devAudit(), devDoc({ expires }), NOW, DEV).ok, false, expires)
+  }
+  assert.equal(evaluate(devAudit(), devDoc({ expires: '2026-10-25' }), NOW, DEV).ok, true)
+  assert.equal(evaluate(devAudit(), devDoc({ reason: 'short' }), NOW, DEV).ok, false)
+  assert.equal(evaluate(devAudit(), devDoc({ package: 'other' }), NOW, DEV).ok, false)
+})
+
+test('dev mode fails closed on a missing or malformed "dev" section; malformed other section is also an error', () => {
+  assert.equal(evaluate({ auditReportVersion: 2, vulnerabilities: {} }, { allow: [] }, NOW, DEV).ok, false)
+  assert.equal(evaluate({ auditReportVersion: 2, vulnerabilities: {} }, { allow: [], dev: {} }, NOW, DEV).ok, false)
+  assert.equal(evaluate({ auditReportVersion: 2, vulnerabilities: {} }, { allow: [], dev: 'x' }, NOW).ok, false, 'runtime mode rejects malformed dev')
+  assert.equal(evaluate({ auditReportVersion: 2, vulnerabilities: {} }, { allow: [] }, NOW).ok, true, 'runtime mode tolerates a missing dev section')
+})
+
+test('dev mode: an expired entry in "allow" does not fail dev mode, and vice versa', () => {
+  const doc = { allow: [{ advisory: ID, package: 'x', reason, expires: '2026-01-01' }], dev: [{ advisory: ID, package: 'tw', reason, expires: '2026-12-15' }] }
+  assert.equal(evaluate(devAudit(), doc, NOW, DEV).ok, true)
+  assert.equal(evaluate({ auditReportVersion: 2, vulnerabilities: {} }, doc, NOW).ok, false)
+})
+
+test('dev mode: error output and orphan critical chains fail closed', () => {
+  assert.equal(evaluate({ error: { code: 'E404' } }, devDoc(), NOW, DEV).ok, false)
+  const orphan = { auditReportVersion: 2, vulnerabilities: { baz: { name: 'baz', severity: 'critical', via: ['missing'] } } }
+  assert.equal(evaluate(orphan, { allow: [], dev: [] }, NOW, DEV).ok, false)
+})
+
+test('committed allowlist has a structurally valid dev section', () => {
+  const doc = JSON.parse(fs.readFileSync(path.join(ROOT, 'docs/security/audit-allowlist.json'), 'utf8'))
+  assert.deepEqual(validateAllowlist(doc, new Date('2026-10-24T00:00:00Z'), 'dev').errors, [])
+})

@@ -455,3 +455,40 @@ jobs:
             ${{ runner.temp }}/candidate-upload/evidence-log-line.jsonl
           if-no-files-found: error
           retention-days: 14
+
+  # AE7: manual dependency review. Runs both audit modes (runtime: high+critical vs the "allow" section; dev: critical vs the
+  # "dev" section of docs/security/audit-allowlist.json), writes JSON summaries outside the checkout and uploads them as one
+  # artifact. workflow_dispatch only; read-only token; no secrets. Needs network access to registry.npmjs.org. It has not been
+  # dispatched on GitHub yet.
+  dependency-review:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+      - name: Audit runtime and dev dependencies (both modes always run; the job fails if either fails)
+        run: |
+          set -uo pipefail
+          out="$RUNNER_TEMP/dependency-review"
+          mkdir -p "$out"
+          rt=0
+          dev=0
+          node scripts/check-audit-allowlist.mjs --summary "$out/audit-runtime.json" || rt=$?
+          node scripts/check-audit-allowlist.mjs --include-dev --summary "$out/audit-dev.json" || dev=$?
+          echo "runtime exit=$rt, dev exit=$dev"
+          [ "$rt" -eq 0 ] && [ "$dev" -eq 0 ]
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: os-erp-dependency-review-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/dependency-review/audit-runtime.json
+            ${{ runner.temp }}/dependency-review/audit-dev.json
+          if-no-files-found: error
+          retention-days: 30

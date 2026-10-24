@@ -78,6 +78,7 @@ const DECLARED = [
   'scripts/check-file-header.mjs',
   'scripts/check-audit-allowlist.mjs',
   'tests/audit-allowlist.test.mjs',
+  'tests/dependency-review-policy.test.mjs',
   'scripts/db-backup.mjs',
   // 文件系统写入序列的故障注入点（AD6）
   'scripts/lib/fs-fault.mjs',
