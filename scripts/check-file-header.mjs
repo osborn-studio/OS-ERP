@@ -86,6 +86,9 @@ const DECLARED = [
   'scripts/upgrade-rehearsal.mjs',
   'scripts/lib/lock-probe.mjs',
   'tests/upgrade-rehearsal.test.mjs',
+  // 旧结构快照备份集（AB5 / ADR-0048）
+  'scripts/schema-snapshot.mjs',
+  'tests/schema-snapshot.test.mjs',
   'src/App.tsx',
   'src/api/client.ts',
   'src/components/Layout.tsx',

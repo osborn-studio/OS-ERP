@@ -7,7 +7,7 @@
  *   1. 输入二选一：`--backup-dir`（db-backup 备份集，缺省最新，`--stamp` 指定）或 `--synth-dir`（synth-data.mjs 造的合成库目录，
  *      必须带合成指纹 org=SYNTHCO；会先复制再用 db-backup.mjs 备份成备份集，之后与真实备份集走同一条路径）。
  *   2. 在 `--target-dir`（显式绝对路径、空目录）里 sha256 核对并恢复一份工作副本。源备份 / 源目录永不改动。
- *   3. **基线截断**（见下）：把版本表 `schema_migrations` 中编号 > N 的行删掉，并（缺省）删除这些迁移在仓库里创建的索引，
+ *   3. **基线截断**（见下；版本表最高编号恰等于 N 的库——`scripts/schema-snapshot.mjs --upto N` 产出的"版本 N 备份集"——不截断、不删索引，报告 `baseline_registry.truncation='skipped'`）：把版本表 `schema_migrations` 中编号 > N 的行删掉，并（缺省）删除这些迁移在仓库里创建的索引，
  *      使后续迁移**真的**重新应用而不是对现成结构做空转。
  *   4. 在一个**暂存迁移目录**里逐个加入编号 > N 的迁移文件（字节级复制，校验和不变），每加一个就以生产模式调用一次
  *      `runMigrations(db, { migrationsDir: 暂存目录, mode: 'production' })`，记录该步耗时；同时在 worker 线程里用另一个连接
@@ -32,7 +32,7 @@
  *   · 诚实边界：被截断的迁移里，**表/列/数据变更类**的结构在副本里原本就存在（来自当前代码生成的合成库或新备份），所以它们的 up() 是
  *     对现成结构的幂等重放，耗时偏低。每步的 `structure_preexisting`（重放前该迁移 verify() 的结果）如实标明：false = 真正新建，
  *     true = 空转重放，null = 迁移没有 verify。**只有 structure_preexisting=false 的步骤耗时才代表真实升级成本**；
- *     若要演练真正的旧库，应拿旧版本代码产出的备份集（它的版本表本来就缺这些行），此时 `--from` 取其最高已应用编号。
+ *     若要演练真正的旧库，应拿 `scripts/schema-snapshot.mjs` 产出的版本 N 备份集（ADR-0048）或旧版本代码产出的备份集（它的版本表本来就缺这些行），此时 `--from` 取其最高已应用编号。
  *
  * 【耗时与锁时间的口径】`duration_ms` = 一次 `runMigrations` 调用的墙钟（含对暂存目录的校验和核对与对已登记迁移的 verify()）；
  *   `overhead_ms` = 紧接着再调用一次（此时是空操作）的墙钟；`net_ms = max(0, duration_ms - overhead_ms)` 近似该迁移 up() + 登记 + 提交。
@@ -216,7 +216,7 @@ function openWork(file, workDir) {
 async function rehearseDb(r, ctx) {
   const dbr = {
     code: r.code, db_file: path.basename(r.restored_as), size_bytes_before: fs.statSync(r.restored_as).size, size_bytes_after: null,
-    pre: null, registry_truncated: [], indexes_dropped: [], steps: [], invariants: [], failures: [], warnings: [], passed: false, timing: {}
+    pre: null, baseline_registry: null, registry_truncated: [], indexes_dropped: [], steps: [], invariants: [], failures: [], warnings: [], passed: false, timing: {}
   }
   const fail = (name, detail) => { dbr.failures.push(`${name}: ${detail}`); dbr.invariants.push({ name, passed: false, detail }) }
   const ok = (name, detail) => dbr.invariants.push({ name, passed: true, detail })
@@ -242,7 +242,11 @@ async function rehearseDb(r, ctx) {
     if (preCheck.missing.length) { fail('PRE_UPGRADE_REGISTRY_FILE_MISSING', `版本表登记了但当前仓库没有对应迁移文件：${preCheck.missing.join(', ')}（无法核对其校验和；截断会把它们的历史一并抹掉）`); return dbr }
     if (preCheck.unrecorded.length) dbr.warnings.push(`无校验和的旧登记行（运行器会按当前文件收养）：${preCheck.unrecorded.join(', ')}`)
 
-    // ---- 基线截断 ----
+    // ---- 基线截断（AB5）：版本表最高编号恰为 N ＝ 这就是 N 版本的库（schema-snapshot.mjs 产出的备份集），没有可截断的行，
+    //      也不删索引——结构本来就是旧的。最高编号 > N 才是"最新结构的库"，走下面的截断路径。校验和核对（上面的 preCheck）两条路径都照常执行。----
+    const regMax = before.migrations.reduce((m, x) => Math.max(m, numOf(x.id)), 0)
+    const atBaseline = regMax === ctx.from
+    dbr.baseline_registry = { max: regMax, truncation: atBaseline ? 'skipped' : 'applied' }
     const dropRows = before.migrations.filter((m) => numOf(m.id) > ctx.from)
     for (const m of dropRows) {
       const file = path.join(MIGRATIONS_DIR, `${m.id}.cjs`)
@@ -253,7 +257,7 @@ async function rehearseDb(r, ctx) {
       const del = db.prepare('DELETE FROM schema_migrations WHERE id=?')
       for (const m of dropRows) del.run(m.id)
     })()
-    if (!ctx.keepIndexes) {
+    if (!ctx.keepIndexes && !atBaseline) {
       const present = new Set(db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND sql IS NOT NULL").all().map((x) => x.name))
       const toDrop = [...ctx.postBaselineIndexes].filter((n) => present.has(n)).sort()
       db.transaction(() => { for (const n of toDrop) db.exec(`DROP INDEX IF EXISTS "${n.replace(/"/g, '""')}"`) })()
@@ -282,7 +286,16 @@ async function rehearseDb(r, ctx) {
       const ts = performance.now()
       let res = null
       let err = null
-      try { res = runMigrations(db, { migrationsDir: stage, mode: 'production', warn: (m) => dbr.warnings.push(m) }) } catch (e) { err = e }
+      // 写锁探针（另一个连接的 BEGIN IMMEDIATE; COMMIT）可能恰好在运行器的延迟事务"先读后写"之间提交，SQLite 在 WAL 下对这种
+      // 快照过期的升级写直接返回 SQLITE_BUSY（不等 busy_timeout）。迁移是单事务，失败已整体回滚，所以重试安全；最多 3 次，次数记在 rec.busy_retries，
+      // 任何非 BUSY 错误、或 3 次都 BUSY，照常判失败。
+      rec.busy_retries = 0
+      for (let attempt = 0; attempt < 3; attempt++) {
+        err = null
+        try { res = runMigrations(db, { migrationsDir: stage, mode: 'production', warn: (m) => dbr.warnings.push(m) }); break } catch (e) { err = e }
+        if (!(err && (/^SQLITE_BUSY/.test(String(err.code)) || /database is locked/.test(String(err.message))))) break
+        rec.busy_retries += 1
+      }
       rec.duration_ms = round1(performance.now() - ts)
       rec.lock = await probe.stop()
       if (err) {
@@ -592,7 +605,7 @@ if (exitCode === EXIT_USAGE) {
 
 const file = target ? writeReport(target, 'upgrade-rehearsal', report) : null
 for (const d of report.databases) {
-  console.log(`  [${d.code}] ${d.db_file} ${Math.round(d.size_bytes_before / 1048576)}MB → ${d.size_bytes_after != null ? Math.round(d.size_bytes_after / 1048576) : '-'}MB，删除登记行 ${d.registry_truncated.length}、删除索引 ${d.indexes_dropped.length}`)
+  console.log(`  [${d.code}] ${d.db_file} ${Math.round(d.size_bytes_before / 1048576)}MB → ${d.size_bytes_after != null ? Math.round(d.size_bytes_after / 1048576) : '-'}MB，${d.baseline_registry?.truncation === 'skipped' ? `版本表已在基线 ${d.baseline_registry.max}（免截断）` : `删除登记行 ${d.registry_truncated.length}、删除索引 ${d.indexes_dropped.length}`}`)
   for (const s of d.steps) console.log(`    ${s.id.padEnd(34)} ${String(s.status).padEnd(6)} ${String(s.duration_ms).padStart(9)}ms (净 ${s.net_ms}ms)  写锁 ${s.lock?.max_busy_span_ms ?? '-'}–${s.lock?.max_blocked_ms ?? '-'}ms  结构原本存在=${s.structure_preexisting}`)
   for (const i of d.invariants) console.log(`    ${i.passed ? '✓' : '✗'} ${i.name} — ${i.detail}`)
 }

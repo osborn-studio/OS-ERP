@@ -242,7 +242,7 @@
 | `exportSql` | fn | — | — | — |
 | `ftsAvailable` | fn | — | — | — |
 | `ftsPhrase` | fn | — | — | — |
-| `keywordUsesFts` | fn | — | — | — |
+| `keywordUsesFts` | fn | GET /api/meta/audit-logs<br>GET /api/meta/audit-logs/export.csv | — | — |
 | `orderOf` | fn | GET /api/meta/audit-logs<br>GET /api/meta/audit-logs/export.csv | — | — |
 | `parseFilters` | fn | GET /api/meta/audit-logs<br>GET /api/meta/audit-logs/export.csv | — | — |
 | `redactDetail` | fn | — | — | — |

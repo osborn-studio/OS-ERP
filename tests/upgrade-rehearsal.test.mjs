@@ -91,6 +91,8 @@ test('replays 059+ one by one on an isolated copy: per-migration timing, lock pr
     assert.equal(db0.steps.find((s) => s.id === id).structure_preexisting, false, id)
   }
   // The registry rows that were truncated recorded the same checksums as today's files (nothing hidden by truncation).
+  assert.equal(db0.baseline_registry.truncation, 'applied', 'a latest-structure database still takes the truncation path')
+  assert.ok(db0.baseline_registry.max > 58)
   assert.deepEqual(db0.registry_truncated.map((x) => x.id), REPLAY)
   assert.ok(db0.registry_truncated.every((x) => x.matches_current_file))
   for (const name of ['all_steps_applied', 'checksums_verified', 'repo_files_match_registry', 'production_rerun_is_noop', 'registry_covers_all_migrations', 'replayed_rows_recorded_as_applied', 'integrity_ok', 'foreign_keys_not_worse', 'probes_retained', 'seed_invariants_not_regressed']) {
