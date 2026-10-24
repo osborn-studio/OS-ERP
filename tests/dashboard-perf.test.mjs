@@ -27,7 +27,7 @@ import { listBelowSafe, countBelowSafe } from '../server/lib/stock.js'
 import { METRIC_BY_KEY } from '../server/lib/metrics.js'
 import { TOOL_MAP } from '../server/mcp/tools.js'
 import { createProfiler, profilingEnabled } from '../server/lib/profile.js'
-import { cachedForDb, invalidateForDb, cacheTtlMs } from '../server/lib/db-ttl-cache.js'
+import { cachedForDb, invalidateForDb, cacheTtlMs, cacheKeyCount } from '../server/lib/db-ttl-cache.js'
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url))
 const SCHEMA = readFileSync(new URL('../server/db/schema.sql', import.meta.url), 'utf8')
@@ -160,8 +160,8 @@ test('profiler is off unless GML_PROFILE is exactly "1" and logs nothing when of
   assert.deepEqual(Object.keys(logged[0][1].blocks), ['a', 'b'])
 })
 
-async function server(t, extraEnv = {}) {
-  const dir = mkdtempSync(path.join(tmpdir(), 'os-erp-aa5-'))
+async function server(t, extraEnv = {}, { dir: sharedDir } = {}) {
+  const dir = sharedDir || mkdtempSync(path.join(tmpdir(), 'os-erp-aa5-'))
   const probe = net.createServer()
   probe.listen(0, '127.0.0.1')
   await once(probe, 'listening')
@@ -179,25 +179,39 @@ async function server(t, extraEnv = {}) {
   t.after(async () => {
     if (child.exitCode === null) child.kill('SIGTERM')
     await stopped
-    rmSync(dir, { recursive: true, force: true })
+    if (!sharedDir) rmSync(dir, { recursive: true, force: true })
   })
   for (let i = 0; i < 2400 && !output.includes('服务已启动') && child.exitCode === null; i++) await delay(50)
   assert.ok(output.includes('服务已启动'), `test-mode server must become ready:\n${output.slice(-2000)}`)
   const base = `http://127.0.0.1:${port}`
-  const lr = await fetch(`${base}/api/auth/login`, {
-    method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ username: 'admin', password: '12345', industry: 'cosmetic' })
-  })
-  const token = (await lr.json()).data.token
-  const call = async (route, init = {}) => {
+  const login = async (username, password) => {
+    const lr = await fetch(`${base}/api/auth/login`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username, password, industry: 'cosmetic' })
+    })
+    return (await lr.json()).data.token
+  }
+  const token = await login('admin', '12345')
+  const callAs = async (tok, route, init = {}) => {
     const res = await fetch(`${base}${route}`, {
-      ...init, headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, signal: AbortSignal.timeout(15000)
+      ...init, headers: { ...(tok ? { authorization: `Bearer ${tok}` } : {}), 'content-type': 'application/json' }, signal: AbortSignal.timeout(15000)
     })
     return { status: res.status, body: await res.json() }
   }
+  const call = (route, init) => callAs(token, route, init)
   const db = new Database(path.join(dir, 'gml_cosmetic.db'))
   t.after(() => db.close())
-  return { api: (r) => call(r), post: (r, b) => call(r, { method: 'POST', body: JSON.stringify(b) }), db, output: () => output }
+  return {
+    api: (r) => call(r), post: (r, b) => call(r, { method: 'POST', body: JSON.stringify(b) }), db, output: () => output, dir,
+    apiAs: (tok, r) => callAs(tok, r), token,
+    /** 建一个受限（按组织）账号并登录；返回 token */
+    async scopedUser(username, orgId) {
+      const password = randomBytes(24).toString('base64url')
+      const r = await call('/api/auth/users', { method: 'POST', body: JSON.stringify({ username, name: username, role: 'warehouse', password, org_id: orgId, data_scope: 'org' }) })
+      assert.equal(r.status, 200, JSON.stringify(r.body))
+      return login(username, password)
+    }
+  }
 }
 
 test('GET /dashboard/summary: profile log only with GML_PROFILE=1, never in the body; AI stock_alert matches the original SQL', { timeout: 300000 }, async (t) => {
@@ -323,4 +337,272 @@ test('dashboard summary is never stale: reflects writes made through another con
   assert.equal(d.body.data.alerts.below_safe, countBelowSafe(db))
   // 响应体永远不含缓存 / 计时字段
   assert.ok(!/cache|profile/i.test(JSON.stringify(d.body.data)))
+})
+
+// ============================ AB2：其余四个看板接口的剖析、缓存与多进程失效（ADR-0044 补充）============================
+
+const AB2_ROUTES = {
+  trend: '/api/dashboard/trend',
+  top: '/api/dashboard/top',
+  todos: '/api/dashboard/todos',
+  'inventory-dist': '/api/dashboard/inventory-dist'
+}
+const profileLines = (out, label) => out().split('\n').filter((l) => l.includes('profile_blocks') && l.includes(`label=${label}`))
+/** 等到某个接口的 profile 行达到 n 条（子进程 stdout 与 HTTP 响应没有先后保证），最多 5 s */
+async function waitProfile(out, label, n) {
+  for (let i = 0; i < 100 && profileLines(out, label).length < n; i++) await delay(50)
+  assert.ok(profileLines(out, label).length >= n, `expected ${n} profile lines for ${label}, got ${profileLines(out, label).length}`)
+}
+const profileCache = (line) => /cache=(hit|miss)/.exec(line)?.[1]
+
+test('AB2 db-ttl-cache: keyed entries are independent, any write drops all keys, the key set is bounded', (t) => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'os-erp-ab2c-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const file = path.join(dir, 'k.db')
+  const a = new Database(file)
+  const other = new Database(file)
+  t.after(() => { a.close(); other.close() })
+  a.pragma('journal_mode=WAL')
+  a.exec('CREATE TABLE t (v INTEGER); INSERT INTO t VALUES (1)')
+  let n = 0
+  const run = (key, d = a) => cachedForDb(d, () => { n++; return `${key}:${d.prepare('SELECT SUM(v) s FROM t').get().s}` }, { ttlMs: 30000, key })
+  assert.deepEqual(run('trend:30'), { value: 'trend:30:1', hit: false })
+  assert.deepEqual(run('trend:7'), { value: 'trend:7:1', hit: false }, 'a different key is its own entry')
+  assert.equal(run('trend:30').hit, true)
+  assert.equal(run('trend:7').hit, true)
+  assert.equal(n, 2)
+  // 默认键（不传 key）与命名键互不影响，且 AA5 的调用方式不变
+  assert.equal(cachedForDb(a, () => 'x', { ttlMs: 30000 }).hit, false)
+  assert.equal(cachedForDb(a, () => 'y', { ttlMs: 30000 }).value, 'x')
+  // 其它连接写入 → 所有键一起失效
+  other.prepare('INSERT INTO t VALUES (5)').run()
+  assert.deepEqual(run('trend:30'), { value: 'trend:30:6', hit: false })
+  assert.deepEqual(run('trend:7'), { value: 'trend:7:6', hit: false })
+  // 显式失效清空全部键
+  invalidateForDb(a)
+  assert.equal(run('trend:30').hit, false)
+  // 键集合有上限（调用者可控的 days 不得撑爆内存），最近用过的保留
+  for (let i = 0; i < 200; i++) run(`k${i}`)
+  assert.ok(cacheKeyCount(a) <= 32, `bounded, got ${cacheKeyCount(a)}`)
+  assert.equal(run('k199').hit, true, 'most recent key survives eviction')
+  assert.equal(run('k0').hit, false, 'oldest key was evicted')
+  // 计算抛错不留下该键
+  assert.throws(() => cachedForDb(a, () => { throw new Error('boom') }, { ttlMs: 30000, key: 'bad' }), /boom/)
+  assert.equal(cachedForDb(a, () => 'ok', { ttlMs: 30000, key: 'bad' }).hit, false)
+})
+
+test('AB2 trend/top/todos/inventory-dist: profile line per endpoint (log only), second read hits, ?days is part of the key, responses stay identical', { timeout: 300000 }, async (t) => {
+  const f = await server(t, { GML_PROFILE: '1' })
+  const base = {}
+  for (const [name, route] of Object.entries(AB2_ROUTES)) {
+    const a = await f.api(route)
+    assert.equal(a.status, 200, `${name} ${JSON.stringify(a.body)}`)
+    const b = await f.api(route)
+    assert.deepEqual(b.body, a.body, `${name}: cached body must equal the computed one`)
+    base[name] = a.body
+    assert.ok(!/cache|profile/i.test(JSON.stringify(a.body.data)), `${name}: no cache or profile fields in the body`)
+  }
+  for (const name of Object.keys(AB2_ROUTES)) await waitProfile(f.output, `dashboard.${name}`, 2)
+  for (const name of Object.keys(AB2_ROUTES)) {
+    const lines = profileLines(f.output, `dashboard.${name}`)
+    assert.equal(lines.length, 2, `${name}: one profile line per request`)
+    assert.equal(profileCache(lines[0]), 'miss', name)
+    assert.equal(profileCache(lines[1]), 'hit', `${name}: reads must not invalidate`)
+    assert.match(lines[0], /blocks=\{/, name)
+  }
+  // 每个块一个键
+  const keysOf = (name) => Object.keys(JSON.parse(/blocks=(\{.*\})/.exec(profileLines(f.output, `dashboard.${name}`)[0])[1]))
+  assert.ok(['sales', 'purchase', 'online'].every((k) => keysOf('trend').includes(k)))
+  assert.ok(['products', 'brands', 'dealers', 'stores'].every((k) => keysOf('top').includes(k)))
+  assert.ok(['pendingDelivery', 'pendingReceipt', 'omsPending', 'stockAlerts', 'expiring'].every((k) => keysOf('todos').includes(k)))
+  assert.ok(['stockAgg', 'assemble'].every((k) => keysOf('inventory-dist').includes(k)))
+  // ?days 进键：7 天是新条目（未命中），再读命中；默认 30 与显式 30 是同一份
+  const d7 = await f.api('/api/dashboard/trend?days=7')
+  const d7b = await f.api('/api/dashboard/trend?days=7')
+  const d30 = await f.api('/api/dashboard/trend?days=30')
+  assert.deepEqual(d7b.body, d7.body)
+  assert.deepEqual(d30.body, base.trend)
+  await waitProfile(f.output, 'dashboard.trend', 5)
+  const tl = profileLines(f.output, 'dashboard.trend').map(profileCache)
+  assert.deepEqual(tl, ['miss', 'hit', 'miss', 'hit', 'hit'])
+  // top 同样按 days
+  const t7 = await f.api('/api/dashboard/top?days=7')
+  const t7b = await f.api('/api/dashboard/top?days=7')
+  assert.deepEqual(t7b.body, t7.body)
+  await waitProfile(f.output, 'dashboard.top', 4)
+  assert.deepEqual(profileLines(f.output, 'dashboard.top').map(profileCache), ['miss', 'hit', 'miss', 'hit'])
+})
+
+test('AB2 profiler stays silent by default on the four endpoints', { timeout: 300000 }, async (t) => {
+  const f = await server(t)
+  for (const route of Object.values(AB2_ROUTES)) assert.equal((await f.api(route)).status, 200)
+  assert.ok(!f.output().includes('profile_blocks'))
+})
+
+test('AB2 cache never serves a global payload to a scope-restricted caller (route gate runs before the cache), and reads do not warm for them', { timeout: 300000 }, async (t) => {
+  const f = await server(t, { GML_PROFILE: '1' })
+  const orgId = f.db.prepare("SELECT org_id FROM warehouses WHERE code='WH01'").get().org_id
+  const restricted = await f.scopedUser('ab2_scoped', orgId)
+  // 先让管理员把四个接口的缓存全部预热
+  for (const route of Object.values(AB2_ROUTES)) { await f.api(route); assert.equal((await f.api(route)).status, 200) }
+  for (const n of Object.keys(AB2_ROUTES)) await waitProfile(f.output, `dashboard.${n}`, 2)
+  const before = Object.keys(AB2_ROUTES).map((n) => profileLines(f.output, `dashboard.${n}`).length)
+  for (const route of Object.values(AB2_ROUTES)) {
+    const denied = await f.apiAs(restricted, route)
+    assert.equal(denied.status, 403, route)
+    assert.equal(denied.body.code, 'GLOBAL_DATA_FORBIDDEN', route)
+    assert.equal(JSON.stringify(denied.body).includes('byWarehouse'), false)
+    const anon = await f.apiAs(null, route)
+    assert.equal(anon.status, 401, route)
+  }
+  await delay(500) // 负向断言：给（不应出现的）日志留出到达时间
+  const after = Object.keys(AB2_ROUTES).map((n) => profileLines(f.output, `dashboard.${n}`).length)
+  assert.deepEqual(after, before, 'rejected requests never reach the handler or the cache')
+})
+
+const SQL_WRITER = `
+const Database = require('better-sqlite3')
+const db = new Database(process.env.AB2_DB)
+const today = db.prepare("SELECT date('now','localtime') d").get().d
+const dealer = db.prepare('SELECT id FROM dealers ORDER BY id LIMIT 1').get().id
+const sku = db.prepare('SELECT id FROM product_skus ORDER BY id LIMIT 1').get().id
+const so = db.prepare("INSERT INTO sales_orders (doc_no, channel, dealer_id, order_date, status, total_qty, receivable_amount) VALUES (?, 'dealer', ?, ?, 'confirmed', 1, 99999999)")
+  .run(process.env.AB2_DOC, dealer, today).lastInsertRowid
+db.prepare('INSERT INTO sales_order_items (order_id, sku_id, qty, price, amount) VALUES (?,?,1,99999999,99999999)').run(so, sku)
+// 待发货清单按 order_date 升序取前 10：再补一张最早的已确认单，保证它出现在 todos 里
+db.prepare("INSERT INTO sales_orders (doc_no, channel, dealer_id, order_date, status, total_qty, receivable_amount) VALUES (?, 'dealer', ?, '1999-01-01', 'confirmed', 1, 1)")
+  .run(process.env.AB2_DOC + '-OLD', dealer)
+db.close()
+console.log('WROTE')
+`
+
+test('AB2 two processes on one DB file: another process\'s commit drops this process\'s cache for all four endpoints (data_version)', { timeout: 300000 }, async (t) => {
+  const A = await server(t, { GML_PROFILE: '1' })
+  // 第二个 server 进程：同一数据目录（同一个库文件），另一个随机端口；先登录（登录会写 last_login_at），再预热 A，避免登录写入干扰命中判断
+  const B = await server(t, {}, { dir: A.dir })
+  const warm = async () => {
+    const out = {}
+    for (const [name, route] of Object.entries(AB2_ROUTES)) {
+      await A.api(route)
+      const second = await A.api(route)
+      assert.equal(second.status, 200)
+      out[name] = second.body.data
+    }
+    return out
+  }
+  const countHits = () => Object.keys(AB2_ROUTES).map((n) => profileLines(A.output, `dashboard.${n}`).map(profileCache))
+  const w0 = await warm()
+  for (const n of Object.keys(AB2_ROUTES)) await waitProfile(A.output, `dashboard.${n}`, 2)
+  for (const seq of countHits()) assert.deepEqual(seq, ['miss', 'hit'])
+
+  // ① 进程 B 经 HTTP 新建仓库 → A 的 inventory-dist（及其余三个）立即失效并反映
+  const created = await B.post('/api/master/warehouses', { code: 'AB2-W', name: 'ab2 两进程仓' })
+  assert.equal(created.status, 200, JSON.stringify(created.body))
+  const dist = await A.api('/api/dashboard/inventory-dist')
+  assert.ok(dist.body.data.byWarehouse.some((w) => w.warehouse_name === 'ab2 两进程仓'), 'process A must see the warehouse committed by process B')
+  assert.equal(w0['inventory-dist'].byWarehouse.some((w) => w.warehouse_name === 'ab2 两进程仓'), false)
+  for (const route of [AB2_ROUTES.trend, AB2_ROUTES.top, AB2_ROUTES.todos]) await A.api(route)
+  for (const n of Object.keys(AB2_ROUTES)) await waitProfile(A.output, `dashboard.${n}`, 3)
+  for (const seq of countHits()) assert.equal(seq[2], 'miss', 'every cached endpoint of A recomputes after B committed')
+
+  // ② 独立 node 进程直接写 SQL（单据 + 明细）→ trend / top / todos 的内容立即变化
+  await warm()
+  const w = spawn(process.execPath, ['-e', SQL_WRITER], { cwd: ROOT, env: { PATH: process.env.PATH, AB2_DB: path.join(A.dir, 'gml_cosmetic.db'), AB2_DOC: 'AB2-SO-0001' }, stdio: ['ignore', 'pipe', 'pipe'] })
+  let wout = ''
+  w.stdout.on('data', (d) => { wout += d }); w.stderr.on('data', (d) => { wout += d })
+  const [code] = await once(w, 'close')
+  assert.equal(code, 0, wout)
+  const trend = await A.api('/api/dashboard/trend')
+  assert.ok(trend.body.data.some((x) => x.offline >= 99999999), 'trend reflects the order written by a separate process')
+  const todos = await A.api('/api/dashboard/todos')
+  assert.ok(todos.body.data.pendingDelivery.some((x) => x.doc_no === 'AB2-SO-0001-OLD'))
+  const top = await A.api('/api/dashboard/top')
+  assert.ok(top.body.data.products[0].amount >= 99999999)
+  assert.equal(top.body.data.dealers[0].amount >= 99999999, true)
+  // 写入之后重复读重新命中（说明失效来自写入，不是缓存坏了）
+  assert.deepEqual((await A.api('/api/dashboard/top')).body, top.body)
+  await waitProfile(A.output, 'dashboard.top', 7)
+  assert.equal(profileCache(profileLines(A.output, 'dashboard.top').at(-1)), 'hit')
+})
+
+// ---- AB2：改写后的 SQL 与 batch-ten 的原写法逐行比较（原写法逐字保留作为对照）----
+const FROM30 = "date('now','localtime','-30 day')"
+const OLD_TOP = {
+  products: `SELECT p.name AS product_name, b.name AS brand_name, SUM(i.qty) qty, SUM(i.amount) amount
+         FROM sales_order_items i JOIN sales_orders so ON so.id=i.order_id
+         JOIN product_skus sk ON sk.id=i.sku_id JOIN products p ON p.id=sk.product_id LEFT JOIN brands b ON b.id=p.brand_id
+         WHERE so.status NOT IN ('cancelled','draft') AND so.order_date >= ${FROM30}
+         GROUP BY p.id ORDER BY amount DESC LIMIT 10`,
+  brands: `SELECT COALESCE(b.name,'未标品牌') AS brand_name, SUM(i.qty) qty, SUM(i.amount) amount
+         FROM sales_order_items i JOIN sales_orders so ON so.id=i.order_id
+         JOIN product_skus sk ON sk.id=i.sku_id JOIN products p ON p.id=sk.product_id LEFT JOIN brands b ON b.id=p.brand_id
+         WHERE so.status NOT IN ('cancelled','draft') AND so.order_date >= ${FROM30}
+         GROUP BY b.id ORDER BY amount DESC LIMIT 10`
+}
+const OLD_DIST = {
+  byWarehouse: `SELECT w.name AS warehouse_name, w.type, COALESCE(SUM(st.qty_on_hand),0) qty, COALESCE(SUM(st.qty_on_hand*st.cost_price),0) amount
+         FROM warehouses w LEFT JOIN inventory_stocks st ON st.warehouse_id=w.id GROUP BY w.id ORDER BY amount DESC, w.id`,
+  byCategory: `SELECT COALESCE(c.name,'未分类') AS category_name, COALESCE(SUM(st.qty_on_hand),0) qty, COALESCE(SUM(st.qty_on_hand*st.cost_price),0) amount
+         FROM inventory_stocks st JOIN product_skus sk ON sk.id=st.sku_id JOIN products p ON p.id=sk.product_id
+         LEFT JOIN categories c ON c.id=p.category_id GROUP BY c.id ORDER BY amount DESC`
+}
+// 浮点求和顺序可以不同（最后一位）；比较时对数值取 4 位小数
+const norm = (rows) => rows.map((r) => Object.fromEntries(Object.entries(r).map(([k, v]) => [k, typeof v === 'number' ? Math.round(v * 1e4) / 1e4 : v])))
+
+test('AB2 /top and /inventory-dist rewrites return the same rows as the original SQL on a varied fixture', { timeout: 300000 }, async (t) => {
+  const f = await server(t)
+  const db = f.db
+  db.pragma('foreign_keys=OFF')
+  // 受控夹具：清掉演示种子的销售单，保证 LIMIT 10 的榜单里只有下面这些行（边界用例不会被种子数据挤出榜外）
+  db.exec('DELETE FROM sales_order_items; DELETE FROM sales_orders')
+  const today = db.prepare("SELECT date('now','localtime') d").get().d
+  const old = db.prepare("SELECT date('now','localtime','-90 day') d").get().d
+  const dealers = db.prepare('SELECT id FROM dealers ORDER BY id LIMIT 3').all().map((x) => x.id)
+  const stores = db.prepare('SELECT id FROM stores ORDER BY id LIMIT 2').all().map((x) => x.id)
+  const brandId = Number(db.prepare("INSERT INTO brands (code, name) VALUES ('AB2-B', 'AB2品牌')").run().lastInsertRowid)
+  const catId = Number(db.prepare("INSERT INTO categories (code, name) VALUES ('AB2-C', 'AB2品类')").run().lastInsertRowid)
+  const mkSku = (code, brand, cat) => {
+    const p = Number(db.prepare('INSERT INTO products (spu_code, name, brand_id, category_id) VALUES (?,?,?,?)').run(`AB2-${code}`, `ab2-${code}`, brand, cat).lastInsertRowid)
+    return Number(db.prepare('INSERT INTO product_skus (product_id, sku_code, name, status) VALUES (?,?,?,?)').run(p, `AB2-K-${code}`, `k-${code}`, 'active').lastInsertRowid)
+  }
+  const skus = { branded: mkSku('b', brandId, catId), noBrand: mkSku('n', null, null), tieA: mkSku('ta', brandId, catId), tieB: mkSku('tb', brandId, catId) }
+  let n = 0
+  const order = (status, date, items, { dealer = null, store = null } = {}) => {
+    const id = Number(db.prepare("INSERT INTO sales_orders (doc_no, channel, dealer_id, store_id, order_date, status, total_qty, receivable_amount) VALUES (?, 'dealer', ?, ?, ?, ?, 1, ?)")
+      .run(`AB2-EQ-${++n}`, dealer, store, date, status, items.reduce((a, [, , amt]) => a + amt, 0)).lastInsertRowid)
+    for (const [sku, qty, amt] of items) db.prepare('INSERT INTO sales_order_items (order_id, sku_id, qty, price, amount) VALUES (?,?,?,?,?)').run(id, sku, qty, amt / qty, amt)
+  }
+  order('confirmed', today, [[skus.branded, 3, 300.3], [skus.noBrand, 2, 200.2]], { dealer: dealers[0] })
+  order('shipped', today, [[skus.tieA, 1, 100], [skus.tieB, 1, 100]], { dealer: dealers[1], store: stores[0] })
+  order('cancelled', today, [[skus.branded, 99, 99999]], { dealer: dealers[0] }) // 取消不计
+  order('draft', today, [[skus.noBrand, 99, 99999]], { store: stores[1] }) // 草稿不计
+  order('confirmed', old, [[skus.branded, 50, 50000]], { dealer: dealers[2] }) // 窗口外不计
+  const wh = db.prepare('INSERT INTO warehouses (code, name, type) VALUES (?,?,?)')
+  wh.run('AB2-E1', 'ab2 空仓1', 'normal'); wh.run('AB2-E2', 'ab2 空仓2', 'normal') // 无库存 + 并列 0 金额
+  const w3 = Number(wh.run('AB2-S', 'ab2 有货仓', 'normal').lastInsertRowid)
+  const st = db.prepare('INSERT INTO inventory_stocks (warehouse_id, sku_id, batch_no, qty_on_hand, cost_price) VALUES (?,?,?,?,?)')
+  st.run(w3, skus.branded, 'a', 10, 1.1); st.run(w3, skus.noBrand, 'a', 7, 2.35); st.run(w3, skus.tieA, 'a', -2, 4)
+  const w1 = db.prepare('SELECT id FROM warehouses ORDER BY id LIMIT 1').get().id
+  st.run(w1, skus.branded, 'b', 5, 1.1)
+  db.pragma('foreign_keys=ON')
+
+  const top = (await f.api('/api/dashboard/top')).body.data
+  for (const k of ['products', 'brands']) {
+    const want = db.prepare(OLD_TOP[k]).all()
+    assert.deepEqual(norm(top[k]), norm(want), k)
+  }
+  assert.equal(top.products.length, 4, 'branded, unbranded and the two tied products')
+  assert.deepEqual(top.brands.map((b) => b.brand_name).sort(), ['AB2品牌', '未标品牌'].sort())
+  assert.ok(top.products.some((p) => p.brand_name === null), 'the unbranded product is in the ranking')
+  assert.equal(top.dealers.length, 2); assert.equal(top.stores.length, 1)
+  assert.ok(!top.products.some((p) => p.qty === 99), 'cancelled / draft / out-of-window rows excluded')
+  const dist = (await f.api('/api/dashboard/inventory-dist')).body.data
+  for (const k of ['byWarehouse', 'byCategory']) {
+    const want = db.prepare(OLD_DIST[k]).all()
+    assert.deepEqual(norm(dist[k]), norm(want), k)
+  }
+  assert.ok(dist.byWarehouse.some((w) => w.warehouse_name === 'ab2 空仓1' && w.qty === 0 && w.amount === 0), 'warehouses without stock still listed with zeros')
+  const names = dist.byWarehouse.map((w) => w.warehouse_name)
+  assert.ok(names.indexOf('ab2 空仓1') < names.indexOf('ab2 空仓2'), 'ties are ordered by warehouse id (deterministic)')
+  assert.ok(dist.byCategory.some((c) => c.category_name === '未分类') && dist.byCategory.some((c) => c.category_name === 'AB2品类'))
 })

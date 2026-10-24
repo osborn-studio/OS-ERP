@@ -479,8 +479,9 @@ BOM 服务层（模块 10B · 一个 BOM + 三类执行单）
 
 | 导出 | 类型 | 路由 | MCP 工具 | 被模块调用 |
 |---|---|---|---|---|
+| `cacheKeyCount` | fn | — | — | — |
 | `cacheTtlMs` | fn | — | — | — |
-| `cachedForDb` | fn | GET /api/dashboard/summary | — | — |
+| `cachedForDb` | fn | GET /api/dashboard/summary<br>GET /api/dashboard/trend<br>GET /api/dashboard/todos<br>GET /api/dashboard/top<br>GET /api/dashboard/inventory-dist | — | — |
 | `invalidateForDb` | fn | — | — | — |
 
 ## `server/lib/dealer-statement.js`
@@ -1001,7 +1002,7 @@ Prometheus 文本指标渲染 + 抓取令牌校验（ADR-0045）
 
 | 导出 | 类型 | 路由 | MCP 工具 | 被模块调用 |
 |---|---|---|---|---|
-| `createProfiler` | fn | GET /api/dashboard/summary | — | — |
+| `createProfiler` | fn | GET /api/dashboard/summary<br>GET /api/dashboard/trend<br>GET /api/dashboard/todos<br>GET /api/dashboard/top<br>GET /api/dashboard/inventory-dist | — | — |
 | `profilingEnabled` | fn | — | — | — |
 
 ## `server/lib/promotion.js`
