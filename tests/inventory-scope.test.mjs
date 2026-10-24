@@ -23,6 +23,7 @@ import net from 'node:net'
 import { fileURLToPath } from 'node:url'
 import { setTimeout as delay } from 'node:timers/promises'
 import Database from 'better-sqlite3'
+import { METRICS } from '../server/lib/metrics.js'
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url))
 const secret = () => randomBytes(24).toString('base64url')
@@ -939,6 +940,10 @@ test('AD1: /api/metrics values / catalog / dictionary follow the warehouse-org s
   insPo.run('AD1-PO-B', supplierId, whB.id, 'approved', 1000)
   const A = await f.account('ad1_wh_a', 'warehouse', { org_id: whA.org_id, data_scope: 'org' })
   const N = await f.account('ad1_wh_none', 'warehouse', { data_scope: 'org' })
+  // ADR-0057：AD1 的 scoped:false 标注行为只在 metrics_global_for_restricted=label 且调用者持有各指标的业务权限时出现。
+  // 这里给仓管角色补足全部指标权限并切到 label；默认 hide 的行为由 tests/metrics-perms.test.mjs 覆盖。
+  for (const m of METRICS) for (const p of m.perms) db.prepare('INSERT OR IGNORE INTO role_permissions (role_code, perm_code) VALUES (?,?)').run('warehouse', p)
+  okData(await api('/api/meta/settings', { token: f.admin, method: 'PUT', body: { key: 'metrics_global_for_restricted', value: 'label', reason: 'AD1 test keeps the labelling behaviour' } }))
   const inScope = `warehouse_id IN (SELECT id FROM warehouses WHERE org_id=${whA.org_id})`
   const sum = (sql) => db.prepare(sql).get().v
   const keys = 'stock_qty,available_qty,stock_amount,below_safe,expiring_qty,turnover_days,purchase_amount,purchase_amount_effective,closed_order_ratio,sales_amount,gmv,payable_open,approval_pending'

@@ -26,7 +26,7 @@ import MetricsHiddenNote from './MetricsHiddenNote'
 import { RefreshCw, ShieldCheck, ShieldAlert, Calculator, Search, Layers } from 'lucide-react'
 import {
   fmtMetricValue, isMetricError, syncMetricDefs,
-  type MetricGroup, type MetricItem
+  type MetricGroup, type MetricItem, type MetricsDictResponse, hiddenMetricsNote
 } from '../../api/metrics'
 
 /**
@@ -59,7 +59,7 @@ export default function Metrics() {
   const [detail, setDetail] = useState<MetricItem | null>(null)
   const [busy, setBusy] = useState(false)
 
-  const { data, loading, reload } = useFetch<{ days: number; groups: MetricGroup[]; total: number; modules: string[] }>(
+  const { data, loading, reload } = useFetch<MetricsDictResponse>(
     '/metrics',
     { days: Math.max(1, Number(days) || 30), with_values: 1 },
     [days]
@@ -145,7 +145,7 @@ export default function Metrics() {
         />
       </div>
 
-      {/* AE11 SLOT（布局）：AE1 的"因权限未显示 N 个指标"说明。AE1 合入后只替换下面两个 props 的来源，不改槽位本身。 */}
+      {/* AE11 槽位 + AE1 数据：接口的 hidden_count 驱动"因权限未显示 N 个指标"说明（AE1 不回传 hidden_reason，槽位按 undefined 处理） */}
       <MetricsHiddenNote count={(data as { hidden_count?: number } | null)?.hidden_count} reason={(data as { hidden_reason?: string } | null)?.hidden_reason} />
 
       <Tabs

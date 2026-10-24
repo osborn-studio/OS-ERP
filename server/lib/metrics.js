@@ -36,7 +36,8 @@
 import { getDb } from '../db/index.js'
 import { stampDef, defStale } from '../db/migrations/_helpers.cjs'
 import { countBelowSafe, stockScopeSql } from './stock.js'
-import { purchaseOrderScopeSql } from './purchase.js'
+import { purchaseOrderScopeSql, PO_READ_PERMS } from './purchase.js'
+import { readSetting } from './settings.js'
 
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100
 const num = (v) => Number(v) || 0
@@ -66,6 +67,7 @@ export const METRICS = [
     key: 'sales_amount',
     name: '销售额',
     module: '销售',
+    perms: ['sales.order.view'],
     category: '规模',
     unit: 'CNY',
     formula: 'SUM(sales_orders.receivable_amount)',
@@ -81,6 +83,7 @@ export const METRICS = [
     key: 'sales_qty',
     name: '销售数量',
     module: '销售',
+    perms: ['sales.order.view'],
     category: '规模',
     unit: '件',
     formula: 'SUM(sales_orders.total_qty)',
@@ -96,6 +99,7 @@ export const METRICS = [
     key: 'sales_order_count',
     name: '销售订单数',
     module: '销售',
+    perms: ['sales.order.view'],
     category: '规模',
     unit: '单',
     formula: 'COUNT(sales_orders)',
@@ -111,6 +115,7 @@ export const METRICS = [
     key: 'avg_order_value',
     name: '客单价',
     module: '销售',
+    perms: ['sales.order.view'],
     category: '效率',
     unit: 'CNY',
     formula: '销售额 / 销售订单数',
@@ -127,6 +132,7 @@ export const METRICS = [
     key: 'attach_rate',
     name: '连带率',
     module: '销售',
+    perms: ['sales.order.view'],
     category: '效率',
     unit: '件/单',
     formula: '销售数量 / 销售订单数',
@@ -143,6 +149,7 @@ export const METRICS = [
     key: 'return_rate',
     name: '退货率',
     module: '销售',
+    perms: ['sales.order.view'],
     category: '效率',
     unit: '%',
     formula: '销售退货金额 / 销售额 × 100',
@@ -161,6 +168,7 @@ export const METRICS = [
     key: 'unpaid',
     name: '未回款',
     module: '销售',
+    perms: ['finance.receivable.view', 'sales.order.view'],
     category: '资金',
     unit: 'CNY',
     formula: 'SUM(receivable_amount - paid_amount)',
@@ -179,6 +187,7 @@ export const METRICS = [
     key: 'gmv',
     name: '线上 GMV',
     module: '线上 OMS',
+    perms: ['oms.order.view'],
     category: '规模',
     unit: 'CNY',
     formula: 'SUM(oms_orders.pay_amount)',
@@ -194,6 +203,7 @@ export const METRICS = [
     key: 'oms_order_count',
     name: '线上订单数',
     module: '线上 OMS',
+    perms: ['oms.order.view'],
     category: '规模',
     unit: '单',
     formula: 'COUNT(oms_orders)',
@@ -209,6 +219,7 @@ export const METRICS = [
     key: 'stock_qty',
     name: '库存数量',
     module: '存货',
+    perms: ['inventory.stock.view'],
     category: '规模',
     unit: '件',
     formula: 'SUM(inventory_stocks.qty_on_hand)',
@@ -225,6 +236,7 @@ export const METRICS = [
     key: 'available_qty',
     name: '可用量',
     module: '存货',
+    perms: ['inventory.stock.view'],
     category: '规模',
     unit: '件',
     formula: 'SUM(qty_on_hand - qty_reserved)',
@@ -243,6 +255,7 @@ export const METRICS = [
     key: 'stock_amount',
     name: '库存金额',
     module: '存货',
+    perms: ['inventory.cost.view'],
     category: '资金',
     unit: 'CNY',
     formula: 'SUM(inventory_stocks.cost_amount)',
@@ -259,6 +272,7 @@ export const METRICS = [
     key: 'turnover_days',
     name: '库存周转天数',
     module: '存货',
+    perms: ['inventory.stock.view'],
     category: '效率',
     unit: '天',
     formula: '当前库存数量 / (近 N 天出库量 / N)，N 默认 30',
@@ -282,6 +296,7 @@ export const METRICS = [
     key: 'below_safe',
     name: '低于安全库存 SKU 数',
     module: '存货',
+    perms: ['inventory.stock.view'],
     category: '风险',
     unit: '个',
     formula: 'COUNT(SKU WHERE 该 SKU 库存合计 < 安全库存)',
@@ -296,6 +311,7 @@ export const METRICS = [
     key: 'expiring_qty',
     name: '临期数量',
     module: '存货',
+    perms: ['inventory.stock.view'],
     category: '风险',
     unit: '件',
     formula: 'SUM(qty_on_hand) WHERE expire_date <= today + N 天，N 默认 90',
@@ -319,6 +335,7 @@ export const METRICS = [
     key: 'purchase_amount',
     name: '采购金额',
     module: '采购',
+    perms: PO_READ_PERMS,
     category: '规模',
     unit: 'CNY',
     formula: 'SUM(purchase_orders.total_amount)',
@@ -338,6 +355,7 @@ export const METRICS = [
     key: 'purchase_amount_effective',
     name: '采购金额（已生效）',
     module: '采购',
+    perms: PO_READ_PERMS,
     category: '规模',
     unit: 'CNY',
     formula: 'SUM(purchase_orders.total_amount)',
@@ -356,6 +374,7 @@ export const METRICS = [
     key: 'payable_open',
     name: '应付未结',
     module: '采购',
+    perms: ['finance.payable.view', 'purchase.settle.view', 'purchase.payment.view'],
     category: '资金',
     unit: 'CNY',
     formula: 'SUM(purchase_settlements.settle_amount - paid_amount)',
@@ -374,6 +393,7 @@ export const METRICS = [
     key: 'oc_order_amount',
     name: '订货金额',
     module: '订货中心',
+    perms: ['order.view'],
     category: '规模',
     unit: 'CNY',
     formula: 'SUM(oc_orders.total_amount)',
@@ -389,6 +409,7 @@ export const METRICS = [
     key: 'oc_fill_rate',
     name: '订货满足率',
     module: '订货中心',
+    perms: ['order.view'],
     category: '效率',
     unit: '%',
     formula: '已完成订货单数 / 非取消订货单数 × 100',
@@ -407,6 +428,7 @@ export const METRICS = [
     key: 'pos_sales',
     name: '门店零售额',
     module: '门店 POS',
+    perms: ['pos.view'],
     category: '规模',
     unit: 'CNY',
     formula: 'SUM(pos_orders.pay_amount)',
@@ -422,6 +444,7 @@ export const METRICS = [
     key: 'credit_usage',
     name: '信用占用率',
     module: '经销商',
+    perms: ['credit.view'],
     category: '风险',
     unit: '%',
     formula: 'SUM(credit_used) / SUM(credit_limit) × 100',
@@ -440,6 +463,7 @@ export const METRICS = [
     key: 'over_credit_dealers',
     name: '超授信经销商数',
     module: '经销商',
+    perms: ['credit.view'],
     category: '风险',
     unit: '个',
     formula: 'COUNT(dealers WHERE credit_used > credit_limit)',
@@ -458,6 +482,7 @@ export const METRICS = [
     key: 'approval_pending',
     name: '待审批单数',
     module: '审批中心',
+    perms: ['approval.instance.view', 'system:approval:view', 'system:approval:manage'],
     category: '流程',
     unit: '个',
     formula: 'COUNT(approval_instances WHERE status = pending)',
@@ -471,6 +496,7 @@ export const METRICS = [
     key: 'closed_order_ratio',
     name: '采购订单四段闭环率',
     module: '采购',
+    perms: PO_READ_PERMS,
     category: '流程',
     unit: '%',
     formula: '四段全关闭订单数 / 非取消订单数 × 100',
@@ -510,9 +536,48 @@ export function metricDefinitions() {
   }))
 }
 
+/**
+ * 要算 / 要标记的 key 列表：keys 不传（或空数组）= 全部；`allow`（Set）给出时再与之取交集。
+ * 注意：`allow` 为空集时结果必须是空，不能因「keys 空 = 全部」而回落到全部（fail-closed）。
+ */
+function wantKeys(keys, allow) {
+  const base = Array.isArray(keys) && keys.length ? keys : METRICS.map((m) => m.key)
+  return allow ? base.filter((k) => allow.has(k)) : base
+}
+
+// AE1（ADR-0057）：指标可见性 = 调用者持有该指标 `perms` 中任一业务查看权限
+//   且（调用者不受限，或设置 `metrics_global_for_restricted=label`，或指标按范围收窄 `scopeAware`）。
+// 缺权限 / 无范围语义的指标「缺席」而不是 403；缺席数量以 `hidden_count` 告知，前端据此给一行说明。
+export const METRICS_GLOBAL_MODE_KEY = 'metrics_global_for_restricted'
+
+/**
+ * 计算调用者可见的指标 key 集合。
+ * @param {object} p
+ * @param {(code: string) => boolean} p.canPerm 调用者是否持有某权限点（由路由用 permContext/hasPerm 构造；超管恒真）
+ * @param {object|null} p.orgScope 调用者数据范围
+ * @param {boolean} [p.subjectBound] 账号绑定了门店 / 经销商或是外部订货主体（视同受限，即使数据范围为全部）
+ * @param {string[]|null} [p.keys] 只对这些 key 计数（`/values?keys=`）；不传 = 全部
+ * @returns {{ allow: Set<string>, hidden: number }} hidden = 在统计范围内被隐藏的已知指标数
+ */
+export function metricVisibility(db, { canPerm, orgScope = null, keys = null, subjectBound = false } = {}) {
+  // 绑定了门店 / 经销商的账号即使 data_scope=all 也是受限调用者（其余模块各自按绑定收口，指标没有）
+  const restricted = isScopeRestricted(orgScope) || subjectBound
+  // 非法 / 未知值读成默认 hide（readSetting 本身对不合法库值回落默认）；只有精确的 label 才放宽
+  const hideScopeless = restricted && readSetting(db, METRICS_GLOBAL_MODE_KEY) !== 'label'
+  const allow = new Set()
+  let hidden = 0
+  const considered = Array.isArray(keys) && keys.length ? keys.filter((k) => METRIC_BY_KEY[k]) : METRICS.map((m) => m.key)
+  for (const m of METRICS) {
+    const ok = (m.perms || []).some((c) => canPerm(c)) && !(hideScopeless && m.scopeAware !== true)
+    if (ok) allow.add(m.key)
+  }
+  for (const k of new Set(considered)) if (!allow.has(k)) hidden++
+  return { allow, hidden }
+}
+
 /** 取指标值。keys 不传则算全部；返回 { key: value } */
-export function metricValues(db = getDb(), { keys = null, days: d = 30, orgScope = null } = {}) {
-  const want = Array.isArray(keys) && keys.length ? keys : METRICS.map((m) => m.key)
+export function metricValues(db = getDb(), { keys = null, days: d = 30, orgScope = null, allow = null } = {}) {
+  const want = wantKeys(keys, allow)
   const out = {}
   for (const k of want) {
     const m = METRIC_BY_KEY[k]
@@ -531,20 +596,20 @@ export function metricValues(db = getDb(), { keys = null, days: d = 30, orgScope
  * 每个指标是否「按调用者范围算」：受限调用者下，`scopeAware` 指标为 true，没有组织归属的全局指标为 false
  * （值仍是全局口径，前端标「全局口径」）；全局调用者一律 true。keys 不传 = 全部。
  */
-export function metricScopedFlags(orgScope = null, keys = null) {
-  const restricted = isScopeRestricted(orgScope)
-  const want = Array.isArray(keys) && keys.length ? keys : METRICS.map((m) => m.key)
+export function metricScopedFlags(orgScope = null, keys = null, allow = null, subjectBound = false) {
+  const restricted = isScopeRestricted(orgScope) || subjectBound
+  const want = wantKeys(keys, allow)
   const out = {}
   for (const k of want) if (METRIC_BY_KEY[k]) out[k] = !restricted || METRIC_BY_KEY[k].scopeAware === true
   return out
 }
 
 /** 定义 + 当前值（字典页主接口）；每项带 `scoped`（见 metricScopedFlags） */
-export function metricCatalog(db = getDb(), { days: d = 30, withValues = true, orgScope = null } = {}) {
-  const values = withValues ? metricValues(db, { days: d, orgScope }) : {}
-  const scoped = metricScopedFlags(orgScope)
+export function metricCatalog(db = getDb(), { days: d = 30, withValues = true, orgScope = null, allow = null, subjectBound = false } = {}) {
+  const values = withValues ? metricValues(db, { days: d, orgScope, allow }) : {}
+  const scoped = metricScopedFlags(orgScope, null, allow, subjectBound)
   const defs = Object.fromEntries(metricDefinitions().map((x) => [x.key, x]))
-  return METRICS.map((m) => ({
+  return METRICS.filter((m) => !allow || allow.has(m.key)).map((m) => ({
     ...defs[m.key],
     scoped: scoped[m.key],
     value: values[m.key] ?? null
@@ -593,8 +658,8 @@ export function metricDefsStale(db = getDb()) {
 }
 
 /** 分组后的字典（前端分组渲染用） */
-export function metricGroups(db = getDb(), { days: d = 30, withValues = true, orgScope = null } = {}) {
-  const list = metricCatalog(db, { days: d, withValues, orgScope })
+export function metricGroups(db = getDb(), { days: d = 30, withValues = true, orgScope = null, allow = null, subjectBound = false } = {}) {
+  const list = metricCatalog(db, { days: d, withValues, orgScope, allow, subjectBound })
   const order = []
   const map = new Map()
   for (const m of list) {
@@ -609,5 +674,5 @@ export function metricGroups(db = getDb(), { days: d = 30, withValues = true, or
 
 export default {
   METRICS, METRIC_BY_KEY, metricDefinitions, metricValues, metricCatalog, metricScopedFlags, isScopeRestricted,
-  syncMetricDefs, metricDefsStale, metricGroups
+  syncMetricDefs, metricDefsStale, metricGroups, metricVisibility
 }
