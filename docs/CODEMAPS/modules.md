@@ -215,7 +215,7 @@
 |---|---|---|---|---|
 | `chainColumnsPresent` | fn | — | — | lib/audit-anchor-manifest.js |
 | `verifyChain` | fn | — | — | lib/audit-anchor-manifest.js, lib/audit-trail.js |
-| `verifyJsonlSegment` | fn | — | — | — |
+| `verifyJsonlSegment` | fn | — | — | lib/audit-anchor-manifest.js |
 
 ## `server/lib/audit-trail.js`
 

@@ -830,3 +830,66 @@ test('AC7 the pause hook is refused outside test mode', (t) => {
   assert.match(r.stderr, /GML_TEST_ARCHIVE_PAUSE_AFTER_EXPORT/)
   g.db.close()
 })
+
+// ---- AC7 Codex 审计后的加固回归 ----
+test('AC7 hardening: encrypted artifacts without the key are not trusted via the plaintext manifest', (t) => {
+  const e = backedUp(t, { key: BKEY })
+  const r = cli(VERIFY, ['--data-dir', e.dir, '--against-backup', e.set, '--json'], e.dir)
+  assert.equal(r.status, 1)
+  assert.equal(JSON.parse(r.stdout).against_backup.status, 'key-required')
+  // 只拿到明文清单（离机副本）也不能当作已认证：.enc 清单不在旁边时，明文清单可用但会注明未认证
+  const only = cli(VERIFY, ['--data-dir', e.dir, '--against-backup', e.set + '.audit-manifest.json', '--json'], e.dir)
+  assert.equal(only.status, 1, 'the .enc sibling exists, so the key is required')
+  e.db.close()
+})
+
+test('AC7 hardening: swapping the manifest anchor list while keeping the digest is caught; a backup whose chain was already broken is no baseline', (t) => {
+  const p = backedUp(t)
+  const mf = p.set + '.audit-manifest.json'
+  const m = JSON.parse(readFileSync(mf, 'utf8'))
+  m.audit_chain.anchors = [{ kind: 'erase', at_row_id: 2, anchor_hash: 'a'.repeat(64), prev_id: 1, prev_row_hash: 'b'.repeat(64), reason: 'x', created_at: '2026-01-01 00:00:00' }]
+  writeFileSync(mf, JSON.stringify(m))
+  assert.equal(JSON.parse(p.V().stdout).against_backup.status, 'manifest-mismatch')
+  p.db.close()
+  const dir = tmp(t)
+  const db = mkDb(dir)
+  fill(db, 8)
+  db.prepare("UPDATE audit_logs SET detail='{\"edited\":1}' WHERE id=3").run() // 备份前链就已经断了
+  assert.equal(cli(BACKUP, ['cosmetic'], dir).status, 0, 'a broken chain does not block the backup')
+  const set = path.join(backupDirOf(dir), newestBackup(dir))
+  assert.equal(JSON.parse(readFileSync(set + '.audit-manifest.json', 'utf8')).audit_chain.verified, false)
+  const r = cli(VERIFY, ['--data-dir', dir, '--against-backup', set, '--json'], dir)
+  assert.equal(r.status, 1)
+  db.close()
+})
+
+test('AC7 hardening: archive digests are re-verified row by row, so a re-signed (sha256 updated) tampered JSONL does not prove descent', (t) => {
+  const f = archivedTipFixture(t)
+  archiveNow(f)
+  const jsonl = path.join(f.out, readdirSync(f.out).find((n) => n.endsWith('.jsonl')))
+  const digestFile = path.join(f.out, readdirSync(f.out).find((n) => n.endsWith('.digest.json')))
+  const lines = readFileSync(jsonl, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))
+  lines[3].detail = '{"forged":true}' // 内容改了，row_hash 不动
+  const text = lines.map((l) => JSON.stringify(l) + '\n').join('')
+  writeFileSync(jsonl, text)
+  const d = JSON.parse(readFileSync(digestFile, 'utf8'))
+  d.file_sha256 = sha(text)
+  writeFileSync(digestFile, JSON.stringify(d))
+  const r = cli(VERIFY, ['--data-dir', f.dir, '--against-backup', f.set, '--archive-dir', f.out, '--json'], f.dir)
+  assert.equal(r.status, 1)
+  assert.equal(cos(r).against_backup.status, 'unverifiable')
+  f.db.close()
+})
+
+test('AC7 hardening: --resume after a completed archive is idempotent even when every row predated the cutoff (the retained last row forms a new segment)', (t) => {
+  const g = archiveReady(t)
+  const A = (extra = []) => cli(ARCHIVE, ['--data-dir', g.dir, '--industry', 'cosmetic', '--before', '2027-01-01', '--out', g.out, ...extra], g.dir)
+  const token = A().stdout.match(/口令：(ARCHIVE-[0-9A-F]{16})/)[1]
+  assert.equal(A(['--confirm', token]).status, 0)
+  const rows = g.db.prepare('SELECT COUNT(*) n FROM audit_logs').get().n
+  const r = A(['--resume', '--confirm', token])
+  assert.equal(r.status, 0, r.stdout + r.stderr)
+  assert.match(r.stdout, /already-archived/)
+  assert.equal(g.db.prepare('SELECT COUNT(*) n FROM audit_logs').get().n, rows)
+  g.db.close()
+})

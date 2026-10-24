@@ -69,6 +69,7 @@ node scripts/audit-archive.mjs --data-dir /abs/data --industry cosmetic --before
 
 - 续做**不重写**导出，只做核对 + 删除 + 登记锚点 + `AUDIT_ARCHIVE` 审计。核对项：摘要字段与当前计划一致；JSONL 的 SHA-256 等于摘要；读回链校验通过；JSONL 与库里该段逐字节相同（`user_name` / `module` / `ip` 不进哈希，只有这一步能发现它们在崩溃后被改）；段内锚点与摘要一致。任何一项不符：退出 1，库与文件都不动，`EXPORT_DIGEST_MISMATCH` / `EXPORT_VERIFY_MISMATCH` / `EXPORT_DB_MISMATCH`——先查清谁动了文件或库，不要删导出文件。
 - `RESUME_INCOMPLETE`：只有 JSONL 没有摘要（崩在导出途中）；人工确认库未变后删掉残留文件，按第 2 节做新归档。`RESUME_NOTHING`：`--out` 里没有对应导出，`--resume` 不会当成新归档。
+- 续做在删除前会再对导出文件与目录项 fsync。
 - 幂等：已归档完成时再跑 `--resume` 输出 `already-archived`、退出 0，不再删除、不再写审计。
 - 故障注入 `GML_TEST_ARCHIVE_PAUSE_AFTER_EXPORT=1` 只给测试用（仅 `GML_RUNTIME_MODE=test`），生产设置它会被拒绝。
 
@@ -93,9 +94,9 @@ node scripts/audit-verify-chain.mjs --data-dir /abs/data --against-backup /path/
 node scripts/audit-verify-chain.mjs --data-dir /abs/data --against-backup /path/to/…db.audit-manifest.json --archive-dir /abs/archive-dir --strict-anchors
 ```
 
-- 先交叉核对清单：明文 vs 密文清单、清单 vs 备份内容（备份在本机时从备份本身重算；密文备份需要密钥）。对不上 = `manifest-mismatch`，说明清单或备份被动过。
+- 先交叉核对清单：明文 vs 密文清单、清单 vs 备份内容（备份在本机时从备份本身重算）、锚点明细 vs `anchors_digest`。对不上 = `manifest-mismatch`，说明清单或备份被动过。**密文备份 / 密文清单必须设置 `GML_BACKUP_KEY`**，否则 `key-required`（退出 1）——不会只凭明文清单放行。备份时链就已不通过（`verified:false`）的备份不能当基线（`unverifiable`）。
 - 再要求在用链是备份链尾的**后代**：同 id 行的 `row_hash` 相同 = `ok`（输出备份之后前进的行数）；不同 = `rewrite/tip-row-differs`（链被改写并重算；备份之后若做过隐私抹除需对照操作记录）；在用链尾落后于备份 = `rewrite/behind`（尾部截断或回滚到更早状态）。
-- 备份链尾已被归档搬走：必须给 `--archive-dir`（含对应 `.digest.json` + `.jsonl`），脚本校验 JSONL 的 SHA-256、行哈希，并沿 `boundary_id` 接到在用库的 `archive` 锚点；缺摘要 = `unverifiable`（退出 1，不当作通过）。
+- 备份链尾已被归档搬走：必须给 `--archive-dir`（含对应 `.digest.json` + `.jsonl`），脚本校验 JSONL 的 SHA-256、逐行哈希与链衔接（并与摘要的行数 / 端点 / 段尾一致），并沿 `boundary_id` 接到在用库的 `archive` 锚点；缺摘要 = `unverifiable`（退出 1，不当作通过）。
 - 锚点：输出备份之后**新增**的锚点（保留清理 / 隐私抹除 / 归档会产生，伪造的锚点也长这样，请对照操作记录）；`--strict-anchors` 让新增 / 消失的锚点也算失败。备份里登记过、现在仍在 id 范围内却消失的锚点 = `rewrite/anchors-removed`。
 - 退出码：0 通过；1 任一非 `ok`（含清单缺失、`unverifiable`）；2 用法错误。
 - 局限：同时改库、清单、备份与离机副本的攻击者不在防护范围；清单明文含链尾哈希和锚点，不含审计内容。

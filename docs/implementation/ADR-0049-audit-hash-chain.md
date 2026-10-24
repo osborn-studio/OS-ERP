@@ -83,3 +83,17 @@
 **后果**：运维须把清单、归档摘要离机保存（docs/operations/audit-integrity.md §6）；离机保存才是对“能写库的攻击者”的防线，清单本身不防同时改库、清单、备份与离机副本。
 
 **局限**：备份之后合法的隐私抹除若恰好改写了备份链尾那一行，会被报成 `tip-row-differs`，需对照操作记录；备份链尾被保留清理删除时无法证明后代关系（`unverifiable`）；`--resume` 依赖 `--before` 与上次一致（文件名含日期与 id 区间）。
+
+### AC7 Codex 审计（gpt-6.1-sol，只读）与处置
+
+| 级别 | 发现 | 处置 |
+|---|---|---|
+| HIGH | 归档证明只信摘要里的 sha256，改 JSONL 内容并同步改 `file_sha256` 仍得 `ok/via:archive` | 每一跳都跑 `verifyJsonlSegment`，行数 / 首末 id / 首行 `prev_hash` / 段尾哈希必须与摘要一致；回归：重签名后的篡改 JSONL ⇒ `unverifiable` |
+| HIGH | 清单锚点明细可被换成伪造的在用锚点（保留原摘要），`--strict-anchors` 的新增 / 消失清单为空 | 载入清单时强制 `anchors.length == anchors_count` 且 `anchorsDigest(anchors) == anchors_digest`，否则 `manifest-mismatch` |
+| HIGH | 无密钥时跳过密文清单认证与备份重算，仅凭明文清单即可放行 | 存在 `.enc` 清单或 `.enc` 备份而无 `GML_BACKUP_KEY` ⇒ `key-required`（退出 1）；仅有孤立明文清单时放行但注明“未经认证” |
+| HIGH | `--resume` 只读校验导出文件，未 fsync 就提交删除（上次可能崩在 fsync 之前） | 校验通过后对 JSONL、摘要及 `--out` 与其父目录 fsync，失败上抛、不删 |
+| MEDIUM | 全部行早于 `--before` 时首轮保留最后一行，重试 `--resume` 找不到该新段的导出报 `RESUME_NOTHING` | `RESUME_NOTHING` 且 `--out` 里有对应本日期的已完成摘要（库里有 `archive` 锚点）⇒ `already-archived`；回归测试覆盖 |
+| MEDIUM | 备份时链已断（`verified:false`）或无链仍可成为“ok”基线 | 非 `verified:true` ⇒ `unverifiable`；已校验的空链才算 ok |
+| MEDIUM | 清单写失败时清理会删掉他人遗留的同名侧车 | 文件名冲突检查含侧车；清理只删本次创建的文件 |
+
+未处理：隐私抹除恰好改写备份链尾所在行会被报 `tip-row-differs`（见上“局限”，设计取舍：伪造锚点与合法抹除不可区分）。

@@ -21,7 +21,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { createHash, randomBytes } from 'node:crypto'
 import Database from 'better-sqlite3'
-import { verifyChain, chainColumnsPresent } from './audit-chain-verify.js'
+import { verifyChain, verifyJsonlSegment, chainColumnsPresent } from './audit-chain-verify.js'
 import { decryptFile, shredFile } from './backup-crypto.js'
 
 export const MANIFEST_FORMAT = 'os-erp-backup-audit-manifest/1'
@@ -115,10 +115,14 @@ export function loadBackupManifest(set, key) {
   let enc = null
   try { if (fs.existsSync(plainPath)) plain = JSON.parse(fs.readFileSync(plainPath, 'utf8')) } catch (e) { return bad('manifest-mismatch', `明文清单无法解析：${e.message}`) }
   const notes = []
+  // 密文产物存在而没有密钥 ⇒ 无法认证 / 重算，不能让明文清单单独放行（否则改明文清单即可伪造"后代"）
+  if (!key && (fs.existsSync(encPath) || (backupFile.endsWith('.enc') && fs.existsSync(backupFile)))) {
+    return bad('key-required', '备份 / 清单是加密的：需要设置 GML_BACKUP_KEY 才能认证清单并从备份内容重算（拒绝只信明文清单）')
+  }
   if (fs.existsSync(encPath)) {
     if (key) {
       try { enc = withTempPlain(encPath, key, (tmp) => JSON.parse(fs.readFileSync(tmp, 'utf8'))) } catch (e) { return bad('manifest-mismatch', `加密清单认证 / 解析失败：${e.code || e.message}`) }
-    } else notes.push('存在加密清单但未设置 GML_BACKUP_KEY，未核对密文清单')
+    }
   }
   const manifest = enc || plain
   if (!manifest) return bad('manifest-missing', `找不到备份清单：${plainPath}`)
@@ -126,6 +130,12 @@ export function loadBackupManifest(set, key) {
   if (plain && enc && JSON.stringify(plain) !== JSON.stringify(enc)) return bad('manifest-mismatch', '明文清单与加密清单不一致（明文清单被改？）')
   const source = enc ? 'encrypted' : 'plain'
   const chain = manifest.audit_chain
+  if (chain.present) {
+    // 锚点明细必须与摘要自洽：否则可以保留原摘要、把明细换成伪造的在用锚点，让"新增 / 消失"清单全空
+    if (!Array.isArray(chain.anchors) || chain.anchors.length !== chain.anchors_count || anchorsDigest(chain.anchors) !== chain.anchors_digest) {
+      return bad('manifest-mismatch', '清单里的锚点明细与其 anchors_digest / anchors_count 不自洽')
+    }
+  }
   if (fs.existsSync(backupFile)) {
     if (manifest.backup_sha256 && sha256FileSync(backupFile) !== manifest.backup_sha256) return bad('manifest-mismatch', '备份文件 sha256 与清单不符（备份被替换或改动）')
     // 以备份内容本身为准重算：清单被改、或清单来自另一份备份都在这里现形
@@ -134,17 +144,14 @@ export function loadBackupManifest(set, key) {
       try { return summarizeAuditChain(db) } finally { db.close() }
     }
     let actual = null
-    if (backupFile.endsWith('.enc')) {
-      if (key) actual = withTempPlain(backupFile, key, recompute)
-      else notes.push('备份为密文且未设置 GML_BACKUP_KEY，未从备份内容重算')
-    } else actual = recompute(backupFile)
+    actual = backupFile.endsWith('.enc') ? withTempPlain(backupFile, key, recompute) : recompute(backupFile)
     if (actual) {
       const same = chain.present === actual.present &&
         (!chain.present || (chain.tip_hash === actual.tip_hash && chain.last_id === actual.last_id && chain.rows === actual.rows && chain.anchors_digest === actual.anchors_digest))
       if (!same) return bad('manifest-mismatch', '清单中的链尾 / 锚点摘要与备份内容重算结果不一致')
       notes.push('已从备份内容重算并与清单一致')
     }
-  } else notes.push('备份文件不在本机，仅核对了清单自身')
+  } else notes.push('备份文件不在本机，仅核对了清单自身' + (enc ? '' : '（明文清单未经认证）'))
   return { ok: true, manifest, source, notes }
 }
 
@@ -160,10 +167,16 @@ function proveViaArchive(live, T, tipHash, archiveDir, industry, liveFirstId) {
     } catch { /* 无法解析的文件忽略 */ }
   }
   const okFiles = new Map()
+  // 摘要和 JSONL 都在可被改的介质上：除了 sha256，还要逐行重算哈希、核对链衔接与摘要的行数 / 端点 / 首行 prev_hash / 段尾
   const fileOk = (d) => {
     if (!okFiles.has(d)) {
       const p = path.join(archiveDir, path.basename(d.file))
-      okFiles.set(d, fs.existsSync(p) && sha256FileSync(p) === d.file_sha256 ? p : null)
+      let good = null
+      if (fs.existsSync(p) && sha256FileSync(p) === d.file_sha256) {
+        const v = verifyJsonlSegment(p, Array.isArray(d.anchors) ? d.anchors : [])
+        if (v.ok && v.rows === d.rows && v.firstId === d.first_id && v.lastId === d.last_id && v.firstPrevHash === d.first_prev_hash && v.tipHash === d.tip_row_hash) good = p
+      }
+      okFiles.set(d, good)
     }
     return okFiles.get(d)
   }
@@ -187,7 +200,9 @@ function proveViaArchive(live, T, tipHash, archiveDir, industry, liveFirstId) {
 export function compareLiveToBackup(live, manifest, { archiveDir = null } = {}) {
   const B = manifest.audit_chain
   const out = { backup_tip_id: B.last_id ?? null, backup_tip_hash: B.tip_hash ?? null, backup_verified: !!B.verified }
-  if (!B.present || !B.tip_hash) return { ...out, status: 'ok', note: '备份时审计链为空，无可比对的链尾' }
+  if (!B.present) return { ...out, status: 'unverifiable', message: '备份时库里没有审计哈希链（迁移 068 之前），没有可比对的链尾' }
+  if (B.verified !== true) return { ...out, status: 'unverifiable', kind: 'backup-chain-broken', message: `备份时链校验就未通过（${JSON.stringify(B.break ?? null)}）：不能把它当作基线` }
+  if (!B.tip_hash) return { ...out, status: 'ok', note: '备份时审计链为空（已校验），无可比对的链尾' }
   const span = live.prepare('SELECT MAX(id) AS last, MIN(id) AS first FROM audit_logs').get()
   const at = live.prepare('SELECT row_hash FROM audit_logs WHERE id=?').get(B.last_id)
   let verdict

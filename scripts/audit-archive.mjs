@@ -142,6 +142,13 @@ function checkResume(db, code, p) {
   if (!back.ok || back.rows !== p.count || back.firstId !== p.firstId || back.lastId !== p.lastId || back.tipHash !== p.tipHash) fail('EXPORT_VERIFY_MISMATCH', `导出文件读回校验失败：${JSON.stringify(back)}`)
   const fp = dbSegmentFingerprint(db, p)
   if (fp.sha256 !== digest.file_sha256 || JSON.stringify(fp.anchors) !== JSON.stringify(digest.anchors)) fail('EXPORT_DB_MISMATCH', '导出文件与库里这一段不一致（崩溃之后库里的行 / 锚点被改过？未进哈希的列 user_name / module / ip 只有这一步能发现）')
+  // 续做之后紧接着就是提交删除：导出文件刚被读过不等于已落盘（上次可能崩在 fsync 之前），这里补 fsync 文件与目录项；做不到就上抛，不删
+  for (const f of [file, digestFile]) {
+    const fd = fs.openSync(f, 'r')
+    try { fs.fsyncSync(fd) } finally { fs.closeSync(fd) }
+  }
+  fsyncDir(outDir)
+  fsyncDir(path.dirname(outDir))
   return { file, digestFile, digest }
 }
 
@@ -242,8 +249,16 @@ for (const { code, file } of targets) {
         checkResume(db, code, p)
         report.industries[code] = { status: 'resumable', rows: p.count, first_id: p.firstId, last_id: p.lastId, tip_hash: p.tipHash, token: tokenOf(code, p) }
       } catch (e) {
-        failed = true
-        report.industries[code] = { status: 'refused', error: `${e.code || 'ERROR'}: ${e.message}` }
+        // 全部行都早于 --before 时首轮归档会保留最后一行；归档审计行写入后这一行又成了新的可归档段。此时 --resume 找不到它的导出，
+        // 但对应的原归档已经完成（摘要 + 库里的 archive 锚点）⇒ 幂等地报告 already-archived，而不是 RESUME_NOTHING
+        const done = e.code === 'RESUME_NOTHING' ? findCompleted(db, code) : null
+        if (done) {
+          plans.set(code, { count: 0 })
+          report.industries[code] = { status: 'already-archived', digest_file: done }
+        } else {
+          failed = true
+          report.industries[code] = { status: 'refused', error: `${e.code || 'ERROR'}: ${e.message}` }
+        }
       }
     } else report.industries[code] = { status: 'planned', rows: p.count, first_id: p.firstId, last_id: p.lastId, tip_hash: p.tipHash, token: tokenOf(code, p) }
   } finally {

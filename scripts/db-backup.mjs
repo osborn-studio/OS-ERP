@@ -263,7 +263,8 @@ if (!freezeError) {
         // 密文名与明文临时名同序号，冲突时一起换
         for (;;) {
           finalOut = path.join(dir, `${base}_${stamp}${suffix()}${ext}`)
-          if (!fs.existsSync(finalOut) && !fs.existsSync(`${finalOut}.failed`) && !fs.existsSync(`${finalOut}.partial`)) break
+          if (!fs.existsSync(finalOut) && !fs.existsSync(`${finalOut}.failed`) && !fs.existsSync(`${finalOut}.partial`) &&
+              !fs.existsSync(`${finalOut}.audit-manifest.json`) && !fs.existsSync(`${finalOut}.audit-manifest.enc`)) break
           n++
         }
         snap.finalOut = finalOut
@@ -352,16 +353,19 @@ for (const snap of snaps) {
     entry.size = fs.statSync(out).size
     entry.sha256 = sha256File(out)
   }
+  const ownedSidecars = [] // 失败清理只删本次创建的文件，不碰别人遗留的同名文件
   try {
     const manifest = buildManifest({ industry: entry.code, backupFile: entry.file, backupSha256: entry.sha256, summary: chainSummary })
     const text = JSON.stringify(manifest, null, 2) + '\n'
     fs.writeFileSync(`${entry.file}.audit-manifest.json`, text, { mode: 0o600, flag: 'wx' })
+    ownedSidecars.push(`${entry.file}.audit-manifest.json`)
     if (backupKey) {
       const tmpPlain = path.join(dir, `.${path.basename(entry.file)}.manifest.${randomBytes(6).toString('hex')}.plain.tmp`)
       plainTmps.add(tmpPlain)
       try {
         fs.writeFileSync(tmpPlain, text, { mode: 0o600, flag: 'wx' })
         encryptFile(tmpPlain, `${entry.file}.audit-manifest.enc`, backupKey)
+        ownedSidecars.push(`${entry.file}.audit-manifest.enc`)
       } finally {
         shredFile(tmpPlain)
         plainTmps.delete(tmpPlain)
@@ -369,7 +373,7 @@ for (const snap of snaps) {
     }
   } catch (e) {
     failed++
-    for (const f of [entry.file, `${entry.file}.audit-manifest.json`, `${entry.file}.audit-manifest.enc`]) fs.rmSync(f, { force: true })
+    for (const f of [entry.file, ...ownedSidecars]) fs.rmSync(f, { force: true })
     entry.status = 'failed'
     entry.error = `${MANIFEST_FAILED}: ${e.message}`
     entry.file = undefined
