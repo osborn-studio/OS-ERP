@@ -14,11 +14,13 @@
  *        Y 可读｜Y* 可读但所有者必须有门店 / 经销商 / 订货主体绑定（admin / 超管豁免）｜- 无权限点或外部主体被内部类型挡掉。
  *   不手写任何角色 × 类型的结论：改了权限字典、`DOC_VIEW_PERMS`、`DOC_SCOPE_RESOLVERS` 或 `hq-roles.js`，输出就变，`--check` 就红。
  *   有任一在用单据类型缺 `DOC_VIEW_PERMS` / `DOC_SCOPE_RESOLVERS` 登记也直接失败（不会悄悄画成 `-`）。
- * 【诚实边界】矩阵描述的是"该角色的默认账号"；单个账号的 `data_scope` 覆盖、多角色叠加、自定义角色不在内。
+ * 【诚实边界】矩阵描述的是"该角色的默认账号"；单个账号的 `data_scope` 覆盖、多角色叠加、自定义角色不在 Markdown 内（AE2：它们由
+ *   server/lib/role-matrix.js 对一个**只读打开**的既有库计算，只出现在 `--json --db=<绝对路径>` 的 `tenant` 字段，且只含计数）。
  *   Markdown 只含静态结论（无时间戳 / 路径 / 随机），两次运行逐字节一致。
  * 【用法】node scripts/gen-role-matrix.mjs            写入 docs/operations/role-matrix.md
  *         node scripts/gen-role-matrix.mjs --check    与仓库文件比对，漂移（含文件缺失 / 被手改）退出 1（CI）
  *         node scripts/gen-role-matrix.mjs --json     把求值结果以 JSON 打到 stdout（测试按格取样用）
+ *         node scripts/gen-role-matrix.mjs --json --db=<绝对路径>   另给 tenant：该库全部 active 角色（含自定义）+ 覆盖分布 + 多角色并集（只读、仅计数；不能与 --check / 写入同用）
  *         --file=<绝对路径>                            把输出 / 比对目标换成另一个文件（只给测试造漂移用）
  *   临时库用 `os.tmpdir()` 下的新目录，`GML_DATA_DIR` 由本脚本自己设置；不读写仓库 `data/`。
  * ============================================================================
@@ -35,12 +37,26 @@ if (args.has('--check') && args.has('--json')) {
   process.exit(2)
 }
 let OUT = path.join(ROOT, 'docs/operations/role-matrix.md')
+let TENANT_DB = null
 for (const a of args) {
-  if (a.startsWith('--file=') && path.isAbsolute(a.slice(7))) OUT = a.slice(7) // 测试用：对另一个文件做 --check / 写入
+  if (a.startsWith('--db=')) {
+    // AE2：只读打开一个既有库，把含自定义角色 / 覆盖分布 / 多角色并集的结果放进 --json 的 tenant 字段；永不进入 Markdown 与 --check
+    const f = a.slice(5)
+    if (!path.isAbsolute(f) || !fs.existsSync(f)) {
+      console.error(`--db 需要一个已存在库文件的绝对路径：${f}`)
+      process.exit(2)
+    }
+    TENANT_DB = f
+  } else if (a.startsWith('--file=') && path.isAbsolute(a.slice(7))) OUT = a.slice(7) // 测试用：对另一个文件做 --check / 写入
   else if (!['--check', '--json'].includes(a)) {
-    console.error(`未知参数 ${a}。用法：node scripts/gen-role-matrix.mjs [--check|--json] [--file=<绝对路径>]`)
+    console.error(`未知参数 ${a}。用法：node scripts/gen-role-matrix.mjs [--check|--json [--db=<库绝对路径>]] [--file=<绝对路径>]`)
     process.exit(2)
   }
+}
+
+if (TENANT_DB && !args.has('--json')) {
+  console.error('--db 只能与 --json 同用（自定义角色是租户数据，不进入 Markdown，否则 --check 会随租户数据漂移）')
+  process.exit(2)
 }
 
 /** 求值：返回 { roles, types, docflow, mcp, hq }（不含任何时间 / 路径）。 */
@@ -63,7 +79,11 @@ async function evaluate() {
     const { DOC_VIEW_PERMS, canViewDocType, holdsBinding, viewPermsOf, HQ_ONLY_MODULES } = await import('../server/mcp/doc-perms.js')
     const { HQ_ROLES, POS_HQ_ROLES, REQUISITION_HQ_ROLES } = await import('../server/lib/hq-roles.js')
 
-    const roles = db.prepare('SELECT code, name, data_scope FROM roles ORDER BY rowid').all()
+    const { buildRoleMatrix } = await import('../server/lib/role-matrix.js')
+    // 只取内置角色：Markdown / --check 不随租户自定义角色漂移（自定义角色只出现在 --json 的 tenant 字段）
+    const roles = db.prepare('SELECT code, name, data_scope FROM roles WHERE is_builtin=1 ORDER BY rowid').all()
+    // 与 /api/meta/role-matrix 管理员出口同一份计算（server/lib/role-matrix.js）；此处是干净临时库，只有内置角色
+    const matrix = buildRoleMatrix(db)
     const types = db.prepare("SELECT code, name, module FROM doc_types WHERE status='active' ORDER BY sort_order, code").all()
     const problems = []
     for (const t of types) {
@@ -124,9 +144,21 @@ async function evaluate() {
       // 范围谓词的来源（O 格只说"受限"，具体收窄到哪些行由这几项决定；任一变动都会让本文件漂移）
       shape: (({ table, cols, via, kind }) => [table, cols && cols.join('+'), via && `via=${via}`, kind && `kind=${kind}`].filter(Boolean).join(' · '))(DOC_SCOPE_RESOLVERS[t.code] || {})
     }))
+    let tenant = null
+    if (TENANT_DB) {
+      const Database = (await import('better-sqlite3')).default
+      const ro = new Database(TENANT_DB, { readonly: true, fileMustExist: true })
+      try {
+        tenant = buildRoleMatrix(ro, { aggregates: true })
+      } finally {
+        ro.close()
+      }
+    }
     db.close()
     return {
       problems,
+      matrix,
+      tenant,
       totalPerms,
       roles: roles.map((r) => ({ code: r.code, name: r.name, dataScope: r.data_scope, perms: permCount[r.code] || 0 })),
       types: meta,
@@ -154,7 +186,7 @@ function render(model) {
   lines.push('')
   lines.push(
     `内置角色 ${roles.length} 个 × 单据类型 ${types.length} 类。每个格子都是对真实门禁函数求值的结果（见 \`scripts/gen-role-matrix.mjs\` 文件头），不是手写结论。` +
-      '描述的是"该角色的默认账号"：数据范围取角色默认值、放在某个组织里、未绑定门店 / 经销商；单个账号的 `data_scope` 覆盖、多角色叠加与自定义角色不在内。' +
+      '描述的是"该角色的默认账号"：数据范围取角色默认值、放在某个组织里、未绑定门店 / 经销商；单个账号的 `data_scope` 覆盖、多角色叠加与自定义角色不在本文件内（后三者见接口管理员出口与 `--json --db=`，只含计数）。' +
       '这是开发阶段的文档，不是验收或上线声明。'
   )
   lines.push('')
@@ -200,6 +232,16 @@ function render(model) {
   for (const r of roles) {
     lines.push(`| \`${r.code}\` | ${r.name} | ${r.dataScope} | ${r.perms} | ${flag(hq.union, r.code)} | ${flag(hq.pos, r.code)} | ${flag(hq.requisition, r.code)} |`)
   }
+  lines.push('')
+  lines.push('## 五、可见度五档（`GET /api/meta/role-matrix` 同一份计算）')
+  lines.push('')
+  lines.push('`server/lib/role-matrix.js` 的 `buildRoleMatrix` 对每个内置角色推演的五档可见度（接口与本脚本共用，管理员出口另含自定义角色，自定义角色只出现在 `--json --db=<库>` 的 `tenant` 字段）。')
+  lines.push('`full` 全部｜`scoped` 按范围｜`bound` 须绑定｜`global_only` 仅全局｜`-` 无。')
+  lines.push('')
+  const short = { full: 'full', scoped: 'scoped', bound: 'bound', global_only: 'global_only', none: '-' }
+  lines.push(`| 单据 | ${model.matrix.roles.map((r) => `\`${r.code}\``).join(' | ')} |`)
+  lines.push(`|---|${model.matrix.roles.map(() => ':-:').join('|')}|`)
+  for (const t of model.matrix.doc_types) lines.push(`| \`${t.code}\` ${t.name} | ${model.matrix.roles.map((r) => short[model.matrix.cells[r.code][t.code]]).join(' | ')} |`)
   lines.push('')
   return lines.join('\n')
 }

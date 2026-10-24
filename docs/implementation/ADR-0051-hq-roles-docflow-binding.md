@@ -93,3 +93,24 @@ ADR-0011 AB7 补充登记过一条既有的高危发现：`/api/docflow/*` 的�
 - **medium，已修**：生成器把 `strictBinding / hqExempt` 写死为 true，而路由取设置键 `docflow_strict_store_binding`；改默认值时矩阵不会漂移。现在与路由同一判据（`readSetting(...) === true`）。
 - **medium，已修（缩小假阳性面）**：`O` 格把所有受限谓词折叠成一类，解析表的 `cols / via / kind` 变动不改变任何格子。第三节新增"范围谓词来源（表 · 归属列 / 形状）"列，任一变动都使文件漂移；仍然不是逐行谓词证据，文件头与上文"诚实边界"如实说明，具体行级收窄由 `docflow-scope` 等集成测试与本测试的 TF 精确断言兜底。
 - **low，已修**：`--check --json` 因 `--json` 先退出而跳过比对。现在两者同用直接退出 2，测试覆盖。
+
+## AE2 补充：角色矩阵覆盖自定义角色、账号覆盖分布与多角色并集（第十四批）
+
+### 决定
+
+- **一份计算**：`server/lib/role-matrix.js` 的 `buildRoleMatrix(db, { aggregates })` 是唯一计算。`/api/meta/role-matrix`（管理员出口）与 `scripts/gen-role-matrix.mjs` 都调用它；生成器的 Markdown 新增第五节"可见度五档"，即内置角色在该函数下的结果，因此接口逻辑的变动也会让 `--check` 漂移。
+- **全部 active 角色**：矩阵读库内所有 `status='active'` 的角色，`roles[].builtin`（`roles.is_builtin`）区分内置 / 自定义；停用角色不入列。自定义角色走与内置角色相同的 `accessOf`（权限点 x `DOC_VIEW_PERMS` x `DOC_SCOPE_RESOLVERS`；不是总部角色、不是外部主体）。
+- **账号 `data_scope` 覆盖分布（仅管理员出口）**：`scope_overrides[roleCode] = { default_scope, total, overridden, by_scope{all,subtree,org,self,dealer,other} }`，只有计数。按主角色（`users.role`）归属；只计 `status='active'` 且非 admin / 超管的账号；非法取值并入 `other`，原值不外露；响应里没有任何账号标识。
+- **多角色**：schema 支持（`user_roles` 多对多，`permContext` 取权限点并集）。管理员出口 `multi_role = { label:'并集示例', accounts, combos[{roles, accounts, cells}] }`，按角色组合聚合、取账号数最多的前 10 组；并集格取各角色在同一单据类型上最宽的一档（权限点判据本身是"任一命中"）。非管理员持有多个角色时多得 `my_union`（仅自己这几个角色的并集一列，不暴露其它角色），否则为 `null`；非管理员仍只拿自己主角色那一列，不含 `scope_overrides` / `multi_role`。
+- **生成器边界**：`--check` 与 Markdown 只含内置角色（生成器用全新临时库，并显式 `WHERE is_builtin=1`），CI 不随租户数据漂移。自定义角色 / 覆盖分布 / 多角色只在 `--json --db=<绝对路径>` 的 `tenant` 字段（库以 `readonly` 打开，只读；`--db` 不能与 `--check` / 写入同用，退出 2；路径须为已存在文件的绝对路径）。
+- **页面**：主表只列内置角色；新增"自定义角色"分组（自定义角色列 + 覆盖计数表 + 并集示例）与"我的并集"卡，位于 `RoleMatrixExtras.tsx`，`RoleMatrix.tsx` 只加两行挂载与类型。
+
+### 诚实边界
+
+- 并集示例是示例：外部主体闸（`store` / `dealer`）按各角色分别算后取最宽，而账号真实口径取决于其主角色；`permContext` 取权限点时不过滤停用角色，矩阵只列 active 角色，二者在"账号挂了已停用角色"时可能有差。
+- 覆盖分布按主角色归属，不展开"多角色 + 覆盖"的交叉；账号数很少的组合（如 1 个账号）对管理员本就可经 `/auth/users` 查到，非管理员拿不到这些字段。
+
+### 验收
+
+- `tests/role-matrix.test.mjs`（红先）：管理员出口含自定义角色（`builtin:false`，格子与独立推演一致，停用角色不入列）；覆盖分布计数精确（停用账号不计、非法取值进 other、响应不含 `ae2_` 账号名与非法原值）；多角色组合计数与并集格；非管理员不含聚合字段、`my_union` 只对多角色账号非空且不泄漏其它角色；生成器 `--json --db=` 的 `tenant` 与接口管理员出口逐项相等，默认输出只含内置角色，`--db` 误用退出 2。
+

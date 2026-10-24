@@ -1444,6 +1444,7 @@ Prometheus 文本指标渲染 + 抓取令牌校验（ADR-0045）
 | `buildRoleMatrix` | fn | — | — | — |
 | `describeCaller` | fn | — | — | — |
 | `roleMatrixFor` | fn | GET /api/meta/role-matrix | — | — |
+| `unionCells` | fn | — | — | — |
 
 ## `server/lib/sales-order.js`
 
