@@ -421,7 +421,10 @@ test('AB3 triggers keep the index exact across insert / update / delete, and sur
   db.prepare('INSERT INTO audit_logs (action, module) VALUES (?,?)').run('NULLY', 'm')
   assert.equal(ftsRows(db, '"NULLY"').length, 1)
   // AB6 加列：触发器只引用自己的列；新增列的写入既不报错也不改索引
-  db.exec('ALTER TABLE audit_logs ADD COLUMN prev_hash TEXT; ALTER TABLE audit_logs ADD COLUMN row_hash TEXT')
+  // 迁移 068（AB6）已经把这两列加上时跳过（两个工作流合并后两者并存）；否则在这里模拟加列
+  const cols = new Set(db.prepare('PRAGMA table_info(audit_logs)').all().map(c => c.name))
+  if (!cols.has('prev_hash')) db.exec('ALTER TABLE audit_logs ADD COLUMN prev_hash TEXT')
+  if (!cols.has('row_hash')) db.exec('ALTER TABLE audit_logs ADD COLUMN row_hash TEXT')
   const c = db.prepare('INSERT INTO audit_logs (action, module, entity, user_name, prev_hash, row_hash) VALUES (?,?,?,?,?,?)').run('HASHED', 'm', 'e', 'carol', 'p', 'r').lastInsertRowid
   db.prepare('UPDATE audit_logs SET row_hash=? WHERE id=?').run('r2', c)
   assert.deepEqual(ftsRows(db, '"HASHED"'), [Number(c)])
@@ -444,7 +447,8 @@ test('AB3 verify() notices a dropped trigger / table and the runner heals it (an
   const missed = auditRow(db, { action: 'MISSEDWHILEDOWN' })
   assert.deepEqual(ftsRows(db, '"MISSEDWHILEDOWN"'), [])
   const r = runMigrations(db, { mode: 'test', warn: () => {} })
-  assert.deepEqual(r.healed, ['067_audit_fts'])
+  // 068（AB6 哈希链）的 verify 会把裸 INSERT 留下的未接链尾行一并自愈，所以这里只断言 067 被自愈
+  assert.ok(r.healed.includes('067_audit_fts'), `healed: ${r.healed.join(',')}`)
   assert.equal(m067.verify(db), true)
   assert.deepEqual(ftsRows(db, '"MISSEDWHILEDOWN"'), [Number(missed)], 'heal rebuilds the index')
 })
