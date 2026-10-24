@@ -101,7 +101,7 @@ node scripts/audit-archive.mjs --data-dir /abs/data --industry cosmetic --before
 
 #### 加密模式（`GML_BACKUP_KEY`）下同三个注入点（AE6）
 
-加密模式不写 `.partial` / 终名 `.db` / `.failed`：明文只存在于 0600 的 `.plain.tmp`，密文直接写 `<终名>.db.enc`。`tests/fs-fault.test.mjs` 对每点 × 两种模式断言：备份目录里（含点文件）除下表第一行 abort 外**没有任何以 `SQLite format 3` 开头的明文文件**，且 `.db.enc` / `.audit-manifest.enc` 能用当前密钥认证解开。
+加密模式不写 `.partial` / 终名 `.db` / `.failed`：明文只存在于 0600 的 `.plain.tmp`，密文直接写 `<终名>.db.enc`。`tests/fs-fault.test.mjs` 对每点 × 两种模式断言：备份目录里（含点文件）除下表第一行 abort（及下文多库说明）外**没有任何以 `SQLite format 3` 开头的明文文件**，且 `.db.enc` / `.audit-manifest.enc` 能用当前密钥认证解开。
 
 | 注入点 | abort 后磁盘状态 | throw 后 | 恢复 |
 | --- | --- | --- | --- |
@@ -109,7 +109,9 @@ node scripts/audit-archive.mjs --data-dir /abs/data --industry cosmetic --before
 | `backup.before-sidecar` | 已通过回读认证的 `.db.enc`，明文已擦除；无任何清单（可解密可用，缺链清单） | 清单失败路径删掉这份 `.db.enc`；`BACKUP_MANIFEST_FAILED` | 重新备份生成带清单的新备份；孤儿 `.db.enc` 确认后可删，否则按 keep 裁剪 |
 | `backup.after-sidecar` | `.db.enc` + `.audit-manifest.json` + `.audit-manifest.enc` 齐全且 `.enc` 清单与明文清单内容一致；无明文临时文件；缺本次报告 | 未捕获异常、非零退出，磁盘状态同左 | 备份可用；下一次正常运行写报告并按 keep 裁剪 |
 
-注意 `.audit-manifest.json` 在加密模式下仍是明文，内容只有链尾 id / 行哈希 / 行数 / 锚点摘要（不含业务数据），设计如此；需要机密性的离机副本用 `.audit-manifest.enc`。
+**多库（默认三库一起备份）**：三库的明文快照在同一冻结窗口内先全部生成，之后才逐库加密。因此 `abort` 于**第一个库**的 `before-sidecar` / `after-sidecar` 时，其余库的 0600 `.plain.tmp` 仍在盘上（测试 `all three industries` 用例断言：恰好 2 个，且是仅有的明文）。恢复时三个注入点都要检查并**擦除**备份目录里所有 `*.plain.tmp`；`throw` 路径（退出处理器）不留任何明文。
+
+注意 `.audit-manifest.json` 在加密模式下仍是明文，内容固定为 `format / industry / backup_file / backup_sha256 / created_at / audit_chain`（`audit_chain` 为链尾 id / 行哈希 / 行数与锚点明细，含锚点 reason 与时间戳；不含业务行数据；测试断言键集合），设计如此；需要机密性的离机副本用 `.audit-manifest.enc`。
 
 #### 平台差异：macOS 与 Linux（AE6）
 
@@ -119,7 +121,7 @@ node scripts/audit-archive.mjs --data-dir /abs/data --industry cosmetic --before
 | --- | --- | --- | --- |
 | 同目录 `rename` 覆盖已有文件 | 原子；已打开的读者保留旧 inode | 同 | `.partial` → 终名、报告覆盖；两平台一致，严格断言 |
 | `rename` 文件到目录 / 目录到非空目录 | `EISDIR` / `ENOTEMPTY`（或 `EEXIST`） | 同 | 被拒绝而非合并；严格断言 |
-| 目录 `fsync`（只读打开目录） | 成功，但 `fsync` 只保证到磁盘缓存，不保证落盘（需 `F_FULLFSYNC`，Node 不暴露） | 持久化目录项 | db-backup 的目录 fsync 在 macOS 上是尽力而为；`abort` 模拟（进程死、内核存活）对两者结论相同，真正断电的强保证只在 Linux 上成立 |
+| 目录 `fsync`（只读打开目录） | 成功，但 `fsync` 只保证到磁盘缓存，不保证落盘（需 `F_FULLFSYNC`，Node 不暴露） | 持久化目录项 | db-backup 无密钥路径的 `.partial` → 终名后会 fsync 目录，在 macOS 上是尽力而为；`abort` 模拟（进程死、内核存活）对两者结论相同。**本测试只验证进程崩溃，不验证断电持久性**：加密路径（`encryptFile` 的 rename、明文清单的写入）当前没有目录 fsync / 文件 fsync，因此到达 `after-sidecar` 并不证明整套备份 + 清单在断电后仍在，断电后的备份必须再跑一次校验（`--against-backup` / 重新备份） |
 | 以写方式打开目录 | `EISDIR` | 同 | 目录 fsync 必须只读打开 |
 | 大小写 | 默认大小写不敏感（可格式化为敏感） | 敏感 | 所有备份/报告名都是小写库名 + 数字时间戳 + 固定后缀，冲突检测在两者上一致 |
 | `open(..., 'wx')` / `link` 到已存在名 | `EEXIST` | 同 | 清单边车用 `wx`，不会覆盖遗留清单 |

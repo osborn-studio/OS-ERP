@@ -168,12 +168,12 @@ for (const point of FAULT_POINTS.archive) {
 }
 
 // ---------------------------------------------------------------- db-backup
-function backupFixture(t) {
+function backupFixture(t, industries = ['cosmetic']) {
   const dir = tmp(t)
-  const init = spawnSync(process.execPath, ['--input-type=module', '-e', `const {initSchemaFor}=await import('./server/db/index.js');initSchemaFor('cosmetic')`], { cwd: ROOT, env: envFor(dir), encoding: 'utf8', timeout: 120000 })
+  const init = spawnSync(process.execPath, ['--input-type=module', '-e', `const {initSchemaFor}=await import('./server/db/index.js');${JSON.stringify(industries)}.forEach(initSchemaFor)`], { cwd: ROOT, env: envFor(dir), encoding: 'utf8', timeout: 120000 })
   assert.equal(init.status, 0, init.stderr)
   const bdir = path.join(dir, 'backups')
-  const B = (extra = [], env = {}) => run(BACKUP, ['cosmetic', ...extra], dir, env)
+  const B = (extra = [], env = {}) => run(BACKUP, [...(industries.length === 1 ? industries : []), ...extra], dir, env)
   const names = () => (existsSync(bdir) ? readdirSync(bdir).sort() : [])
   const dbs = () => names().filter((f) => /^gml_cosmetic_.*\.db$/.test(f))
   const reports = () => names().filter((f) => /^backup-report-.*\.json$/.test(f))
@@ -322,7 +322,8 @@ for (const point of FAULT_POINTS.backup) {
           assert.equal(encs.length, 1)
           const mj = path.join(f.bdir, `${encs[0]}.audit-manifest.json`); const me = path.join(f.bdir, `${encs[0]}.audit-manifest.enc`)
           assert.ok(existsSync(mj) && existsSync(me), 'both manifests are complete')
-          assert.ok(!isPlainSqlite(mj) && head(me, 4).equals(MAGIC), 'json manifest is metadata, enc manifest is ciphertext')
+          assert.ok(!isPlainSqlite(mj) && head(me, 4).equals(MAGIC), 'json manifest is not a database, enc manifest is ciphertext')
+          assert.deepEqual(Object.keys(JSON.parse(readFileSync(mj, 'utf8'))).sort(), ['audit_chain', 'backup_file', 'backup_sha256', 'created_at', 'format', 'industry'], 'the plain manifest has exactly the buildManifest schema (no data fields)')
           assert.equal(readFileSync(decryptTo(t, me), 'utf8'), readFileSync(mj, 'utf8'), 'the authenticated manifest equals the plain one')
           assert.equal(statSync(mj).mode & 0o777, 0o600)
           decryptFile(path.join(f.bdir, encs[0]), null, KEY_BYTES)
@@ -340,6 +341,25 @@ for (const point of FAULT_POINTS.backup) {
       assert.equal(plaintextSnapshots(f).length, staleTmps)
     })
   }
+}
+
+// 多库：三库的明文快照在同一冻结窗口内**先全部生成**，之后才逐库加密。因此 abort 于第一库的任何注入点时，其余库的 0600 `.plain.tmp` 仍在盘上。
+for (const point of ['backup.before-sidecar', 'backup.after-sidecar']) {
+  test(`db-backup fault ${point} (encrypted, all three industries): abort leaves the not-yet-encrypted databases' 0600 plaintext temps (documented); throw leaves none`, { timeout: 180000 }, (t) => {
+    const f = backupFixture(t, ['cosmetic', 'food', 'apparel'])
+    const ab = f.B([], { ...KEY, ...fault(point, 'abort') })
+    assertDied(ab, 'abort', point)
+    const tmps = f.names().filter((n) => n.endsWith('.plain.tmp'))
+    assert.equal(tmps.length, 2, 'the two databases after the first one are still plaintext')
+    assert.deepEqual(plaintextSnapshots(f).sort(), tmps.sort(), 'those temps are the only plaintext')
+    for (const n of tmps) assert.equal(statSync(path.join(f.bdir, n)).mode & 0o777, 0o600)
+    assert.equal(f.names().filter((n) => n.endsWith('.db.enc')).length, 1, 'only the first database reached ciphertext')
+    const f2 = backupFixture(t, ['cosmetic', 'food', 'apparel'])
+    const th = f2.B([], { ...KEY, ...fault(point, 'throw') })
+    assert.notEqual(th.status, 0)
+    assert.deepEqual(plaintextSnapshots(f2), [], 'handled failure and the exit-time shredder leave no plaintext for any database')
+    assert.equal(f2.names().filter((n) => n.endsWith('.plain.tmp')).length, 0)
+  })
 }
 
 // ---------------------------------------------------------------- 平台差异（macOS / Linux）
@@ -382,15 +402,17 @@ test('platform: directory fsync (the db-backup rename durability step) succeeds 
   // Linux 的目录 fsync 持久化目录项。两者对 abort（进程死、内核存活）模拟的结论相同。
 })
 
-test('platform: case sensitivity differs (APFS default folds case, Linux does not) and the backup/report names never depend on it', (t) => {
+test('platform: case sensitivity differs (APFS default folds case, Linux does not); real generated backup/report names are lowercase so collision checks agree', (t) => {
   const dir = tmp(t, 'os-ae6-plat-')
   writeFileSync(path.join(dir, 'Probe.tmp'), 'x')
   const folds = existsSync(path.join(dir, 'probe.tmp'))
   if (process.platform === 'linux') assert.equal(folds, false, 'Linux filesystems used by CI are case-sensitive')
-  else if (process.platform === 'darwin') assert.equal(typeof folds, 'boolean', 'APFS is case-insensitive by default but may be formatted case-sensitive')
-  // 备份文件名全部由小写库名 + 数字时间戳 + 固定后缀构成：同名冲突检测（existsSync）在两种文件系统上结论一致
-  const f = ['gml_cosmetic_20261024-010203.db', 'gml_cosmetic_20261024-010203_1.db.enc', 'backup-report-20261024-010203.json']
-  for (const n of f) assert.equal(n, n.toLowerCase())
+  // darwin: APFS is case-insensitive by default but may be formatted case-sensitive, so only the probe result is recorded
+  const f = backupFixture(t)
+  assert.equal(f.B([], KEY).status, 0)
+  const generated = f.names().filter((n) => !n.startsWith('.'))
+  assert.ok(generated.length >= 4, `db.enc, two manifests, report: ${generated}`)
+  for (const n of generated) assert.equal(n, n.toLowerCase(), 'generated names carry no uppercase')
 })
 
 test('platform: hard-linking over an existing name is refused (EEXIST) on both, so the wx sidecar write cannot clobber a stale manifest', (t) => {
