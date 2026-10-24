@@ -209,6 +209,9 @@ test('candidate signs EVIDENCE.json when GML_RELEASE_SIGN_KEY is set; verify-rel
   const downgraded = { ...ev, signature: null }
   const t4 = verify(copy('downgrade', JSON.stringify(downgraded)), '--pubkey', keys.pub)
   assert.notEqual(t4.status, 0); assert.match(t4.stderr, /unsigned|signature/i)
+  // 重复的 --pubkey 不猜测信任哪一把
+  const dup = verify(evFile, `--pubkey=${swapped.pub}`, '--pubkey', keys.pub)
+  assert.notEqual(dup.status, 0); assert.match(dup.stderr, /more than once/)
   // 私钥当作 --pubkey 被拒
   assert.notEqual(verify(evFile, '--pubkey', keys.priv).status, 0)
   // 缺失的公钥文件

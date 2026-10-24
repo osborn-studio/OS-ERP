@@ -74,12 +74,21 @@ export function assertOutsideRepository(p, label = 'path') {
 export function loadSigningKey(file) {
   if (typeof file !== 'string' || !path.isAbsolute(file)) throw new Error(`${KEY_ENV} must be an absolute path to a private key PEM`)
   assertOutsideRepository(file, 'Signing key')
-  let st
-  try { st = fs.statSync(file) } catch (error) { throw new Error(`Cannot read signing key ${file} (${error.code || error.message})`) }
-  if (!st.isFile()) throw new Error(`Signing key ${file} is not a regular file`)
-  if (process.platform !== 'win32' && (st.mode & 0o077) !== 0) throw new Error(`Signing key ${file} has permission ${(st.mode & 0o777).toString(8)}; it must not be readable by group/others (chmod 600)`)
+  // 只打开一次，权限与类型取自同一个文件描述符（不给"检查后替换"留缝）。
+  let pem
+  let fd
+  try {
+    fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0))
+    const st = fs.fstatSync(fd)
+    if (!st.isFile()) throw new Error(`Signing key ${file} is not a regular file`)
+    if (process.platform !== 'win32' && (st.mode & 0o077) !== 0) throw new Error(`Signing key ${file} has permission ${(st.mode & 0o777).toString(8)}; it must not be readable by group/others (chmod 600)`)
+    pem = fs.readFileSync(fd)
+  } catch (error) {
+    if (error.code) throw new Error(`Cannot read signing key ${file} (${error.code})`)
+    throw error
+  } finally { if (fd !== undefined) fs.closeSync(fd) }
   let key
-  try { key = createPrivateKey(fs.readFileSync(file)) } catch (error) { throw new Error(`Signing key ${file} is not a readable private key PEM (${error.message.split('\n')[0]})`) }
+  try { key = createPrivateKey(pem) } catch (error) { throw new Error(`Signing key ${file} is not a readable private key PEM (${error.message.split('\n')[0]})`) }
   if (key.asymmetricKeyType !== 'ed25519') throw new Error(`Signing key must be Ed25519, got ${key.asymmetricKeyType}`)
   return key
 }

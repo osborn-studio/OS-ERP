@@ -65,6 +65,7 @@ for (const [file, expected] of Object.entries(manifest.files)) {
 // 证据包（Z5）：仅在给出 --evidence=<EVIDENCE.json> 时校验。证据必须与本包的 MANIFEST 一致，且不得自称未产生的结果。
 const evidenceArg = process.argv.find(a => a.startsWith('--evidence='))?.slice(11)
 // AB4（ADR-0047）：--pubkey <pem> | --pubkey=<pem>（只验签用的公钥，须带外获得）。没有 --evidence 就没有可验的东西：用法错误。
+if (process.argv.filter(a => a === '--pubkey' || a.startsWith('--pubkey=')).length > 1) fail('--pubkey given more than once; refusing to guess which key to trust')
 const pubkeyIdx = process.argv.findIndex(a => a === '--pubkey' || a.startsWith('--pubkey='))
 const pubkeyArg = pubkeyIdx < 0 ? undefined : (process.argv[pubkeyIdx].startsWith('--pubkey=') ? process.argv[pubkeyIdx].slice(9) : process.argv[pubkeyIdx + 1])
 if (pubkeyIdx >= 0 && (!pubkeyArg || pubkeyArg.startsWith('--'))) fail('--pubkey needs a public key PEM path')

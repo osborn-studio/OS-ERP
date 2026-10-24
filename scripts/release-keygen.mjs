@@ -32,16 +32,20 @@ function main() {
     if (fs.readdirSync(dir).length) throw new Error(`${dir} is not empty; refusing to write keys next to existing files`)
     fs.chmodSync(dir, 0o700)
   } else fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
+  assertOutsideRepository(fs.realpathSync(dir), '--out (after creation)') // 创建后按真实路径再判一次
   const privFile = path.join(dir, 'release-sign.key.pem')
   const pubFile = path.join(dir, 'release-sign.pub.pem')
+  const created = []
   try {
     const { privateKey, publicKey } = generateKeyPairSync('ed25519')
     writeExclusive(privFile, privateKey.export({ type: 'pkcs8', format: 'pem' }))
+    created.push(privFile)
     fs.chmodSync(privFile, 0o600)
     fs.writeFileSync(pubFile, publicKey.export({ type: 'spki', format: 'pem' }), { flag: 'wx', mode: 0o644 })
+    created.push(pubFile)
     console.log(JSON.stringify({ private_key: privFile, public_key: pubFile, key_id: publicKeyId(publicKey), note: 'Keep the private key off the repository and off shared storage; distribute only the public key (out of band).' }, null, 2))
   } catch (error) {
-    fs.rmSync(privFile, { force: true }); fs.rmSync(pubFile, { force: true })
+    for (const f of created) fs.rmSync(f, { force: true }) // 只删本次调用自己创建的文件
     throw error
   }
 }
