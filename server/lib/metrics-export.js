@@ -1,0 +1,78 @@
+/**
+ * ============================================================================
+ * 文件标识：server/lib/metrics-export.js ｜ Prometheus 文本指标渲染 + 抓取令牌校验（ADR-0045）
+ * ============================================================================
+ * 【职责】
+ *   · `renderPrometheus({ ops, retry, counters, version })`：把 ops-status 的 gauge、`tx.js` 的写重试统计、
+ *     `process-counters.js` 的事件计数渲染成 text exposition 0.0.4（每个指标族一行 HELP + 一行 TYPE，前缀 `os_erp_`）。
+ *   · `metricsTokenOk(presented, env)`：`GML_METRICS_TOKEN` 的校验。令牌只来自环境变量。
+ *
+ * 【令牌口径】
+ *   · 未设置 / 短于 32 字符 ⇒ 令牌路径整体关闭（短令牌不能靠"设了就生效"变成弱口令）。
+ *   · 比较：双方各取 SHA-256（定长 32 字节）再 `timingSafeEqual` —— 不泄露长度，也不因前缀相同而提前返回。
+ *   · 令牌永不进日志、响应、审计：本模块不写任何输出，调用方也只传入、不回显。
+ *
+ * 【输出边界】只有数字与固定 label 值（reason / version）。不含路径、账号名、IP、备份文件名；
+ *   未知值（取不到备份年龄、磁盘等）输出 -1，与 ADR-0029 的 JSON 计数器同一约定。
+ * ============================================================================
+ */
+import { createHash, timingSafeEqual } from 'node:crypto'
+import { opsCounters } from './ops-status.js'
+import { COUNTER_DEFS } from './process-counters.js'
+
+export const METRICS_TOKEN_MIN_LENGTH = 32
+export const PROMETHEUS_CONTENT_TYPE = 'text/plain; version=0.0.4; charset=utf-8'
+
+const digest = (s) => createHash('sha256').update(s, 'utf8').digest()
+
+/** 令牌是否匹配。`presented` 非字符串 / 空、或服务端未配置有效令牌 ⇒ false。 */
+export function metricsTokenOk(presented, env = process.env) {
+  const configured = env.GML_METRICS_TOKEN
+  if (typeof configured !== 'string' || configured.length < METRICS_TOKEN_MIN_LENGTH) return false
+  if (typeof presented !== 'string' || presented.length === 0) return false
+  return timingSafeEqual(digest(presented), digest(configured))
+}
+
+const escLabel = (v) => String(v).replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n')
+const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
+
+/** 渲染。ops 来自 computeOpsStatus；retry 来自 writeRetryStats()；counters 来自 counterSnapshot()。 */
+export function renderPrometheus({ ops, retry, counters, version }) {
+  const lines = []
+  const family = (name, type, help, samples) => {
+    lines.push(`# HELP os_erp_${name} ${help}`, `# TYPE os_erp_${name} ${type}`)
+    for (const [labels, value] of samples) lines.push(`os_erp_${name}${labels} ${num(value)}`)
+  }
+  const gauge = (name, help, value) => family(name, 'gauge', help, [['', value]])
+  const g = opsCounters(ops)
+
+  gauge('backup_age_seconds', 'Seconds since the newest backup report was generated; -1 when unknown or no report.', g.backup_age_seconds)
+  gauge('backup_last_failed', '1 when the newest backup report recorded a failure, else 0.', g.backup_last_failed)
+  gauge('backup_missing', '1 when no backup report exists in the backup directory, else 0.', g.backup_missing)
+  gauge('migration_checksum_mismatches', 'Applied migrations whose file content no longer matches the recorded checksum; -1 when unknown.', g.migration_checksum_mismatches)
+  gauge('migration_checksum_adopted', 'Migrations registered through explicit checksum adoption; -1 when unknown.', g.migration_checksum_adopted)
+  gauge('login_throttle_unavailable', '1 when the login throttle store fails its read-only probe (logins fail closed), else 0.', g.login_throttle_unavailable)
+  gauge('disk_free_bytes', 'Free bytes on the volume holding the data directory; -1 when unknown.', g.disk_free_bytes)
+
+  for (const [name, def] of Object.entries(COUNTER_DEFS)) {
+    const value = counters?.[name]
+    const samples = def.labelName
+      ? def.values.map((v) => [`{${def.labelName}="${escLabel(v)}"}`, value?.[v]])
+      : [['', value]]
+    family(name, 'counter', def.help, samples)
+  }
+
+  family('write_calls_total', 'counter', 'withWriteRetry invocations (since process start).', [['', retry?.calls]])
+  family('write_retries_total', 'counter', 'Write transactions retried after SQLITE_BUSY/LOCKED (since process start).', [['', retry?.retries]])
+  family('write_retry_exhausted_total', 'counter', 'Write transactions that still failed with SQLITE_BUSY/LOCKED after the last attempt.', [['', retry?.exhausted]])
+  family('write_non_retryable_errors_total', 'counter', 'Write transactions that failed with a non-busy error (not retried).', [['', retry?.non_retryable]])
+
+  // ADR-0036：CSP 目前只有 Report-Only 头、没有报告接收端点（无 report-uri/report-to），服务端收不到任何违规报告。
+  // 恒为 0 不代表"没有违规"——只代表"没有采集"；HELP 写明，且文档的告警规则不引用它。
+  family('csp_violation_reports_total', 'counter', 'CSP violation reports received. Always 0: no report endpoint exists (ADR-0036 report-only mode), so violations are not collected.', [['', 0]])
+
+  family('build_info', 'gauge', 'Build information; value is always 1.', [[`{version="${escLabel(version)}"}`, 1]])
+  return `${lines.join('\n')}\n`
+}
+
+export default { renderPrometheus, metricsTokenOk, METRICS_TOKEN_MIN_LENGTH, PROMETHEUS_CONTENT_TYPE }

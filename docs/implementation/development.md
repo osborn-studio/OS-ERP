@@ -38,6 +38,16 @@ node scripts/regress-isolated.mjs --rounds=3 --industries=cosmetic,food --output
 
 原始测试日志、数据库与生成文件在 `artifacts/` / 临时目录保存，不提交；经过检查的汇总写进 `docs/implementation/validation.md`。原版演示日志可能包含测试 Token，因此不要上传原始日志到公共站点。
 
+## 新人 30 分钟路径
+
+目标：30 分钟内知道“一条请求从哪进、过哪些闸门、碰哪些表、为什么这样定”。下面的地图都是脚本生成的（`node scripts/gen-codemap.mjs`，CI 的 “Codemaps are current” 步骤校验不漂移），是**静态文本扫描**，边界写在各文件的“扫描边界”一节；它们帮你定位，不替代读代码。
+
+1. 5 分钟：读 [AGENTS.md](../../AGENTS.md) 的约束与 [handoff.md](../../handoff.md)，再读本页“验证命令”，知道什么在哪台主机验证。
+2. 10 分钟：读 [ADR 索引](ADR-INDEX.md)，按批次扫标题；挑与你要改的区域相关的 ADR 读“决定”与“边界”节。索引末两列给出每个 ADR 提到的守卫脚本与测试。
+3. 10 分钟：用地图下钻——[路由地图](../CODEMAPS/routes.md)（路由 → 中间件链 → 处理器文件:行 → lib 函数 → 表）、[模块地图](../CODEMAPS/modules.md)（lib 函数被哪些路由/MCP 工具用）、[表地图](../CODEMAPS/tables.md)（表由哪个迁移建/改，哪些文件碰它）。改一个 lib 函数前，先在模块地图看它的调用方。
+4. 5 分钟：认识守卫——`node scripts/check-route-authz.mjs --list`（谁只过了登录；新增路由必须有闸门或登记理由，ADR-0021）、`check-api-contract`、`check-mcp-coverage`、`check-file-header`、`check-data-paths`；它们的用途在各自文件头和相关 ADR。
+5. 改完代码：新增/修改路由、lib 导出、迁移或 ADR 后运行 `node scripts/gen-codemap.mjs`（与 `node scripts/gen-changelog.mjs`）并把生成文件一并提交；`--check` 在 CI 里对漂移变红。
+
 ## 后续工作入口
 
 ChatGPT 负责审阅 handoff 与证据、确定下一批范围；Codex/Claude Code 分别实现与独立审查，可轮换角色。分别使用工作树，不能同时写一个 checkout 或共用数据库/端口。当前尚未调用 Claude Code；独立审查来自本任务的只读审查代理。

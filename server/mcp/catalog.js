@@ -27,10 +27,13 @@
  *   3. **实体范围照旧**：受限令牌只能看到 / 推进自己组织、门店、经销商、仓库范围内的事；
  *      表上取不到任何归属列时**按看不到处理**（fail-closed），不按"能看"处理。
  *   4. **行业绑定照旧**：令牌绑定行业，跨行业读不到。
- *   5. **写操作要幂等键**：由 `server/mcp/server.js` 统一要求（不在本文件）。
+ *   5. **类型级查看权限（X5）**：`doc.query` / `doc.get` / `doc.list_types` 按 `doc-perms.js` 的映射校验
+ *      令牌所有者**此刻**是否有该类型的查看权限点；未登记的类型默认拒绝。
+ *   6. **写操作要幂等键**：由 `server/mcp/server.js` 统一要求（不在本文件）。
  * ============================================================================
  */
 import { TOOLS } from './tools.js'
+import { viewPermsOf } from './doc-perms.js'
 
 /**
  * 由内核驱动的通用单据工具。
@@ -38,9 +41,9 @@ import { TOOLS } from './tools.js'
  *    `scripts/check-mcp-coverage.mjs` 会交叉核对（名字对不上就红），防止"说支持了、其实没实现"。
  */
 export const GENERIC_DOC_TOOLS = [
-  { name: 'doc.list_types', level: 'read', covers: '全部单据类型：状态机 + 可选动作 + 高危标注' },
-  { name: 'doc.query', level: 'read', covers: '按类型 / 状态 / 关键词查单据（受实体范围约束）' },
-  { name: 'doc.get', level: 'read', covers: '单据详情 + 流转留痕（谁在什么时候把它推到哪一步）' },
+  { name: 'doc.list_types', level: 'read', covers: '所有者有权查看的单据类型：状态机 + 可选动作 + 高危标注' },
+  { name: 'doc.query', level: 'read', covers: '按类型 / 状态 / 关键词查单据（受类型级查看权限与实体范围约束）' },
+  { name: 'doc.get', level: 'read', covers: '单据详情 + 流转留痕（受类型级查看权限与实体范围约束）' },
   { name: 'doc.transition', level: 'write', covers: '按内核推进单据（**高危边一律拒绝**，须人工确认）' }
 ]
 
@@ -143,13 +146,15 @@ export function buildMcpCatalog(db) {
       has_lines: !!t.has_lines,
       rows: count,
       owner_cols: ownerCols,
+      /** X5：读这张单据所需的权限点（任一命中即可）；null = 未登记，通用读工具默认拒绝 */
+      view_perms: viewPermsOf(t.code),
       /** true = 受限令牌（按组织/门店/经销商/仓库约束）看不到这张单据 */
       restricted_invisible: ownerCols === 0,
       states: stateOf.get(t.code) || [],
       actions: acts,
       // 「AI 能不能用」的三态，全部由数据推导，不手写
       ai: {
-        read: true, // 由 doc.query / doc.get 覆盖
+        read: viewPermsOf(t.code) !== null, // 由 doc.query / doc.get 覆盖；未登记查看权限点则默认拒绝（X5）
         write: acts.some((a) => !a.danger), // 至少有一条安全边 ⇒ 可写
         // 高危边存在 ⇒ 必须在界面上人工确认才能推进
         needs_human_for_danger: acts.some((a) => a.danger)

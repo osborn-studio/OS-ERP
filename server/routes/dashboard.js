@@ -17,6 +17,9 @@ import { Router } from 'express'
 import { getDb } from '../db/index.js'
 import { ok, wrap } from '../lib/http.js'
 import { requireAuth, requireInternal, requireGlobalData } from '../middleware/auth.js'
+import { countBelowSafe, listBelowSafe } from '../lib/stock.js'
+import { createProfiler } from '../lib/profile.js'
+import { cachedForDb } from '../lib/db-ttl-cache.js'
 
 const r = Router()
 r.use(requireAuth, requireInternal('总部经营看板'), requireGlobalData('总部经营看板'))
@@ -26,51 +29,64 @@ r.get(
   requireAuth,
   wrap((_req, res) => {
     const db = getDb()
-    const one = (sql, ...p) => db.prepare(sql).get(...p)
-
-    const today = one(
-      `SELECT COUNT(*) orders, COALESCE(SUM(receivable_amount),0) amount FROM sales_orders
-       WHERE status NOT IN ('cancelled','draft') AND order_date = date('now','localtime')`
-    )
-    const month = one(
-      `SELECT COUNT(*) orders, COALESCE(SUM(receivable_amount),0) amount, COALESCE(SUM(total_qty),0) qty FROM sales_orders
-       WHERE status NOT IN ('cancelled','draft') AND substr(order_date,1,7) = strftime('%Y-%m','now','localtime')`
-    )
-    const lastMonth = one(
-      `SELECT COALESCE(SUM(receivable_amount),0) amount FROM sales_orders
-       WHERE status NOT IN ('cancelled','draft') AND substr(order_date,1,7) = strftime('%Y-%m','now','localtime','-1 month')`
-    )
-    const purchaseMonth = one(
-      `SELECT COUNT(*) orders, COALESCE(SUM(total_amount),0) amount FROM purchase_orders
-       WHERE status NOT IN ('cancelled') AND substr(order_date,1,7) = strftime('%Y-%m','now','localtime')`
-    )
-    const omsMonth = one(
-      `SELECT COUNT(*) orders, COALESCE(SUM(pay_amount),0) gmv, COALESCE(SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END),0) pending
-       FROM oms_orders WHERE substr(order_time,1,7) = strftime('%Y-%m','now','localtime')`
-    )
-    const inventory = one(
-      'SELECT COALESCE(SUM(qty_on_hand),0) qty, COALESCE(SUM(qty_on_hand*cost_price),0) amount, COUNT(DISTINCT sku_id) skus FROM inventory_stocks'
-    )
-    const receivable = one(
-      `SELECT COALESCE(SUM(receivable_amount - paid_amount),0) unpaid FROM sales_orders WHERE status NOT IN ('cancelled','draft')`
-    )
-    const payable = one(`SELECT COALESCE(SUM(total_amount),0) amount FROM purchase_orders WHERE status IN ('submitted','approved','received')`)
-    const alerts = one(
-      `SELECT
-        (SELECT COUNT(*) FROM sales_orders WHERE status='confirmed') AS pending_delivery,
-        (SELECT COUNT(*) FROM purchase_orders WHERE status IN ('submitted','approved')) AS pending_receipt,
-        (SELECT COUNT(*) FROM oms_orders WHERE status='pending') AS oms_pending,
-        (SELECT COUNT(*) FROM product_skus sk WHERE sk.status='active' AND sk.safe_stock>0
-           AND COALESCE((SELECT SUM(qty_on_hand) FROM inventory_stocks st WHERE st.sku_id=sk.id),0) < sk.safe_stock) AS below_safe,
-        (SELECT COUNT(*) FROM inventory_stocks st WHERE st.qty_on_hand>0 AND st.expire_date IS NOT NULL AND st.expire_date <> ''
-           AND st.expire_date <= date('now','localtime','+90 day')) AS expiring,
-        (SELECT COUNT(*) FROM dealers WHERE status='active' AND credit_limit>0 AND credit_used*1.0/credit_limit>=0.8) AS credit_alert`
-    )
-    const growth = lastMonth.amount > 0 ? Number((((month.amount - lastMonth.amount) / lastMonth.amount) * 100).toFixed(1)) : null
-
-    return ok(res, { today, month, lastMonth, purchaseMonth, omsMonth, inventory, receivable, payable, alerts, growth })
+    const prof = createProfiler('dashboard.summary') // GML_PROFILE=1 才记录；只写日志，不进响应
+    // AA5：汇总只由库内容与当前日期决定（本路由要求全局数据范围，与调用者无关）→ 30 s 内且库无任何写入时直接复用（见 lib/db-ttl-cache.js）
+    const { value, hit } = prof.time('cache_or_compute', () => cachedForDb(db, () => computeSummary(db, prof)))
+    prof.done({ cache: hit ? 'hit' : 'miss' })
+    return ok(res, value)
   })
 )
+
+function computeSummary(db, prof) {
+  const one = (name, sql, ...p) => prof.time(name, () => db.prepare(sql).get(...p))
+
+  const today = one('today',
+    `SELECT COUNT(*) orders, COALESCE(SUM(receivable_amount),0) amount FROM sales_orders
+     WHERE status NOT IN ('cancelled','draft') AND order_date = date('now','localtime')`
+  )
+  const month = one('month',
+    `SELECT COUNT(*) orders, COALESCE(SUM(receivable_amount),0) amount, COALESCE(SUM(total_qty),0) qty FROM sales_orders
+     WHERE status NOT IN ('cancelled','draft') AND substr(order_date,1,7) = strftime('%Y-%m','now','localtime')`
+  )
+  const lastMonth = one('lastMonth',
+    `SELECT COALESCE(SUM(receivable_amount),0) amount FROM sales_orders
+     WHERE status NOT IN ('cancelled','draft') AND substr(order_date,1,7) = strftime('%Y-%m','now','localtime','-1 month')`
+  )
+  const purchaseMonth = one('purchaseMonth',
+    `SELECT COUNT(*) orders, COALESCE(SUM(total_amount),0) amount FROM purchase_orders
+     WHERE status NOT IN ('cancelled') AND substr(order_date,1,7) = strftime('%Y-%m','now','localtime')`
+  )
+  const omsMonth = one('omsMonth',
+    `SELECT COUNT(*) orders, COALESCE(SUM(pay_amount),0) gmv, COALESCE(SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END),0) pending
+     FROM oms_orders WHERE substr(order_time,1,7) = strftime('%Y-%m','now','localtime')`
+  )
+  // 原写法 `…, COUNT(DISTINCT sku_id) FROM inventory_stocks` 会为 DISTINCT 建临时 B 树并扫整张宽表；
+  // 拆成"整表求和"+"idx_stock_sku 覆盖索引上的去重计数"，结果相同（sku_id NOT NULL），medium 库约 142 ms → 39 ms
+  const inventory = prof.time('inventory', () => {
+    const sums = db.prepare('SELECT COALESCE(SUM(qty_on_hand),0) qty, COALESCE(SUM(qty_on_hand*cost_price),0) amount FROM inventory_stocks').get()
+    const { skus } = db.prepare('SELECT COUNT(*) skus FROM (SELECT DISTINCT sku_id FROM inventory_stocks WHERE sku_id IS NOT NULL)').get()
+    return { qty: sums.qty, amount: sums.amount, skus }
+  })
+  const receivable = one('receivable',
+    `SELECT COALESCE(SUM(receivable_amount - paid_amount),0) unpaid FROM sales_orders WHERE status NOT IN ('cancelled','draft')`
+  )
+  const payable = one('payable',`SELECT COALESCE(SUM(total_amount),0) amount FROM purchase_orders WHERE status IN ('submitted','approved','received')`)
+  const alertsRow = one('alertsRow',
+    `SELECT
+      (SELECT COUNT(*) FROM sales_orders WHERE status='confirmed') AS pending_delivery,
+      (SELECT COUNT(*) FROM purchase_orders WHERE status IN ('submitted','approved')) AS pending_receipt,
+      (SELECT COUNT(*) FROM oms_orders WHERE status='pending') AS oms_pending,
+      (SELECT COUNT(*) FROM inventory_stocks st WHERE st.qty_on_hand>0 AND st.expire_date IS NOT NULL AND st.expire_date <> ''
+         AND st.expire_date <= date('now','localtime','+90 day')) AS expiring,
+      (SELECT COUNT(*) FROM dealers WHERE status='active' AND credit_limit>0 AND credit_used*1.0/credit_limit>=0.8) AS credit_alert`
+  )
+  // below_safe 走 lib/stock.js 的预聚合口径（Z3）；对象键顺序保持与改写前一致
+  const { pending_delivery, pending_receipt, oms_pending, expiring, credit_alert } = alertsRow
+  const alerts = { pending_delivery, pending_receipt, oms_pending, below_safe: prof.time('below_safe', () => countBelowSafe(db)), expiring, credit_alert }
+  const growth = lastMonth.amount > 0 ? Number((((month.amount - lastMonth.amount) / lastMonth.amount) * 100).toFixed(1)) : null
+
+  return { today, month, lastMonth, purchaseMonth, omsMonth, inventory, receivable, payable, alerts, growth }
+}
 
 r.get(
   '/trend',
@@ -175,16 +191,8 @@ r.get(
          FROM oms_orders o JOIN platforms pf ON pf.id=o.platform_id WHERE o.status='pending' ORDER BY o.order_time LIMIT 10`
       )
       .all()
-    const stockAlerts = db
-      .prepare(
-        `SELECT sk.id AS sku_id, sk.sku_code, sk.name AS sku_name, p.name AS product_name, sk.safe_stock,
-                COALESCE(SUM(st.qty_on_hand),0) qty_on_hand
-         FROM product_skus sk JOIN products p ON p.id=sk.product_id LEFT JOIN inventory_stocks st ON st.sku_id=sk.id
-         WHERE sk.status='active' AND sk.safe_stock>0
-         GROUP BY sk.id HAVING COALESCE(SUM(st.qty_on_hand),0) < sk.safe_stock
-         ORDER BY (sk.safe_stock - COALESCE(SUM(st.qty_on_hand),0)) DESC LIMIT 10`
-      )
-      .all()
+    // 与预警页同一口径（lib/stock.js），看板只取前 10 且不带 shortage 字段
+    const stockAlerts = listBelowSafe(db, 10).map(({ shortage, ...row }) => row)
     const expiring = db
       .prepare(
         `SELECT st.id, st.batch_no, st.expire_date, st.qty_on_hand, sk.sku_code, sk.name AS sku_name, w.name AS warehouse_name,

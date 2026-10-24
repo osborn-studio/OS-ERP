@@ -242,9 +242,12 @@ export const MENUS: MenuItem[] = [
       { key: 'notify', label: '消息推送', path: '/system/notify' },
       { key: 'imSync', label: '钉钉/飞书同步', path: '/system/im-sync' },
       { key: 'dict', label: '枚举字典', path: '/system/dict' },
-      { key: 'ai', label: 'AI 查询日志', path: '/system/ai-logs' }
+      { key: 'ai', label: 'AI 查询日志', path: '/system/ai-logs' },
+      { key: 'auditLogs', label: '审计日志', path: '/system/audit-logs' }
     ]
-  }
+  },
+  // 我的数据范围：不写 roles = 每个登录用户可见（Z6）。只描述调用者自己，所以不需要权限点。
+  { key: 'my-scope', label: '我的数据范围', icon: ShieldCheck, path: '/system/my-scope' }
 ]
 
 function canSee(roles: string[] | undefined, role: string) {

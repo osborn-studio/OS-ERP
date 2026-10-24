@@ -41,6 +41,7 @@ import { localDate, localNow, addDays } from './dates.js'
 import { writeOcCredit, releaseByOrder, reoccupyByOrder, ocCreditUsed } from './oc-credit.js'
 import { ensureAr, ensureOcAr, AR_SOURCE_OC } from './ar.js'
 import { readSetting } from './settings.js'
+import { registerDocScopeBuilder } from './doc-scope-registry.js'
 // 仓库类型的**唯一出处**。可发货仓型不再在本文件手写清单（那正是下面那处缺陷的成因）：
 // 手写的 `('normal','regional','central','kitchen','consignment')` 里 `regional` 是拼错的
 // （真值 `region`）、`consignment` 不在值域里 ⇒ 区域仓被整类漏掉且**不报错**。
@@ -232,17 +233,65 @@ export function getCustomer(db, id) {
 }
 
 /** 客户树（多级渠道）：返回该客户及其全部下级 */
-export function customerTree(db, rootId = null) {
-  const all = db.prepare('SELECT * FROM oc_customers ORDER BY id').all()
+export function customerTree(db, rootId = null, { scope = null } = {}) {
+  // scope（ocScope 的返回值）给了就只取范围内的客户；上级不在范围内的节点自成一根，不会借上级泄漏名字。
+  const all = scope
+    ? db.prepare(`SELECT c.* FROM oc_customers c WHERE ${scope.sql} ORDER BY c.id`).all(...scope.params)
+    : db.prepare('SELECT * FROM oc_customers ORDER BY id').all()
+  const present = new Set(all.map((c) => c.id))
   const byParent = new Map()
   for (const c of all) {
-    const k = c.parent_customer_id || 0
+    const k = c.parent_customer_id && present.has(c.parent_customer_id) ? c.parent_customer_id : 0
     if (!byParent.has(k)) byParent.set(k, [])
     byParent.get(k).push(c)
   }
   const build = (node) => ({ ...node, children: (byParent.get(node.id) || []).map(build) })
   if (rootId) return build(getCustomer(db, rootId))
   return (byParent.get(0) || []).map(build)
+}
+
+// ---------------------------------------------------------------------------
+// 一·二、客户组织范围（ADR-0027）：订货中心**唯一**的数据范围判据
+// ---------------------------------------------------------------------------
+
+/**
+ * 订货中心数据范围谓词 —— 总览、客户列表 / 树 / 详情、订货单、授信、对账单都调它，不在别处再抄。
+ *
+ * 归属键：`oc_customers.org_id`（客户自身组织：门店 / 经销商档案的 org_id）；下游客户（org_id 为 NULL）
+ * 继承上级客户的组织。订货单 / 对账单 / 授信流水没有自己的归属，一律跟着 `customer_id` 走
+ * （`oc_orders.org_id` 是货主列 owner_org_id，不是客户归属，不能用来收口）。
+ *
+ * 取值：
+ *   · 外部主体（dealer / store 账号）→ 只有自己的客户（`self`）；
+ *   · `all` → `1=1`；
+ *   · `org` / `subtree` → 客户归属组织落在 `orgIds` 内；归属 NULL 的客户对其不可见；
+ *   · `none` / `dealer`（非经销商账号带 dealer 范围）/ 空 `orgIds` / 没有 `req.orgScope` → `1=0`（失败关闭）。
+ *
+ * @param column 引用客户 id 的列表达式（客户表自身用 'c.id'，订货单用 'o.customer_id'）
+ * @returns {{sql:string, params:any[], self:number|null, all:boolean, empty:boolean}}
+ */
+export function ocScope(db, req, column = 'c.id') {
+  const self = selfCustomerId(db, (req && req.user) || {})
+  if (self) return { sql: `${column} = ?`, params: [self], self, all: false, empty: false }
+  const s = req && req.orgScope
+  if (s && s.scope === 'all') return { sql: '1=1', params: [], self: null, all: true, empty: false }
+  const ids = s && Array.isArray(s.orgIds) ? s.orgIds.map(Number).filter(Number.isFinite) : []
+  if (!s || s.scope === 'none' || s.scope === 'dealer' || !ids.length) {
+    return { sql: '1=0', params: [], self: null, all: false, empty: true }
+  }
+  const ph = ids.map(() => '?').join(',')
+  return {
+    sql: `${column} IN (SELECT cs.id FROM oc_customers cs WHERE COALESCE(cs.org_id,
+          (SELECT pp.org_id FROM oc_customers pp WHERE pp.id = cs.parent_customer_id)) IN (${ph}))`,
+    params: ids, self: null, all: false, empty: false
+  }
+}
+
+/** 这个客户在调用者范围内吗？（不存在的客户 = 不在范围内） */
+export function customerInScope(db, req, customerId) {
+  const sc = ocScope(db, req, 'c.id')
+  if (sc.empty) return false
+  return !!db.prepare(`SELECT 1 FROM oc_customers c WHERE c.id = ? AND ${sc.sql}`).get(Number(customerId), ...sc.params)
 }
 
 // ---------------------------------------------------------------------------
@@ -1271,10 +1320,18 @@ export function voidStatement(db, { id, actor = null, reason = null }) {
 // 十一、看板
 // ---------------------------------------------------------------------------
 
-export function overview(db, { customerIds = null } = {}) {
-  const args = customerIds || []
-  const scopeClause = (column, prefix = 'WHERE') => customerIds === null ? ''
-    : `${prefix} ${args.length ? `${column} IN (${args.map(() => '?').join(',')})` : '1=0'}`
+export function overview(db, { customerIds = null, scopeFor = null } = {}) {
+  // scopeFor(column) => ocScope 的返回值（路由用，column 是各子查询里的客户 id 列）；
+  // customerIds 是显式 id 集合（脚本 / 旧调用）。两者都不给 = 全库。
+  // 每条子查询只带一次范围谓词，所以 args 对每条各用一次。
+  const sc = scopeFor ? scopeFor('c.id') : null
+  const args = sc ? sc.params : (customerIds || [])
+  const restricted = sc ? !sc.all : customerIds !== null
+  const scopeClause = (column, prefix = 'WHERE') => {
+    if (!restricted) return ''
+    if (scopeFor) return `${prefix} ${scopeFor(column).sql}`
+    return `${prefix} ${args.length ? `${column} IN (${args.map(() => '?').join(',')})` : '1=0'}`
+  }
   const cond = scopeClause('customer_id')
 
   const byStatus = db
@@ -1384,13 +1441,9 @@ export function ocAccessCheck(db, req, row) {
     }
     return { ok: true }
   }
-  const s = (req && req.orgScope) || { scope: 'all', orgIds: null }
-  if (s.scope === 'all') return { ok: true }
-  if (s.scope === 'none' || !s.orgIds || !s.orgIds.length) {
-    return { ok: false, status: 403, message: '当前身份没有该单据的数据范围' }
-  }
-  if (row.org_id == null || s.orgIds.includes(row.org_id)) return { ok: true }
-  return { ok: false, status: 403, message: '无权操作其他组织的单据' }
+  // 内部账号：按客户归属组织判（ADR-0027）。范围外与不存在同形（404），不泄漏存在性。
+  if (customerInScope(db, req, row.customer_id)) return { ok: true }
+  return { ok: false, status: 404, message: '记录不存在', notFound: true }
 }
 
 // 流转效果归属登记（027 / A01）：订货单的流转占/放授信、分仓、收货并应收，
@@ -1410,9 +1463,20 @@ claimTransitionEffect(
 export default {
   OrderCenterError,
   ensureCustomer, getCustomer, customerTree, creditSnapshot, writeCredit,
-  selfCustomerId, ocAccessCheck,
+  selfCustomerId, ocAccessCheck, ocScope, customerInScope,
   visibleSkus, availableQty, quoteItems, checkOrder, decideApproval,
   customerWarehouseIds, pickWarehouse, createOrder, getOrder, transitionOrder,
   buildStatement, getStatement, settleStatement, confirmStatement,
   statementBalance, closeStatement, voidStatement, overview
 }
+
+// 单据流读接口（ADR-0032）：订货中心范围谓词登记给 docflow 的 DOC_SCOPE_RESOLVERS（按 customer_id 收口，同 ocScope）。
+registerDocScopeBuilder('order-center', ({ db, user, orgScope }) => {
+  let s
+  try {
+    s = ocScope(db, { user: user || {}, orgScope }, 't.customer_id')
+  } catch {
+    return null // 外部主体未绑定订货主体等：失败关闭
+  }
+  return s.empty ? null : { sql: s.sql, params: s.params }
+})

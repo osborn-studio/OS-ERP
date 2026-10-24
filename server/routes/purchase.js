@@ -17,12 +17,14 @@ import { Router } from 'express'
 import { localDate, addDays } from '../lib/dates.js'
 import { getDb } from '../db/index.js'
 import { ok, fail, wrap, pageParams, paged, failFromError } from '../lib/http.js'
-import { requireAuth, requireRole, requirePerm, currentUser, permContext } from '../middleware/auth.js'
+import { requireAuth, requireRole, requirePerm, attachOrgScope, currentUser, permContext } from '../middleware/auth.js'
 import { audit } from '../middleware/audit.js'
+import { withWriteRetry } from '../lib/tx.js'
 // 状态推进的**唯一入口**是内核（`applyTransition`）。本文件过去没有直接用过它，
 // 因为采购订单那条边有副作用、走的是 `transitionPurchaseOrder`；而下面补的三条边
 // （PRT.cancel / PRT.complete / GR.close）都是**零副作用的纯状态推进**，直接走内核即可。
 import { advanceStatus } from '../lib/docflow.js'
+import { assertWarehouseInScope } from '../lib/stock.js'
 import {
   createPurchaseReturn,
   // 采购订单的建单 / 收货 / 状态推进 / 详情重算 / 行级校验 —— 领域服务在 lib/purchase.js，
@@ -31,7 +33,7 @@ import {
   normalizePurchaseOrderLines,
   getPurchaseOrder as loadOrder,
   PURCHASE_ORDER_SELECT, PURCHASE_ORDER_FROM,
-  PurchaseError, DocFlowError, PO_READ_PERMS
+  PurchaseError, DocFlowError, PO_READ_PERMS, assertPurchaseDocInScope, purchaseScopeSql
 } from '../lib/purchase.js'
 
 const r = Router()
@@ -125,6 +127,7 @@ r.post(
   '/orders',
   requireAuth,
   requireRole(...W),
+  attachOrgScope,
   guard((req, res) => {
     const db = getDb()
     const u = currentUser(req)
@@ -132,9 +135,12 @@ r.post(
       supplier_id, warehouse_id, order_date, expect_date, items = [], remark, settle_type,
       fulfill_type = 'hq', target_store_id, target_warehouse_id, source_type = 'manual'
     } = req.body || {}
+    // ADR-0038：订单归属取自仓；入库仓与直运目标仓都必须在调用者范围内（403），否则建出的单会越过后续的单据范围闸。
+    if (warehouse_id != null) assertWarehouseInScope(db, warehouse_id, req.orgScope)
+    if (target_warehouse_id) assertWarehouseInScope(db, target_warehouse_id, req.orgScope)
     // 行级校验、单号、落库、汇总重算全在 `createPurchaseOrder` 里 ——
     // 与 MCP 工具 `purchase.create_order` 是同一段代码。
-    const order = createPurchaseOrder(db, {
+    const order = withWriteRetry(db, () => createPurchaseOrder(db, {
       supplierId: supplier_id,
       warehouseId: warehouse_id,
       orderDate: order_date,
@@ -147,7 +153,7 @@ r.post(
       targetWarehouseId: target_warehouse_id || null,
       sourceType: source_type,
       actor: { id: u.uid || null, name: u.name || u.username || null }
-    })
+    }), { label: 'po.create' })
     audit(req, { action: 'CREATE', module: 'purchase', entity: 'purchase_orders', entityId: order.id })
     return ok(res, order)
   })
@@ -157,13 +163,15 @@ r.put(
   '/orders/:id',
   requireAuth,
   requireRole(...W),
+  attachOrgScope,
   guard((req, res) => {
     const db = getDb()
     const id = Number(req.params.id)
-    const order = db.prepare('SELECT * FROM purchase_orders WHERE id=?').get(id)
-    if (!order) return fail(res, '采购订单不存在', 404)
+    // ADR-0038：先判单据范围（404），再判改仓目标（403）；改仓不得把别组织的单挪进自己的范围
+    const order = assertPurchaseDocInScope(db, 'PO', id, req.orgScope)
     if (!['draft'].includes(order.status)) return fail(res, '只有草稿状态的订单可以修改')
     const { supplier_id, warehouse_id, order_date, expect_date, remark, items } = req.body || {}
+    if (warehouse_id != null) assertWarehouseInScope(db, warehouse_id, req.orgScope)
     // 修改草稿是与建单同形的写入口，校验必须同样严 —— 「只在 create 上拦」等于没拦。
     // 校验器与建单**同一份**（`normalizePurchaseOrderLines`），不再各写一遍。
     const lines = Array.isArray(items) ? normalizePurchaseOrderLines(db, items) : null
@@ -198,9 +206,12 @@ r.post(
   '/orders/:id/status',
   requireAuth,
   requireRole(...W),
+  attachOrgScope,
   guard((req, res) => {
     const db = getDb()
     const id = Number(req.params.id)
+    // ADR-0038：先判单据范围（订单经仓归属组织）再谈流转；范围外与不存在同形 404，不产生任何写。
+    assertPurchaseDocInScope(db, 'PO', id, req.orgScope)
     // 流转规则已从本文件搬进单据内核（doc_actions 表）：
     // 合法状态与合法动作是数据，不是这里的 if；非法流转由内核统一拦截，
     // 并自动写 doc_events 留痕（谁、何时、从哪到哪）。
@@ -211,14 +222,15 @@ r.post(
     //   ② 边权限 `assertEdgePermitted` —— 与请购单（purchase-chain.js）用的是同一份。
     //      原来这一层完全没有，warehouse 角色能 approve 采购订单，而同一角色在请购单上会 403。
     // 这里只负责把「这个人有哪些权限点」（permContext）递下去。
-    const r = transitionPurchaseOrder(db, {
+    const permCtx = permContext(db, req.user)
+    const r = withWriteRetry(db, () => transitionPurchaseOrder(db, {
       id,
       action: req.body?.action,
       remark: req.body?.remark,
       actor: { id: req.user.uid, name: req.user.name || req.user.username },
-      permCtx: permContext(db, req.user),
+      permCtx,
       source: 'api'
-    })
+    }), { label: 'po.transition' })
     audit(req, { action: String(r.action || '').toUpperCase(), module: 'purchase', entity: 'purchase_orders', entityId: id })
     return ok(res, r.order)
   })
@@ -230,10 +242,15 @@ r.post(
   '/orders/:id/receive',
   requireAuth,
   requireRole(...W),
+  attachOrgScope,
   guard((req, res) => {
     const db = getDb()
     const u = currentUser(req)
-    const out = receivePurchaseOrder(db, {
+    // ADR-0038：订单经 warehouse_id 判范围，范围外 404 且不入库。
+    const po = assertPurchaseDocInScope(db, 'PO', Number(req.params.id), req.orgScope)
+    // 直运订单实际入的是 target_warehouse_id（lib/purchase.js 的 inboundWhId），也必须在范围内
+    if (po.fulfill_type === 'direct' && po.target_warehouse_id) assertWarehouseInScope(db, po.target_warehouse_id, req.orgScope)
+    const out = withWriteRetry(db, () => receivePurchaseOrder(db, {
       orderId: Number(req.params.id),
       items: req.body?.items || [],
       inspector: req.body?.inspector || null,
@@ -241,7 +258,7 @@ r.post(
       receiptDate: req.body?.receipt_date || null,
       actor: { id: u.uid || null, name: u.name || u.username || null },
       source: 'api'
-    })
+    }), { label: 'po.receive' })
     audit(req, { action: 'RECEIVE', module: 'purchase', entity: 'purchase_receipts', entityId: out.receipt_id })
     return ok(res, out)
   })
@@ -252,11 +269,14 @@ r.get(
   '/receipts',
   requireAuth,
   requirePerm(...PO_READ_PERMS),
+  attachOrgScope,
   wrap((req, res) => {
     const db = getDb()
     const { page, pageSize, offset } = pageParams(req)
-    const conds = []
-    const params = []
+    // ADR-0038 补充（AA4）：收货单 / 退货单经 warehouse_id → warehouses.org_id 判范围（同 purchaseScopeSql.wh）
+    const scope = purchaseScopeSql(req.orgScope, 'pr')
+    const conds = [scope.wh]
+    const params = [...scope.params]
     if (req.query.keyword) {
       conds.push('(pr.doc_no LIKE ? OR s.name LIKE ?)')
       params.push(`%${req.query.keyword}%`, `%${req.query.keyword}%`)
@@ -279,8 +299,10 @@ r.get(
   '/receipts/:id',
   requireAuth,
   requirePerm(...PO_READ_PERMS),
-  wrap((req, res) => {
+  attachOrgScope,
+  guard((req, res) => {
     const db = getDb()
+    assertPurchaseDocInScope(db, 'GR', Number(req.params.id), req.orgScope)
     const head = db
       .prepare(
         `SELECT pr.*, s.name AS supplier_name, w.name AS warehouse_name, po.doc_no AS order_no
@@ -309,9 +331,11 @@ r.post(
   '/receipts/:id/close',
   requireAuth,
   requireRole(...W),
-  wrap((req, res) => {
+  attachOrgScope,
+  guard((req, res) => {
     const db = getDb()
     const id = Number(req.params.id)
+    assertPurchaseDocInScope(db, 'GR', id, req.orgScope)
     const head = db.prepare('SELECT id, doc_no FROM purchase_receipts WHERE id=?').get(id)
     if (!head) return fail(res, '收货单不存在', 404)
     const out = advanceStatus(db, req, {
@@ -330,16 +354,18 @@ r.get(
   '/returns',
   requireAuth,
   requirePerm(...PO_READ_PERMS),
+  attachOrgScope,
   wrap((req, res) => {
     const db = getDb()
     const { page, pageSize, offset } = pageParams(req)
+    const scope = purchaseScopeSql(req.orgScope, 't')
     const FROM = 'purchase_returns t LEFT JOIN suppliers s ON s.id=t.supplier_id LEFT JOIN warehouses w ON w.id=t.warehouse_id'
-    const total = db.prepare(`SELECT COUNT(*) c FROM ${FROM}`).get().c
+    const total = db.prepare(`SELECT COUNT(*) c FROM ${FROM} WHERE ${scope.wh}`).get(...scope.params).c
     const rows = db
       .prepare(
-        `SELECT t.*, s.name AS supplier_name, w.name AS warehouse_name FROM ${FROM} ORDER BY t.id DESC LIMIT ? OFFSET ?`
+        `SELECT t.*, s.name AS supplier_name, w.name AS warehouse_name FROM ${FROM} WHERE ${scope.wh} ORDER BY t.id DESC LIMIT ? OFFSET ?`
       )
-      .all(pageSize, offset)
+      .all(...scope.params, pageSize, offset)
     return paged(res, { rows, total, page, pageSize })
   })
 )
@@ -348,12 +374,15 @@ r.post(
   '/returns',
   requireAuth,
   requireRole(...W),
+  attachOrgScope,
   wrap((req, res) => {
     const db = getDb()
     const u = currentUser(req)
     const { supplier_id, warehouse_id, return_date, reason, items = [] } = req.body || {}
     if (!supplier_id || !warehouse_id) return fail(res, '请选择供应商与退货仓库')
     if (!items.length) return fail(res, '请添加退货明细')
+    // ADR-0038 补充：退货出库的仓必须在范围内（不存在的仓对受限范围同为 403），先于任何库存写入
+    assertWarehouseInScope(db, warehouse_id, req.orgScope)
     // 单据日期兜底，避免未传日期时触发 NOT NULL 约束错误。
     // 建单、出库、走内核三件事都在 lib/purchase.js 的 createPurchaseReturn 里 ——
     // 质检判退要走同一处，否则「退货单怎么生成」迟早有两套实现。
@@ -381,9 +410,11 @@ r.post(
   '/returns/:id/cancel',
   requireAuth,
   requireRole(...W),
-  wrap((req, res) => {
+  attachOrgScope,
+  guard((req, res) => {
     const db = getDb()
     const id = Number(req.params.id)
+    assertPurchaseDocInScope(db, 'PRT', id, req.orgScope)
     const head = db.prepare('SELECT id, doc_no, status FROM purchase_returns WHERE id=?').get(id)
     if (!head) return fail(res, '采购退货单不存在', 404)
     const out = advanceStatus(db, req, {
@@ -404,9 +435,11 @@ r.post(
   '/returns/:id/complete',
   requireAuth,
   requireRole(...W),
-  wrap((req, res) => {
+  attachOrgScope,
+  guard((req, res) => {
     const db = getDb()
     const id = Number(req.params.id)
+    assertPurchaseDocInScope(db, 'PRT', id, req.orgScope)
     const head = db.prepare('SELECT id, doc_no, status FROM purchase_returns WHERE id=?').get(id)
     if (!head) return fail(res, '采购退货单不存在', 404)
     const out = advanceStatus(db, req, {
@@ -455,11 +488,12 @@ r.get(
   '/orders/:id/receive-suggest',
   requireAuth,
   requirePerm(...PO_READ_PERMS),
-  wrap((req, res) => {
+  attachOrgScope,
+  guard((req, res) => {
     const db = getDb()
     const id = Number(req.params.id)
-    const order = db.prepare('SELECT * FROM purchase_orders WHERE id=?').get(id)
-    if (!order) return fail(res, '采购订单不存在', 404)
+    // ADR-0038 补充：收货建议带出订单行，与订单收货同一道范围判据（范围外 404）
+    assertPurchaseDocInScope(db, 'PO', id, req.orgScope)
     const rows = db
       .prepare(
         `SELECT i.id AS item_id, i.sku_id, sk.sku_code, sk.name AS sku_name, p.shelf_life_months,

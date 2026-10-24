@@ -18,25 +18,23 @@
 // 本模块让 GML 扮演「承接方」，用标准报文演示与主流电商平台的对接能力。
 // 报文格式：{ method, app_key, sign, ...request }，响应统一 { success, code, message, ...data }
 import { Router } from 'express'
-import crypto from 'node:crypto'
 import { getDb } from '../db/index.js'
 import { ok, fail, wrap } from '../lib/http.js'
-import { requireAuth } from '../middleware/auth.js'
+import { requireAuth, requirePerm, requireInternal } from '../middleware/auth.js'
+import { auditStrict } from '../middleware/audit.js'
+import { redactValue } from '../lib/redact.js'
+import { verifyQimenRequest, issuePlatformSecret } from '../lib/qimen-auth.js'
 
 const r = Router()
+const MANAGE_PERM = 'oms.platform.manage'
 
-const md5 = (s) => crypto.createHash('md5').update(s, 'utf8').digest('hex').toUpperCase()
+// 签名契约（ADR-0033）：sign = HMAC-SHA256(平台独立密钥, app_key\nmethod\ntimestamp\nnonce\nsha256(canonicalJson(request)))，
+// 大写十六进制；timestamp 5 分钟窗口，nonce 窗口内一次性。实现与细节见 lib/qimen-auth.js。
+// ADR-0028：签名**必填**——缺签名与错签名同样拒绝（原来缺签名直接放行是"未鉴权调用"后门）。
 
-// 奇门签名规则（演示版）：sign = MD5(app_key + method + secret)
-// 真实环境为 系统参数按 key 排序拼接 + secret 前后缀，此处做等价简化
-function verifySign(platform, method, sign) {
-  if (!sign) return { pass: true, note: '未携带签名（演示环境放行，生产必须校验）' }
-  const expected = md5(`${platform.app_key}${method}GML-DEMO-SECRET`)
-  return { pass: sign === expected, note: 'sign = MD5(app_key + method + secret)' }
-}
-
-function qimenError(res, code, message, extra = {}) {
-  return res.status(200).json({ success: false, code, message, ...extra })
+// 协议错误码走 HTTP 200（外部协议约定，见 check-bizcode-shape 的已声明落点）；鉴权失败（缺/错 app_key、缺/错签名）是 401。
+function qimenError(res, code, message, extra = {}, status = 200) {
+  return res.status(status).json({ success: false, code, message, ...extra })
 }
 
 function logGateway(db, platformId, method, payload, status, message, costMs) {
@@ -45,7 +43,7 @@ function logGateway(db, platformId, method, payload, status, message, costMs) {
      VALUES (?,?,?,?,?,?,?,?,?,?)`
   ).run(
     platformId || null, `qimen:${method}`, 'in', status, 1, status === 'success' ? 1 : 0, status === 'success' ? 0 : 1,
-    message, JSON.stringify(payload).slice(0, 4000), costMs
+    message, JSON.stringify(redactValue({ ...payload, sign: undefined })).slice(0, 4000), costMs
   )
 }
 
@@ -134,11 +132,15 @@ const PLATFORM_CODES = [
 r.get(
   '/capabilities',
   requireAuth,
+  requireInternal('奇门接入清单'),
+  requirePerm(MANAGE_PERM),
   wrap((_req, res) => {
     const db = getDb()
+    // 只列公开标识（app_key）与"是否已签发"；密钥永不出现在任何读接口（ADR-0033）
     const platforms = db
       .prepare(
         `SELECT pf.id, pf.code, pf.platform_code, pf.name, pf.shop_name, pf.adapter, pf.app_key, pf.qimen_url, pf.qimen_wh, pf.shop_code, pf.status,
+                (pf.app_secret_sealed IS NOT NULL AND pf.app_secret_sealed<>'') AS has_secret, pf.app_secret_rotated_at AS secret_rotated_at,
                 w.name AS warehouse_name
          FROM platforms pf LEFT JOIN warehouses w ON w.id=pf.warehouse_id ORDER BY pf.id`
       )
@@ -146,11 +148,36 @@ r.get(
     return ok(res, {
       protocol: '奇门标准化协议 V3.9.5（演示实现）',
       gateway: '/api/qimen',
-      signRule: 'sign = MD5(app_key + method + secret)，演示环境 secret = GML-DEMO-SECRET，未携带签名时放行并记录告警',
+      signRule:
+        'sign = 大写十六进制 HMAC-SHA256(平台密钥, app_key\\nmethod\\ntimestamp\\nnonce\\nSHA256(request 的键名排序紧凑 JSON))；timestamp 为 13 位毫秒时间戳（±5 分钟），nonce 16-64 位且窗口内只能用一次；app_key / timestamp / nonce / sign 均必填，缺失或错误一律 401',
       methods: METHODS,
       platformCodes: PLATFORM_CODES,
       platforms
     })
+  })
+)
+
+// ---------- 平台密钥签发 / 轮换（管理员，ADR-0033）----------
+// 明文只在本响应里出现一次，库里只存封存值；已有密钥必须显式 { rotate: true }（旧密钥立即失效）。
+r.post(
+  '/platforms/:id/secret',
+  requireAuth,
+  requireInternal('奇门密钥管理'),
+  requirePerm(MANAGE_PERM),
+  wrap((req, res) => {
+    const db = getDb()
+    const id = Number(req.params.id)
+    if (!Number.isInteger(id) || id <= 0) return fail(res, '平台 id 非法', 400)
+    // QimenCredentialError 带 status+code，由 wrap 统一转成项目信封（404 / 409 + 稳定码）
+    // 审计写入与凭据变更在同一事务里：审计写不进去就整体回滚（"密钥换了但审计上不存在"不可接受）
+    const issued = db.transaction(() => {
+      const out = issuePlatformSecret(db, id, { rotate: req.body?.rotate === true })
+      // 留痕只记"谁对哪个平台做了签发/轮换"，不带密钥也不带末 4 位
+      auditStrict(req, { action: out.rotated ? 'QIMEN_SECRET_ROTATE' : 'QIMEN_SECRET_ISSUE', module: 'oms', entity: 'platforms', entityId: id, detail: out.app_key })
+      return out
+    })()
+    res.set('Cache-Control', 'no-store')
+    return ok(res, issued)
   })
 )
 
@@ -162,25 +189,26 @@ r.post(
     const started = Date.now()
     const body = req.body || {}
     const method = body.method
+    // 鉴权先于一切：缺 app_key / 未知或停用平台 / 缺签名 / 错签名 ⇒ 401，绝不放行（ADR-0028）。
+    // app_key 必须是非空字符串（对象 / 数组等载荷不进 SQL 绑定）。
+    const appKey = typeof body.app_key === 'string' ? body.app_key : ''
+    if (!appKey) return qimenError(res, '1003', '缺少 app_key', {}, 401)
+    const platform = db.prepare("SELECT * FROM platforms WHERE app_key=? AND status='active'").get(appKey)
+    if (!platform) return qimenError(res, '1003', 'app_key 不存在或未授权', {}, 401)
+    const authResult = verifyQimenRequest(db, platform, body)
+    if (!authResult.ok) {
+      logGateway(db, platform.id, String(method || '').slice(0, 100), { app_key: appKey }, 'fail', authResult.message, Date.now() - started)
+      return qimenError(res, authResult.code, authResult.message, {}, 401)
+    }
     if (!method) return qimenError(res, '1001', '缺少 method 参数')
     if (!METHODS.some((m) => m.method === method)) {
       return qimenError(res, '1002', `不支持的奇门接口：${method}`)
     }
-    // app_key 鉴权
-    const platform = body.app_key
-      ? db.prepare('SELECT * FROM platforms WHERE app_key=?').get(body.app_key)
-      : null
-    if (body.app_key && !platform) return qimenError(res, '1003', 'app_key 不存在或未授权')
-    const signCheck = platform ? verifySign(platform, method, body.sign) : { pass: true, note: '未鉴权调用' }
-    if (!signCheck.pass) {
-      logGateway(db, platform?.id || null, method, { app_key: body.app_key }, 'fail', '签名校验失败', Date.now() - started)
-      return qimenError(res, '1004', '签名校验失败')
-    }
 
     const request = body.request || {}
     const respond = (data) => {
-      logGateway(db, platform?.id || null, method, body, 'success', `${method} 处理成功`, Date.now() - started)
-      return res.json({ success: true, code: 0, message: signCheck.note || 'success', ...data })
+      logGateway(db, platform.id, method, body, 'success', `${method} 处理成功`, Date.now() - started)
+      return res.json({ success: true, code: 0, message: 'success', ...data })
     }
 
     // ---- 各 method 的承接逻辑 ----
@@ -192,7 +220,7 @@ r.post(
       return respond({
         mappings: rows.map((s) => ({
           ownerCode: 'GML',
-          shopCode: request.shopCode || platform?.shop_code || '',
+          shopCode: request.shopCode || platform.shop_code || '',
           itemCode: s.sku_code,
           shopSkuId: `P${s.sku_code}`,
           itemId: s.sku_code,
@@ -203,9 +231,13 @@ r.post(
 
     if (method === 'taobao.qimen.inventory.query') {
       const itemCodes = request.itemCodes || []
-      const wh = request.warehouseCode
-        ? db.prepare('SELECT * FROM warehouses WHERE code=?').get(request.warehouseCode)
+      // 平台绑定了发货仓时只能查自己的仓；给了未知仓编码一律空结果（不能因为查不到仓就退化成全仓汇总）
+      let wh = request.warehouseCode
+        ? db.prepare('SELECT * FROM warehouses WHERE code=?').get(String(request.warehouseCode))
         : null
+      const denied = (request.warehouseCode && !wh) || (platform.warehouse_id && wh && wh.id !== platform.warehouse_id)
+      if (denied) return respond({ warehouseCode: String(request.warehouseCode), items: [] })
+      if (!wh && platform.warehouse_id) wh = db.prepare('SELECT * FROM warehouses WHERE id=?').get(platform.warehouse_id) || null
       const conds = ['st.qty_on_hand <> 0']
       const params = []
       if (wh) {
@@ -223,7 +255,7 @@ r.post(
         )
         .all(...params)
       return respond({
-        warehouseCode: request.warehouseCode || 'ALL',
+        warehouseCode: request.warehouseCode || wh?.code || 'ALL',
         items: rows.map((x) => ({ itemCode: x.sku_code, quantity: x.qty, reserved: x.reserved, available: x.qty - x.reserved }))
       })
     }

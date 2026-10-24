@@ -200,6 +200,22 @@ test('approval todos require an approval permission and only count instances the
     const mgr = await f.account('apv_mgr', 'sales')
     assert.equal(await count(mgr.token), 3)
   })
+  await t.test('approval_manager_global=0 narrows a scope-restricted manager to in-scope documents, leaving approver queues and global scope untouched (Z9)', async () => {
+    const mgr = await f.account('apv_mgr0', 'sales', { data_scope: 'org' })
+    const globalMgr = await f.account('apv_mgr_all', 'sales', { data_scope: 'all' })
+    assert.equal(await count(mgr.token), 3, 'switch default (1): manager sees every pending instance')
+    db.prepare("INSERT OR REPLACE INTO settings (key,value) VALUES ('approval_manager_global','0')").run()
+    try {
+      assert.equal(await count(mgr.token), 0, 'switch 0: restricted manager with no in-scope documents sees none')
+      assert.deepEqual(okData(await api('/api/approval/pending', { token: mgr.token })).list, [])
+      assert.equal(await count(globalMgr.token), 3, 'global-scope manager unaffected')
+      assert.equal(await count(approverA.token), 2, 'own approver queue unaffected')
+      assert.equal(await count(f.admin), 3)
+    } finally {
+      db.prepare("DELETE FROM settings WHERE key='approval_manager_global'").run()
+    }
+    assert.equal(await count(mgr.token), 3, 'switch back to default (1)')
+  })
   await t.test('view-only internal user gets an empty, scoped todo; external and no-permission roles get 403', async () => {
     const wh = await f.account('apv_wh', 'warehouse')
     assert.equal(await count(wh.token), 0)
