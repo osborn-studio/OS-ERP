@@ -772,6 +772,34 @@ gh run view <run-id> --log-failed
 - 未覆盖：`dmserver`；多进程同时写时的锁等待分布（正确性由 `tests/mcp-rate-store-db.test.mjs` 的 4 进程竞速用例验证：恰好放行 `rpm` 次，不是性能数据）；与业务写入争用下的尾延迟；`synchronous=FULL` / 网络盘；表在长期运行后的体积（每令牌每分钟至多 2 个窗口 × 2 种 kind 的行，清理线之外的行由定时器删除）。
 
 
+## AF9 MCP 限速 db 模式在并发业务写入下的尾延迟与写锁等待（**Mac mini M4 10 核 / 临时 WAL 库 / 非目标主机 / 整机负载极高：loadavg 约 48–77（本批其它工作流并行）/ 3 次运行**）
+
+脚本：`node scripts/bench-mcp-rate-contention.mjs [--seconds=8] [--pace-ms=0|5]`。同一个 WAL 库文件上起 **4 个调用者进程**（各自连续 `consume`，db 模式、额度开到 1e6 只走放行路径、读写交替、20 个令牌轮转）和 **1 个写者进程**（"合成风格"：往一张带两个索引的类 `inventory_transactions` 表做多行事务插入；**不是** `synth-data.mjs` 的领域函数全流程）。每个场景 8 秒。`synchronous` 实测为 `1`（NORMAL，better-sqlite3 在 WAL 下的默认），`busy_timeout=5000`，`withWriteRetry` 默认 4 次。延迟 = 每次 `consume()` 的墙钟（含等锁与退避重试）。场景：baseline（无写者）、oltp（1 行/事务，间隔 2 ms）、bulk（200 行/事务，间隔 20 ms）、saturating（200 行/事务，不留间隔）。
+
+### 紧循环调用者（最坏情况：4 个进程各自不停 `consume`，约 3–4 万次/秒；运行 1，运行 2 趋势一致）
+| 场景 | consume/s | p50 | p95 | p99 | max | fail-closed | 重试 / 用尽 | 写者 rows/s（最长事务） |
+|---|---|---|---|---|---|---|---|---|
+| baseline | 46614 | 14 µs | 37 µs | 64 µs | 2317 ms | 0 | 0 / 0 | — |
+| oltp | 38129 | 14 µs | 40 µs | 88 µs | 1543 ms | 0 | 0 / 0 | 51（1416 ms） |
+| bulk | 28033 | 15 µs | 44 µs | 116 µs | 1028 ms | 0 | 0 / 0 | 1867（1091 ms） |
+| saturating | 25785 | 14 µs | 42 µs | 107 µs | 2390 ms | 0 | 0 / 0 | 21733（1633 ms） |
+
+运行 2（同参数）：p95 38–39 µs、p99 66–76 µs 各场景相当，max 1.5–2.0 s，写者 oltp 45 rows/s、bulk 1533、saturating 22956。**读法**：调用者自己的 p50/p95/p99 几乎不受写者影响（写者事务很短，调用者拿锁快）；反过来，**紧循环的调用者把写者饿住了**——oltp 写者按间隔本可达约 500 行/秒，实测 45–51；写者最长一次事务 0.8–2.0 s。`max` 在无写者的 baseline 也有 1.0–2.3 s，说明它主要是整机负载下进程被调度走的停顿（loadavg 50+），不是锁等待；SQLite 的 busy 处理器是轮询睡眠，不公平，多个紧循环进程互相也会饿。生产里单令牌受 `GML_MCP_TOKEN_RPM`（默认 600/分 = 10/s）约束，这个压力是人为的上界，不是预期负载。
+
+### 有节奏的调用者（每次 `consume` 后睡 5 ms，4 个进程约 300–600 次/秒；单次运行）
+| 场景 | consume/s | p50 | p95 | p99 | max | fail-closed | 重试 / 用尽 | 平均等待 | 写者 rows/s（最长事务） |
+|---|---|---|---|---|---|---|---|---|---|
+| baseline | 592 | 0.15 ms | 1.7 ms | 4.7 ms | 46 ms | 0 | 0 / 0 | 0.40 ms | — |
+| oltp | 542 | 0.15 ms | 3.6 ms | 10.9 ms | 63 ms | 0 | 0 / 0 | 0.81 ms | 300（57 ms） |
+| bulk | 544 | 0.16 ms | 3.0 ms | 8.7 ms | 52 ms | 0 | 0 / 0 | 0.71 ms | 8244（49 ms） |
+| saturating | 300 | 0.17 ms | 24.9 ms | 149 ms | 727 ms | 0 | 0 / 0 | 7.0 ms | 43422（178 ms） |
+
+读法：有节奏时调用者的 p50 不变（约 0.15 ms，主要是定时器抖动），尾部随写者占锁时间增长：写者每事务 200 行且不留间隙时 p95 约 25 ms、p99 约 150 ms，平均等待 7 ms；有间隔的 oltp / bulk 写者只把 p95 抬到 3–4 ms。**所有场景 fail-closed 为 0、`withWriteRetry` 没有触发重试**——5 s 的 `busy_timeout` 在这些压力下足够。这与 `OsErpMcpRateStoreWaitHigh`（p95 > 100 ms 持续 15 分钟）的阈值相比：只有"写者几乎不间断占锁"这种极端场景才会接近。
+
+- 未覆盖：`dmserver`；真实业务写（领域函数 + 审计 + 触发器，事务更大更慢）；`synchronous=FULL` 对比（本批只测库默认 NORMAL）；多个业务写者；长期运行后的表体积；负载低时的数字（本机负载 50–77，绝对值与抖动都被放大，只看量级与场景间趋势）。
+- 该告警阈值（100 ms、15 分钟）**不是**用生产流量标定的，上线后按一周 `histogram_quantile(0.95, …)` 的分布复核。
+
+
 ## AE3 OMS `/stats` 与 AI 平台分析：区间谓词前后（**Mac mini / 合成 20 万 OMS 单 + 每单一行明细 / 非目标主机 / 整机负载 8–21**）
 
 脚本：`node scripts/bench-oms-order-time.mjs --rows 200000 --span 365|60 --repeat 21|31`（输出 `ae3` 键；全新临时目录；不跑 `ANALYZE`）。"前"= AE3 之前的 SQL（`date(order_time) >= …`，无迁移 070 索引）；"后"= `server/lib/oms-sql.js` 的新 SQL + 迁移 070 索引。新旧 SQL 在全局与受限组织范围（org 1 = 平台 1、2）、30 / 90 天窗口上逐条返回相同行（脚本断言 `ae3.results_identical: true`，三次运行均为真）。**负载高、同机并行，绝对值抖动可达 2×，只看量级；同计划的语句（`stats_top_skus`、受限范围）前后差异是噪声，不是改动效果。不是 `dmserver` 结果。**
