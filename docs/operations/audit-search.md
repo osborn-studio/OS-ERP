@@ -75,4 +75,5 @@ node scripts/audit-fts-maintain.mjs --data-dir /abs/path/to/data --industry cosm
 - 重复执行同一动作是幂等的（`changed_objects` / `setting_changed` 为 false）；缺 `--reason` 退出 2、什么都不改；构建不支持 FTS5 时 `--enable` 报 `unsupported`、退出 1、设置不改。
 - 步骤 4 持写锁到回填结束；100 万行的实测见 capacity-baseline "AE4"（复现：`node scripts/bench-audit-fts-toggle.mjs --rows 1000000`，在系统临时目录建库、结束即删）。期间并发写入等 `busy_timeout`，可能收到 `SQLITE_BUSY`——低峰执行。
 - 并发与失败：设置与对象在同一个 `BEGIN IMMEDIATE` 事务里改，拿不到锁 → `status: busy`、二者都不变；中途失败 → 整体回滚。两个运维脚本同时执行时后到者等锁，之后看到的是已改好的状态（幂等）。
+- 已知窗口（未修）：`--disable` 恰好提交于某个在途关键词请求「选定走 FTS」与「执行查询」之间时，那一个请求会失败（`no such table: audit_logs_fts`；CSV 导出跨批次可能中途失败），重试即可——低峰执行，或先以 `GML_AUDIT_FTS=0` 重启切走查询路径再 `--disable`。启动自愈与维护脚本恰好重叠时，启动可能得到 `SQLITE_BUSY_SNAPSHOT` 而失败，重启即可。
 - 无 FTS5 构建：CI 的 `audit-no-fts5` job（`ci.yml`）从源码重编译去掉 `SQLITE_ENABLE_FTS5` 的 better-sqlite3 并跑审计视图与维护测试；该 job 在托管 runner 上的首次运行结果尚未验证（见 ADR-0054）。

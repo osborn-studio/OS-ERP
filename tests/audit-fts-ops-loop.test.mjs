@@ -37,8 +37,8 @@ async function freePort() {
 function instance(t) {
   const dir = mkdtempSync(path.join(tmpdir(), 'os-ae4-'))
   const secret = randomBytes(32).toString('hex')
-  t.after(() => rmSync(dir, { recursive: true, force: true }))
-  const state = { dir, child: null, port: 0, stopped: null }
+  const state = { dir, child: null, port: 0, stopped: null, dbs: [] }
+  state.open = () => { const db = new Database(path.join(dir, 'gml_cosmetic.db')); state.dbs.push(db); return db }
   const env = (port) => ({ PATH: process.env.PATH, HOME: dir, TMPDIR: dir, HOST: '127.0.0.1', PORT: String(port), NODE_ENV: 'production', GML_RUNTIME_MODE: 'test', GML_DATA_DIR: dir, GML_DB: '', GML_JWT_SECRET: secret })
   state.start = async () => {
     state.port = await freePort()
@@ -58,7 +58,8 @@ function instance(t) {
     await state.stopped
     state.child = null
   }
-  t.after(() => state.stop())
+  // 一个有序的清理：先停服务并等它退出，再关库连接，最后删目录（t.after 按注册顺序执行，分开注册会先删目录）
+  t.after(async () => { await state.stop(); for (const d of state.dbs) { try { d.close() } catch { /* 已关闭 */ } } rmSync(dir, { recursive: true, force: true }) })
   state.get = async (route, headers = {}) => {
     const res = await fetch(`http://127.0.0.1:${state.port}${route}`, { headers, signal: AbortSignal.timeout(15000) })
     return { status: res.status, body: await res.json() }
@@ -93,8 +94,7 @@ const total = async (inst, admin, kw) => (await inst.get(`/api/meta/audit-logs?k
 test('AE4 operator loop on a real server: disable -> LIKE answers -> restart keeps it off -> enable backfills -> FTS path again', { timeout: 180000, skip: NO_FTS5 ? 'this SQLite build has no FTS5' : false }, async (t) => {
   const inst = instance(t)
   await inst.start()
-  const db = new Database(path.join(inst.dir, 'gml_cosmetic.db'))
-  t.after(() => db.close())
+  const db = inst.open()
   const admin = await inst.login(db)
   db.exec('DELETE FROM audit_logs')
   for (let i = 0; i < 30; i++) ins(db, { user: `user${i % 5}`, action: 'CREATE', entity: `ent${i % 3}` })
@@ -159,8 +159,7 @@ test('AE4 --disable / --enable refuse to run without --reason (nothing changes) 
   const inst = instance(t)
   await inst.start()
   await inst.stop()
-  const db = new Database(path.join(inst.dir, 'gml_cosmetic.db'))
-  t.after(() => db.close())
+  const db = inst.open()
   const before = { objs: objects(db), set: setting(db) }
   for (const a of ['disable', 'enable']) {
     const r = inst.script(a, null)
@@ -177,8 +176,7 @@ test('AE4 --enable while another connection holds the write lock: busy, the inde
   const inst = instance(t)
   await inst.start()
   await inst.stop()
-  const db = new Database(path.join(inst.dir, 'gml_cosmetic.db'))
-  t.after(() => db.close())
+  const db = inst.open()
   for (let i = 0; i < 20; i++) ins(db, { user: `u${i}`, action: 'CREATE' })
   assert.equal(inst.script('disable').status, 0)
   ins(db, { user: 'late', action: 'LATEWORD' })
