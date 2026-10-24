@@ -14,7 +14,7 @@
  *     链尾已被归档搬出库时，用 `--archive-dir` 指向归档摘要目录证明。`--strict-anchors`：备份之后新增 / 消失的锚点也算失败。
  *     AF5（ADR-0055 补充 2）：备份之后在备份链尾范围内（`at_row_id` ≤ 备份链尾 id）新增的锚点同样要求匹配的操作意图 + 审计行印证（同 `--offbox`），
  *     否则 `rewrite`（anchor-without-intent / intent-uncorroborated / …，`intent_problems` 逐条列出）；链尾之后追加区间里的锚点是正常增长。
- *     已被后来的归档搬出库的锚点（只剩在归档摘要里）也同样对账，需要 `--archive-dir`；没给而基线之后有新的 archive 锚点时输出 `notes` 明说未覆盖。
+ *     已被后来的归档搬出库的锚点（只剩在归档摘要里）也同样对账，需要 `--archive-dir`（连得上在用库的验证通过的摘要链）；基线时存活的行被归档搬出过库而没有这条链 ⇒ `unverifiable/archive-evidence-missing`，退出 1。
  *     意图签名用 `--intent-pubkey <公钥PEM>` 验证；`--require-signed-intents` 在这个模式下必须同时给 `--intent-pubkey`（没有 `--pubkey` 可回落）。
  *   · `--offbox <anchor-*.json> --pubkey <公钥PEM>`（AD5，ADR-0055）：验 `offbox-anchor.mjs` 写出的签名锚点（改文件 / 换钥 / 去签名都失败），
  *     并要求每个被锚定的行业库的在用链是锚定链尾的**后代**（同 `--against-backup` 的 ok / rewrite / unverifiable 口径；`--archive-dir` 同样适用）。
@@ -45,7 +45,7 @@ if (!!args.offbox !== !!args.pubkey) die('USAGE', '--offbox 与 --pubkey 必须�
 if ((args['archive-dir'] || args['strict-anchors']) && !args['against-backup'] && !(args['archive-dir'] && args.offbox && !args['strict-anchors'])) die('USAGE', '--archive-dir / --strict-anchors 只与 --against-backup 一起使用')
 
 const { verifyChain, chainColumnsPresent } = await import('../server/lib/audit-chain-verify.js')
-const { loadBackupManifest, compareLiveToBackup, openArchiveIndex, archivedAnchorsSince, archivedRowLookup } = await import('../server/lib/audit-anchor-manifest.js')
+const { loadBackupManifest, compareLiveToBackup, openArchiveIndex, archiveEvidence, archivedAnchorsSince, archivedRowLookup } = await import('../server/lib/audit-anchor-manifest.js')
 const { loadBackupKey } = await import('../server/lib/backup-crypto.js')
 const { loadPublicKey } = await import('./lib/evidence-sign.mjs')
 const { loadAnchor, asManifest } = await import('./lib/offbox-anchor.mjs')
@@ -55,24 +55,38 @@ const { verifyAnchorIntents } = await import('../server/lib/audit-anchor-intent.
  * 基线（离机锚点 / 备份清单）之后在“已锚定范围内”（at_row_id ≤ 基线链尾 id）新增的锚点逐个做操作意图对账（--offbox 与 --against-backup 共用）。
  * `cmp` 是 compareLiveToBackup 的结果（原地补字段）；只在 cmp.status === 'ok' 时对账。`base` = { first_id, last_id, anchors }（基线链摘要）；链尾为空 ⇒ 没有已锚定范围。
  * 两类来源：① 仍在库里的新增锚点；② （AF5）已被后来的归档搬出库、但仍记在验证通过的归档摘要里的锚点——伪造的桥锚点可以借一次归档洗出库而躲过 ①。
- * ② 需要 --archive-dir；没给而基线之后又确有新增的 archive 锚点时，在 notes 里注明“归档段内的锚点没有对账”。
+ * ② 需要连得上在用库的归档摘要链（--archive-dir）；基线时存活的行被归档搬出过库却没有这条链 ⇒ `unverifiable/archive-evidence-missing`（失败闭合，不静默跳过）。
+ * 基线有链尾却没有锚点清单 ⇒ `unverifiable/baseline-anchor-list-missing`。
  */
 function reconcileInRange(db, code, cmp, base, notes) {
+  if (cmp.status !== 'ok') return
   const lastId = base.last_id ?? null
+  // 基线链尾存在却没有锚点清单：分不出“基线之后”新增了哪些锚点——不能当作没有，失败闭合
+  if (lastId != null && !Array.isArray(base.anchors)) {
+    cmp.status = 'unverifiable'
+    cmp.kind = 'baseline-anchor-list-missing'
+    cmp.message = '基线（离机锚点 / 备份清单）没有锚点清单，无法分辨基线之后新增的锚点；请用新的离机锚点 / 备份重做基线'
+    return
+  }
   const live = (cmp.anchors_added || []).filter((a) => lastId != null && a.at_row_id <= lastId)
   const archiveDir = args['archive-dir'] ? path.resolve(args['archive-dir']) : null
-  const index = archiveDir ? openArchiveIndex(archiveDir, code) : null
-  const archived = index && cmp.status === 'ok' ? archivedAnchorsSince(index, base) : []
+  const index = archiveDir ? openArchiveIndex(archiveDir, code) : { digests: [], fileOk: () => null }
+  // 基线时存活的行如果后来被归档搬出过库，就必须有连得上的归档证据（摘要 + JSONL）才能对账那段；没有 ⇒ unverifiable，而不是静默当作没有
+  const ev = archiveEvidence(db, index, base)
+  if (ev.needed && !ev.ok) {
+    cmp.status = 'unverifiable'
+    cmp.kind = 'archive-evidence-missing'
+    cmp.message = `基线之后，基线时存活的行被归档搬出过库（在用库第一行是 archive 边界），但${archiveDir ? `${archiveDir} 里没有一条验证通过、连得到在用库的归档摘要链` : '没有给 --archive-dir'}：已被搬出库的锚点无法对账。请用 --archive-dir 指向离机保存的归档摘要目录，或在归档之后重做离机锚点 / 备份作为新基线`
+    return
+  }
+  const archived = ev.needed ? archivedAnchorsSince(ev.chain, base) : []
   const inRange = [...live, ...archived]
   cmp.anchors_added_in_range = inRange.length
   if (archived.length) cmp.archived_anchors_in_range = archived.length
-  const extra = []
-  if (!archiveDir && cmp.status === 'ok' && (cmp.anchors_added || []).some((a) => a.kind === 'archive')) extra.push('基线之后做过归档，但没有给 --archive-dir：已被归档搬出库的锚点没有对账（给 --archive-dir 指向归档摘要目录才能覆盖）')
-  if (!inRange.length || cmp.status !== 'ok') { if (extra.length) cmp.notes = [...(notes || []), ...extra]; return }
-  const iv = verifyAnchorIntents(db, inRange, { publicKey: intentPublicKey, requireSigned: !!args['require-signed-intents'], minAuditRowId: lastId, archivedRow: index ? archivedRowLookup(index) : null })
+  if (!inRange.length) return
+  const iv = verifyAnchorIntents(db, inRange, { publicKey: intentPublicKey, requireSigned: !!args['require-signed-intents'], minAuditRowId: lastId, archivedRow: ev.needed ? archivedRowLookup(ev.chain, index) : null })
   cmp.intents_checked = iv.checked
-  if (!intentPublicKey) extra.push('意图签名未验证：没有给公钥（--intent-pubkey）；未签名的意图只能挡住只改了锚点表的伪造')
-  if (extra.length) cmp.notes = [...(notes || []), ...extra]
+  if (!intentPublicKey) cmp.notes = [...(notes || []), '意图签名未验证：没有给公钥（--intent-pubkey）；未签名的意图只能挡住只改了锚点表的伪造']
   if (iv.ok) return
   cmp.status = 'rewrite'
   cmp.kind = iv.problems[0].kind

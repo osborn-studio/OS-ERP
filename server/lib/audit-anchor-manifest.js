@@ -185,17 +185,50 @@ export function openArchiveIndex(archiveDir, industry) {
 }
 
 /**
- * 基线（备份清单 / 离机锚点条目）之后被归档搬出库的锚点（AF5）：在**验证通过的**摘要里、`first_id ≤ at_row_id ≤ last_id`（基线时存活行上的锚点）
+ * 与在用库**连得上**的归档摘要链（AF5）：从在用库第一行的 `archive` 锚点（at_row_id = 在用库最小审计行 id，anchor_hash = 摘要段尾）往回，
+ * 沿 `boundary_id` / `first_prev_hash` / `tip_row_hash` 一段一段接上去，每段 JSONL 都必须验证通过。不在这条链上的摘要（目录里被人放进来的、
+ * 自洽但不属于本库的文件）既不能提供锚点清单也不能提供印证行。返回 [最新段, …, 最旧段]；在用库第一行不是 archive 边界 ⇒ []。
+ */
+export function connectedArchive(live, index) {
+  const first = live.prepare('SELECT MIN(id) AS id FROM audit_logs').get().id
+  if (first == null) return []
+  const hashes = new Set(live.prepare("SELECT anchor_hash FROM audit_chain_anchors WHERE kind='archive' AND at_row_id=?").all(first).map((r) => r.anchor_hash))
+  const chain = []
+  let cur = index.digests.find((d) => d.boundary_id === first && hashes.has(d.tip_row_hash) && index.fileOk(d))
+  while (cur && !chain.includes(cur)) {
+    chain.push(cur)
+    cur = index.digests.find((d) => d.boundary_id === chain.at(-1).first_id && d.tip_row_hash === chain.at(-1).first_prev_hash && index.fileOk(d))
+  }
+  return chain
+}
+
+/**
+ * 基线（备份清单 / 离机锚点条目 `base` = { first_id, last_id, anchors }）之后，基线时存活的行是否被归档搬出过库、因而需要归档证据（AF5）：
+ * 在用库第一行是 `archive` 锚点的边界、且 id 大于基线 first_id。需要时 `connectedArchive` 必须一路接到覆盖 `base.first_id` 的那一段，否则对账是盲的。
+ * 返回 { needed, ok, chain }。
+ */
+export function archiveEvidence(live, index, base) {
+  const first = live.prepare('SELECT MIN(id) AS id FROM audit_logs').get().id
+  if (base.first_id == null || base.last_id == null || first == null || first <= base.first_id) return { needed: false, ok: true, chain: [] }
+  const boundary = live.prepare("SELECT 1 FROM audit_chain_anchors WHERE kind='archive' AND at_row_id=? LIMIT 1").get(first)
+  const chain = connectedArchive(live, index)
+  if (!boundary) return { needed: false, ok: true, chain }
+  return { needed: true, ok: chain.length > 0 && chain.at(-1).first_id <= base.first_id, chain }
+}
+
+/**
+ * 基线之后被归档搬出库的锚点（AF5）：在**连得上、验证通过的**摘要（`connectedArchive`）里、`first_id ≤ at_row_id ≤ last_id`（基线时存活行上的锚点）
  * 且不在基线锚点清单里的锚点。早于基线的归档只涉及 `< first_id` 的行，不在此列；基线之后的追加区间（`> last_id`）是正常增长。
  * 这些锚点已不在库里，却仍被摘要用来承认 JSONL 里的断口——伪造的桥锚点可以借一次归档洗出库，所以也要做意图对账。
+ * `chain` = connectedArchive 的结果。
  */
-export function archivedAnchorsSince(index, { first_id: firstId, last_id: lastId, anchors }) {
-  if (firstId == null || lastId == null || !Array.isArray(anchors)) return [] // 没有基线锚点清单就分不出“基线之后”新增的，不猜
+export function archivedAnchorsSince(chain, { first_id: firstId, last_id: lastId, anchors }) {
+  if (firstId == null || lastId == null || !Array.isArray(anchors)) return []
   const had = new Set(anchors.map(anchorKey))
   const out = []
   const seen = new Set()
-  for (const d of index.digests) {
-    if (!Array.isArray(d.anchors) || !index.fileOk(d)) continue
+  for (const d of chain) {
+    if (!Array.isArray(d.anchors)) continue
     for (const a of d.anchors) {
       if (!a || typeof a !== 'object' || !Number.isSafeInteger(a.at_row_id) || a.at_row_id < firstId || a.at_row_id > lastId) continue
       const k = anchorKey(a)
@@ -207,10 +240,10 @@ export function archivedAnchorsSince(index, { first_id: firstId, last_id: lastId
   return out
 }
 
-/** 在验证通过的归档 JSONL 里按 id 找审计行（{ id, action, detail }）；没有 ⇒ null */
-export function archivedRowLookup(index) {
+/** 在连得上的归档链的 JSONL 里按 id 找审计行（{ id, action, detail }）；没有 ⇒ null */
+export function archivedRowLookup(chain, index) {
   return (id) => {
-    for (const d of index.digests) {
+    for (const d of chain) {
       if (!(d.first_id <= id && id <= d.last_id)) continue
       const file = index.fileOk(d)
       if (!file) continue

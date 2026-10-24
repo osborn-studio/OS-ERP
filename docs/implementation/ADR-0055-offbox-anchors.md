@@ -82,8 +82,12 @@ Codex 审计（gpt-6.1-sol，只读，针对相对 batch-thirteen 的差异，�
 2. **删除 `corroboration-archived` / `acceptArchived`**。AE5 的补充留了一条“印证行已被后来的归档搬出库 ⇒ 仅 `--accept-new-anchors` 放行”的路径，并自称“几乎不可达”。AF5 证明它对**库内锚点**严格不可达：被印证的锚点满足 `at_row_id ≤ 基线链尾 < 印证行 id`；印证行要被归档搬走，那次归档的段尾 `lastId ≥` 印证行 id，而 `audit-archive` 在同一事务里 `DELETE FROM audit_chain_anchors WHERE at_row_id <= lastId`，该锚点必然一起被删。其他删行途径也造不成这种组合：保留清理只删 `module ∈ {master, notify}` 的行，操作审计行不在其列。回归 `the "corroborating row was archived" path is unreachable`：真实跑两次归档，印证行与库内范围内锚点同时消失；再补回一条范围内锚点 + 指向已归档行的伪造意图，**无论带不带 `--accept-new-anchors`** 都是 `rewrite/intent-uncorroborated`。删除前，这个伪造在带开关时会通过（红测试证实），保留这条路径是一个可用的绕过口。
    - 行为变化：`--accept-new-anchors` 不再有任何作用；脚本打印一行提示后忽略它（不报用法错误，避免旧运维脚本直接失效；结果只会更严）。
    - 这不意味着“被归档的锚点无需对账”，见下一条。
-2b. **被归档搬出库的锚点改由摘要对账（Codex AF5 高危的修复）**。库内不可达 ≠ 无需检查：归档把段内锚点导出进摘要后从库里删掉，伪造的桥锚点若先于一次合法归档登记，就会随这次归档“洗出”库（库里只剩 archive 锚点），对账看到零个范围内锚点。修复：给了 `--archive-dir` 时，`--offbox` 与 `--against-backup` 都用 `openArchiveIndex`（摘要 + JSONL 逐行重算哈希，验不过的摘要不被采信）取出验证通过的摘要里、`first_id ≤ at_row_id ≤ last_id` 且不在基线锚点清单里的锚点（`archivedAnchorsSince`），与库内新增锚点一起走同一套意图对账；它们的印证行已被归档时，`verifyAnchorIntents` 的 `archivedRow` 从验证通过的归档 JSONL 里取（`archivedRowLookup`）。早于基线的归档只涉及 `< first_id` 的行，不算新增；基线没有锚点清单时不猜。回归：`laundered … archive digest`（两种比对）、`a legitimate retention-style anchor that was later archived …`、以及“两次归档”夹具里第一次归档的锚点现在经第二次归档的摘要 + 归档 JSONL 里的印证行通过对账。
-   - 没有 `--archive-dir` 时无法对账这部分：输出 `notes` 明说“基线之后做过归档，但没有给 --archive-dir”，文档要求做过归档之后复核必须带离机保存的归档摘要目录。这是**诚实的限制，不是修复**：不带目录时，被归档洗出库的伪造锚点看不见。
+2b. **被归档搬出库的锚点改由摘要对账（Codex AF5 高危的修复，二轮收紧）**。库内不可达 ≠ 无需检查：归档把段内锚点导出进摘要后从库里删掉，伪造的桥锚点若先于一次合法归档登记，就会随这次归档“洗出”库，对账看到零个范围内锚点。修复：
+   - `openArchiveIndex`（摘要 + JSONL 逐行重算哈希，验不过的不采信）→ `connectedArchive`：只收**一路连到在用库**的摘要链（从在用库第一行的 `archive` 锚点往回，沿 `boundary_id` / `first_prev_hash` / `tip_row_hash` 接）。目录里被放进来的、自洽但不连在用库的摘要既不能提供锚点清单，也不能提供印证行（二轮 Codex：伪造的单行 JSONL 可以“印证”伪造意图；多出的无意图锚点也可以让合法归档被误拒）。
+   - `archivedAnchorsSince`：链上摘要里 `first_id ≤ at_row_id ≤ last_id`（基线时存活行上的锚点）且不在基线锚点清单里的锚点，与库内新增锚点一起走同一套意图对账；印证行也已被归档时，`verifyAnchorIntents` 的 `archivedRow`（`archivedRowLookup`，只查连得上的链）从归档 JSONL 里取。早于基线的归档只涉及 `< first_id` 的行，不算新增。
+   - **失败闭合**（二轮 Codex：缺目录/坏 JSONL 时静默跳过会让同一伪造躲过）：`archiveEvidence` 判断基线时存活的行是否被归档搬出过库（在用库第一行是 `archive` 边界且 id 大于基线 first_id）；是则必须有覆盖基线 first_id 的连通链，否则 `unverifiable/archive-evidence-missing`（退出 1）。基线有链尾却没有锚点清单 ⇒ `unverifiable/baseline-anchor-list-missing`（此前分不出新增锚点却当作没有）。
+   - 行为变化：归档之后复核必须带 `--archive-dir`，或在归档后重做离机锚点 / 备份作为新基线（新基线 first_id 越过被归档的行就不再需要）。AE5 里“归档不需要任何开关”的说法只对不需要归档证据的情形成立。
+   - 回归：`laundered … archive digest`（两种比对，含缺目录 / 空目录 / JSONL 被改 ⇒ `archive-evidence-missing`）、`planted … archive segment`、`planted digest carrying an unrelated anchor`、`a legitimate retention-style anchor that was later archived …`、以及“两次归档”夹具里第一次归档的锚点现在经第二次归档的摘要 + 归档 JSONL 里的印证行通过对账。
 3. **意图密钥保管**。`release-keygen.mjs --purpose anchor-intent` 写 `anchor-intent.key.pem`（0600、O_EXCL）+ `anchor-intent.pub.pem`；`--purpose release`（缺省）行为不变。拒绝规则共用同一实现（相对路径、仓库 / 任何 git 工作树内含符号链接、非空目录）；未知 / 重复 / 缺值的 `--purpose`（含 `constructor` / `toString` / `__proto__` 这类原型属性名，用 `Object.hasOwn` 判断）在创建任何东西之前失败。输出多一个 `purpose`，提示把私钥放在执行清理 / 归档 / 抹除的操作机上、与发行密钥分开、不放业务主机。`GML_ANCHOR_INTENT_KEY` 的加载规则（`loadIntentSigner`）不变，测试加了“keygen 出来的钥匙能被它加载、仓库内的路径被拒”。
 4. **每日流程**：`audit-integrity.md` §8 给出完整命令集（两把密钥生成、`GML_ANCHOR_INTENT_KEY`、`offbox-anchor` 两种目的地、`--offbox` 与 `--against-backup` 复核均带 `--intent-pubkey --require-signed-intents`），并说明不带该开关时未签名意图也算通过。`offbox-anchor.mjs` 头注释指向同一流程。文档策略测试断言这些命令仍在。
 5. 同步更新 `docs/本地交付/02_操作手册.md` 里仍写着“`--accept-new-anchors` 人工放行”的一条。
@@ -96,7 +100,8 @@ Codex 审计（gpt-6.1-sol，只读，针对相对 batch-thirteen 的差异，�
 
 ### 审计记录（AF5）
 Codex 审计（gpt-6.1-sol，只读，防御性审查，针对 AF5 提交）：
-- 高：已归档的桥锚点躲过对账（只检查库内锚点；`audit-archive` 把现存桥锚点原样导出进摘要再删库内副本，随后的合法归档可把它带出对账范围；`proveViaArchive` 也信任摘要里的锚点清单承认 JSONL 断口）⇒ 已修（2b）：摘要锚点纳入对账，印证行从验证通过的归档 JSONL 取；无 `--archive-dir` 时在输出里明说未对账，并记为限制。这是 AD5/AE5 起就有的缺口，AF5 的 `--against-backup` 对账同样会漏掉它，所以一并修。
+- 高：已归档的桥锚点躲过对账（只检查库内锚点；`audit-archive` 把现存桥锚点原样导出进摘要再删库内副本，随后的合法归档可把它带出对账范围；`proveViaArchive` 也信任摘要里的锚点清单承认 JSONL 断口）⇒ 已修（2b）：摘要锚点纳入对账，印证行从验证通过的归档 JSONL 取。这是 AD5/AE5 起就有的缺口，AF5 的 `--against-backup` 对账同样会漏掉它，所以一并修。
+- 二轮（针对修复提交）两条高：① 缺 `--archive-dir` / 目录为空 / JSONL 被损坏时静默跳过，同一伪造照样躲过 ⇒ 已改为失败闭合（`archive-evidence-missing`，原先“只在 notes 里注明”的做法撤销）；② 目录里被放入的自洽但不连在用库的摘要可以伪造印证行、或用多余锚点让合法归档误拒 ⇒ 已改为只采信连到在用库的摘要链。另提示：离机锚点条目没有 `anchors` 清单时被静默跳过 ⇒ 已改为 `baseline-anchor-list-missing`（失败闭合）；该分支只有手工构造的锚点能到达，未单独造测试。
 - 中：空链基线绕过 `--strict-anchors` ⇒ 已修（见上）。
 - 低：`--purpose constructor|toString|__proto__` 命中原型属性、生成了奇怪文件名的密钥 ⇒ 已修（`Object.hasOwn`），回归覆盖。
 - 低：ADR 补充对签名验证提示的描述不准（`--offbox` 的 `--pubkey` 兼作意图公钥；提示只在有锚点被对账时出现）⇒ 已更正。
