@@ -15,7 +15,7 @@ on:
   workflow_dispatch:
     inputs:
       scale:
-        description: Synthetic database scale (small = 2k SKU, medium = 20k SKU / 30k docs, large = 20k SKU / 50k docs)
+        description: Synthetic database scale (small = 2k SKU, medium = 20k SKU / 30k docs, large = 20k SKU / 50k docs, large-ci = AB11 100k SKU / 1M txns with a 240 min generation budget)
         required: false
         default: medium
         type: choice
@@ -23,6 +23,7 @@ on:
           - small
           - medium
           - large
+          - large-ci
       # AA11: optional, default off. Scheduled runs never set it, so they never run the rehearsal.
       rehearsal:
         description: Also run the upgrade rehearsal (replay migrations 059+ on a copy of the synthetic database, timings in the log only)
@@ -44,7 +45,7 @@ jobs:
   capacity:
     name: Synthetic capacity baseline (hosted, trend only)
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: ${{ inputs.scale == 'large-ci' && 355 || 60 }}
     env:
       CI: 'true'
       HOST: 127.0.0.1
@@ -74,6 +75,7 @@ jobs:
             small)  args='--skus 2000 --docs 3000 --txns 15000' ;;
             medium) args='--skus 20000 --docs 30000 --txns 150000' ;;
             large)  args='--skus 20000 --docs 50000 --txns 250000' ;;
+            large-ci) args='--profile large-ci --time-budget 240' ;; # AB11: stops early (partial:true, still green) when the budget or disk guard trips
             *) echo '::error::unknown scale'; exit 1 ;;
           esac
           pw="$(node -e "process.stdout.write(require('node:crypto').randomBytes(24).toString('hex'))")"
@@ -100,6 +102,12 @@ jobs:
           grep -E '^\[pipeline\] [a-z_]+: exit [0-9a-z]+ in [0-9.]+s$' "$CAP_REPORTS/pipeline.log" || true
           [ "$rc" -eq 0 ] || echo "::error::pipeline exited with code $rc (raw output withheld)"
           exit "$rc"
+      # AB11 (large-ci only): honest report straight from the raw pipeline report. Prints only numbers and fixed names (no paths, no error text).
+      - name: Large-ci report (partial flag, reached scale, p95 table, explain-audit violations)
+        if: inputs.scale == 'large-ci' && always()
+        continue-on-error: true
+        run: |
+          node -e "const fs=require('fs');let r;try{r=JSON.parse(fs.readFileSync(process.argv[1],'utf8'))}catch{console.log('large-ci: no pipeline report');process.exit(0)}const n=(v)=>(typeof v==='number'&&Number.isFinite(v)?v:'?');const w=(v)=>String(v??'').replace(/[^A-Za-z0-9_.\/-]/g,'?').slice(0,64);const x=r.reached||{};console.log('large-ci partial='+(r.partial===true)+' reason='+w(r.partial_reason)+' skus='+n(x.skus)+' txns='+n(x.txns)+'/'+n(x.txns_target)+' docs='+n(x.docs)+'/'+n(x.docs_target));const ea=r.steps&&r.steps.explain_audit;console.log('large-ci explain_audit violations='+n(ea&&ea.violations));for(const e of ((r.steps&&r.steps.bench_api&&r.steps.bench_api.endpoints)||[]).slice(0,40))console.log('large-ci p95 '+w(e.name)+' p50='+n(e.p50)+' p95='+n(e.p95)+' p99='+n(e.p99)+' errors='+n(e.errors))" "$CAP_REPORTS/pipeline-report.json"
       # The write profile mutates its database, so it runs on a fresh copy of the pipeline's (already disposable, test-classified) bench copy.
       - name: Bench write profile (on a copy of the bench database)
         id: bench_write

@@ -21,6 +21,7 @@
  *   密钥/密码在内存里随机生成，只经子进程环境或 stdin 传递，不写入报告、不打印。全程不监听公网地址（bench/drill 自己起的服务只绑 127.0.0.1 随机端口）。
  *
  * 【用法】node scripts/synth-pipeline.mjs --dir /abs/new-dir [--skus N --txns N --docs N --seed N] [--iterations 100 --concurrency 4] [--keep]
+ *        [--profile large-ci] [--time-budget MINUTES] [--batch-txns N] [--min-free-mb N]   (AB11：large-ci = 10 万 SKU / 100 万流水，分 20 万一批 VACUUM，到时/磁盘不足 → 报告 partial:true 并退出 0)
  *   报告：`<dir>/pipeline-report.json`；退出码：0 全部步骤成功；1 某步骤失败（报告仍写出）；2 用法/安全拒绝。
  *   默认完成后删除 `<dir>`（保留报告到 --out）；加 --keep 保留整个目录以便复查。
  * ============================================================================
@@ -38,25 +39,31 @@ import { verifyInvariants } from './synth-data.mjs'
 import { sourceIdentity } from './lib/source-identity.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+/** AB11：托管 runner（ubuntu，约 14 GB 可用磁盘、6 h 作业上限）的 roadmap 规模。显式 --skus/--txns/--docs 等永远覆盖这里。 */
+export const LARGE_CI = { skus: '100000', txns: '1000000', docs: '100000', 'batch-txns': '200000', 'min-free-mb': '3072' }
+const PROFILES = { 'large-ci': LARGE_CI }
 const usage = (m) => Object.assign(new Error(m), { exitCode: 2 })
 const withinRepoData = (p) => isWithin(path.resolve(ROOT, 'data'), p)
 
 export function parseArgs(argv) {
-  const o = { dir: null, out: null, keep: false, scale: {}, iterations: 100, concurrency: 4 }
+  const o = { dir: null, out: null, keep: false, scale: {}, iterations: 100, concurrency: 4, profile: null }
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === '--keep') { o.keep = true; continue }
-    if (['--dir', '--out', '--skus', '--txns', '--docs', '--seed', '--iterations', '--concurrency'].includes(a)) {
+    if (['--dir', '--out', '--skus', '--txns', '--docs', '--seed', '--iterations', '--concurrency', '--profile', '--time-budget', '--batch-txns', '--min-free-mb'].includes(a)) {
       if (argv[i + 1] === undefined) throw usage(`参数 ${a} 缺值`)
       const v = argv[++i]
       if (a === '--dir') o.dir = v
       else if (a === '--out') o.out = v
+      else if (a === '--profile') o.profile = v
       else if (a === '--iterations' || a === '--concurrency') o[a.slice(2)] = Number(v)
       else o.scale[a.slice(2)] = v
       continue
     }
     throw usage(`未知参数 ${a}`)
   }
+  if (o.profile !== null && !PROFILES[o.profile]) throw usage(`未知 --profile ${o.profile}（可用：${Object.keys(PROFILES).join(', ')}）`)
+  if (o.profile) o.scale = { ...PROFILES[o.profile], ...o.scale }
   if (!o.dir || !path.isAbsolute(o.dir)) throw usage('必须给绝对路径 --dir（全新目录）')
   if (withinRepoData(o.dir)) throw usage('--dir 不得位于仓库 data/ 内')
   if (fs.existsSync(o.dir) && fs.readdirSync(o.dir).length) throw usage('--dir 非空')
@@ -104,9 +111,18 @@ export async function runPipeline(o) {
   // ① 生成
   const gArgs = ['scripts/synth-data.mjs', '--quiet', '--out', path.join(o.dir, 'synth-summary.json')]
   for (const [k, v] of Object.entries(o.scale)) gArgs.push(`--${k}`, v)
-  const g = step('generate', gArgs, { env: { ...prod, GML_SYNTH_ADMIN_PASSWORD: adminPassword } })
+  // 生成步骤的进程超时：给了 --time-budget 就按「预算 + 30 分钟」（VACUUM / 校验收尾），否则默认 1 h；large-ci 无预算时放宽到 5.5 h
+  const budget = Number(o.scale['time-budget'] || 0)
+  const genTimeout = budget > 0 ? Math.ceil((budget + 30) * 60000) : (o.profile ? 19800000 : 3600000)
+  const g = step('generate', gArgs, { env: { ...prod, GML_SYNTH_ADMIN_PASSWORD: adminPassword }, timeout: genTimeout })
   if (g.status !== 0) { fail('generate', g); return report }
   const synth = JSON.parse(fs.readFileSync(path.join(o.dir, 'synth-summary.json'), 'utf8'))
+  // AB11：partial = 生成因时间预算 / 磁盘余量提前停止。流水线仍照常对「已达到的规模」跑完后续步骤并以 0 退出，但报告如实标 partial 与 reached。
+  report.profile = o.profile
+  report.partial = synth.partial === true
+  report.partial_reason = synth.partial_reason ?? null
+  report.reached = synth.reached ?? null
+  report.batching = synth.batching ?? null
   report.dataset = { config: synth.config, plan: synth.plan, counts: synth.counts, table_counts: synth.table_counts, db_bytes: synth.db_bytes, digest: synth.digest, invariants_ok: synth.invariants?.ok ?? null }
   report.steps.generate = { ok: true, wall_ms: g.wall_ms, phase_ms: synth.phase_ms }
 
@@ -135,12 +151,17 @@ export async function runPipeline(o) {
       { env: { ...extra }, input: adminPassword + '\n' })
     const rf = fs.existsSync(target) ? newest(target, /^restore-drill-.*\.json$/) : null
     const rep = rf ? JSON.parse(fs.readFileSync(path.join(target, rf), 'utf8')) : null
-    if (s.status !== 0 || !rep?.passed) { fail(name, s); if (rep) report.steps[name].failures = rep.failures; return false }
+    // large-ci：磁盘只有约 14 GB，演练完立刻删掉恢复出来的整库副本
+    const cleanup = () => { if (o.profile) fs.rmSync(target, { recursive: true, force: true }) }
+    if (s.status !== 0 || !rep?.passed) { fail(name, s); if (rep) report.steps[name].failures = rep.failures; cleanup(); return false }
     report.steps[name] = { ok: true, wall_ms: s.wall_ms, timing_ms: rep.timing, probes: rep.probes.map((p) => ({ name: p.name, expected: p.expected, actual: p.actual, match: p.match })) }
+    cleanup()
     return true
   }
   if (!runDrill('restore_drill_plain', plainStamp, {})) return report
   if (!runDrill('restore_drill_encrypted', encStamp, { GML_BACKUP_KEY: backupKey })) return report
+
+  if (o.profile) fs.rmSync(backupDir, { recursive: true, force: true }) // 两次演练都用完备份了；large-ci 释放磁盘
 
   // ④ 索引审计（只读打开生成的库）
   const ea = step('explain_audit', ['scripts/explain-audit.mjs', '--out', path.join(o.dir, 'explain.json')], { env: { GML_DATA_DIR: dataDir } })

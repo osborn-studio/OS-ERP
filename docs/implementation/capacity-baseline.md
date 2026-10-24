@@ -400,3 +400,37 @@ node scripts/upgrade-rehearsal.mjs --from=62 --backup-dir=… --target-dir=… -
 - `dmserver` 上用生产规模副本复跑；large 规模未跑。
 - `/dashboard/trend`、`/top`、`/todos`、`/inventory-dist` 等其它看板接口未剖析、未缓存。
 - 缓存只在单进程内；多进程部署时每个进程各有一份，靠 `data_version` 感知其它进程的提交（已测两个连接，未做多进程实测）。
+
+## AB11 large-ci：托管 runner 上的 10 万 SKU / 100 万流水（**机制已就绪，大规模本身尚未运行**）
+
+> **范围声明**：本节记录的是 `large-ci` 的**机制与结果 JSON 形状**。大规模运行（10 万 SKU / 100 万流水）**没有在本机执行**（Mac mini 磁盘与负载都不允许），所以这里**没有任何 large-ci 的容量数字**。唯一实测的是下面的"冒烟"：5 000 SKU / 5 万流水，仅证明分批 + 预算路径能走通，**不是 large 运行、不是容量证据、不是目标主机（`dmserver`）结果**。首次真实 large-ci 运行要等 `nightly-capacity.yml` 手动触发（`scale=large-ci`）。
+
+### 怎么用
+- 本地/流水线：`node scripts/synth-pipeline.mjs --dir <绝对新目录> --profile large-ci [--time-budget 240] [--out <报告>]`。`large-ci` 默认 `--skus 100000 --txns 1000000 --docs 100000 --batch-txns 200000 --min-free-mb 3072`；显式给的参数永远覆盖默认。
+- 工作流：`nightly-capacity.yml` 的手动输入 `scale` 增加选项 `large-ci`（默认仍 `medium`，定时运行不受影响）；选它时作业超时 355 分钟（GitHub 上限 360），生成预算 `--time-budget 240` 分钟，其余步骤（备份、两次恢复演练、explain-audit、压测、写档压测）在剩余时间内跑。
+- 新步骤 `Large-ci report` 只从原始流水线报告打印固定格式行：`partial`/原因/达到规模、`explain_audit violations=`、逐接口 `p50/p95/p99/errors`（p95 表）。现有 `Gate` 不变（违规或错误仍然红）；`capacity-summary.mjs` 未改，所以 summary 里 `scale` 对 large-ci 显示 `?`，**要看 large-ci 的 partial 状态只能看 `Large-ci report` 步骤的日志行**。
+
+### 分批与守卫（`synth-data.mjs`）
+- `--batch-txns N`：每当 `inventory_transactions` 的最大 rowid 越过 N 的整数倍（在单据事务之外的循环边界检查），先 `wal_checkpoint(TRUNCATE)`，再 `VACUUM`，再 checkpoint。目的是控制 WAL 与空闲页，不是改数据：同种子下分批与不分批的 `digest` 相同（测试断言）。
+- 磁盘守卫：`VACUUM` 在 WAL 模式下峰值额外占用约 2 倍库大小，所以边界处若可用空间 < `2.2 × 库大小 + --min-free-mb` 则**不做 VACUUM 而直接停止**（`partial_reason: disk_low`）；另外每 200 个循环迭代与每个边界检查一次 `可用空间 < --min-free-mb`。
+- `--time-budget M`（分钟，可小数，仅约束**生成阶段**）：到点后在下一个循环边界停止，后续阶段整体跳过；已提交的单据完整，仍照常做不变量校验（校验与 VACUUM 的收尾时间不计入预算，流水线给生成步骤的进程超时是"预算 + 30 分钟"）。
+- 流水线在 `large-ci` 下为省磁盘（runner 约 14 GB）：每次恢复演练结束立刻删除恢复出的整库副本，两次演练后删除备份目录。**这些都没有在大库上验证；估算峰值约为库大小的 4 倍（数据 + 明文备份 + 加密备份 + 演练副本），100 万流水库约 1.5–2.5 GB（由冒烟库 5 万流水 68 MB 外推，未验证）。**
+
+### 结果 JSON（`pipeline-report.json` 新增字段，`schema_version` 仍为 1，旧字段不变）
+| 字段 | 含义 |
+|---|---|
+| `profile` | `"large-ci"` 或 `null` |
+| `partial` | 生成因预算或磁盘守卫提前停止则为 `true`；否则 `false`。**partial 时 `ok` 仍可为 true、进程退出码 0（作业保持绿色），但报告对象是"已达到的规模"** |
+| `partial_reason` | `"time_budget"` / `"disk_low"` / `null`（`synth-summary.json` 另有 `partial_phase`：停在 purchase/sales/adjust） |
+| `reached` | `{skus, txns, txns_target, docs, docs_target}`：来自库内真实行数 / 已创建单据数，不是目标值 |
+| `batching` | `{batch_txns, vacuums, vacuum_ms, min_free_mb, free_mb_min_seen}` |
+| `steps.explain_audit.violations` | 索引审计违规数（与原有字段相同） |
+| `steps.bench_api.endpoints[]` | `name/route/requests/errors/p50/p95/p99`（p95 表的来源） |
+
+读法：`partial: true` 时所有 p95 与违规数都只对 `reached` 那个规模成立，不能当作 100 万流水的结果；`txns` 达到目标的 `partial: false` 才是完整 large-ci。
+
+### 冒烟（**不是 large 运行**）
+Mac mini，`--profile large-ci --skus 5000 --txns 50000 --docs 5000 --batch-txns 20000 --time-budget 20 --iterations 30 --concurrency 4`，临时目录，测完删除。测量时整机负载很高（loadavg 起始 26.6）。结果：`ok: true`、`partial: false`、`reached` 5 000 SKU / 50 000 流水 / 5 000 单据；`vacuums: 2`（`vacuum_ms` 3 161）；库 68 186 112 字节；生成 164.6 s（purchase 32.8 s / sales 101.6 s / adjust 19.5 s / verify 8.9 s）；`explain_audit` 0 违规；压测 10 个接口 0 错误，p95（ms）：login 3 828（含密码哈希，负载下）、dashboard_summary 59、purchase_order_list 20、stock_query 57、report_operating 148，其余 < 16。这些 p95 是冒烟库上高负载下的单次读数，**不可与 Y10/Z3 的 medium 数字比较**。另有测试覆盖：分批（digest 不变）、时间预算（`partial: true`、退出码 0、不变量仍绿）、磁盘守卫、流水线 partial 报告。
+
+### 未验证
+大规模运行本身；runner 上的磁盘峰值与 355 分钟内能否跑完全部后续步骤；`bootAll` 预热在百万流水库上是否撞 1 小时步骤超时；`GITHUB` 托管 runner 的 `statfs` 余量读数。

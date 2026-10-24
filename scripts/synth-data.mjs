@@ -30,6 +30,7 @@
  *
  * 【用法】GML_RUNTIME_MODE=production GML_DATA_DIR=/abs/new-dir GML_DB= node scripts/synth-data.mjs
  *          [--skus 60] [--txns 600] [--docs 120] [--seed 20261023] [--anchor 2026-10-01] [--out summary.json] [--no-verify] [--quiet]
+ *          [--batch-txns N] [--time-budget MINUTES] [--min-free-mb N]   (AB11：每 N 条流水 checkpoint+VACUUM；到时/磁盘不足则 partial 提前停并退出 0)
  *   --docs = 采购订单 + 销售订单总数（约 40% 采购 / 60% 销售）；--txns = inventory_transactions 目标行数（盘盈盘亏补足，已超则不删）。
  * 退出码：0 完成且不变量全绿；1 运行失败或不变量红；2 用法 / 安全拒绝。
  * ============================================================================
@@ -48,18 +49,25 @@ process.env.TZ = 'UTC'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 export const SCHEMA_VERSION = 1
-export const DEFAULTS = { skus: 60, txns: 600, docs: 120, seed: 20261023, anchor: '2026-10-01' }
+export const DEFAULTS = { skus: 60, txns: 600, docs: 120, seed: 20261023, anchor: '2026-10-01', batchTxns: 0, timeBudget: 0, minFreeMb: 0 }
 const LIMITS = { skus: [1, 500000], txns: [0, 5000000], docs: [0, 1000000] }
 
 const usage = (message) => Object.assign(new Error(message), { exitCode: 2 })
 
 export function parseArgs(argv) {
   const o = { ...DEFAULTS, out: null, verify: true, quiet: false }
-  const num = { '--skus': 'skus', '--txns': 'txns', '--docs': 'docs', '--seed': 'seed' }
+  const num = { '--skus': 'skus', '--txns': 'txns', '--docs': 'docs', '--seed': 'seed', '--batch-txns': 'batchTxns', '--min-free-mb': 'minFreeMb' }
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === '--no-verify') { o.verify = false; continue }
     if (a === '--quiet') { o.quiet = true; continue }
+    if (a === '--time-budget') { // AB11：分钟，可为小数；到点后停止继续造数据并把结果标成 partial
+      if (argv[i + 1] === undefined) throw usage(`参数 ${a} 缺值`)
+      const n = Number(argv[++i])
+      if (!Number.isFinite(n) || n <= 0) throw usage('--time-budget 必须是 >0 的分钟数')
+      o.timeBudget = n
+      continue
+    }
     if (a === '--out' || a === '--anchor' || num[a]) {
       if (argv[i + 1] === undefined) throw usage(`参数 ${a} 缺值`)
       const v = argv[++i]
@@ -74,6 +82,8 @@ export function parseArgs(argv) {
     }
     throw usage(`未知参数 ${a}`)
   }
+  if (o.batchTxns < 0) throw usage('--batch-txns 必须 >=0（0 = 不分批）')
+  if (o.minFreeMb < 0) throw usage('--min-free-mb 必须 >=0（0 = 不检查）')
   for (const [k, [lo, hi]] of Object.entries(LIMITS)) {
     if (o[k] < lo || o[k] > hi) throw usage(`--${k} 必须在 ${lo}..${hi}`)
   }
@@ -220,6 +230,8 @@ export async function generate(opts, dataDir, env = process.env) {
   const progress = makeProgress(opts.quiet)
   const phases = {}
   const phase = async (name, fn) => { const t = performance.now(); const r = await fn(); phases[name] = Math.round(performance.now() - t); return r }
+  const genStart = performance.now()
+  const deadline = opts.timeBudget > 0 ? genStart + opts.timeBudget * 60000 : Infinity
   const rng = makeRng(opts.seed)
   const ri = (lo, hi) => lo + Math.floor(rng() * (hi - lo + 1))
   const pick = (arr) => arr[Math.floor(rng() * arr.length)]
@@ -311,6 +323,43 @@ export async function generate(opts, dataDir, env = process.env) {
   const soLines = soCount ? Math.max(1, Math.round((opts.txns * 0.25) / Math.max(1, soCount * deliverFrac))) : 0
   const txnCount = () => db.prepare('SELECT COUNT(*) c FROM inventory_transactions').get().c
 
+  // ---- AB11：分批 checkpoint+VACUUM、磁盘余量守卫、时间预算（只在事务之外的循环边界检查，不会打断单据事务） ----
+  // 流水计数用 MAX(rowid)（O(1)；本生成器从不删流水），不用 COUNT(*)（百万行上每次全扫）。
+  const maxTxn = () => db.prepare('SELECT COALESCE(MAX(rowid),0) m FROM inventory_transactions').get().m
+  const batching = { batch_txns: opts.batchTxns, vacuums: 0, vacuum_ms: 0, min_free_mb: opts.minFreeMb, free_mb_min_seen: null }
+  let nextBoundary = opts.batchTxns > 0 ? opts.batchTxns : Infinity
+  let stop = null // { reason, phase }
+  let checks = 0
+  const dbFileNow = () => dbPathFor('cosmetic')
+  const freeMb = () => { try { const st = fs.statfsSync(dataDir); return Math.floor((Number(st.bavail) * Number(st.bsize)) / 1048576) } catch { return null } }
+  const noteFree = () => { const f = freeMb(); if (f != null && (batching.free_mb_min_seen == null || f < batching.free_mb_min_seen)) batching.free_mb_min_seen = f; return f }
+  /** 返回 true = 应停止当前循环。已停后任何阶段再调用都立即返回 true（后续阶段整体跳过）。 */
+  const shouldStop = (phaseName) => {
+    if (stop) return true
+    if (performance.now() >= deadline) { stop = { reason: 'time_budget', phase: phaseName }; return true }
+    checks++
+    const atBoundary = maxTxn() >= nextBoundary
+    // 磁盘余量：每次分批边界检查，另外每 200 次循环检查一次（statfs 很便宜，但不必逐单据）
+    if (opts.minFreeMb > 0 && (atBoundary || checks % 200 === 0)) {
+      const f = noteFree()
+      if (f != null && f < opts.minFreeMb) { stop = { reason: 'disk_low', phase: phaseName }; return true }
+    }
+    if (atBoundary) {
+      // VACUUM 在 WAL 模式下会把整库副本先写进 WAL 再 checkpoint 回主文件：峰值额外占用 ≈ 2 × 库大小。余量不够就不 VACUUM，直接停。
+      db.pragma('wal_checkpoint(TRUNCATE)')
+      const need = Math.ceil((fs.statSync(dbFileNow()).size / 1048576) * 2.2)
+      const f = noteFree()
+      if (f != null && f < need + opts.minFreeMb) { stop = { reason: 'disk_low', phase: phaseName }; return true }
+      const t = performance.now()
+      db.exec('VACUUM')
+      db.pragma('wal_checkpoint(TRUNCATE)')
+      batching.vacuum_ms += Math.round(performance.now() - t); batching.vacuums++
+      while (maxTxn() >= nextBoundary) nextBoundary += opts.batchTxns
+      noteFree()
+    }
+    return false
+  }
+
   // SKU 轮转：先把每个 SKU 轮一遍（保证覆盖），再随机
   const order = master.skus.map((_, i) => i)
   for (let i = order.length - 1; i > 0; i--) { const j = Math.floor(rng() * (i + 1)); [order[i], order[j]] = [order[j], order[i]] }
@@ -323,6 +372,7 @@ export async function generate(opts, dataDir, env = process.env) {
 
   await phase('purchase', async () => {
     for (let i = 0; i < poCount; i++) {
+      if (shouldStop('purchase')) break
       const date = srcDate(i, poCount, 30, PUR_SPAN)
       const nLines = Math.max(1, purLines + ri(-1, 1))
       const used = new Set(); const items = []
@@ -348,7 +398,7 @@ export async function generate(opts, dataDir, env = process.env) {
       counts.receipts++; if (partial && recvItems.length < po.items.length) counts.partial++
       progress('purchase', i + 1, poCount)
     }
-    progress('purchase', poCount, poCount, true)
+    if (!stop) progress('purchase', poCount, poCount, true)
   })
 
   const SO_SPAN = 25
@@ -360,6 +410,7 @@ export async function generate(opts, dataDir, env = process.env) {
     const priceOf = new Map(master.skus.map((s) => [s.id, s.dealerPrice]))
     const upsertSale = [] // 保留顺序以便确定性
     for (let i = 0; i < soCount; i++) {
+      if (shouldStop('sales')) break
       const date = ymdAdd(opts.anchor, -(SO_SPAN - Math.floor((i / Math.max(1, soCount)) * SO_SPAN)))
       const wh = master.warehouses[i % nWh]
       const pool = stocked.get(wh)
@@ -454,6 +505,7 @@ export async function generate(opts, dataDir, env = process.env) {
     let done = 0; let seq = 0
     const BATCH = 200
     while (done < need0) {
+      if (shouldStop('adjust')) break
       db.transaction(() => {
         for (let n = 0; n < BATCH && done < need0; n++, done++) {
           const r = pick(rows); seq++
@@ -466,7 +518,7 @@ export async function generate(opts, dataDir, env = process.env) {
       })()
       progress('adjust', done, need0)
     }
-    progress('adjust', need0, need0, true)
+    if (!stop) progress('adjust', need0, need0, true)
   })
 
   const verify = opts.verify ? await phase('verify', () => verifyInvariants(db)) : null
@@ -484,6 +536,12 @@ export async function generate(opts, dataDir, env = process.env) {
     source: sourceIdentity(),
     timezone: process.env.TZ,
     scope_notice: 'Synthetic production-classified database generated on the local host. NOT customer data, NOT a target-host (dmserver) result.',
+    // AB11：partial = 因时间预算 / 磁盘余量提前停止；reached 是实际达到的规模（来自库内真实行数，不是目标值）
+    partial: !!stop,
+    partial_reason: stop?.reason ?? null,
+    partial_phase: stop?.phase ?? null,
+    reached: { skus: master.skus.length, txns: tableCounts.inventory_transactions, txns_target: opts.txns, docs: counts.purchase_orders + counts.sales_orders, docs_target: opts.docs },
+    batching,
     config: { skus: opts.skus, txns_target: opts.txns, docs: opts.docs, seed: opts.seed, anchor: opts.anchor, runtime_mode: 'production', industry: 'cosmetic' },
     host: { platform: process.platform, arch: process.arch, cpus: os.cpus().length, cpu_model: os.cpus()[0]?.model ?? null, total_mem_mb: Math.round(os.totalmem() / 1048576), node: process.version },
     plan: { po_count: poCount, so_count: soCount, lines_per_po: purLines, lines_per_so: soLines },
@@ -504,7 +562,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   const summary = await generate(opts, dataDir, env)
   summary.total_ms = Math.round(performance.now() - t0)
   if (opts.out) writeExclusive(path.resolve(opts.out), JSON.stringify(summary, null, 2) + '\n')
-  console.log(JSON.stringify({ ok: summary.invariants ? summary.invariants.ok : null, total_ms: summary.total_ms, db_bytes: summary.db_bytes, counts: summary.counts, table_counts: summary.table_counts, digest: summary.digest, failed: (summary.invariants?.checks || []).filter((c) => !c.ok) }))
+  console.log(JSON.stringify({ ok: summary.invariants ? summary.invariants.ok : null, partial: summary.partial, reached: summary.reached, total_ms: summary.total_ms, db_bytes: summary.db_bytes, counts: summary.counts, table_counts: summary.table_counts, digest: summary.digest, failed: (summary.invariants?.checks || []).filter((c) => !c.ok) }))
   return summary
 }
 
