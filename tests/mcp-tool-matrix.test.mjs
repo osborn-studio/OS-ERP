@@ -435,6 +435,42 @@ test('MCP delegation matrix: every tool x {owner inactive, permission removed, s
     }
   }
 
+  // ---- 状态 4b（AB7）：RC / YQ / SH 的门店绑定在 DOC_SCOPE_RESOLVERS 里声明 ----
+  // 三类 × {所有者绑定本店、未绑定}：绑定 ⇒ 本店单据可读、他店 NOT_FOUND（doc.get / order.trace_document）；
+  // 未绑定 ⇒ 全部拒绝；全程零写。
+  matrix.registry_binding_state = { state: 'registry_store_binding', types: {} }
+  {
+    const types = ['RC', 'YQ', 'SH']
+    for (const code of types) for (const p of DOC_VIEW_PERMS[code].perms) grant.run('warehouse', p)
+    for (const p of ['sales.order.view', 'purchase.order.view', 'inventory.stock.view']) grant.run('warehouse', p)
+    try {
+      for (const code of types) {
+        const { table_name: tn, doc_no_field: nf } = db.prepare('SELECT table_name, doc_no_field FROM doc_types WHERE code=?').get(code)
+        const noCol = nf || 'doc_no'
+        const stores = db.prepare(`SELECT store_id FROM ${tn} WHERE store_id IS NOT NULL GROUP BY store_id ORDER BY COUNT(*) DESC, store_id LIMIT 2`).all()
+        assert.equal(stores.length, 2, `${code}: fixture needs two stores with documents`)
+        const rowOf = (sid) => db.prepare(`SELECT id, ${noCol} AS dn FROM ${tn} WHERE store_id=? ORDER BY id LIMIT 1`).get(sid)
+        const own = rowOf(stores[0].store_id)
+        const foreign = rowOf(stores[1].store_id)
+        const cell = {}
+        const before = snapshot()
+        db.prepare('UPDATE users SET store_id=? WHERE id=?').run(stores[0].store_id, ownerId)
+        cell.bound_own = outcome(await mcp('tools/call', { name: 'doc.get', arguments: { doc_type: code, id: own.id } }, token)).kind
+        cell.bound_foreign = outcome(await mcp('tools/call', { name: 'doc.get', arguments: { doc_type: code, id: foreign.id } }, token)).code
+        cell.trace_foreign = outcome(await mcp('tools/call', { name: 'order.trace_document', arguments: { doc_no: String(foreign.dn) } }, token)).code
+        db.prepare('UPDATE users SET store_id=NULL WHERE id=?').run(ownerId)
+        cell.unbound_get = outcome(await mcp('tools/call', { name: 'doc.get', arguments: { doc_type: code, id: own.id } }, token)).code
+        cell.unbound_trace = outcome(await mcp('tools/call', { name: 'order.trace_document', arguments: { doc_no: String(own.dn) } }, token)).code
+        const changed = diff(before, snapshot())
+        const good = cell.bound_foreign === 'NOT_FOUND' && cell.trace_foreign === 'NOT_FOUND' && cell.unbound_get === 'TOKEN_OWNER_BINDING_REQUIRED' && cell.unbound_trace === 'NOT_FOUND' && changed.length === 0
+        matrix.registry_binding_state.types[code] = { ...cell, result: good ? 'DENIED' : 'LEAK' }
+        if (!good) failures.push(`registry_store_binding ${code}: ${JSON.stringify(cell)} ${changed.join(';')}`)
+      }
+    } finally {
+      restorePerms()
+    }
+  }
+
   // ---- 状态 5（Z2）：单据历史工具（doc.get）按 DOC_SCOPE_RESOLVERS 判范围 ----
   // 经销商属于所有者组织、但出货仓归他组织的销售订单：旧的列名推断（dealer_id）会放行并连同留痕一起吐出；
   // 现在与 HTTP 的 salesScopeSql 同判据，必须 NOT_FOUND 且零写。无组织归属的全局类型（OM）同样 NOT_FOUND。
@@ -594,6 +630,8 @@ test('MCP delegation matrix: every tool x {owner inactive, permission removed, s
   assert.equal(covered, TOOLS.length, 'matrix must cover every tool in every state')
   assert.equal(saved.tool_count, TOOLS.length)
   assert.ok(Object.keys(saved.binding_state.types).length >= 6 && Object.values(saved.binding_state.types).every((x) => x.result === 'DENIED'), 'every store/dealer bound type is denied to an unbound owner')
+  assert.deepEqual(Object.keys(saved.registry_binding_state.types).sort(), ['RC', 'SH', 'YQ'], 'AB7: registry store binding is exercised for RC / YQ / SH')
+  assert.ok(Object.values(saved.registry_binding_state.types).every((x) => x.result === 'DENIED'), 'AB7: bound-to-other-store and unbound owners read nothing')
   assert.ok(Object.keys(saved.history_scope_state.cases).length >= 2 && Object.values(saved.history_scope_state.cases).every((x) => x.result !== 'LEAK'), 'history tool honors the owner scope')
   assert.ok(Object.keys(saved.trace_query_scope_state.cases).length >= 6 && Object.values(saved.trace_query_scope_state.cases).every((x) => x.result !== 'LEAK'), 'order.trace_document and doc.query honor the owner scope and view permission')
   assert.ok(Object.keys(saved.inventory_scope_state.tools).length >= 14 && Object.values(saved.inventory_scope_state.tools).every((x) => x.result !== 'LEAK'), 'inventory tools honor the owner warehouse-org scope')

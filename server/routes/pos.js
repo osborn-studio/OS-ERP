@@ -18,6 +18,7 @@ import { localDate } from '../lib/dates.js'
 import { getDb } from '../db/index.js'
 import { ok, fail, wrap, failFromError } from '../lib/http.js'
 import { requireAuth, requireRole, requirePerm, permContext, hasPerm, resolveOrgScope } from '../middleware/auth.js'
+import { boundStoreId } from '../lib/store-binding.js'
 import { warehouseInScope } from '../lib/stock.js'
 import { audit } from '../middleware/audit.js'
 import { advanceStatus } from '../lib/docflow.js'
@@ -57,8 +58,9 @@ const r = Router()
 function storeCtx(req) {
   const db = getDb()
   const u = req.user
-  if (!u.store_id) throw Object.assign(new Error('当前账号未绑定门店'), { status: 403 })
-  const store = db.prepare('SELECT * FROM stores WHERE id=?').get(u.store_id)
+  const storeId = boundStoreId(u)
+  if (storeId == null) throw Object.assign(new Error('当前账号未绑定门店'), { status: 403 })
+  const store = db.prepare('SELECT * FROM stores WHERE id=?').get(storeId)
   if (!store) throw Object.assign(new Error('门店不存在'), { status: 404 })
   // ADR-0038 补充（AA4）：库存读取覆盖**本店全部启用仓**（`whs`）；
   // `wh`（范围内首个启用仓）是写路径（收银出库 / 日结 / 盘点等）的默认仓。
