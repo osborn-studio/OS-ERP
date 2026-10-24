@@ -285,6 +285,11 @@ function listRoutes(root) {
     routes.push({ cls: m[1], path: m[2], file: `server/routes/${m[3]}`, line: Number(m[4]), verb: m[5], chain: chain === '(无)' ? '' : chain })
   }
   if (!routes.length) throw new Error(`check-route-authz --list returned no routes: ${res.stderr || res.stdout}`.slice(0, 400))
+  // 清单必须完整：汇总行「路由 N 条」要与解析到的条数一致（管道截断 / 子进程异常时宁可失败，不生成残缺地图）
+  const total = /^路由 (\d+) 条/m.exec(res.stdout)
+  if (res.status !== 0 || !total || Number(total[1]) !== routes.length) {
+    throw new Error(`check-route-authz --list incomplete: status=${res.status} parsed=${routes.length} declared=${total ? total[1] : 'missing'} ${res.stderr}`.slice(0, 400))
+  }
   routes.sort((a, b) => cmp(a.file, b.file) || a.line - b.line || cmp(a.path, b.path) || cmp(a.verb, b.verb))
   return routes
 }
