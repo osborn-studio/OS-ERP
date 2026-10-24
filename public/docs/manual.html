@@ -220,6 +220,7 @@
 <a class="toc-l3" data-depth="3" href="#382-强制走-like环境变量-gml_audit_fts0">38.2 强制走 `LIKE`：环境变量 `GML_AUDIT_FTS=0`</a>
 <a class="toc-l3" data-depth="3" href="#383-维护脚本audit-fts-maintainmjs">38.3 维护脚本：`audit-fts-maintain.mjs`</a>
 <a class="toc-l3" data-depth="3" href="#384-想量化时">38.4 想量化时</a>
+<a class="toc-l3" data-depth="3" href="#385-完整关闭--重新开启索引的操作闭环--disable----enableadr-0054">38.5 完整关闭 / 重新开启索引的操作闭环（`--disable` / `--enable`，ADR-0054）</a>
 <a class="toc-l2" data-depth="2" href="#三十九-奇门平台密钥命令行签发与-app_key-掩码">三十九 奇门平台密钥：命令行签发与 app_key 掩码</a>
 <a class="toc-l3" data-depth="3" href="#391-谁何时需要">39.1 谁、何时需要</a>
 <a class="toc-l3" data-depth="3" href="#392-命令">39.2 命令</a>
@@ -768,6 +769,17 @@ node scripts/audit-fts-maintain.mjs --data-dir /abs/data --industry cosmetic --r
 <p>开发或交付人员可以在隔离临时目录里跑基准（该脚本没有 <code>--help</code>，按 <code>--名称 值</code> 成对书写，不支持 <code>--名称=值</code>，未知参数或缺值报错）：</p>
 <pre><code>node scripts/bench-audit-logs.mjs --rows 1000000 --out /abs/result.json</code></pre>
 <p>可用参数：<code>--rows</code>、<code>--export</code>、<code>--repeat</code>、<code>--writes</code>、<code>--out</code>（缺省 100 万行、导出 50000、重复 3 次、写入 20000）。它在系统临时目录建合成库，不碰任何实例数据。数字是开发机、合成数据、有并行负载下的量级参考，不是目标主机结果。</p>
+<h3 id="385-完整关闭--重新开启索引的操作闭环--disable----enableadr-0054">38.5 完整关闭 / 重新开启索引的操作闭环（<code>--disable</code> / <code>--enable</code>，ADR-0054）</h3>
+<p>适用：想彻底去掉索引（省磁盘与写放大，或怀疑索引问题要彻底回退），之后还要能恢复。<strong>服务可以保持运行</strong>；每条命令都必须写 <code>--reason</code>（改的是危险设置 <code>audit_fts_enabled</code>，留痕到设置审计日志）。</p>
+<pre><code># 1 关闭：删除索引表与三个触发器，设置记为关（同一个写事务）
+node scripts/audit-fts-maintain.mjs --data-dir /abs/data --industry cosmetic --disable --reason &quot;原因&quot;
+# 2 关闭期间：关键词检索照常，全部走 LIKE，结果与之前一致；新写入的审计行立即可检索
+# 3 重启服务：设置为关时不会自动重建索引（--integrity-check 报告 status=absent，退出码 0）
+# 4 低峰重新开启：建表 + 触发器 + 回填全部存量行（含关闭期间写入的行）
+node scripts/audit-fts-maintain.mjs --data-dir /abs/data --industry cosmetic --enable --reason &quot;原因&quot;
+# 5 核对
+node scripts/audit-fts-maintain.mjs --data-dir /abs/data --industry cosmetic --integrity-check</code></pre>
+<ul><li>第 4 步持写锁直到回填结束，其间其他写入等 <code>busy_timeout</code>（缺省 5 秒），超时会收到 <code>SQLITE_BUSY</code>：100 万行量级见 capacity-baseline &quot;AE4&quot;（Mac mini 合成数据，<strong>目标主机请自行实测</strong>）。可加 <code>--busy-ms</code> 调整本脚本等锁的上限；拿不到锁则 <code>status=busy</code>、退出 1，设置与索引都不变。</li><li>已知窗口：<code>--disable</code> 恰好提交时正在处理的那一个关键词请求（含跨批次的 CSV 导出）可能失败，重试即可；建议低峰执行，或先以 <code>GML_AUDIT_FTS=0</code> 重启再 <code>--disable</code>。启动与脚本恰好重叠时服务启动可能失败，重启即可。</li><li>重复执行同一命令是幂等的；缺 <code>--reason</code> 退出 2；数据库构建不带 FTS5 时 <code>--enable</code> 报 <code>unsupported</code>、退出 1、设置不改。</li><li>只在界面 / API 里改 <code>audit_fts_enabled</code> <strong>不会</strong>立即动索引，下次启动才收敛；要立刻生效请用上面的脚本。</li><li>在带 FTS5 的构建上建过索引的库，不要拿到不带 FTS5 的构建上写入；要换构建，先 <code>--disable</code>。</li><li>与 38.2 的区别：<code>GML_AUDIT_FTS=0</code> 只切查询路径，索引和触发器仍在；<code>--disable</code> 才真正删除。</li></ul>
 <h2 id="三十九-奇门平台密钥命令行签发与-app_key-掩码">三十九 奇门平台密钥：命令行签发与 app_key 掩码</h2>
 <p>依据 ADR-0033 的 AB8 补充（迁移 069）。奇门网关在生产模式仍受能力闸门限制（503），重新开放需要产品负责人单独授权；本章的操作适用于演示、测试环境联调，以及生产开放前的验收准备。</p>
 <h3 id="391-谁何时需要">39.1 谁、何时需要</h3>
