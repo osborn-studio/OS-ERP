@@ -154,6 +154,16 @@ jobs:
             printf '{"previous":null,"reason":"previous SBOM malformed or unreadable"}\n' > "$CAND_UPLOAD/sbom-diff.json"
             echo "::warning::previous candidate SBOM is malformed or unreadable; SBOM diff skipped"
           fi
+      # AG7 lock-registry guard: every package-lock.json `resolved` must point at registry.npmjs.org (the only registry whose entries
+      # `npm audit signatures` can verify). Read-only, no network. Fails the candidate on any other host; do not pass --allow here.
+      - name: Lock registry guard (all resolved hosts must be registry.npmjs.org)
+        run: |
+          set -euo pipefail
+          node scripts/check-lock-registry.mjs
+          [ "$(ls -d "$RUNNER_TEMP"/pkg-x/*/ | wc -l)" -eq 1 ] || { echo "expected exactly one extracted package directory" >&2; exit 1; }
+          pkg="$(ls -d "$RUNNER_TEMP"/pkg-x/*/)"
+          [ -f "${pkg}package-lock.json" ] || { echo "candidate package has no package-lock.json" >&2; exit 1; }
+          node scripts/check-lock-registry.mjs --lock "${pkg}package-lock.json"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: os-erp-candidate-${{ github.run_id }}-${{ github.run_attempt }}

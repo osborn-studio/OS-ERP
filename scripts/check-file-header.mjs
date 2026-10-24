@@ -87,6 +87,8 @@ const DECLARED = [
   'scripts/check-file-header.mjs',
   'scripts/check-audit-allowlist.mjs',
   'tests/audit-allowlist.test.mjs',
+  'scripts/check-lock-registry.mjs',
+  'tests/check-lock-registry.test.mjs',
   'tests/dependency-review-policy.test.mjs',
   'tests/release-candidate-policy.test.mjs',
   'scripts/db-backup.mjs',
