@@ -8,7 +8,7 @@
  *   与此同时脚本逐轮跑真实子进程 `audit-fts-maintain.mjs --disable` → `--enable`（各自 `--busy-ms`）。结束后对账并报告：
  *   写失败（按类别：SQLITE_BUSY / no such table / trigger / 其它；分"尝试级"与"重试用尽仍失败的行"两种）、写重试数、最大写停顿（含 p50/p99）、每次开关的墙钟与
  *   维护报告（status、elapsed_ms、lock_probe）、以及（可选 `--metrics-url`）运行中服务的 `os_erp_audit_fts_fallback_total` 前后差值。
- *   对账（失败即退出 1）：已确认写入的行数 = 库里 `AG4_WRITE` 行数且序号不重；哈希链 `verifyChain` 完好；最后一次 `--enable` 之后 FTS 索引文档数 = 审计行数、`--integrity-check` 为 ok。
+ *   对账（失败即退出 1）：每次 --disable/--enable 都真的执行（退出 0、status ok、非空转）；已确认写入的行数 = 库里 `AG4_WRITE` 行数且序号不重；哈希链 `verifyChain` 完好；最后一次 `--enable` 之后 FTS 索引文档数 = 审计行数、`--integrity-check` 为 ok。
  * 【用法】node scripts/bench-audit-toggle-under-write.mjs [--mode steady|burst] [--rate 200] [--burst-size 50] [--burst-every-ms 1000] [--rounds 5] [--seed-rows 20000]
  *   [--settle-ms 300] [--busy-ms 5000] [--writer-busy-ms 5000] [--retries 2] [--metrics-url http://127.0.0.1:PORT/api/meta/metrics?format=prometheus] [--out result.json]
  *   · `--metrics-url` 需要的 Bearer 令牌只从环境变量 `OS_ERP_BENCH_METRICS_TOKEN` 读（不进命令行）；该服务**不是**本脚本的库的服务，除非你自己指向同一个临时目录——
@@ -128,9 +128,14 @@ try {
   const v = result.verify
   v.no_lost_rows = v.writer_rows_in_db === w.acked && v.writer_distinct_seqs === w.acked && total === cfg.seedRows + w.acked
   v.fts_matches_rows = v.fts_indexed_docs === total && v.final_integrity_status === 'ok'
-  result.ok = v.no_lost_rows && v.chain_ok && v.fts_matches_rows
+  // 每一次开关都真的执行了（退出 0、status ok、不是 already_in_state 空转）——否则对账通过也没有演练到切换
+  v.toggles_ok = result.rounds.every((r) => [r.disable, r.enable].every((x) => x.exit === 0 && x.status === 'ok' && x.already_in_state === false))
+  result.ok = v.toggles_ok && v.no_lost_rows && v.chain_ok && v.fts_matches_rows
 } finally {
-  if (writer) { try { writer.child.kill('SIGTERM') } catch { /* 已退出 */ } }
+  if (writer) {
+    try { writer.child.kill('SIGTERM') } catch { /* 已退出 */ }
+    if (writer.child.exitCode === null && writer.child.signalCode === null) await new Promise((res) => writer.child.once('exit', res))
+  }
   fs.rmSync(dir, { recursive: true, force: true })
   console.log(`temp dir removed: ${!fs.existsSync(dir)}`)
 }

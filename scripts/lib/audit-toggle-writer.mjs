@@ -9,7 +9,7 @@
  *     收到 IPC `{type:'stop'}` 后写完当前行，回报 `summary` 并退出。
  *   · 导出辅助：`classifyError`（把错误归成 `SQLITE_BUSY` / `no such table` / `trigger` / 其它码）、`parseFallbackTotal`（从 Prometheus 文本里加总 `os_erp_audit_fts_fallback_total`）、`percentile`。
  * 【诚实边界】写入者是**单个进程、单个连接**，同步 API：一次写等锁期间它整个被冻住，所以"最大写停顿"= 一次 `insertAuditRow`（含重试与退避）的墙钟最大值，包含了等待 `busy_timeout` 的时间。
- *   steady 模式落后于计划时不"补发"积压，只是不再睡眠；实际速率在 summary 里给出。这不是多写者并发，也不是服务内请求路径（没有 HTTP、没有 `audit()` 中间件的"去掉明细重试一次"）。
+ *   steady 模式落后于计划时**不补发**积压：被挡住之后从"现在"重新按间隔排程（不会事后连发），所以挡住的那段时间就是真的少写了；实际速率在 summary 里给出。`retried_rows` 只统计"重试后成功"的行，重试用尽仍失败的行在 `lost_rows`（其重试次数仍计入 `retry_attempts`）。这不是多写者并发，也不是服务内请求路径（没有 HTTP、没有 `audit()` 中间件的"去掉明细重试一次"）。
  * 【改它要注意什么】只在 `GML_RUNTIME_MODE` 不限的任意临时数据目录使用；子进程不读 `GML_DB`、不碰仓库 data/（调用方负责传临时目录）。
  * ============================================================================
  */
@@ -53,6 +53,7 @@ export function spawnWriter({ dataDir, industry = 'cosmetic', mode = 'steady', r
     '--burst-every-ms', String(burstEveryMs), '--retries', String(retries), '--busy-ms', String(busyMs), '--max-rows', String(maxRows)]
   const child = spawn(process.execPath, args, { env: { PATH: process.env.PATH, HOME: dataDir, TMPDIR: dataDir, GML_DB: '', GML_RUNTIME_MODE: 'test', GML_JWT_SECRET: 'w'.repeat(48), ...env }, stdio: ['ignore', 'inherit', 'inherit', 'ipc'] })
   let readyRes; let readyRej; let sumRes
+  const exited = new Promise((res) => child.once('exit', res)) // 立即登记：避免 stop() 晚到时错过已发出的 exit 事件
   const ready = new Promise((res, rej) => { readyRes = res; readyRej = rej })
   const summary = new Promise((res) => { sumRes = res })
   child.on('message', (m) => { if (m?.type === 'ready') readyRes(); else if (m?.type === 'summary') sumRes(m.summary) })
@@ -62,7 +63,8 @@ export function spawnWriter({ dataDir, industry = 'cosmetic', mode = 'steady', r
     async stop() {
       if (child.exitCode === null && child.connected) child.send({ type: 'stop' })
       const s = await summary
-      if (child.exitCode === null) await new Promise((res) => child.once('exit', res))
+      await exited
+      if (!s) throw new Error('writer exited without a summary (killed or crashed)')
       return s
     }
   }
@@ -114,12 +116,15 @@ async function childMain() {
   process.send({ type: 'ready' })
   if (mode === 'steady') {
     const gap = 1000 / rate
+    let next = t0
     for (let i = 0; !stopping && (!maxRows || i < maxRows); i++) {
-      const due = t0 + i * gap
-      const wait = due - performance.now()
+      const wait = next - performance.now()
       await (wait > 1 ? delay(wait) : new Promise((r) => setImmediate(r)))
       if (stopping) break
       await writeOne()
+      next += gap
+      const now = performance.now()
+      if (next < now) next = now // 落后：丢弃积压的排程槽位，不补发
     }
   } else {
     for (let sent = 0; !stopping && (!maxRows || sent < maxRows);) {
