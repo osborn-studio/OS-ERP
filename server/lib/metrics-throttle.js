@@ -23,9 +23,8 @@ function envInt(raw, min, max, fallback) {
 
 function keyOf(ip) {
   if (typeof ip !== 'string' || ip.length > 128) return null
-  const v = isIP(ip.split('%')[0])
-  if (v === 0) return null
-  if (v === 4) return ip
+  if (isIP(ip) === 4) return ip // 整串校验：IPv4 带 %zone 一律不认（否则每个后缀一个新桶）
+  if (isIP(ip.split('%')[0]) !== 6) return null
   const host = new URL(`http://[${ip.split('%')[0]}]/`).hostname.slice(1, -1)
   const m = host.match(/^::ffff:([a-f0-9]{1,4}):([a-f0-9]{1,4})$/)
   if (m) {
@@ -42,6 +41,7 @@ export function createMetricsThrottle({ env = process.env, now = Date.now, ...ov
     maxBuckets: override.maxBuckets ?? DEFAULT_METRICS_THROTTLE.maxBuckets
   }
   const buckets = new Map() // key -> { n, expires }
+  let minExpiry = Infinity // 所有桶中最早的过期时刻（桶满时 O(1) 判断是否有可清理项，避免每个新来源都全表扫描）
   return {
     policy,
     /** → { allowed: true } | { allowed: false, retryAfter(秒, ≥1) } */
@@ -54,11 +54,14 @@ export function createMetricsThrottle({ env = process.env, now = Date.now, ...ov
       if (b && b.expires <= t) { buckets.delete(key); b = undefined }
       if (!b) {
         if (buckets.size >= policy.maxBuckets) {
-          for (const [k, v] of buckets) if (v.expires <= t) buckets.delete(k)
-          if (buckets.size >= policy.maxBuckets) return reject(Math.min(...[...buckets.values()].map((v) => v.expires)))
+          if (t < minExpiry) return reject(minExpiry)
+          minExpiry = Infinity
+          for (const [k, v] of buckets) { if (v.expires <= t) buckets.delete(k); else if (v.expires < minExpiry) minExpiry = v.expires }
+          if (buckets.size >= policy.maxBuckets) return reject(minExpiry)
         }
         b = { n: 0, expires: t + policy.windowMs }
         buckets.set(key, b)
+        if (b.expires < minExpiry) minExpiry = b.expires
       }
       if (b.n >= policy.limit) return reject(b.expires)
       b.n += 1

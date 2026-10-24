@@ -83,6 +83,7 @@ ADR-0036 的 CSP 目前只发 `Content-Security-Policy-Report-Only`，头里没�
 - `os_erp_audit_write_duration_seconds`（histogram，固定桶 0.5 ms … 1 s + `+Inf`）：`audit-trail.js` 的 `insertAuditRow`（唯一 INSERT 点），失败的尝试同样计时。
 - `os_erp_mcp_tool_calls_total{tool,code}`：`mcp/server.js` 的 `insertCallLog` 成功落行后计数。
 **基数与注入**：`tool` 只接受启动时从工具目录登记的名字（含虚拟工具），其余 `unknown`；`code` 只接受 `process-counters.js` 内登记的结果码，其余 `other`；成功为 `ok`。用户可控字符串因此不能产生新序列，label 值另经转义。直方图桶边界与名字写死在 `HISTOGRAM_DEFS`。
+`ok` 与 `AUDIT_UNAVAILABLE` 对每个已登记工具预置为 0（`increase()` 无法还原首次出现即为 1 的序列），其它码在首次发生时出现。
 **限制**：MCP 计数以审计行落地为准——审计写入本身失败的调用不计入该计数（见 `audit_strict_write_failures_total{reason="mcp_call_log"}`）；多进程各自计数。
 
 ### 验证

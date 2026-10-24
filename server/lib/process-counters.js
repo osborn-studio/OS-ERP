@@ -48,8 +48,15 @@ export const MCP_RESULT_CODES = Object.freeze([
 const mcpCodes = new Set(MCP_RESULT_CODES)
 const mcpTools = new Set()
 const mcpCalls = new Map() // tool -> Map(code -> n)
+// 预置零值序列：`increase()` 无法还原"首次出现即为 1"的序列，所以关键结果码（成功、审计不可用）对每个已登记工具先输出 0。
+const MCP_PRESEEDED = ['ok', 'AUDIT_UNAVAILABLE']
+function seedMcp(tool) {
+  const m = mcpCalls.get(tool) ?? new Map()
+  mcpCalls.set(tool, m)
+  for (const c of MCP_PRESEEDED) if (!m.has(c)) m.set(c, 0)
+}
 export function registerMcpTools(names) {
-  for (const n of names) if (typeof n === 'string' && /^[A-Za-z][A-Za-z0-9_.-]{0,95}$/.test(n)) mcpTools.add(n)
+  for (const n of names) if (typeof n === 'string' && /^[A-Za-z][A-Za-z0-9_.-]{0,95}$/.test(n)) { mcpTools.add(n); seedMcp(n) }
 }
 /** MCP 工具调用 +1；`code` 为空/假值 = 成功。永不抛错。 */
 export function incMcpToolCall(tool, code) {
@@ -124,6 +131,6 @@ export function counterSnapshot() {
 }
 
 /** 仅供测试 */
-export function resetCounters() { resetAll(); resetHists(); mcpCalls.clear() }
+export function resetCounters() { resetAll(); resetHists(); mcpCalls.clear(); for (const t of mcpTools) seedMcp(t) }
 
 export default { COUNTER_DEFS, incCounter, counterSnapshot, resetCounters, incMcpToolCall, registerMcpTools, observeHistogram, histogramSnapshot }

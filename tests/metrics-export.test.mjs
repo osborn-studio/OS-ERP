@@ -311,6 +311,7 @@ test('AB10 dashboard cache hit/miss counters', () => {
 test('AB10 MCP tool call counter: registered tools and codes only, everything else folded (bounded cardinality, no injection)', () => {
   resetCounters()
   registerMcpTools(['stock_query', 'doc_create'])
+  assert.equal(counterSnapshot().mcp_tool_calls_total.stock_query.AUDIT_UNAVAILABLE, 0, 'critical series start at 0 so increase() sees the first event')
   incMcpToolCall('stock_query', null)
   incMcpToolCall('stock_query', 'PERM_DENIED')
   incMcpToolCall('doc_create', 'SOME_NEW_CODE')
@@ -373,6 +374,9 @@ test('AB10 metrics throttle: per-IP fixed window, separate buckets, capacity fai
   assert.equal(bad.policy.windowMs, 60000)
   assert.equal(createMetricsThrottle({ env: { GML_METRICS_IP_LIMIT: '7' } }).policy.limit, 7)
   assert.equal(th.consume(undefined).allowed, false, 'unparseable source address is not exempt')
+  const z = createMetricsThrottle({ limit: 1, now: () => 1000 })
+  assert.equal(z.consume('192.0.2.1%a').allowed, false, 'IPv4 with a zone suffix is not a valid source')
+  assert.equal(z.consume('192.0.2.1%b').allowed, false)
 })
 
 test('AB10 HTTP: metrics throttled per IP (429 + bizcode + Retry-After), bad tokens count, accepted rotation tokens, new series present', { timeout: 180000 }, async (t) => {
