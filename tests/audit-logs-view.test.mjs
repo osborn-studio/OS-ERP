@@ -429,6 +429,14 @@ test('AB3 triggers keep the index exact across insert / update / delete, and sur
   assert.equal(m067.verify(db), true)
 })
 
+test('AB3 an UPDATE of the content rowid (id) re-indexes the row; external-content integrity-check passes', (t) => {
+  const db = migrated(t)
+  const id = auditRow(db, { action: 'MOVEDROW' })
+  db.prepare('UPDATE audit_logs SET id=? WHERE id=?').run(900001, id)
+  assert.deepEqual(ftsRows(db, '"MOVEDROW"'), [900001])
+  db.prepare("INSERT INTO audit_logs_fts(audit_logs_fts, rank) VALUES('integrity-check', 1)").run() // 外部内容表的完整性校验：索引与内容表逐行一致，否则抛错
+})
+
 test('AB3 verify() notices a dropped trigger / table and the runner heals it (and re-indexes missed rows)', (t) => {
   const db = migrated(t)
   db.exec('DROP TRIGGER audit_logs_fts_ai')
@@ -461,29 +469,30 @@ test('AB3 buildWhere: FTS only for >=3-char keywords when available; phrase-quot
   const f = (keyword) => parseFilters({ keyword })
   let w = buildWhere(f('订单审'), { fts: true })
   assert.match(w.where, /id IN \(SELECT rowid FROM audit_logs_fts WHERE audit_logs_fts MATCH \?\)/)
-  assert.doesNotMatch(w.where, /LIKE/); assert.deepEqual(w.args, ['"订单审"'])
+  assert.match(w.where, /LIKE/, 'candidates are re-checked with the same LIKE predicate (Unicode case folding differs)')
+  assert.deepEqual(w.args, ['"订单审"', '%订单审%', '%订单审%', '%订单审%'])
   w = buildWhere(f('订单'), { fts: true })
   assert.match(w.where, /LIKE/, 'two characters: trigram cannot match, LIKE path'); assert.doesNotMatch(w.where, /audit_logs_fts/)
   w = buildWhere(f('abcdef'), { fts: false })
   assert.match(w.where, /LIKE/); assert.doesNotMatch(w.where, /audit_logs_fts/)
   assert.match(buildWhere(f('abcdef')).where, /LIKE/, 'default is the LIKE path')
   // FTS 语法一律是字面量：引号加倍、不抛错
-  assert.deepEqual(buildWhere(f('a"b OR c'), { fts: true }).args, ['"a""b OR c"'])
+  assert.equal(buildWhere(f('a"b OR c'), { fts: true }).args[0], '"a""b OR c"')
   assert.doesNotMatch(buildWhere(f('abc" OR 1=1 --'), { fts: true }).where, /OR 1=1/, 'keyword never reaches the SQL text')
-  assert.equal(buildWhere({ keyword: 'abc', module: 'x' }, { fts: true }).args.length, 2)
+  assert.equal(buildWhere({ keyword: 'abc', module: 'x' }, { fts: true }).args.length, 5)
 })
 
 test('AB3 FTS and LIKE paths return identical rows (injection-shaped, wildcard, CJK, mixed-case keywords)', (t) => {
   const db = migrated(t)
   assert.equal(ftsAvailable(db), true)
-  const corpus = [['CREATE', 'sales_orders', 'alice'], ['DEL100%_done', 'order', 'alice'], ['approve OR reject', 'po', 'bob'], ['审批通过', '销售订单', '张三'],
+  const corpus = [['ÄBC', 'École', 'Straße'], ['CREATE', 'sales_orders', 'alice'], ['DEL100%_done', 'order', 'alice'], ['approve OR reject', 'po', 'bob'], ['审批通过', '销售订单', '张三'],
     ['导出', '审计日志', '张三丰'], ['a"b', 'NEAR(x y)', 'col:action'], ['LOGIN', '*', 'user-1'], ['x AND y', 'e', 'u'], ['Create', 'Sales_Orders', 'ALICE'], ['100%', 'a_b', 'axb']]
   for (const [action, entity, user] of corpus) auditRow(db, { action, entity, user })
   const ids = (keyword, fts) => {
     const { where, args } = buildWhere(parseFilters({ keyword }), { fts })
     return db.prepare(`SELECT id FROM audit_logs ${where} ORDER BY id`).all(...args).map(r => r.id)
   }
-  const probes = ['CREATE', 'create', 'sales_orders', 'Sales', 'ali', 'alice', '100%', '%_d', 'DEL100', 'a_b', 'axb', 'OR re', 'approve OR', 'x AND y', '审批通', '销售订单', '张三', '张三丰', '审计日志',
+  const probes = ['äbc', 'ÄBC', 'éco', 'École', 'straSSe', 'Straße', 'CREATE', 'create', 'sales_orders', 'Sales', 'ali', 'alice', '100%', '%_d', 'DEL100', 'a_b', 'axb', 'OR re', 'approve OR', 'x AND y', '审批通', '销售订单', '张三', '张三丰', '审计日志',
     'a"b', '"b', 'NEAR(x', 'NEAR(x y)', 'col:ac', 'action:', '*', 'user-1', 'ser-', 'abc*', '^CRE', 'zzz', "'; DROP TABLE audit_logs;--", 'a OR b OR c', '(((', ')))', '-CRE', 'NOT x']
   for (const k of probes) {
     let like; try { like = ids(k, false) } catch (e) { assert.ok(e instanceof AuditViewError, k); continue }
@@ -566,6 +575,23 @@ test('AB3 over HTTP: FTS path answers keyword searches (3+ and 2 chars); droppin
   f.db.exec('DROP TRIGGER audit_logs_fts_ai; DROP TRIGGER audit_logs_fts_ad; DROP TRIGGER audit_logs_fts_au; DROP TABLE audit_logs_fts')
   assert.equal(ftsAvailable(f.db), false)
   assert.deepEqual(await run(), viaFts, 'LIKE fallback answers identically')
+})
+
+test('AB3 explain-audit on a database without audit_logs_fts: FTS-only statements are skipped, LIKE fallback statements still audited, no error', (t) => {
+  const dir = mkd(path.join(tmpdir(), 'os-ab3-nofts-'))
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  cpSync(MIGRATIONS_DIR, dir, { recursive: true })
+  rm(path.join(dir, '067_audit_fts.cjs'))
+  const db = migrated(t, { migrationsDir: dir })
+  assert.equal(ftsAvailable(db), false)
+  const targets = STATEMENTS.filter(s => s.id.startsWith('audit.'))
+  const allow = ALLOW.filter(a => a.statement.startsWith('audit.'))
+  const r = auditStatements(db, targets, { allow })
+  assert.deepEqual(r.violations, [], JSON.stringify(r.violations)); assert.deepEqual(r.unusedAllow, [])
+  const skipped = r.statements.filter(s => s.skipped).map(s => s.id)
+  assert.ok(skipped.includes('audit.list_keyword_fts') && skipped.includes('audit.count_module_keyword_fts'), skipped.join())
+  assert.ok(skipped.every(id => /_fts$/.test(id)))
+  assert.ok(r.statements.find(s => s.id === 'audit.count_keyword_nofts').plan.length > 0, 'fallback statement is really audited')
 })
 
 test('AB3 explain-audit: FTS keyword statements are green and use the FTS table; LIKE fallback statements carry an exemption with a reason', (t) => {

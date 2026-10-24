@@ -6,13 +6,13 @@
  * 【职责】AA6 的关键词检索是 `LIKE '%x%'` 子串匹配（action / entity / user_name），命中稀少时读全表。本迁移建
  *   `audit_logs_fts`：FTS5 **外部内容**虚拟表（content='audit_logs'，不复制正文，只存倒排索引），tokenizer = trigram
  *   （子串语义与 LIKE 一致，含中文；查询词至少 3 个字符，2 个字符的关键词由 `audit-view.js` 走 LIKE）。
- *   由 `audit_logs` 上的三个触发器维护：AFTER INSERT / AFTER DELETE / AFTER UPDATE OF (action, entity, user_name)。
+ *   由 `audit_logs` 上的三个触发器维护：AFTER INSERT / AFTER DELETE / AFTER UPDATE OF (id, action, entity, user_name)。
  *
  * 【没有 FTS5 的构建】`PRAGMA compile_options` 不含 ENABLE_FTS5（或 trigram 分词器不可用）时，本迁移**什么都不建**，
  *   照常被登记为已执行；`verify()` 同样返回 true（否则 runner 每次启动都会"自愈重跑"）。`audit-view.js` 查不到
  *   `audit_logs_fts` 就走原 LIKE 路径；`scripts/explain-audit.mjs` 为该回退路径登记了带理由的豁免。
  *
- * 【触发器与其他列】触发器只引用 id / action / entity / user_name，且 UPDATE 触发器限定 `OF action, entity, user_name`：
+ * 【触发器与其他列】触发器只引用 id / action / entity / user_name，且 UPDATE 触发器限定 `OF id, action, entity, user_name`（id 是外部内容的 rowid，改 id 也要重建该行的索引项）：
  *   AB6（迁移 068）给 audit_logs 增 prev_hash / row_hash 后，对这些列的写入不会触发 FTS 维护，也不会让触发器失效。
  *   `audit_logs` 的 INSERT 点仍只有 `insertAuditRow`；触发器在同一事务内同步更新索引。
  *
@@ -33,7 +33,7 @@ const TRIGGERS = {
   audit_logs_fts_ad: `CREATE TRIGGER IF NOT EXISTS audit_logs_fts_ad AFTER DELETE ON audit_logs BEGIN
     INSERT INTO ${FTS}(${FTS}, rowid, action, entity, user_name) VALUES ('delete', old.id, old.action, old.entity, old.user_name);
   END`,
-  audit_logs_fts_au: `CREATE TRIGGER IF NOT EXISTS audit_logs_fts_au AFTER UPDATE OF action, entity, user_name ON audit_logs BEGIN
+  audit_logs_fts_au: `CREATE TRIGGER IF NOT EXISTS audit_logs_fts_au AFTER UPDATE OF id, action, entity, user_name ON audit_logs BEGIN
     INSERT INTO ${FTS}(${FTS}, rowid, action, entity, user_name) VALUES ('delete', old.id, old.action, old.entity, old.user_name);
     INSERT INTO ${FTS}(rowid, action, entity, user_name) VALUES (new.id, new.action, new.entity, new.user_name);
   END`

@@ -124,8 +124,12 @@ export function buildWhere(f, { fts = false } = {}) {
     // 也不搜 module / entity_id（它们有精确过滤项，子串匹配只会扩大扫描面）
     if (useFtsFor(f.keyword, fts)) {
       // FTS 外部内容表只索引这三列（detail 不在其中，侧信道结论同上）；trigram 的子串语义与 LIKE 一致
+      // FTS 只负责缩小候选集：trigram 是 Unicode 大小写不敏感，而 LIKE 只折叠 ASCII（Ä/ä 在 LIKE 下不相等），
+      // 所以候选行再过一遍同一个 LIKE 谓词，保证两条路径的结果逐行相同（候选集 ⊇ LIKE 命中集，不会漏）
+      const p = `%${likeEsc(f.keyword)}%`
       c.push(`id IN (SELECT rowid FROM ${FTS_TABLE} WHERE ${FTS_TABLE} MATCH ?)`)
-      a.push(ftsPhrase(f.keyword))
+      c.push("(action LIKE ? ESCAPE '\\' OR entity LIKE ? ESCAPE '\\' OR user_name LIKE ? ESCAPE '\\')")
+      a.push(ftsPhrase(f.keyword), p, p, p)
     } else {
       const p = `%${likeEsc(f.keyword)}%`
       c.push("(action LIKE ? ESCAPE '\\' OR entity LIKE ? ESCAPE '\\' OR user_name LIKE ? ESCAPE '\\')")

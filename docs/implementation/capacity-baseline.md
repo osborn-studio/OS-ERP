@@ -313,7 +313,7 @@ node scripts/synth-pipeline.mjs --dir /tmp/synth-large --skus 20000 --txns 25000
 
 ### 迁移 067 做了什么
 `audit_logs_fts(action, entity, user_name)`：FTS5 **外部内容**表（`content='audit_logs'`，tokenizer = `trigram`，子串语义与 `LIKE '%x%'` 一致、含中文），由 `audit_logs` 上的 INSERT / DELETE / `UPDATE OF action, entity, user_name` 三个触发器维护。`PRAGMA compile_options` 无 `ENABLE_FTS5`（或 trigram 不可用）时迁移是空操作且 `verify()` 为真，`audit-view.js` 查不到 `audit_logs_fts` 就走原 LIKE；`explain-audit` 为该回退登记了带理由的豁免（`audit.count_keyword_nofts` / `audit.list_keyword_nofts`）。
-**何时走 FTS**（`keywordUsesFts`）：库里有 FTS 表、关键词 ≥3 字符（trigram 下限；2 字关键词走 LIKE）、且探测到命中稀少（≤2000 条）。命中很多时 FTS 反而慢（第一版无条件走 FTS 的实测：常见词 `APPROVE` 列表 0.2 → 22.6 ms，`module + 关键词` 0.09 → 144 ms，因为要物化全部命中 rowid），所以命中多时回退 LIKE（沿索引/rowid 倒扫，凑够一页即停）。两条路径返回的行完全相同（`tests/audit-logs-view.test.mjs` 对一组含 FTS 语法、通配符、中文、大小写的关键词逐个比对）。
+**何时走 FTS**（`keywordUsesFts`）：库里有 FTS 表、关键词 ≥3 字符（trigram 下限；2 字关键词走 LIKE）、且探测到命中稀少（≤2000 条）。命中很多时 FTS 反而慢（第一版无条件走 FTS 的实测：常见词 `APPROVE` 列表 0.2 → 22.6 ms，`module + 关键词` 0.09 → 144 ms，因为要物化全部命中 rowid），所以命中多时回退 LIKE（沿索引/rowid 倒扫，凑够一页即停）。两条路径返回的行完全相同（FTS 只缩小候选集，候选行再过一遍同一个 LIKE 谓词：trigram 对 Unicode 大小写不敏感而 LIKE 只折叠 ASCII，Codex 复核实测 `ÄBC` / `äbc` 两路径曾不一致，已修；`tests/audit-logs-view.test.mjs` 对一组含 FTS 语法、通配符、中文、大小写的关键词逐个比对，含 Unicode 大小写对）。
 
 ### 实测（ms；列表 = 第 1 页，计数 = 封顶 10 001；FTS 列含"命中是否稀少"的探测耗时）
 | 关键词 | LIKE（仅 065）列表 / 计数 | 067 列表 / 计数 | 走的路径 |

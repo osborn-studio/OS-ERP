@@ -58,10 +58,11 @@ function auditStatementsFor() {
     const { where, args } = buildWhere(f, bw)
     const order = orderOf(f)
     const mirrors = 'server/routes/meta.js GET /audit-logs (server/lib/audit-view.js)'
-    out.push({ id: `audit.list_${name}`, mirrors, bench: null, expectIndex, params: [...args, 50, 0], sql: `SELECT * FROM audit_logs ${where} ORDER BY ${order.sql} LIMIT ? OFFSET ?` })
-    out.push({ id: `audit.count_${name}`, mirrors, bench: null, expectIndex, params: [...args, AUDIT_COUNT_CAP + 1], sql: countSql(where) })
+    const needsTable = bw.fts ? 'audit_logs_fts' : undefined
+    out.push({ id: `audit.list_${name}`, needsTable, mirrors, bench: null, expectIndex, params: [...args, 50, 0], sql: `SELECT * FROM audit_logs ${where} ORDER BY ${order.sql} LIMIT ? OFFSET ?` })
+    out.push({ id: `audit.count_${name}`, needsTable, mirrors, bench: null, expectIndex, params: [...args, AUDIT_COUNT_CAP + 1], sql: countSql(where) })
     const ex = exportSql(where, order)
-    out.push({ id: `audit.export_${name}`, mirrors: 'server/routes/meta.js GET /audit-logs/export.csv (exportChunks)', bench: null, expectIndex,
+    out.push({ id: `audit.export_${name}`, needsTable, mirrors: 'server/routes/meta.js GET /audit-logs/export.csv (exportChunks)', bench: null, expectIndex,
       params: [...args, 1000000, ...(order.byTime ? ['2026-10-02 00:00:00', 7] : [7]), 1000], sql: ex.next })
   }
   return out
@@ -303,6 +304,8 @@ export function auditStatements(db, statements, { threshold = DEFAULT_THRESHOLD,
   const violations = []
   const used = new Set()
   for (const s of statements) {
+    // 语句依赖的可选表不存在（如没有 FTS5 的构建上迁移 067 是空操作）：不审计、不报错，在结果里标 skipped；回退路径由 *_nofts 语句覆盖
+    if (s.needsTable && !tables.has(s.needsTable)) { out.push({ id: s.id, mirrors: s.mirrors, bench: s.bench ?? null, plan: [], scans: [], skipped: `缺少 ${s.needsTable}` }); continue }
     const rows = db.prepare(`EXPLAIN QUERY PLAN ${s.sql}`).all(...(s.params || []))
     const plan = rows.map(r => r.detail)
     const aliases = aliasMap(s.sql)
