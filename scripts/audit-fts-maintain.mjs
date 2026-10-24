@@ -11,7 +11,9 @@
  *   · `--rebuild`：从 audit_logs 重建整个倒排索引（`rebuild`）。**单次写事务，持写锁到结束**；大库上耗时见 capacity-baseline "AC5"。
  *   `optimize` / `rebuild` 在表不存在时退出 1（没有东西可维护；建表是迁移 067 的事，不在这里）。
  *
- * 【用法】node scripts/audit-fts-maintain.mjs --data-dir <绝对路径> --industry <行业> (--optimize|--rebuild|--integrity-check) [--out <报告.json>] [--busy-ms <n>]
+ * 【AD4 开关】`--disable` / `--enable`（必须带 `--reason`）：在**同一个写事务**里改设置 `audit_fts_enabled`（危险键，留痕到 setting_audit_log）并删除 / 重建 FTS 表与触发器
+ *   （重建 = 迁移 067 的 up：建表、触发器、回填存量行，大库上持写锁到结束）。幂等；构建不支持 FTS5 时 `--enable` 报 status=unsupported、退出 1 且设置不改。ADR-0054。
+ * 【用法】node scripts/audit-fts-maintain.mjs --data-dir <绝对路径> --industry <行业> (--optimize|--rebuild|--integrity-check|--disable|--enable) [--reason <理由>] [--out <报告.json>] [--busy-ms <n>]
  *   · 必须显式 `--data-dir`（走 `requireExplicitDataDir()`，拒绝仓库 data/，symlink 也认）与 `--industry`；环境里的 `GML_DB` 被忽略。
  *   · 报告（JSON，0600）默认写到 `<data-dir>/audit-fts-maintain-<行业>-<动作>-<时间戳>.json`；`--out` 必须是绝对路径，物理位置（解开符号链接，含尚不存在的子目录）在仓库 data/ 之外，不能是库文件或其 -wal / -shm / -journal，且不覆盖已有文件（退出 2）。行业库文件本身是符号链接则拒绝（退出 2）。报告不含绝对路径。
  *   · 退出码：0 成功；1 操作失败（corrupt / busy / absent+写操作 / 其它错误）；2 参数 / 环境错误。
@@ -26,14 +28,20 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { performance } from 'node:perf_hooks'
+import { createRequire } from 'node:module'
 import Database from 'better-sqlite3'
 import { parseArgs, locateDatabases, die } from './lib/audit-chain-cli.mjs'
 import { startLockProbe } from './lib/lock-probe.mjs'
+import { ensureSettings, writeSetting } from '../server/lib/settings.js'
+
+const m071 = createRequire(import.meta.url)('../server/db/migrations/071_audit_fts_optional.cjs')
+const m067 = createRequire(import.meta.url)('../server/db/migrations/067_audit_fts.cjs')
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const FTS = 'audit_logs_fts'
 const TRIGGERS = ['audit_logs_fts_ai', 'audit_logs_fts_ad', 'audit_logs_fts_au']
-const MODES = ['optimize', 'rebuild', 'integrity-check']
+const MODES = ['optimize', 'rebuild', 'integrity-check', 'disable', 'enable']
+const TOGGLES = ['disable', 'enable'] // AD4：同事务改设置 audit_fts_enabled 并删除/重建 FTS 表与触发器
 const SQL = {
   optimize: `INSERT INTO ${FTS}(${FTS}) VALUES ('optimize')`,
   rebuild: `INSERT INTO ${FTS}(${FTS}) VALUES ('rebuild')`,
@@ -59,10 +67,11 @@ function canonical(p, depth = 0) {
 }
 const within = (dir, p) => p === dir || p.startsWith(dir + path.sep)
 
-const args = parseArgs(process.argv.slice(2), { values: ['--data-dir', '--industry', '--out', '--busy-ms'], flags: MODES.map((m) => `--${m}`) })
+const args = parseArgs(process.argv.slice(2), { values: ['--data-dir', '--industry', '--out', '--busy-ms', '--reason'], flags: MODES.map((m) => `--${m}`) })
 const chosen = MODES.filter((m) => args[m])
-if (chosen.length !== 1) die('USAGE', '用法：audit-fts-maintain.mjs --data-dir <绝对路径> --industry <行业> (--optimize|--rebuild|--integrity-check) [--out <报告.json>] [--busy-ms <n>]（三个动作必须且只能选一个）')
+if (chosen.length !== 1) die('USAGE', '用法：audit-fts-maintain.mjs --data-dir <绝对路径> --industry <行业> (--optimize|--rebuild|--integrity-check|--disable|--enable) [--reason <理由>] [--out <报告.json>] [--busy-ms <n>]（动作必须且只能选一个；--disable/--enable 必须带 --reason）')
 const action = chosen[0]
+if (TOGGLES.includes(action) && !String(args.reason || '').trim()) die('USAGE', `--${action} 改的是危险设置 audit_fts_enabled，必须带 --reason <理由>`)
 if (!args['data-dir']) die('USAGE', '--data-dir <绝对路径> 必填')
 if (!args.industry) die('USAGE', '--industry <行业> 必填')
 let busyMs = 5000
@@ -96,6 +105,7 @@ const exists = (db, type, name) => !!db.prepare('SELECT 1 FROM sqlite_master WHE
 const sizeOf = (f) => ['', '-wal'].reduce((n, s) => { try { return n + fs.statSync(f + s).size } catch { return n } }, 0)
 const isBusy = (e) => e && (e.code === 'SQLITE_BUSY' || e.code === 'SQLITE_LOCKED' || /database is locked/.test(String(e.message)))
 
+const readStoredSetting = (db) => db.prepare("SELECT value FROM settings WHERE key='audit_fts_enabled'").get()?.value ?? null
 const report = {
   schema_version: 1, action, industry: args.industry, data_file: path.basename(file), started_at: new Date().toISOString(),
   ok: false, status: 'error', error: null, rows: null, fts_present: null, triggers_present: null, busy_timeout_ms: busyMs,
@@ -110,7 +120,41 @@ try {
   report.fts_present = exists(db, 'table', FTS)
   report.triggers_present = Object.fromEntries(TRIGGERS.map((n) => [n, exists(db, 'trigger', n)]))
   report.rows = db.prepare('SELECT COUNT(*) c FROM audit_logs').get().c
-  if (!report.fts_present) {
+  if (TOGGLES.includes(action)) {
+    // AD4：设置值与对象在同一个写事务里一起改——要么都改要么都不改。禁用 = 删表 + 触发器；启用 = 067 的 up（建表、触发器、回填）。
+    report.setting_before = readStoredSetting(db)
+    if (action === 'enable' && !m067.ftsSupported(db)) {
+      report.status = 'unsupported'
+      report.error = '本构建没有 FTS5 / trigram：无法建索引，设置未改动'
+    } else {
+      probe = await startLockProbe(file)
+      const t0 = performance.now()
+      try {
+        db.exec('BEGIN IMMEDIATE')
+        try {
+          // 补键 + 基线放在同一个事务里：后面任何一步失败都整体回滚，不留下半截设置行
+          ensureSettings(db, { actor: { id: null, name: 'audit-fts-maintain', source: 'script' } })
+          if (action === 'disable') report.changed_objects = m071.dropFts(db)
+          else { const had = exists(db, 'table', FTS); m071.enableFts(db); report.changed_objects = !had }
+          const w = writeSetting(db, { key: 'audit_fts_enabled', value: action === 'enable' ? '1' : '0', reason: args.reason.trim(), actor: { id: null, name: 'audit-fts-maintain', source: 'script' }, source: 'script' })
+          report.setting_changed = w.changed
+          db.exec('COMMIT')
+        } catch (e) { try { db.exec('ROLLBACK') } catch { /* 没有打开的事务 */ } throw e }
+        report.status = 'ok'
+      } catch (e) {
+        report.status = isBusy(e) ? 'busy' : 'error'
+        report.error = String(e.message).slice(0, 300)
+      } finally {
+        report.elapsed_ms = Math.round((performance.now() - t0) * 10) / 10
+        report.lock_probe = await probe.stop()
+      }
+      report.setting_after = readStoredSetting(db)
+      report.fts_present = exists(db, 'table', FTS)
+      report.triggers_present = Object.fromEntries(TRIGGERS.map((n) => [n, exists(db, 'trigger', n)]))
+      report.bytes_after = sizeOf(file)
+    }
+    report.ok = report.status === 'ok'
+  } else if (!report.fts_present) {
     report.status = 'absent'
     report.ok = action === 'integrity-check'
     report.error = report.ok ? null : `${FTS} 不存在（无 FTS5 的构建，或迁移 067 未执行）：没有可维护的索引`

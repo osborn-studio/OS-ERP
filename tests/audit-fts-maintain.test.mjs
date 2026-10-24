@@ -13,7 +13,11 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import Database from 'better-sqlite3'
 import { runMigrations } from '../server/db/migrations/runner.js'
+import * as m067 from '../server/db/migrations/067_audit_fts.cjs'
 
+// AD4：CI 的 audit-no-fts5 job 在没有 FTS5 的 SQLite 构建上跑本文件：依赖索引存在的用例跳过，无 FTS5 用例真实执行
+const NO_FTS5 = !m067.ftsSupported(new Database(':memory:'))
+const needsFts5 = NO_FTS5 ? { skip: 'this SQLite build has no FTS5' } : {}
 const ROOT = fileURLToPath(new URL('../', import.meta.url))
 const SCRIPT = 'scripts/audit-fts-maintain.mjs'
 const SCHEMA = readFileSync(path.join(ROOT, 'server/db/schema.sql'), 'utf8')
@@ -52,7 +56,7 @@ test('refuses the repository data/ directory, relative paths, missing arguments 
   assert.equal(reportOf(dir).data_file, 'gml_cosmetic.db')
 })
 
-test('--integrity-check: healthy index passes; an index that missed a row is reported and exits 1; --rebuild repairs it', (t) => {
+test('--integrity-check: healthy index passes; an index that missed a row is reported and exits 1; --rebuild repairs it', needsFts5, (t) => {
   const { dir, db } = fixture(t)
   const ok = run(['--data-dir', dir, '--industry', 'cosmetic', '--integrity-check', '--out', path.join(dir, 'r1.json')], dir)
   assert.equal(ok.status, 0, ok.stderr)
@@ -73,7 +77,7 @@ test('--integrity-check: healthy index passes; an index that missed a row is rep
   assert.equal(db.prepare("SELECT COUNT(*) c FROM audit_logs_fts WHERE audit_logs_fts MATCH '\"GHOSTACT\"'").get().c, 1)
 })
 
-test('--rebuild and --optimize: report carries elapsed time and a lock-probe result; default report lands in the data dir', (t) => {
+test('--rebuild and --optimize: report carries elapsed time and a lock-probe result; default report lands in the data dir', needsFts5, (t) => {
   const { dir, db } = fixture(t, 2000)
   db.close()
   for (const mode of ['rebuild', 'optimize']) {
@@ -96,7 +100,7 @@ test('--rebuild and --optimize: report carries elapsed time and a lock-probe res
   assert.equal(run(['--data-dir', dir, '--industry', 'cosmetic', '--integrity-check', '--out', path.join(dir, 'x.json')], dir).status, 0)
 })
 
-test('database without audit_logs_fts: integrity-check reports absent (exit 0); rebuild and optimize refuse (exit 1)', (t) => {
+test('database without audit_logs_fts: integrity-check reports absent (exit 0); rebuild and optimize refuse (exit 1)', needsFts5, (t) => {
   const { dir, db } = fixture(t, 5)
   db.exec('DROP TRIGGER audit_logs_fts_ai; DROP TRIGGER audit_logs_fts_ad; DROP TRIGGER audit_logs_fts_au; DROP TABLE audit_logs_fts')
   db.close()
@@ -109,7 +113,7 @@ test('database without audit_logs_fts: integrity-check reports absent (exit 0); 
   }
 })
 
-test('rebuild while another connection holds the write lock: fails cleanly as busy after --busy-ms, index untouched, report says busy', (t) => {
+test('rebuild while another connection holds the write lock: fails cleanly as busy after --busy-ms, index untouched, report says busy', needsFts5, (t) => {
   const { dir, db } = fixture(t, 100)
   db.close()
   const holder = new Database(path.join(dir, 'gml_cosmetic.db'))
@@ -161,4 +165,101 @@ test('--out cannot overwrite the database or its sidecars, nor an existing file;
   symlinkSync(path.join(dir3, 'gml_cosmetic.db'), path.join(dir4, 'gml_cosmetic.db'))
   const real = run(['--data-dir', dir4, '--industry', 'cosmetic', '--integrity-check'], dir4)
   assert.equal(real.status, 2); assert.match(real.stderr, /DB_IS_SYMLINK/)
+})
+
+// AD4（ADR-0054）：--disable / --enable 在同一事务里改设置 audit_fts_enabled 并删/重建 FTS 对象
+const ftsNames = (db) => db.prepare("SELECT type,name FROM sqlite_master WHERE (type='trigger' AND name LIKE 'audit_logs_fts%') OR name='audit_logs_fts' ORDER BY name").all().map((r) => `${r.type}:${r.name}`)
+const settingRow = (db) => db.prepare("SELECT value FROM settings WHERE key='audit_fts_enabled'").get()?.value
+
+test('AD4 --disable / --enable require --reason (exit 2, nothing changed)', needsFts5, (t) => {
+  const { dir, db } = fixture(t, 5)
+  db.close()
+  for (const m of ['disable', 'enable']) {
+    const r = run(['--data-dir', dir, '--industry', 'cosmetic', `--${m}`], dir)
+    assert.equal(r.status, 2, m); assert.match(r.stderr, /--reason/)
+    assert.equal(run(['--data-dir', dir, '--industry', 'cosmetic', `--${m}`, '--reason', '  '], dir).status, 2, 'blank reason')
+  }
+  const chk = new Database(path.join(dir, 'gml_cosmetic.db'), { readonly: true })
+  t.after(() => chk.close())
+  assert.equal(ftsNames(chk).length, 4)
+})
+
+test('AD4 --disable drops table + triggers and records the setting with a reason; idempotent; audit writes keep working; --enable rebuilds and backfills', needsFts5, (t) => {
+  const { dir, db } = fixture(t, 30)
+  const off = run(['--data-dir', dir, '--industry', 'cosmetic', '--disable', '--reason', 'disk pressure drill', '--out', path.join(dir, 'd1.json')], dir)
+  assert.equal(off.status, 0, off.stderr + off.stdout)
+  const r1 = reportOf(dir, path.join(dir, 'd1.json'))
+  assert.equal(r1.status, 'ok'); assert.equal(r1.fts_present, false); assert.equal(r1.setting_after, '0'); assert.equal(r1.setting_changed, true)
+  assert.deepEqual(ftsNames(db), [])
+  assert.equal(settingRow(db), '0')
+  const log = db.prepare("SELECT action,value_after,reason,actor_name,actor_source FROM setting_audit_log WHERE key='audit_fts_enabled' ORDER BY id").all()
+  assert.deepEqual(log.map((l) => l.action), ['baseline', 'set'])
+  assert.equal(log[1].value_after, '0'); assert.equal(log[1].reason, 'disk pressure drill'); assert.equal(log[1].actor_source, 'script')
+  const again = run(['--data-dir', dir, '--industry', 'cosmetic', '--disable', '--reason', 'again', '--out', path.join(dir, 'd2.json')], dir)
+  assert.equal(again.status, 0); assert.equal(reportOf(dir, path.join(dir, 'd2.json')).setting_changed, false)
+  // 没有触发器：写入照常；FTS 维护动作如实报 absent
+  db.prepare("INSERT INTO audit_logs (user_id,user_name,action,module,entity,entity_id) VALUES (1,'zed','WHILEOFF','sales','e','1')").run()
+  assert.equal(run(['--data-dir', dir, '--industry', 'cosmetic', '--integrity-check', '--out', path.join(dir, 'i.json')], dir).status, 0)
+  assert.equal(reportOf(dir, path.join(dir, 'i.json')).status, 'absent')
+  // 重新开启：重建 + 回填
+  const on = run(['--data-dir', dir, '--industry', 'cosmetic', '--enable', '--reason', 'drill over', '--out', path.join(dir, 'e1.json')], dir)
+  assert.equal(on.status, 0, on.stderr + on.stdout)
+  const r3 = reportOf(dir, path.join(dir, 'e1.json'))
+  assert.equal(r3.status, 'ok'); assert.equal(r3.fts_present, true); assert.equal(r3.setting_after, '1')
+  assert.equal(ftsNames(db).length, 4)
+  assert.equal(db.prepare("SELECT COUNT(*) c FROM audit_logs_fts WHERE audit_logs_fts MATCH '\"WHILEOFF\"'").get().c, 1, 'row written while off is indexed')
+  assert.equal(run(['--data-dir', dir, '--industry', 'cosmetic', '--integrity-check', '--out', path.join(dir, 'i2.json')], dir).status, 0)
+  assert.equal(reportOf(dir, path.join(dir, 'i2.json')).status, 'ok')
+  assert.equal(run(['--data-dir', dir, '--industry', 'cosmetic', '--enable', '--reason', 'noop', '--out', path.join(dir, 'e2.json')], dir).status, 0)
+  assert.equal(reportOf(dir, path.join(dir, 'e2.json')).setting_changed, false)
+})
+
+test('AD4 the setting wins at startup: after --disable, runMigrations does not recreate the index; after --enable it is left alone', needsFts5, (t) => {
+  const { dir, db } = fixture(t, 10)
+  assert.equal(run(['--data-dir', dir, '--industry', 'cosmetic', '--disable', '--reason', 'x'], dir).status, 0)
+  const r = runMigrations(db, { mode: 'test', warn: () => {} })
+  assert.ok(!r.healed.some((h) => /audit_fts|067|071/.test(h)), r.healed.join())
+  assert.deepEqual(ftsNames(db), [])
+})
+
+test('AD4 --disable on a lock-held database fails as busy and changes neither the objects nor the setting', needsFts5, (t) => {
+  const { dir, db } = fixture(t, 20)
+  db.close()
+  const holder = new Database(path.join(dir, 'gml_cosmetic.db'))
+  t.after(() => { try { holder.close() } catch { /* closed */ } })
+  // 先让 ensureSettings 能写：库已迁移但 settings 行可能缺；持锁前不预置，直接测忙
+  holder.exec('BEGIN IMMEDIATE')
+  const r = spawnSync(process.execPath, [SCRIPT, '--data-dir', dir, '--industry', 'cosmetic', '--disable', '--reason', 'x', '--busy-ms', '200', '--out', path.join(dir, 'b.json')], { cwd: ROOT, env: env(dir), encoding: 'utf8', timeout: 60000 })
+  holder.exec('ROLLBACK')
+  assert.equal(r.status, 1)
+  assert.equal(reportOf(dir, path.join(dir, 'b.json')).status, 'busy')
+  assert.equal(ftsNames(holder).length, 4)
+  assert.notEqual(settingRow(holder), '0')
+})
+
+test('AD4 on a SQLite build WITHOUT FTS5 (CI audit-no-fts5): integrity-check is absent/0, optimize/rebuild/enable exit 1, disable only records the setting', { skip: NO_FTS5 ? false : 'this SQLite build has FTS5; the audit-no-fts5 CI job runs this case' }, (t) => {
+  const { dir, db } = fixture(t, 5)
+  assert.deepEqual(ftsNames(db), [])
+  db.close()
+  const o = (n) => path.join(dir, `${n}.json`)
+  assert.equal(run(['--data-dir', dir, '--industry', 'cosmetic', '--integrity-check', '--out', o('i')], dir).status, 0)
+  assert.equal(reportOf(dir, o('i')).status, 'absent')
+  for (const m of ['optimize', 'rebuild']) assert.equal(run(['--data-dir', dir, '--industry', 'cosmetic', `--${m}`, '--out', o(m)], dir).status, 1, m)
+  const en = run(['--data-dir', dir, '--industry', 'cosmetic', '--enable', '--reason', 'x', '--out', o('en')], dir)
+  assert.equal(en.status, 1); assert.equal(reportOf(dir, o('en')).status, 'unsupported')
+  const dis = run(['--data-dir', dir, '--industry', 'cosmetic', '--disable', '--reason', 'x', '--out', o('dis')], dir)
+  assert.equal(dis.status, 0, dis.stderr + dis.stdout); assert.equal(reportOf(dir, o('dis')).setting_after, '0')
+})
+
+test('AD4 a failed toggle rolls back everything, including a freshly seeded setting row and its baseline', needsFts5, (t) => {
+  const { dir, db } = fixture(t, 10)
+  db.exec("DELETE FROM settings WHERE key='audit_fts_enabled'; DELETE FROM setting_audit_log WHERE key='audit_fts_enabled'")
+  // 触发器上挂一个会失败的东西：让删除 FTS 对象之后的 writeSetting 写日志失败
+  db.exec("CREATE TRIGGER ad4_fail BEFORE INSERT ON setting_audit_log WHEN new.action='set' AND new.key='audit_fts_enabled' BEGIN SELECT RAISE(ABORT,'ad4 injected'); END")
+  const r = run(['--data-dir', dir, '--industry', 'cosmetic', '--disable', '--reason', 'x', '--out', path.join(dir, 'f.json')], dir)
+  assert.equal(r.status, 1)
+  assert.equal(reportOf(dir, path.join(dir, 'f.json')).status, 'error')
+  assert.equal(ftsNames(db).length, 4, 'objects restored by the rollback')
+  assert.equal(settingRow(db), undefined, 'no half-seeded setting row')
+  assert.equal(db.prepare("SELECT COUNT(*) c FROM setting_audit_log WHERE key='audit_fts_enabled'").get().c, 0, 'no stray baseline')
 })

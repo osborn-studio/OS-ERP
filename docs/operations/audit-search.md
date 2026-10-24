@@ -43,3 +43,19 @@ node scripts/audit-fts-maintain.mjs --data-dir /abs/path/to/data --industry cosm
 - **只影响查询路径**：迁移 067 照常建表与触发器，写入照常维护索引，维护脚本照常可用。用途：FTS 索引被怀疑有问题时的**止血开关**（先切 LIKE，再 `--rebuild`），以及测试。
 - CI 的 checks job 有一步 `Audit view tests without FTS (GML_AUDIT_FTS=0)`，用该开关再跑一遍 `tests/audit-logs-view.test.mjs`：在带 FTS5 的构建上真实演练回退路径（此前只靠 `setFtsOverride` 模拟）。依赖"FTS 路径可用"的用例在该运行里按原因跳过，其余照跑。
 - 代价：LIKE 路径在命中稀少的关键词上会读全表（100 万行约百毫秒级，见 capacity-baseline "AB3"）。
+
+## 4. 完全关闭索引：设置 `audit_fts_enabled`（AD4，ADR-0054）
+
+- 危险设置键，默认开。关闭 = 删除 `audit_logs_fts` 与三个触发器，检索一律走 LIKE（与无 FTS5 的构建同一条路径），审计写入少一次索引维护；可逆。
+- 运维入口（同一个写事务里改设置并删/建对象，必须写理由，留痕到 `setting_audit_log`）：
+
+```sh
+node scripts/audit-fts-maintain.mjs --data-dir /abs/path/to/data --industry cosmetic --disable --reason "原因"
+node scripts/audit-fts-maintain.mjs --data-dir /abs/path/to/data --industry cosmetic --enable  --reason "原因"
+```
+
+- `--enable` = 建表 + 触发器 + 回填存量行（即 `--rebuild` 的成本，持写锁到结束，低峰执行）；构建不支持 FTS5 时报 `unsupported`、退出 1、设置不改。两个动作幂等。
+- **启动自愈规则**：只在设置这样说时才动索引——设置开且对象缺失 → 重建并回填；设置关且对象存在 → 删除；设置关且对象已不在 → 什么都不做（不会每次启动重建）。在界面 / API 里改设置不立即动索引，下次启动收敛；要立即生效用上面的脚本。
+- 在带 FTS5 的构建上建过索引的库，不要拿到无 FTS5 的构建上写入；要换构建，先 `--disable`。
+- 与 `GML_AUDIT_FTS=0` 的区别：后者只切查询路径、索引与触发器仍在并被维护；设置关闭是真正删除。
+- CI 的 `audit-no-fts5` job 用从源码重编译、去掉 `SQLITE_ENABLE_FTS5` 的 better-sqlite3 跑 `tests/audit-logs-view.test.mjs` 与 `tests/audit-fts-maintain.test.mjs`（真实无 FTS5 构建）。
