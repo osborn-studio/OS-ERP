@@ -3,7 +3,7 @@
 <!-- generated -->
 <!-- 由 `node scripts/gen-codemap.mjs` 生成，勿手改；CI 校验不漂移 -->
 
-共 201 张表、69 个迁移。“建于”= schema.sql / 迁移编号 / 运行时建表的文件；“改于”= ALTER、addColumn（无后缀）、建索引（·idx）、触发器（·trg）、DROP（·drop）所在迁移编号。“触达”= 该文件的 SQL 文本里出现这张表（server/db/ 下的种子与启动文件不计）。
+共 201 张表、70 个迁移。“建于”= schema.sql / 迁移编号 / 运行时建表的文件；“改于”= ALTER、addColumn（无后缀）、建索引（·idx）、触发器（·trg）、DROP（·drop）所在迁移编号。“触达”= 该文件的 SQL 文本里出现这张表（server/db/ 下的种子与启动文件不计）。
 
 ## 扫描边界（必读）
 
@@ -289,3 +289,4 @@
 | 071 | `071_audit_fts_optional.cjs` | 审计日志 FTS5 索引可选化（设置 audit_fts_enabled） | — | — |
 | 072 | `072_audit_anchor_intents.cjs` | 审计锚点操作意图表（audit_anchor_intents） | audit_anchor_intents | audit_anchor_intents, audit_anchor_intents_old |
 | 073 | `073_mcp_rate_buckets.cjs` | MCP 限速桶表（mcp_rate_buckets，db 存储模式） | if | — |
+| 074 | `074_oms_items_order_index.cjs` | 线上订单明细按订单号索引（oms_order_items.oms_order_id） | — | — |

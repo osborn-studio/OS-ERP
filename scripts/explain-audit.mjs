@@ -71,23 +71,24 @@ function auditStatementsFor() {
   return out
 }
 
-/** AE3：登记 oms-sql.js 的语句（全局 + 受限范围两种形态）。每条 { sql, params } 与路由同形。 */
+/** AE3：登记 oms-sql.js 的语句（全局 + 受限范围两种形态）。每条 { sql, params } 与路由同形。AF3：九条全部声明 idx_oms_order_time 的带约束 SEARCH，且没有任何 ALLOW 豁免。 */
 function omsStatsAudit() {
   const out = []
-  // expect=true：计划必须是 idx_oms_order_time 的带约束 SEARCH。其余形态（平台驱动 / 受限范围 / 明细驱动）规划器按别的索引走，如实登记、只守"无裸 SCAN"
-  const reg = (id, mirrors, st, expect = false) => out.push({ id, mirrors, bench: null, ...(expect ? { expectIndex: 'idx_oms_order_time', expectSearch: true } : {}), sql: st.sql, params: st.params })
+  // AF3：全部九条都必须是 idx_oms_order_time 的带约束 SEARCH（AE3 时平台驱动 / 受限范围 / 明细驱动三类只守"无裸 SCAN"，现已改写 + 迁移 074 补齐）。
+  // topSkus 另靠迁移 074 的 idx_oms_items_order：缺了它计划退化为 SCAN oms_order_items / 自动索引，在没有豁免的情况下直接违规
+  const reg = (id, mirrors, st) => out.push({ id, mirrors, bench: null, expectIndex: 'idx_oms_order_time', expectSearch: true, sql: st.sql, params: st.params })
   const g = { ps: omsPlatformScopeSql({ scope: 'all' }, 'pf'), os: omsOrderScopeSql({ scope: 'all' }, 'o'), os0: omsOrderScopeSql({ scope: 'all' }, 'oms_orders') }
   const r = { ps: omsPlatformScopeSql({ orgIds: [1] }, 'pf'), os: omsOrderScopeSql({ orgIds: [1] }, 'o'), os0: omsOrderScopeSql({ orgIds: [1] }, 'oms_orders') }
   const M = 'server/routes/oms.js GET /stats (server/lib/oms-sql.js '
   reg('oms.stats_by_platform', `${M}omsStatsByPlatformStmt)`, omsStatsByPlatformStmt(30, g.ps))
   reg('oms.stats_by_platform_scoped', `${M}omsStatsByPlatformStmt, 受限组织范围)`, omsStatsByPlatformStmt(30, r.ps))
-  reg('oms.stats_trend', `${M}omsStatsTrendStmt)`, omsStatsTrendStmt(30, g.os0), true)
+  reg('oms.stats_trend', `${M}omsStatsTrendStmt)`, omsStatsTrendStmt(30, g.os0))
   reg('oms.stats_trend_scoped', `${M}omsStatsTrendStmt, 受限组织范围)`, omsStatsTrendStmt(30, r.os0))
-  reg('oms.stats_total', `${M}omsStatsTotalStmt)`, omsStatsTotalStmt(30, g.os0), true)
+  reg('oms.stats_total', `${M}omsStatsTotalStmt)`, omsStatsTotalStmt(30, g.os0))
   reg('oms.stats_total_scoped', `${M}omsStatsTotalStmt, 受限组织范围)`, omsStatsTotalStmt(30, r.os0))
   reg('oms.stats_top_skus', `${M}omsStatsTopSkusStmt)`, omsStatsTopSkusStmt(30, g.os))
   reg('oms.stats_top_skus_scoped', `${M}omsStatsTopSkusStmt, 受限组织范围)`, omsStatsTopSkusStmt(30, r.os))
-  reg('ai.platform_analysis', 'server/routes/ai.js POST /query#channel_compare (server/lib/oms-sql.js aiPlatformAnalysisStmt)', aiPlatformAnalysisStmt(30), true)
+  reg('ai.platform_analysis', 'server/routes/ai.js POST /query#channel_compare (server/lib/oms-sql.js aiPlatformAnalysisStmt)', aiPlatformAnalysisStmt(30))
   return out
 }
 
@@ -303,9 +304,7 @@ export const ALLOW = [
   { statement: 'dash.recent_purchase', table: 'purchase_orders', noSort: true, reason: PAGE_REASON },
   { statement: 'dash.recent_oms', table: 'oms_orders', noSort: true, reason: PAGE_REASON },
   { statement: 'dash.recent_txn', table: 'inventory_transactions', noSort: true, reason: PAGE_REASON },
-  // AE3：/stats topSkus 由 oms_order_items 驱动（SCAN i → 按主键找 o），oms_orders 上的区间谓词在这个计划里只是过滤，不能缩小读取范围
-  { statement: 'oms.stats_top_skus', table: 'oms_order_items', reason: 'AE3：明细表驱动（无统计信息时规划器先扫 oms_order_items 再按主键取订单），order_time 区间谓词只做过滤；改成订单驱动（CROSS JOIN）会改变浮点求和顺序，不能保证与旧结果逐位相同，留作已知残余，见 ADR-0044 补充 4' },
-  { statement: 'oms.stats_top_skus_scoped', table: 'oms_order_items', reason: '同 oms.stats_top_skus（受限组织范围形态）' },
+  // AF3：oms.stats_top_skus(_scoped) 的豁免已移除——迁移 074 补 idx_oms_items_order 后，订单窗口驱动、按订单号取明细，不再整表 SCAN oms_order_items（ADR-0044 补充 5）
   // AD3：/channel 线上渠道的豁免已移除——谓词改成 order_time >= ?，走 idx_oms_order_time（迁移 070），由 expectIndex 守卫
   { statement: 'dash.sales_unpaid', table: 'sales_orders', reason: AGG_REASON },
   { statement: 'dash.stock_total', table: 'inventory_stocks', reason: '整表聚合（SUM 全库存），没有谓词；索引只能做覆盖扫描，不改变量级；AA5 起由看板 30 s 缓存吸收重复读取' },
@@ -375,10 +374,15 @@ export function auditStatements(db, statements, { threshold = DEFAULT_THRESHOLD,
       }
       scans.push(entry)
     }
+    // AF3：计划里 `MATERIALIZE w` / `CO-ROUTINE w` 声明的名字是派生表（子查询 / CTE）的物化结果，不是可建索引的真实表；
+    // 在它上面自建的自动索引没有"补真实索引"这个解法（它的内容就是每次查询现算的聚合），这里不算缺索引。
+    // 产生它的那次读取（派生表内部对真实表的 SEARCH / SCAN）仍是计划里的独立行，照常被上面的规则判定。
+    const derived = new Set(plan.map(d => /^(?:MATERIALIZE|CO-ROUTINE) (\S+)/.exec(d)?.[1]).filter(Boolean))
     // SQLite 在运行时为连接临时造的"自动索引"= 它认为这里缺索引；每次查询都重建一遍
     for (const detail of plan) {
       const m = /^SEARCH (\S+) USING AUTOMATIC (?:PARTIAL )?(?:COVERING )?INDEX/.exec(detail)
-      if (!m) continue
+      // 同名保护（Codex 审计）：别名若在 SQL 里同时是某真实表的别名（如另一分支的 `LEFT JOIN fact w`），就不能因为别处有 `MATERIALIZE w` 而放过
+      if (!m || (derived.has(m[1]) && !tables.has(aliases.get(m[1]) ?? ''))) continue
       const table = aliases.get(m[1]) ?? m[1]
       const hit = allow.find(a => a.statement === s.id && a.table === table)
       const entry = { detail, table, kind: 'automatic_index', rows: tables.has(table) ? rowsOf(table) : null }
@@ -392,10 +396,12 @@ export function auditStatements(db, statements, { threshold = DEFAULT_THRESHOLD,
     }
     // expectSearch（AD3，Codex 审计）：除了"用了这个索引"，还必须是带范围 / 等值约束的 SEARCH（`SEARCH … USING [COVERING] INDEX <idx> (col>?)`），
     // 而不是对该索引的整条 SCAN——否则去掉区间谓词后计划退化成"覆盖索引全扫"，expectIndex 仍然绿
+    // Codex 审计：另一处不相干的 SEARCH 不能替主聚合"担保"——计划里只要还有对该索引的整条 SCAN（`SCAN x USING [COVERING] INDEX <idx>`），就不算满足
+    const fullIndexScan = s.expectSearch && s.expectIndex && plan.some(d => d.startsWith('SCAN ') && d.includes(` INDEX ${s.expectIndex}`))
     if (s.expectSearch && s.expectIndex && plan.some(d => d.includes(s.expectIndex)) &&
-        !plan.some(d => d.startsWith('SEARCH ') && d.includes(` INDEX ${s.expectIndex} (`))) {
+        (fullIndexScan || !plan.some(d => d.startsWith('SEARCH ') && d.includes(` INDEX ${s.expectIndex} (`)))) {
       const table = [...aliasMap(s.sql).values()][0] ?? '?'
-      violations.push({ statement: s.id, table, detail: plan.join(' | '), reason: `计划用了 ${s.expectIndex} 但不是带约束的 SEARCH（索引全扫，区间谓词失效）` })
+      violations.push({ statement: s.id, table, detail: plan.join(' | '), reason: `计划用了 ${s.expectIndex} 但不是带约束的 SEARCH，或同一索引另有整条索引扫描（索引全扫，区间谓词失效）` })
     }
     out.push({ id: s.id, mirrors: s.mirrors, bench: s.bench ?? null, plan, scans })
   }

@@ -848,3 +848,72 @@ gh run view <run-id> --log-failed
 
 - **Linux CI 上的 `tests/fs-fault.test.mjs`：尚未运行。** 2026-10-24 用 `gh run view` 只读核对 PR #9（`feat/batch-thirteen`）的 CI：run `40111488028` 在“Audit view tests without FTS”步骤失败，其后的 “Focused tests (tests/*.test.mjs)” 步骤被跳过（`-`），所以该文件没有在 ubuntu 上执行；run `40112658832` 当时仍在进行（“Typecheck, build, focused tests” 未完成，日志尚不可读）。PR #10 不存在。因此 AE6 文档里“Linux 由 CI `checks` job 在 ubuntu-latest 上跑同一文件”仍是**待验证**，没有 Linux 通过/失败的证据；目录 fsync、rename 覆盖、`wx` 等 `platform:` 用例的 Linux 行为未被实测。
 - 本机（macOS）：`tests/fs-fault.test.mjs` 在加入 `backup.after-enc-rename-fsync` / `backup.after-manifest-fsync` 与多库 × 4 点用例后全部通过；其中 fsync 顺序用例只断言调用顺序，不是断电实验。
+
+
+## AF3 OMS `/stats` 平台维度、热销与受限范围语句改走时间索引：改写 + 迁移 074（**Mac mini / 合成 20 万 OMS 单 + 每单一行明细 / 非目标主机 / 整机负载 12–25 / 同机轮转计时**）
+
+脚本：`node scripts/bench-oms-order-time.mjs --rows 200000 --span 365 --ordered --writes 4000 --rounds 5 --repeat 31 --out result.json`（输出 `af3` 键；`--span 60 --no-write` 为密集窗口最坏情形；`--ordered` = 订单时间随 id 递增 ±6 h，更接近真实落库，不加则时间与 id 无关、对窗口驱动计划偏不利）。全新临时目录；不跑 `ANALYZE`。四种索引状态各用一份库副本、各开一个连接：S0（仅迁移 070，即 AE3 现状）、S0+B（再加被否决的 `oms_orders(platform_id, order_time, status, pay_amount)`）、S1（+迁移 074，已发布）、S1+B；每条语句**轮转**所有（状态 × 写法）配置计时（每轮每配置一次，31 轮取 p50 / p95），整机负载漂移落在所有配置上，比逐配置连续计时可比。新写法与最初的 `date(order_time)` 旧 SQL 逐条核对：整数 / 文本 / 行序严格相同，浮点列相对误差 `af3.max_rel_diff = 0`（脚本断言 `af3.identical: true`，所有运行均为真）。**负载高，p95 含抖动，只看量级；不是 `dmserver` 结果。**
+
+### 计划（全局范围；受限范围同形）
+| 语句 | AF3 之前（AE3） | AF3 之后 |
+|---|---|---|
+| `/stats` byPlatform | `SCAN pf` + `SEARCH o USING INDEX sqlite_autoindex_oms_orders_1 (platform_id=?) LEFT-JOIN`（逐平台读全部历史订单） | `MATERIALIZE w` ← `SEARCH oms_orders USING COVERING INDEX idx_oms_order_time (order_time>?)` + 分组，`SCAN pf` + `SEARCH w USING AUTOMATIC COVERING INDEX`（≤ 平台数行的派生表） |
+| `/stats` topSkus | `SCAN i` + `SEARCH o USING INTEGER PRIMARY KEY (rowid=?)`（ALLOW 豁免） | `SEARCH o USING COVERING INDEX idx_oms_order_time (order_time>?)` + `SEARCH i USING INDEX idx_oms_items_order (oms_order_id=?)`（无豁免） |
+| 受限范围的 trend / total / topSkus | `SEARCH oms_orders USING INDEX sqlite_autoindex_oms_orders_1 (platform_id=?)`（范围内全部历史订单） | `SEARCH oms_orders USING COVERING INDEX idx_oms_order_time (order_time>?)`（范围谓词包 `likely()`） |
+| 受限范围的 byPlatform | 同全局（平台驱动） | 同全局（窗口子查询先聚合，范围谓词在外层平台上） |
+
+### 延迟（ms，p50 / p95；数据跨 365 天、时间随 id 递增；负载 25）
+| 语句 | AE3 现状 | (a) 只改写 | (b) 只加平台复合索引（被否决） | **已发布 = (a) + 074** |
+|---|---|---|---|---|
+| byPlatform 全局 30 天 | 89.1 / 219 | 5.2 / 13.3 | 2.6 / 19.4 | **6.3 / 20.2** |
+| byPlatform 全局 90 天 | 87.8 / 113 | 19.2 / 33.3 | 11.6 / 18.6 | **18.3 / 29.0** |
+| byPlatform 受限 30 天 | 32.5 / 46.5 | 4.3 / 10.7 | 1.1 / 3.9 | **7.2 / 9.8** |
+| byPlatform 受限 90 天 | 38.5 / 48.7 | 19.3 / 29.7 | 5.3 / 14.2 | **19.4 / 38.3** |
+| topSkus 全局 30 天 | 30.7 / 46.5 | 27.3 / 55.7（仍 SCAN 明细表） | 28.1 / 50.7（仍 SCAN） | **13.4 / 21.9** |
+| topSkus 全局 90 天 | 37.1 / 48.7 | 39.2 / 52.5（仍 SCAN） | 35.3 / 48.3（仍 SCAN） | **39.3 / 48.9** |
+| topSkus 受限 30 天 | 23.8 / 31.5 | 22.5 / 33.8 | 25.0 / 34.6 | **6.7 / 11.9** |
+| topSkus 受限 90 天 | 39.4 / 75.2 | 41.1 / 63.4 | 41.0 / 77.1 | **24.2 / 50.0** |
+| trend 受限 30 天 | 30.7 / 45.9 | 2.5 / 6.2 | 1.4 / 3.9 | **2.5 / 6.3** |
+| trend 受限 90 天 | 39.3 / 55.1 | 9.9 / 21.2 | 5.7 / 11.4 | **9.7 / 26.0** |
+| total 受限 30 天 | 31.7 / 41.7 | 2.0 / 4.4 | 0.8 / 2.0 | **2.3 / 4.9** |
+| total 受限 90 天 | 44.4 / 99.1 | 8.7 / 34.4 | 2.5 / 9.4 | **8.5 / 34.4** |
+| trend / total 全局（计划未变） | 2.9–16 / 8–23 | 同 | 同 | 同（噪声内） |
+
+读法：byPlatform 与所有受限形态 (a) 即获得 4–20× 收益，零写入成本；(b) 的 p95 还要再低几毫秒到十几毫秒，但 (b) 单独解决不了 topSkus（仍 SCAN 明细表，且无论 (a) 还是 (b) 都需要明细索引）。topSkus 由 074 改成订单窗口驱动：30 天窗口快约 2.3–3.6×，90 天全局与扫描持平（39 vs 37 ms），受限 90 天快约 1.6×。
+
+### 密集窗口最坏情形（数据全在最近 60 天，窗口覆盖几乎全部行；`--span 60 --ordered`，负载 22）
+| 语句 | AE3 现状 | **已发布** | (b) 只加平台复合索引 |
+|---|---|---|---|
+| byPlatform 全局 30 / 90 天 | 99 / 139；114 / 153 | 44 / 69；71 / 84 | 27 / 47；45 / 57 |
+| byPlatform 受限 30 / 90 天 | 38 / 56；45 / 53 | 34 / 45；**67 / 98** | 9.6 / 14；17 / 22 |
+| topSkus 全局 30 / 90 天 | 55 / 68；93 / 106 | **89 / 113；186 / 216** | 59 / 75；97 / 110 |
+| topSkus 受限 30 / 90 天 | 36 / 46；53 / 63 | 41 / 52；**78 / 99** | 38 / 53；56 / 69 |
+| trend / total 受限 30 / 90 天 | 34–50 / 40–60 | 13–37 / 20–54 | 5–23 / 10–33 |
+
+**这是真实回退，不是噪声**：窗口覆盖多数行时，订单窗口驱动要对每个窗口内订单探测一次明细索引（随机读），比"顺序扫描明细表 + 主键查找"慢约 2×（topSkus 全局 +34 / +93 ms；受限 byPlatform 90 天 +22 ms）。读量因此随窗口内订单数而不是全部历史订单数增长——3 年历史同量级库（随机序、CPU 时间）topSkus 30 天窗口 5.8 vs 19 ms，90 天持平（19.5 vs 22.6 ms）。取舍同 AD3，但最坏情形是 ~2× 回退而非持平，已写入 ADR-0044 补充 5。
+
+### 明细索引形状：单列（已发布）vs 覆盖 `(oms_order_id, title, qty, amount)`（否决）
+| 语句 | 扫描（AE3） | 单列 | 覆盖 |
+|---|---|---|---|
+| topSkus 全局 30 / 90 天（CPU p50 / p95） | 25.1 / 34.3；35.3 / 41.9 | 11.2 / 14.8；36.2 / 45.2 | 8.7 / 12.7；28.8 / 37.3 |
+| topSkus 受限 30 / 90 天 | 21.9 / 27.4；29.5 / 36.7 | 6.2 / 9.4；19.1 / 26.2 | 4.3 / 7.6；15.5 / 23.5 |
+| 索引体积（20 万明细行） | — | 2.36 MB | 5.99 MB（标题仅 7 字符，真实标题更长则更大） |
+| 写入 CPU（µs/单，中位数） | 99.9 | 106.8（+7%） | 103.0（+3%） |
+
+覆盖版读快约 20%，体积 2.5×；单列版已满足目标，选更小的。
+
+### 建索引与写放大（独立库、逐单自动提交；一单 = 1 行 `oms_orders` + 2 行 `oms_order_items`；种子 10 万单，5 轮 × 4000 单，状态交替；µs/单，中位数）
+| 状态 | 墙钟 | CPU（user+sys） | CPU 相对基线 | 新增索引体积（20 万行） | `CREATE INDEX` |
+|---|---|---|---|---|---|
+| 基线（070 only） | 142.6 | 99.9 | 1.00 | — | — |
+| + 074 单列（已发布） | 137.9 | 106.8 | **1.07** | +2.36 MB | 29–76 ms |
+| + 074 覆盖（否决） | 139.5 | 103.0 | 1.03 | +5.99 MB | 76 ms |
+| + (b) 平台复合索引（否决） | 191.8 | 122.8 | **1.23** | +9.48 MB | 137–225 ms |
+| + 074 + (b) | 186.5 | 132.3 | 1.32 | +11.8 MB | — |
+
+墙钟噪声大（负载 25，(b) 的中位数含离群），**CPU 时间更可靠**：已发布的 074 每单约 +7 µs（每明细行约 +3.5 µs）；(b) 每单约 +23 µs（表中基线已含 070 的覆盖索引，其自身写放大见 AD3 一节）。写入成本是选 (a) + 074 而不是 (b) 的主要依据。
+
+### 复现与未覆盖
+- 复现：见脚本头；`--ordered`（时间随 id）、`--span 60|365|1095`、`--no-write`。
+- 未覆盖：`dmserver` 与生产规模副本；真实标题长度下的明细索引体积；真实订单 / 明细的写入并发争用；空闲机器上的数字；有 `sqlite_stat1` 统计信息时的计划（见 `docs/operations/query-planner.md`）。
+- explain-audit（合成库）见下方验证记录；九条 `oms.stats_*` / `ai.platform_analysis` 无豁免。
