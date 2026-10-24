@@ -15,6 +15,7 @@
  * ============================================================================
  */
 import { localDate } from './dates.js'
+import { incCounter } from './process-counters.js'
 
 const DEFAULT_TTL_MS = 30000
 const state = new WeakMap() // db -> { stmt, pragmaOk, entry }
@@ -42,7 +43,8 @@ export function cachedForDb(db, compute, { ttlMs = cacheTtlMs(), now = Date.now 
   const s = slot(db)
   const key = versionKey(db, s)
   const t = now()
-  if (s.entry && s.entry.key === key && t - s.entry.at <= ttlMs) return { value: s.entry.value, hit: true }
+  if (s.entry && s.entry.key === key && t - s.entry.at <= ttlMs) { incCounter('dashboard_cache_total', 'hit'); return { value: s.entry.value, hit: true } }
+  incCounter('dashboard_cache_total', 'miss')
   s.entry = null
   const value = compute()
   // 计算期间如果本连接又写了东西（不应发生：处理器是同步只读的），key 以计算后为准重取，保守起见不缓存

@@ -9,6 +9,7 @@
    openssl rand -hex 32
    ```
 2. 只通过环境变量交给服务：`GML_METRICS_TOKEN=<上一步的值>`（与 `GML_JWT_SECRET` 一样放在 secrets/环境文件里，不进仓库、不进镜像、不进日志）。重启服务生效；轮换 = 换值并重启，Prometheus 侧同步更新。
+   **轮换（AB10）**：先把新令牌设为 `GML_METRICS_TOKEN_NEXT` 并重启（此时新旧两把同时有效），把 Prometheus 侧换成新令牌，确认抓取正常后，把 `GML_METRICS_TOKEN` 改成新值、删除 `GML_METRICS_TOKEN_NEXT` 再重启。两把都要求 ≥32 字符，任何一把过短即被忽略。
 3. 令牌**只**对 `GET /api/meta/metrics?format=prometheus` 有效；对 JSON 形态、`/health` 及其它接口无效。令牌不能放在 URL 里。
 
 自测（把令牌放在 `curl` 的头里，不要写进 shell 历史时可用 `read -s`）：
@@ -16,6 +17,8 @@
 ```sh
 curl -sS -H "Authorization: Bearer $GML_METRICS_TOKEN" 'http://127.0.0.1:3000/api/meta/metrics?format=prometheus' | head
 ```
+
+**抓取节流（AB10）**：`/api/meta/metrics` 按来源 IP（`req.ip`，受 `GML_TRUST_PROXY` 约束）限速，独立于登录节流的桶，在鉴权之前计数（猜令牌同样受限）。默认每 IP 每 60 s 120 次，可用 `GML_METRICS_IP_LIMIT`（1..100000）与 `GML_METRICS_IP_WINDOW_MS`（1000..86400000）调整，非法值回退默认。超限返回 429，`error=METRICS_RATE_LIMITED` 并带 `Retry-After`。进程内计数，重启清零。
 
 ## 2. Prometheus 抓取配置
 
@@ -54,9 +57,17 @@ scrape_configs:
 | `os_erp_csp_violation_reports_total` | counter | **恒 0：未采集**（CSP 为 Report-Only 且没有报告端点，ADR-0036）；不要据此告警 |
 | `os_erp_build_info{version}` | gauge | 恒 1 |
 
+AB10 新增：
+
+| 指标 | 类型 | 含义 |
+|---|---|---|
+| `os_erp_dashboard_cache_total{result="hit\|miss"}` | counter | 总部看板汇总 TTL 缓存命中 / 未命中（`GML_DASHBOARD_CACHE_MS=0` 关闭缓存时不计数） |
+| `os_erp_audit_write_duration_seconds_bucket{le}` / `_sum` / `_count` | histogram | `audit_logs` INSERT 耗时（秒，含失败的尝试）；固定桶 0.0005 … 1 与 `+Inf` |
+| `os_erp_mcp_tool_calls_total{tool,code}` | counter | MCP 工具调用（以调用审计行成功落地为准），`code` 为 `ok` 或登记的错误码；未登记的工具名折成 `unknown`、未登记的码折成 `other`，基数固定 |
+
 计数器是进程内的，重启归零；用 `increase()`/`rate()`，不要直接比较绝对值。
 
-## 4. 告警规则（5 条）
+## 4. 告警规则（5 条 + AB10 的 4 条，见 4.1）
 
 ```yaml
 groups:
@@ -108,6 +119,52 @@ groups:
 ```
 
 另外建议（非 OS-ERP 指标）：用 `up{job="os-erp"} == 0` 监控抓取本身；`rate_limited` 的突增可单独做看板观察撞库趋势，但不建议直接告警（误输入会触发）。
+
+### 4.1 AB10 新增序列的告警规则
+
+```yaml
+groups:
+  - name: os-erp-ab10
+    rules:
+      - alert: OsErpDashboardCacheIneffective
+        # 看板请求持续、但命中率低于 20%：库写入频繁使缓存不断失效，或 TTL 被配得过短。命中率低本身不是故障，仅提示
+        expr: |
+          sum(increase(os_erp_dashboard_cache_total{result="hit"}[30m]))
+            / clamp_min(sum(increase(os_erp_dashboard_cache_total[30m])), 1) < 0.2
+          and sum(increase(os_erp_dashboard_cache_total[30m])) > 60
+        for: 30m
+        labels: { severity: info }
+        annotations:
+          summary: "总部看板缓存命中率低"
+          description: "检查 GML_DASHBOARD_CACHE_MS 是否为 0/过小，或写入是否过于频繁（ADR-0044：任何写入都会让缓存失效）。"
+
+      - alert: OsErpAuditWriteSlow
+        # 审计写入 p95 超过 100 ms：磁盘或锁争用，会拖慢所有受审计的写请求
+        expr: histogram_quantile(0.95, sum by (le) (rate(os_erp_audit_write_duration_seconds_bucket[10m]))) > 0.1
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "审计写入 p95 延迟超过 100ms"
+          description: "检查磁盘 IO、WAL 检查点、备份是否与写入重叠；与 OsErpWriteContention 一起看。"
+
+      - alert: OsErpMcpDeniedSpike
+        # 权限/范围类拒绝突增：令牌被滥用或配置错误的 Agent 在反复撞墙
+        expr: sum(increase(os_erp_mcp_tool_calls_total{code=~"PERM_DENIED|SCOPE_DENIED|TOOL_DENIED|TOOL_NOT_ALLOWED|TOKEN_OWNER_PERM_DENIED|ORG_OUT_OF_SCOPE"}[10m])) > 50
+        labels: { severity: warning }
+        annotations:
+          summary: "MCP 工具调用被拒绝次数突增"
+          description: "到 MCP 调用日志（mcp_call_logs）按 token_name 看是谁；必要时吊销该令牌。"
+
+      - alert: OsErpMcpAuditUnavailable
+        # 调用审计写不进去的同时仍有工具调用失败：与 OsErpAuditStrictWriteFailing 互补（后者按失败计数，这里看 AUDIT_UNAVAILABLE 结果码）
+        expr: increase(os_erp_mcp_tool_calls_total{code="AUDIT_UNAVAILABLE"}[10m]) > 0
+        labels: { severity: critical }
+        annotations:
+          summary: "MCP 写型工具因调用审计不可用而被拒"
+          description: "检查 mcp_call_logs 表与磁盘；见 ADR-0011。"
+```
+
+说明：抓取被节流（429）时 Prometheus 侧表现为 `up == 0`，已有的 `up{job="os-erp"} == 0` 规则覆盖；默认限额（120 次/分钟/IP）远高于 30 s 一次的抓取频率。
 
 ## 5. 排障
 

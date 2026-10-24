@@ -12,7 +12,10 @@ import { fileURLToPath } from 'node:url'
 import { setTimeout as delay } from 'node:timers/promises'
 import Database from 'better-sqlite3'
 import jwt from 'jsonwebtoken'
-import { incCounter, counterSnapshot, resetCounters } from '../server/lib/process-counters.js'
+import { incCounter, counterSnapshot, resetCounters, incMcpToolCall, registerMcpTools, observeHistogram, histogramSnapshot } from '../server/lib/process-counters.js'
+import { createMetricsThrottle } from '../server/lib/metrics-throttle.js'
+import { cachedForDb } from '../server/lib/db-ttl-cache.js'
+import { insertAuditRow } from '../server/lib/audit-trail.js'
 import { renderPrometheus, metricsTokenOk, METRICS_TOKEN_MIN_LENGTH } from '../server/lib/metrics-export.js'
 import { auditStrictRow } from '../server/lib/audit-trail.js'
 import { createLoginThrottle } from '../server/lib/login-throttle.js'
@@ -70,7 +73,7 @@ test('renderPrometheus: HELP/TYPE per family, os_erp_ prefix, gauges from ops, u
     if (l.startsWith('# TYPE ')) {
       const [, , name, kind] = l.split(' ')
       assert.match(name, /^os_erp_[a-z0-9_]+$/)
-      assert.ok(['counter', 'gauge'].includes(kind))
+      assert.ok(['counter', 'gauge', 'histogram'].includes(kind))
       families.add(name)
       continue
     }
@@ -274,4 +277,125 @@ test('login throttle rejections reach the scrape end to end', { timeout: 180000 
   const text = await (await s.get(PROM, s.tokenFor('admin'))).text()
   assert.equal(valueOf(text, 'os_erp_login_throttle_rejections_total{reason="rate_limited"}'), 1)
   assert.ok(!text.includes('nobody'))
+})
+
+// ------------------------------------------------------------ AB10 supplement
+test('AB10 token rotation: GML_METRICS_TOKEN and GML_METRICS_TOKEN_NEXT both accepted; NEXT alone works; short NEXT ignored', () => {
+  const a = randomBytes(24).toString('hex')
+  const b = randomBytes(24).toString('hex')
+  const env = { GML_METRICS_TOKEN: a, GML_METRICS_TOKEN_NEXT: b }
+  assert.equal(metricsTokenOk(a, env), true)
+  assert.equal(metricsTokenOk(b, env), true)
+  assert.equal(metricsTokenOk(a + 'x', env), false)
+  assert.equal(metricsTokenOk(b, { GML_METRICS_TOKEN_NEXT: b }), true, 'NEXT works while the old one is already unset')
+  assert.equal(metricsTokenOk('short', { GML_METRICS_TOKEN: a, GML_METRICS_TOKEN_NEXT: 'short' }), false)
+  assert.equal(metricsTokenOk(b, { GML_METRICS_TOKEN: a, GML_METRICS_TOKEN_NEXT: '' }), false)
+  const src = readFileSync(path.join(ROOT, 'server/lib/metrics-export.js'), 'utf8').replace(/\/\/.*$/gm, '')
+  assert.ok(!/\bsome\(|\.includes\(presented|===\s*presented/.test(src), 'both candidates are always compared (no early exit on the secret)')
+})
+
+test('AB10 dashboard cache hit/miss counters', () => {
+  resetCounters()
+  const db = new Database(':memory:')
+  cachedForDb(db, () => 1, { ttlMs: 1000 })
+  cachedForDb(db, () => 1, { ttlMs: 1000 })
+  cachedForDb(db, () => 1, { ttlMs: 1000 })
+  let s = counterSnapshot().dashboard_cache_total
+  assert.deepEqual(s, { hit: 2, miss: 1 })
+  cachedForDb(db, () => 1, { ttlMs: 0 }) // 关闭缓存：不计
+  s = counterSnapshot().dashboard_cache_total
+  assert.deepEqual(s, { hit: 2, miss: 1 })
+  db.close()
+})
+
+test('AB10 MCP tool call counter: registered tools and codes only, everything else folded (bounded cardinality, no injection)', () => {
+  resetCounters()
+  registerMcpTools(['stock_query', 'doc_create'])
+  incMcpToolCall('stock_query', null)
+  incMcpToolCall('stock_query', 'PERM_DENIED')
+  incMcpToolCall('doc_create', 'SOME_NEW_CODE')
+  incMcpToolCall('evil"}\n# HELP x', 'ok')
+  incMcpToolCall('stock_query', 'x"y')
+  const m = counterSnapshot().mcp_tool_calls_total
+  assert.equal(m.stock_query.ok, 1)
+  assert.equal(m.stock_query.PERM_DENIED, 1)
+  assert.equal(m.doc_create.other, 1)
+  assert.equal(m.unknown.ok, 1)
+  assert.equal(m.stock_query.other, 1)
+  const text = renderPrometheus({ ops: OPS, retry: {}, counters: counterSnapshot(), version: 'x' })
+  assert.equal(valueOf(text, 'os_erp_mcp_tool_calls_total{tool="stock_query",code="PERM_DENIED"}'), 1)
+  assert.equal(valueOf(text, 'os_erp_mcp_tool_calls_total{tool="unknown",code="ok"}'), 1)
+  assert.ok(!text.includes('evil'))
+  assert.match(text, /^# TYPE os_erp_mcp_tool_calls_total counter$/m)
+})
+
+test('AB10 audit write latency histogram: fixed buckets, cumulative, +Inf == count; insertAuditRow observes', () => {
+  resetCounters()
+  observeHistogram('audit_write_duration_seconds', 0.0004)
+  observeHistogram('audit_write_duration_seconds', 0.02)
+  observeHistogram('audit_write_duration_seconds', 99)
+  observeHistogram('nope', 1)
+  observeHistogram('audit_write_duration_seconds', Number.NaN)
+  const h = histogramSnapshot().audit_write_duration_seconds
+  assert.equal(h.count, 3)
+  const text = renderPrometheus({ ops: OPS, retry: {}, counters: counterSnapshot(), histograms: histogramSnapshot(), version: 'x' })
+  assert.match(text, /^# TYPE os_erp_audit_write_duration_seconds histogram$/m)
+  assert.equal(valueOf(text, 'os_erp_audit_write_duration_seconds_bucket{le="0.0005"}'), 1)
+  assert.equal(valueOf(text, 'os_erp_audit_write_duration_seconds_bucket{le="0.025"}'), 2)
+  assert.equal(valueOf(text, 'os_erp_audit_write_duration_seconds_bucket{le="+Inf"}'), 3)
+  assert.equal(valueOf(text, 'os_erp_audit_write_duration_seconds_count'), 3)
+  assert.ok(valueOf(text, 'os_erp_audit_write_duration_seconds_sum') > 99)
+  resetCounters()
+  const db = new Database(':memory:')
+  db.exec('CREATE TABLE audit_logs (id INTEGER PRIMARY KEY, user_id, user_name, action, module, entity, entity_id, detail, ip)')
+  insertAuditRow(db, { userName: 'u', action: 'X' })
+  assert.equal(histogramSnapshot().audit_write_duration_seconds.count, 1)
+  db.exec('DROP TABLE audit_logs')
+  assert.throws(() => insertAuditRow(db, { userName: 'u', action: 'X' }))
+  assert.equal(histogramSnapshot().audit_write_duration_seconds.count, 2, 'failed writes are timed too')
+  db.close()
+})
+
+test('AB10 metrics throttle: per-IP fixed window, separate buckets, capacity fails closed, bad config falls back', () => {
+  let now = 1000
+  const th = createMetricsThrottle({ limit: 3, windowMs: 60000, maxBuckets: 2, now: () => now })
+  for (let i = 0; i < 3; i++) assert.equal(th.consume('10.0.0.1').allowed, true)
+  const blocked = th.consume('10.0.0.1')
+  assert.equal(blocked.allowed, false)
+  assert.ok(blocked.retryAfter >= 1 && blocked.retryAfter <= 60)
+  assert.equal(th.consume('10.0.0.2').allowed, true, 'another IP has its own bucket')
+  assert.equal(th.consume('10.0.0.3').allowed, false, 'bucket table full of live entries: fail closed')
+  now += 60001
+  assert.equal(th.consume('10.0.0.1').allowed, true, 'window expired')
+  assert.equal(th.consume('::ffff:10.0.0.1').allowed, true, 'v4-mapped shares the v4 bucket')
+  const bad = createMetricsThrottle({ env: { GML_METRICS_IP_LIMIT: '0', GML_METRICS_IP_WINDOW_MS: 'x' } })
+  assert.equal(bad.policy.limit, 120)
+  assert.equal(bad.policy.windowMs, 60000)
+  assert.equal(createMetricsThrottle({ env: { GML_METRICS_IP_LIMIT: '7' } }).policy.limit, 7)
+  assert.equal(th.consume(undefined).allowed, false, 'unparseable source address is not exempt')
+})
+
+test('AB10 HTTP: metrics throttled per IP (429 + bizcode + Retry-After), bad tokens count, accepted rotation tokens, new series present', { timeout: 180000 }, async (t) => {
+  const a = randomBytes(24).toString('hex')
+  const b = randomBytes(24).toString('hex')
+  const s = await server(t, { GML_METRICS_TOKEN: a, GML_METRICS_TOKEN_NEXT: b, GML_METRICS_IP_LIMIT: '5', GML_METRICS_IP_WINDOW_MS: '60000' })
+  const r1 = await s.get(PROM, a)
+  assert.equal(r1.status, 200)
+  const text = await r1.text()
+  assert.match(text, /^# TYPE os_erp_dashboard_cache_total counter$/m)
+  assert.match(text, /^# TYPE os_erp_audit_write_duration_seconds histogram$/m)
+  assert.match(text, /^# TYPE os_erp_mcp_tool_calls_total counter$/m)
+  assert.equal((await s.get(PROM, b)).status, 200)
+  assert.equal((await s.get(PROM, 'wrong')).status, 401)
+  assert.equal((await s.get(PROM)).status, 401)
+  assert.equal((await s.get(PROM, a)).status, 200)
+  const res = await s.get(PROM, a)
+  assert.equal(res.status, 429)
+  const body = await res.json()
+  assert.equal(body.success, false)
+  assert.equal(body.error, 'METRICS_RATE_LIMITED')
+  assert.equal(body.detail.code, 'METRICS_RATE_LIMITED')
+  assert.ok(Number(res.headers.get('retry-after')) >= 1)
+  assert.equal((await s.get('/api/meta/metrics', s.tokenFor('admin'))).status, 429, 'JSON form and admin JWT share the same per-IP bucket')
+  assert.ok(!s.output().includes(a) && !s.output().includes(b))
 })

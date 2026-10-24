@@ -17,7 +17,7 @@
  */
 
 import { redactValue } from './redact.js'
-import { incCounter } from './process-counters.js'
+import { incCounter, observeHistogram } from './process-counters.js'
 
 export const SECURITY_AUDIT_UNAVAILABLE = 'SECURITY_AUDIT_UNAVAILABLE'
 export const AUDIT_OUTSIDE_TX = 'AUDIT_OUTSIDE_TX'
@@ -57,7 +57,12 @@ function bind(row, { withDetail = true } = {}) {
 
 /** 普通写入：返回 better-sqlite3 的 run 结果；失败直接抛给调用方决定（`audit()` 会重试一次去掉明细） */
 export function insertAuditRow(db, row, options) {
-  return db.prepare(INSERT).run(...bind(row, options))
+  const started = process.hrtime.bigint()
+  try {
+    return db.prepare(INSERT).run(...bind(row, options))
+  } finally {
+    observeHistogram('audit_write_duration_seconds', Number(process.hrtime.bigint() - started) / 1e9)
+  }
 }
 
 /**

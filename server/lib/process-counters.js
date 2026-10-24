@@ -23,11 +23,78 @@ export const COUNTER_DEFS = Object.freeze({
     help: 'Strict (in-transaction, roll-back-on-failure) audit writes that failed, by reason (insert_error, no_row, outside_tx = coding error, mcp_call_log).',
     labelName: 'reason', values: ['insert_error', 'no_row', 'outside_tx', 'mcp_call_log']
   },
+  dashboard_cache_total: {
+    help: 'Dashboard summary TTL cache lookups by result (hit: served from cache; miss: recomputed). Not counted when the cache is disabled (GML_DASHBOARD_CACHE_MS=0).',
+    labelName: 'result', values: ['hit', 'miss']
+  },
   security_audit_unavailable_total: {
     help: 'Times a business change was refused with 503 SECURITY_AUDIT_UNAVAILABLE because its security audit row could not be written.',
     labelName: null, values: []
   }
 })
+
+/**
+ * MCP 工具调用计数（AB10）：两个 label（tool, code），都是**封闭集合**。
+ *   · tool：只接受 `registerMcpTools` 登记过的工具名（来自代码内的工具目录），其余折成 `unknown`；
+ *   · code：`ok` 或下面登记的结果码，其余折成 `other`。用户可控字符串（工具名、参数）因此无法制造新序列或注入 label。
+ */
+export const MCP_RESULT_CODES = Object.freeze([
+  'ok', 'other', 'TOOL_NOT_FOUND', 'TOOL_NOT_ALLOWED', 'TOOL_DENIED', 'SCOPE_DENIED', 'PERM_DENIED', 'TOKEN_OWNER_PERM_DENIED',
+  'ORG_OUT_OF_SCOPE', 'BAD_ARGS', 'MISSING_ARGS', 'ARG_TYPE', 'ARG_ENUM', 'ARG_UNKNOWN', 'NOT_FOUND', 'DOC_NOT_FOUND',
+  'TARGET_NOT_FOUND', 'WAREHOUSE_NOT_FOUND', 'BAD_DOC_TYPE', 'INSUFFICIENT_STOCK', 'TRANSITION_NOT_ALLOWED',
+  'IDEMPOTENCY_REQUIRED', 'IDEMPOTENCY_CONFLICT', 'CONFIRMATION_REQUIRED', 'CONFIRM_ARGS_MISMATCH', 'CONFIRM_ALREADY_USED',
+  'EDGE_REQUIRES_HUMAN', 'APPROVAL_ACTOR_REQUIRED', 'APPROVAL_NOT_FOUND', 'OWNER_MISMATCH', 'AUDIT_UNAVAILABLE', 'EXEC_ERROR'
+])
+const mcpCodes = new Set(MCP_RESULT_CODES)
+const mcpTools = new Set()
+const mcpCalls = new Map() // tool -> Map(code -> n)
+export function registerMcpTools(names) {
+  for (const n of names) if (typeof n === 'string' && /^[A-Za-z][A-Za-z0-9_.-]{0,95}$/.test(n)) mcpTools.add(n)
+}
+/** MCP 工具调用 +1；`code` 为空/假值 = 成功。永不抛错。 */
+export function incMcpToolCall(tool, code) {
+  const t = mcpTools.has(tool) ? tool : 'unknown'
+  const c = !code ? 'ok' : mcpCodes.has(code) && typeof code === 'string' ? code : 'other'
+  let m = mcpCalls.get(t)
+  if (!m) { m = new Map(); mcpCalls.set(t, m) }
+  m.set(c, (m.get(c) || 0) + 1)
+}
+
+/** 直方图登记：桶边界固定（秒），不由输入决定 */
+export const HISTOGRAM_DEFS = Object.freeze({
+  audit_write_duration_seconds: {
+    help: 'Duration of audit_logs INSERT statements in seconds (includes failed attempts).',
+    buckets: [0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1]
+  }
+})
+const hists = new Map()
+const resetHists = () => {
+  for (const [name, def] of Object.entries(HISTOGRAM_DEFS)) hists.set(name, { counts: def.buckets.map(() => 0), inf: 0, sum: 0, count: 0 })
+}
+resetHists()
+/** 观测一个耗时（秒）；未登记名 / 非有限非负数被忽略。 */
+export function observeHistogram(name, seconds) {
+  const h = hists.get(name)
+  if (!h || typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds < 0) return false
+  const i = HISTOGRAM_DEFS[name].buckets.findIndex((b) => seconds <= b)
+  if (i < 0) h.inf += 1
+  else h.counts[i] += 1
+  h.sum += seconds
+  h.count += 1
+  return true
+}
+/** 快照：{ 名: { buckets: [{le, count(累计)}], sum, count } }，count 即 +Inf 桶 */
+export function histogramSnapshot() {
+  const out = {}
+  for (const [name, h] of hists) {
+    let acc = 0
+    out[name] = {
+      buckets: HISTOGRAM_DEFS[name].buckets.map((le, i) => ({ le, count: (acc += h.counts[i]) })),
+      sum: h.sum, count: h.count
+    }
+  }
+  return out
+}
 
 const NO_LABEL = ''
 const counts = new Map()
@@ -52,10 +119,11 @@ export function counterSnapshot() {
   for (const [name, series] of counts) {
     out[name] = COUNTER_DEFS[name].labelName ? Object.fromEntries(series) : series.get(NO_LABEL)
   }
+  out.mcp_tool_calls_total = Object.fromEntries([...mcpCalls].map(([t, m]) => [t, Object.fromEntries(m)]))
   return out
 }
 
 /** 仅供测试 */
-export function resetCounters() { resetAll() }
+export function resetCounters() { resetAll(); resetHists(); mcpCalls.clear() }
 
-export default { COUNTER_DEFS, incCounter, counterSnapshot, resetCounters }
+export default { COUNTER_DEFS, incCounter, counterSnapshot, resetCounters, incMcpToolCall, registerMcpTools, observeHistogram, histogramSnapshot }
