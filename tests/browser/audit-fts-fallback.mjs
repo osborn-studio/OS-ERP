@@ -47,12 +47,14 @@ async function openAudit(actor, patch, { blocked = false } = {}) {
   const errors = []
   page.on('pageerror', (e) => errors.push(e.message))
   await uiLogin(page, base, actor.username, actor.password)
+  const seen = []
+  page.on('response', async (r) => { if (isAuditList(new URL(r.url())) && r.status() === 200) { try { seen.push((await r.json())?.data?.fts?.fallback_total) } catch { /* not JSON */ } } })
   const listed = page.waitForResponse((r) => isAuditList(new URL(r.url())))
   await page.goto(new URL('/system/audit-logs', base).href)
   const status = (await listed).status()
   if (blocked) await page.getByTestId('scope-notice').waitFor()
   else await page.getByRole('heading', { name: '审计日志' }).waitFor()
-  return { status, page, errors }
+  return { status, page, errors, seen }
 }
 
 try {
@@ -61,12 +63,14 @@ try {
   await step('real admin: fts.fallback_total is a non-negative integer and the slot shows exactly that', async () => {
     const fts = okData(await api('/api/meta/audit-logs?page=1&pageSize=1', { token: admin })).fts
     assert.ok(Number.isInteger(fts.fallback_total) && fts.fallback_total >= 0, 'fts.fallback_total must be a non-negative integer')
-    const { page, errors } = await openAudit({ username: 'admin', password: '12345' })
+    const { page, errors, seen } = await openAudit({ username: 'admin', password: '12345' })
     const slot = page.getByTestId('audit-fts-fallback')
     await slot.waitFor({ state: 'attached' })
-    // 计数可能在两次读取之间增长（其他场景触发回退），所以只断言页面值与"页面自己拿到的响应"一致：不小于先前读到的值
-    assert.ok(Number(await slot.getAttribute('data-count')) >= fts.fallback_total)
+    // 页面值必须等于"页面自己收到的元数据响应"里的值（计数可能在两次读取之间增长，所以不与先前直接读到的值比等号，只要求不回退）
     const n = Number(await slot.getAttribute('data-count'))
+    assert.ok(seen.length > 0 && seen.every((v) => Number.isInteger(v)), 'the page must receive an integer fts.fallback_total')
+    assert.ok(seen.includes(n), `slot count ${n} must equal a value the page received (${seen.join(',')})`)
+    assert.ok(n >= fts.fallback_total, 'the process counter never goes down')
     assert.equal(await page.getByTestId('audit-fts-fallback-text').count(), n > 0 ? 1 : 0)
     assert.deepEqual(errors, [])
   })
