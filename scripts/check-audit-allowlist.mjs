@@ -65,27 +65,36 @@ export function validateAllowlist(doc, now = new Date()) {
 /** Pure: extract gated advisories from `npm audit --json` output. Throws on unexpected shape. */
 export function gatedFindings(audit) {
   if (!audit || typeof audit !== 'object' || audit.error) throw new Error('audit output is an error or not an object')
-  if (audit.auditReportVersion !== 2 || !audit.vulnerabilities || typeof audit.vulnerabilities !== 'object') {
+  const vulns = audit.vulnerabilities
+  if (audit.auditReportVersion !== 2 || !vulns || typeof vulns !== 'object' || Array.isArray(vulns)) {
     throw new Error('audit output has no auditReportVersion 2 vulnerabilities map')
   }
-  const found = new Map() // advisory id (or "pkg:<name>" when unresolvable) -> { package, severity }
-  for (const [name, v] of Object.entries(audit.vulnerabilities)) {
-    if (!v || !GATED.has(v.severity)) continue
-    const objs = (Array.isArray(v.via) ? v.via : []).filter((x) => x && typeof x === 'object')
-    let resolved = false
-    for (const x of objs) {
-      if (!GATED.has(x.severity)) continue
-      const m = typeof x.url === 'string' ? /GHSA(-[a-z0-9]{4}){3}/.exec(x.url) : null
-      found.set(m ? m[0] : `unidentified:${name}`, { package: x.name || name, severity: x.severity })
-      resolved = true
+  const SEVERITIES = new Set(['info', 'low', 'moderate', 'high', 'critical'])
+  for (const [name, v] of Object.entries(vulns)) {
+    if (!v || typeof v !== 'object' || !SEVERITIES.has(v.severity) || !Array.isArray(v.via)) {
+      throw new Error(`vulnerability "${name}" has an unexpected shape`)
     }
-    const onlyStrings = objs.length === 0
-    if (!resolved && onlyStrings) {
-      // transitive: covered only if every named upstream is itself a gated entry in the report
-      const upstream = (v.via || []).filter((s) => typeof s === 'string')
-      const covered = upstream.length > 0 && upstream.every((s) => audit.vulnerabilities[s] && GATED.has(audit.vulnerabilities[s].severity))
-      if (!covered) found.set(`unidentified:${name}`, { package: name, severity: v.severity })
+  }
+  const found = new Map() // advisory id (or "unidentified:<pkg>") -> { package, severity }
+  // Every advisory object anywhere in the report is gated by its own severity; a gated package entry must
+  // additionally be backed by at least one identified advisory, reached through its via chain (cycles do not count).
+  for (const [name, v] of Object.entries(vulns)) {
+    for (const x of v.via) {
+      if (x && typeof x === 'object' && GATED.has(x.severity)) {
+        const m = typeof x.url === 'string' ? /GHSA(-[a-z0-9]{4}){3}/.exec(x.url) : null
+        found.set(m ? m[0] : `unidentified:${name}`, { package: x.name || name, severity: x.severity })
+      }
     }
+  }
+  const backed = (name, seen) => {
+    if (seen.has(name)) return false
+    seen.add(name)
+    const v = vulns[name]
+    if (!v) return false
+    return v.via.some((x) => (x && typeof x === 'object' ? GATED.has(x.severity) : typeof x === 'string' && backed(x, seen)))
+  }
+  for (const [name, v] of Object.entries(vulns)) {
+    if (GATED.has(v.severity) && !backed(name, new Set())) found.set(`unidentified:${name}`, { package: name, severity: v.severity })
   }
   return found
 }

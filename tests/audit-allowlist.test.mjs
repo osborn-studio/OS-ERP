@@ -67,6 +67,14 @@ test('transitive high with no identifiable advisory fails closed; covered chain 
   assert.equal(evaluate(audit(chain), allow(), NOW).ok, true)
 })
 
+test('reviewer cases: array map, missing severity, circular chain all fail closed', () => {
+  assert.equal(evaluate({ auditReportVersion: 2, vulnerabilities: [] }, allow(), NOW).ok, false)
+  const noSev = { auditReportVersion: 2, vulnerabilities: { x: { via: [{ name: 'x', severity: 'high', url: 'https://github.com/advisories/GHSA-xxxx-yyyy-zzzz' }] } } }
+  assert.equal(evaluate(noSev, { allow: [] }, NOW).ok, false)
+  const cyc = { auditReportVersion: 2, vulnerabilities: { a: { severity: 'high', via: ['b'] }, b: { severity: 'high', via: ['a'] } } }
+  assert.equal(evaluate(cyc, { allow: [] }, NOW).ok, false)
+})
+
 test('error or malformed audit output fails closed', () => {
   assert.equal(evaluate({ error: { code: 'E404' } }, allow(), NOW).ok, false)
   assert.equal(evaluate({}, allow(), NOW).ok, false)
