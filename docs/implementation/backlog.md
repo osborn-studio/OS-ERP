@@ -169,3 +169,20 @@
 | `db` 限速模式：60 s 清理定时器未在真实服务中观察；高并发业务写下的尾延迟未测 | AE9 |
 | 新浏览器场景（审计 FTS 状态、MCP 限速卡、指标隐藏说明）未执行 | Linux CI | AE11 |
 | `dmserver` 上的所有性能数字均未复测 | 目标主机 | 全批 |
+
+## 第十五批后仍 open 的残留
+
+| 位置 | 残留 | 来源 |
+|---|---|---|
+| `release-candidate.yml`、`capacity-smoke`、`dependency-review`、`audit-no-fts5`、夜间工作流 | 均未在托管 runner 上实跑（PR #4–#10 未合并，main 上没有这些文件） | AF1/AF7/AF8 |
+| `resolveCiRun` 忽略 `workflow_dispatch` 的 `ci.yml` run | 手动全量 CI 不计入候选证据（设计如此，可改） | AF1 |
+| 仍为 scopeless 的指标 | 缺覆盖率守卫；`hide` 模式下对受限账号整体隐藏 | AF2 |
+| OMS 密集窗口最坏情形（数据集中在近 60 天）比 AE3 慢 | 订单窗口驱动对明细索引随机读；平台复合索引方案被否决但数据已记录 | AF3 |
+| 审计 INSERT 触发器与 `--disable` 并发未压测；暂停钩子只固定提交顺序 | AF4 |
+| `baseline-anchor-list-missing` 分支无测试；未签名意图挡不住能写库者 | AF5 |
+| 备份报告文件与清理删除未 fsync；真实掉电未测；Linux 上的 fs-fault 结果未登记 | AF6 |
+| 锁文件 341 个包解析自 npmmirror，`npm audit signatures` 大概率不覆盖它们；zip 条目/解压上限无法在工作流可靠限制 | AF7 |
+| `db` 限速模式：100 ms 清理周期只在测试模式；阈值未按生产流量校准；紧循环调用者会饿死业务写入者（人为负载） | AF9 |
+| 停用角色提示前端未显示；数据范围说明仍按主角色字段 | AF10 |
+| `rate_limited_recent` 是触顶窗口数而非精确 429 计数（桶表不记拒绝）；`hide` 模式下受限用户看不到"按范围计算"标记（需 AF2 字段） | AF11 |
+| `dmserver` 上的所有性能数字均未复测 | 目标主机 | 全批 |
