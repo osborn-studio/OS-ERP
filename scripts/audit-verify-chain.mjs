@@ -12,6 +12,10 @@
  *   · `--against-backup`（AC7，ADR-0049 补充）：读备份清单（`db-backup.mjs` 写的 `<备份>.audit-manifest.json` / `.enc`；加密备份需 GML_BACKUP_KEY），
  *     先交叉核对清单与备份内容，再要求在用链是备份链尾的**后代**。在用链能通过自身校验却不是后代 ⇒ 整链被重算（`rewrite`）。行业取自清单。
  *     链尾已被归档搬出库时，用 `--archive-dir` 指向归档摘要目录证明。`--strict-anchors`：备份之后新增 / 消失的锚点也算失败。
+ *   · `--offbox <anchor-*.json> --pubkey <公钥PEM>`（AD5，ADR-0055）：验 `offbox-anchor.mjs` 写出的签名锚点（改文件 / 换钥 / 去签名都失败），
+ *     并要求每个被锚定的行业库的在用链是锚定链尾的**后代**（同 `--against-backup` 的 ok / rewrite / unverifiable 口径；`--archive-dir` 同样适用）。
+ *     被锚定为有链的行业库现已不存在 ⇒ 失败。只检查本次选中的行业。在已锚定范围内新增的库内锚点（可能是伪造的桥锚点）默认失败，
+ *     核对操作记录后用 `--accept-new-anchors` 明确接受。
  *   退出码：0 全部 OK；1 有断点（或库未迁移到 068、`--against-backup` 非 ok）；2 参数 / 环境错误。
  * 【边界】不改库、不创建缺失的行业库；不覆盖 user_name / module / ip 三列（规格如此，见 ADR-0049「限制」）。
  * ============================================================================
@@ -20,16 +24,33 @@ import path from 'node:path'
 import Database from 'better-sqlite3'
 import { parseArgs, locateDatabases, die } from './lib/audit-chain-cli.mjs'
 
-const args = parseArgs(process.argv.slice(2), { values: ['--data-dir', '--industry', '--expect-tip', '--against-backup', '--archive-dir'], flags: ['--json', '--strict-anchors'] })
+const args = parseArgs(process.argv.slice(2), { values: ['--data-dir', '--industry', '--expect-tip', '--against-backup', '--archive-dir', '--offbox', '--pubkey'], flags: ['--json', '--strict-anchors', '--accept-new-anchors'] })
 if (!args['data-dir'] && !process.env.GML_DATA_DIR) die('USAGE', '用法：audit-verify-chain.mjs --data-dir <绝对路径> [--industry <行业>] [--expect-tip <hash>] [--json]')
 if (args['expect-tip'] && !/^[0-9a-f]{64}$/.test(args['expect-tip'])) die('USAGE', '--expect-tip 必须是 64 位小写十六进制')
 if (args['expect-tip'] && !args.industry) die('USAGE', '--expect-tip 只对单个行业有意义，请同时给 --industry')
 
-if ((args['archive-dir'] || args['strict-anchors']) && !args['against-backup']) die('USAGE', '--archive-dir / --strict-anchors 只与 --against-backup 一起使用')
+if (args['accept-new-anchors'] && !args.offbox) die('USAGE', '--accept-new-anchors 只与 --offbox 一起使用')
+if (!!args.offbox !== !!args.pubkey) die('USAGE', '--offbox 与 --pubkey 必须同时给出（公钥须带外获得）')
+if ((args['archive-dir'] || args['strict-anchors']) && !args['against-backup'] && !(args['archive-dir'] && args.offbox && !args['strict-anchors'])) die('USAGE', '--archive-dir / --strict-anchors 只与 --against-backup 一起使用')
 
 const { verifyChain, chainColumnsPresent } = await import('../server/lib/audit-chain-verify.js')
 const { loadBackupManifest, compareLiveToBackup } = await import('../server/lib/audit-anchor-manifest.js')
 const { loadBackupKey } = await import('../server/lib/backup-crypto.js')
+const { loadPublicKey } = await import('./lib/evidence-sign.mjs')
+const { loadAnchor, asManifest } = await import('./lib/offbox-anchor.mjs')
+
+// 离机锚点先验签：验不过就是失败，不是跳过
+let offbox = null
+if (args.offbox) {
+  let loaded
+  try { loaded = loadAnchor(path.resolve(args.offbox), loadPublicKey(path.resolve(args.pubkey))) } catch (e) { loaded = { ok: false, reason: e.message } }
+  if (!loaded.ok) {
+    if (args.json) console.log(JSON.stringify({ ok: false, offbox: { status: 'invalid', message: loaded.reason } }, null, 2))
+    else console.log(`OFFBOX-INVALID ${loaded.reason}`)
+    process.exit(1)
+  }
+  offbox = loaded
+}
 
 // 备份清单先读（它决定行业）；清单读不出来 / 与备份对不上就是失败，不是通过
 let backupCheck = null
@@ -49,8 +70,11 @@ if (args['against-backup']) {
 }
 
 const { targets, absent } = await locateDatabases(args)
-const report = { ok: true, industries: {} }
-for (const code of absent) report.industries[code] = { status: 'absent' }
+const report = { ok: true, industries: {}, ...(offbox ? { offbox: { file: path.resolve(args.offbox), created_at: offbox.anchor.created_at, key_id: offbox.key_id } } : {}) }
+for (const code of absent) {
+  report.industries[code] = { status: 'absent' }
+  if (offbox?.anchor.audit[code]?.status === 'chain') { report.ok = false; report.industries[code].status = 'absent'; report.industries[code].offbox = { status: 'missing', message: '锚点记录该行业有审计链，但现在没有该行业库（库被删除 / 换了数据目录？）' } }
+}
 for (const { code, file } of targets) {
   const db = new Database(file, { readonly: true })
   try {
@@ -67,7 +91,28 @@ for (const { code, file } of targets) {
       if (against.status !== 'ok') report.ok = false
       else if (args['strict-anchors'] && (against.anchors_added?.length || against.anchors_removed?.length)) { against.status = 'anchors-changed'; report.ok = false }
     }
-    report.industries[code] = { status: r.ok ? 'ok' : 'broken', rows: r.rows, first_id: r.firstId, last_id: r.lastId, tip_hash: r.tipHash, anchors_used: r.anchorsUsed, ...(r.brk ? { break: r.brk } : {}), ...(against ? { against_backup: against } : {}) }
+    let off = null
+    if (offbox && r.ok) {
+      const entry = offbox.anchor.audit[code]
+      if (!entry) off = { status: 'not-anchored', message: '锚点里没有该行业（锚点之后新增的行业库？）' }
+      else if (entry.status !== 'chain') off = { status: 'ok', note: `锚点记录该行业为 ${entry.status}` }
+      else {
+        off = compareLiveToBackup(db, asManifest(code, entry), { archiveDir: args['archive-dir'] ? path.resolve(args['archive-dir']) : null })
+        // 锚点之后新增、但落在已锚定范围内（at_row_id <= 锚定链尾 id）的库内锚点：伪造的"桥"锚点可以洗白一次对历史行的改写
+        // （改第 k 行并重算它，再登记一条把新哈希接回第 k+1 行原 prev_hash 的锚点；链校验与链尾比对都会通过）。
+        // 合法的保留清理 / 归档 / 隐私抹除在已锚定范围内也会产生这类锚点，所以默认失败并列出，操作者对照操作记录后用
+        // --accept-new-anchors 明确接受（或先做一次新锚点）。锚点之后的追加区间里新增的锚点是正常增长，不在此列。
+        const inRange = (off.anchors_added || []).filter((a) => entry.last_id != null && a.at_row_id <= entry.last_id)
+        off.anchors_added_in_range = inRange.length
+        if (inRange.length && off.status === 'ok' && !args['accept-new-anchors']) {
+          off.status = 'anchors-added'
+          off.kind = 'in-anchored-range'
+          off.message = `锚点之后在已锚定范围内新增了 ${inRange.length} 条库内锚点（${inRange.map((a) => `${a.kind}@${a.at_row_id}`).join(', ')}）：可能是保留清理 / 归档 / 隐私抹除，也可能是伪造的桥锚点；对照操作记录，确认后加 --accept-new-anchors`
+        }
+      }
+      if (off.status !== 'ok' && off.status !== 'not-anchored') report.ok = false
+    } else if (offbox) report.ok = false
+    report.industries[code] = { status: r.ok ? 'ok' : 'broken', rows: r.rows, first_id: r.firstId, last_id: r.lastId, tip_hash: r.tipHash, anchors_used: r.anchorsUsed, ...(r.brk ? { break: r.brk } : {}), ...(against ? { against_backup: against } : {}), ...(off ? { offbox: off } : {}) }
   } finally {
     db.close()
   }
@@ -85,6 +130,7 @@ else {
       if (a.anchors_added?.length) console.log(`      备份之后新增锚点 ${a.anchors_added.length} 条（保留清理 / 隐私抹除 / 归档会产生；请对照操作记录）：${a.anchors_added.map((x) => `${x.kind}@${x.at_row_id}`).join(', ')}`)
       for (const n of a.notes || []) console.log(`      注：${n}`)
     }
+    if (r.offbox) console.log(`${r.offbox.status === 'ok' || r.offbox.status === 'not-anchored' ? 'OK   ' : 'FAIL '} ${code} 对比离机锚点：${r.offbox.status}${r.offbox.kind ? `/${r.offbox.kind}` : ''}${r.offbox.message ? ' — ' + r.offbox.message : ''}${r.offbox.advanced_rows !== undefined ? `；此后前进 ${r.offbox.advanced_rows} 行` : ''}`)
     if (r.status === 'ok') continue
     if (r.status === 'broken') console.log(`BREAK ${code}: 第一个断点 id=${r.break.id} 类型=${r.break.kind}（期望 ${r.break.expected}，实得 ${r.break.actual}）；此前 ${r.rows} 行正常`)
     else console.log(`${r.status.toUpperCase()} ${code}${r.message ? ': ' + r.message : ''}`)

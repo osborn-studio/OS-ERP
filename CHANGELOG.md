@@ -11,6 +11,7 @@
 ## 第十三批（进行中）：见 roadmap-v9
 
 - [ADR-0053：指标接口按范围收口，`report.dashboard_kpi` 与 dealer summary 补功能权限（AD1）](docs/implementation/ADR-0053-metrics-scope-and-kpi-permissions.md) — 指标函数接受 `orgScope`：`compute(db, { days, orgScope })`；不传 = 全局（`dashboard-perf`、`scripts/test-metrics.mjs` 等内部调用口径逐字不变）。`metricValues` / `metricCatalog` / `metricGroups` 透传。 - 范围判据各只有一份：库存类（`stock_qty`、`available_qty`、`stock_amount`、`turnover_…
+- [ADR-0055：透明日志与审计链的离机签名锚点（AD5）](docs/implementation/ADR-0055-offbox-anchors.md) — `scripts/offbox-anchor.mjs --data-dir <abs> --dest <abs 目录 | ssh://别名/绝对路径> --key <私钥PEM> [--log <EVIDENCE-LOG>]` 写出 `anchor-<stamp>.json`（`stamp` 为 UTC 毫秒时间戳）： `{"anchor": {format, created_at, log, audit, signature}, "sig": "<base64>"}`。 -…
 
 ## 第十二批（进行中）：见 roadmap-v8
 
