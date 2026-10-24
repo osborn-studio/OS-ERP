@@ -14,6 +14,7 @@
 import fs from 'node:fs'
 
 export const MAX_SBOM_BYTES = 32 * 1024 * 1024
+export const MAX_COMPONENTS = 50000
 const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0)
 
 /** 结构检查与 verify-release 一致（CycloneDX 1.x、components 为数组、各有 name/version、bom-ref 唯一）；返回组件数组。 */
@@ -23,12 +24,17 @@ export function parseSbom(bom, label = 'SBOM') {
   if (bom.bomFormat !== 'CycloneDX') bad('bomFormat is not CycloneDX')
   if (!/^1\.\d+$/.test(String(bom.specVersion))) bad('CycloneDX specVersion missing or not 1.x')
   if (!Array.isArray(bom.components)) bad('components is not an array')
+  if (bom.components.length > MAX_COMPONENTS) bad(`more than ${MAX_COMPONENTS} components`)
   const refs = new Set()
   for (const c of bom.components) {
     if (!c || typeof c !== 'object' || typeof c.name !== 'string' || !c.name || typeof c.version !== 'string' || !c.version) bad('component without name/version')
     if (c.group !== undefined && typeof c.group !== 'string') bad('component group is not a string')
+    if (c.hashes !== undefined) {
+      if (!Array.isArray(c.hashes)) bad('component hashes is not an array')
+      for (const h of c.hashes) if (!h || typeof h.alg !== 'string' || !h.alg || typeof h.content !== 'string' || !h.content) bad('component hash without alg/content')
+    }
     const ref = c['bom-ref']
-    if (ref !== undefined && (typeof ref !== 'string' || refs.has(ref))) bad(`invalid or duplicate bom-ref ${String(ref).slice(0, 80)}`)
+    if (ref !== undefined && (typeof ref !== 'string' || refs.has(ref))) bad(`invalid or duplicate bom-ref ${clean(ref, 80)}`)
     refs.add(ref)
   }
   return bom.components
@@ -51,20 +57,24 @@ export function loadSbomFile(file, { maxBytes = MAX_SBOM_BYTES } = {}) {
   return json
 }
 
-const keyOf = (c) => (c.group ? `${c.group}/${c.name}` : c.name)
+// 结构化键：{group:'@a',name:'pkg'} 与 {name:'@a/pkg'} 不会碰撞；显示名仍是 group/name。
+const keyOf = (c) => JSON.stringify([c.group ?? '', c.name])
+const displayOf = (c) => (c.group ? `${c.group}/${c.name}` : c.name)
 const hashList = (c) => (Array.isArray(c.hashes) ? c.hashes.filter((h) => h && typeof h.alg === 'string' && typeof h.content === 'string').map((h) => `${h.alg}:${h.content}`).sort() : [])
 
 function index(components) {
   const byKey = new Map()
   for (const c of components) {
     const k = keyOf(c)
-    if (!byKey.has(k)) byKey.set(k, new Map())
-    const versions = byKey.get(k)
+    if (!byKey.has(k)) byKey.set(k, { name: displayOf(c), versions: new Map() })
+    const { versions } = byKey.get(k)
     const prior = versions.get(c.version)
-    versions.set(c.version, [...(prior ?? []), ...hashList(c)].sort())
+    versions.set(c.version, [...new Set([...(prior ?? []), ...hashList(c)])].sort())
   }
   return byKey
 }
+
+const sameList = (x, y) => x.length === y.length && x.every((v, i) => v === y[i])
 
 export function diffSboms(previous, current) {
   const pc = parseSbom(previous, 'previous SBOM')
@@ -74,23 +84,25 @@ export function diffSboms(previous, current) {
   const added = []
   const removed = []
   const changed = []
-  for (const [name, versions] of c) {
-    if (!p.has(name)) for (const v of [...versions.keys()].sort()) added.push({ name, version: v })
+  for (const [key, cur] of c) {
+    if (!p.has(key)) for (const v of [...cur.versions.keys()].sort()) added.push({ name: cur.name, version: v })
   }
-  for (const [name, versions] of p) {
-    if (!c.has(name)) { for (const v of [...versions.keys()].sort()) removed.push({ name, version: v }); continue }
-    const cur = c.get(name)
-    const from = [...versions.keys()].sort()
-    const to = [...cur.keys()].sort()
-    if (from.join('\0') !== to.join('\0')) { changed.push({ name, kind: 'version', from, to }); continue }
+  for (const [key, old] of p) {
+    if (!c.has(key)) { for (const v of [...old.versions.keys()].sort()) removed.push({ name: old.name, version: v }); continue }
+    const cur = c.get(key)
+    const from = [...old.versions.keys()].sort()
+    const to = [...cur.versions.keys()].sort()
+    if (!sameList(from, to)) changed.push({ name: old.name, kind: 'version', from, to })
+    // 完整性比较对两侧都存在的每个版本独立进行（版本集合变化不能掩盖同版本内容被替换）
     for (const v of from) {
-      const a = versions.get(v)
-      const b = cur.get(v)
-      if (a.length && b.length && a.join('\0') !== b.join('\0')) changed.push({ name, kind: 'integrity', from, to, previousHashes: a, currentHashes: b })
+      if (!cur.versions.has(v)) continue
+      const a = old.versions.get(v)
+      const b = cur.versions.get(v)
+      if (a.length && b.length && !sameList(a, b)) changed.push({ name: old.name, kind: 'integrity', version: v, from, to, previousHashes: a, currentHashes: b })
     }
   }
   const byName = (x, y) => cmp(x.name, y.name) || cmp(x.version ?? '', y.version ?? '')
-  added.sort(byName); removed.sort(byName); changed.sort((x, y) => cmp(x.name, y.name) || cmp(x.kind, y.kind))
+  added.sort(byName); removed.sort(byName); changed.sort((x, y) => cmp(x.name, y.name) || cmp(x.kind, y.kind) || cmp(x.version ?? '', y.version ?? ''))
   return { added, removed, changed, summary: { previous: pc.length, current: cc.length, added: added.length, removed: removed.length, changed: changed.length } }
 }
 
@@ -102,6 +114,8 @@ export function clean(value, max = 160) {
     const unsafe = c < 0x20 || (c >= 0x7f && c < 0xa0) || c === 0xfeff || (c >= 0x2028 && c <= 0x202e) || (c >= 0x2066 && c <= 0x2069)
     s += unsafe ? '?' : ch
   }
+  // GitHub 会先去掉行首空白再解析 `::cmd::` ，并识别行内 `##[cmd]`：破坏这两种语法
+  s = s.replace(/::/g, ': :').replace(/##\[/g, '# #[')
   return s.length > max ? `${s.slice(0, max)}...` : s
 }
 
@@ -113,13 +127,13 @@ export function renderTable(diff) {
     if (!rows.length) return
     out.push('', `${title} (${rows.length})`)
     const cells = rows.map(fmt)
-    const w = Math.max(...cells.map((r) => r[0].length))
+    const w = cells.reduce((m, r) => Math.max(m, r[0].length), 0)
     for (const [a, b] of cells) out.push(`  ${a.padEnd(w)}  ${b}`)
   }
   section('Added', diff.added, (r) => [clean(r.name), clean(r.version)])
   section('Removed', diff.removed, (r) => [clean(r.name), clean(r.version)])
   section('Changed', diff.changed, (r) => [clean(r.name), r.kind === 'integrity'
-    ? `${clean(r.from.join(', '))} (integrity hash differs for the same version)`
+    ? `${clean(r.version)} (integrity hash differs for the same version)`
     : `${clean(r.from.join(', '))} -> ${clean(r.to.join(', '))}`])
   return `${out.join('\n')}\n`
 }

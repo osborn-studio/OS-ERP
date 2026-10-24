@@ -454,9 +454,10 @@ jobs:
       # Re-apply as-is after the "Self-verify the candidate" step in any workflow that has the same CAND_*/pkg-x conventions.
       # Both steps are read-only toward the repository; they need network access (registry.npmjs.org, the GitHub API).
       # `npm audit signatures` is pinned to the npmjs registry because .npmrc points installs at registry.npmmirror.com, which has
-      # no audit/signature endpoint. With that override npm only audits packages whose lockfile `resolved` URL is on npmjs; the
-      # packages resolved from npmmirror are NOT covered. The step records the per-host lockfile counts next to npm's own summary so
-      # the coverage gap is visible in the artifact instead of hidden. A signature verification failure fails the job.
+      # no audit/signature endpoint. Observed locally: with that override npm audited 42 packages, close to the 36 lockfile entries
+      # resolved from npmjs, so entries resolved from npmmirror are probably NOT covered; npm's selection logic is not guaranteed
+      # (it verifies registry metadata by name@version, it does not bind the installed tarball to the signed integrity). The step
+      # records npm's own "audited N packages" summary and the per-host lockfile counts so the coverage gap is visible in the artifact. A signature verification failure fails the job.
       - name: Verify registry signatures of installed dependencies (npm audit signatures, npmjs registry)
         run: |
           set -euo pipefail
@@ -468,7 +469,9 @@ jobs:
             grep -o '"resolved": "https\?://[^/]*' package-lock.json | sed 's/"resolved": "//' | sort | uniq -c
           } 2>&1 | tee "$CAND_UPLOAD/audit-signatures.txt"
       # The previous candidate artifact is untrusted DATA: only a run of this repository's candidate workflow that succeeded on
-      # `main` or on a v* tag is considered (a dispatch from any other branch is ignored), only sbom.cdx.json (or the one fixed
+      # `main` or on a v* tag, with event push or workflow_dispatch (never pull_request, so a fork PR branch named main is ignored), is
+      # considered (a dispatch from any other branch is ignored; a v*-named branch dispatched by a writer is still accepted: the diff is
+      # informational, not a trust decision), only sbom.cdx.json (or the one fixed
       # release/sbom.cdx.json entry of the zip) is read, nothing from it is executed, size is capped, and the diff output is sanitised.
       # The diff is informational: no previous artifact => "first candidate"; a malformed previous SBOM is reported in the
       # output file and as a warning, it does not fail the candidate.
@@ -486,7 +489,7 @@ jobs:
           prev_root="$RUNNER_TEMP/prev-candidate"
           rm -rf "$prev_root"; mkdir -p "$prev_root"
           prev_sbom=""
-          ids="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$CAND_WORKFLOW" --status success --limit 30 --json databaseId,headBranch --jq '.[] | select(.databaseId != (env.GITHUB_RUN_ID | tonumber)) | select(.headBranch == "main" or (.headBranch | test("^v[0-9]"))) | .databaseId' 2>/dev/null | head -n 10 || true)"
+          ids="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$CAND_WORKFLOW" --status success --limit 30 --json databaseId,headBranch,event --jq '.[] | select(.databaseId != (env.GITHUB_RUN_ID | tonumber)) | select(.event == "push" or .event == "workflow_dispatch") | select(.headBranch == "main" or (.headBranch | test("^v[0-9]"))) | .databaseId' 2>/dev/null | head -n 10 || true)"
           for id in $ids; do
             case "$id" in ''|*[!0-9]*) continue ;; esac
             d="$prev_root/$id"; mkdir -p "$d"
@@ -509,7 +512,7 @@ jobs:
           elif node scripts/sbom-diff.mjs "$prev_sbom" "$cur" --json-out="$CAND_UPLOAD/sbom-diff.json" --table-out="$CAND_UPLOAD/sbom-diff.txt"; then
             echo "diffed against the candidate artifact of run $prev_id"
           else
-            echo "previous candidate SBOM (run $prev_id) is malformed or unreadable; no diff produced." | tee "$CAND_UPLOAD/sbom-diff.txt"
+            echo "previous candidate SBOM (run $prev_id) is malformed or unreadable, or the diff failed; no diff produced." | tee "$CAND_UPLOAD/sbom-diff.txt"
             printf '{"previous":null,"reason":"previous SBOM malformed or unreadable"}\n' > "$CAND_UPLOAD/sbom-diff.json"
             echo "::warning::previous candidate SBOM is malformed or unreadable; SBOM diff skipped"
           fi

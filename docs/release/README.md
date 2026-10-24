@@ -177,13 +177,14 @@ read-only toward the repository and need network access.
 - **`npm audit signatures --registry=https://registry.npmjs.org`** verifies the registry signatures (and provenance attestations
   where published) of the installed packages. A verification failure **fails the job**. The registry is given on the command line
   because `.npmrc` points installs at `registry.npmmirror.com`, which has no audit or signature endpoint. Consequence, stated
-  honestly: with that override npm audits only the packages whose lockfile `resolved` URL is on `registry.npmjs.org`; the entries
-  resolved from npmmirror are **not** covered. `audit-signatures.txt` therefore ends with the lockfile entry count per registry
+  honestly: with that override, a local run audited 42 packages against 36 npmjs.org lockfile entries (341 entries resolve from
+  npmmirror), so the npmmirror-resolved entries are probably **not** covered, but npm's selection logic is not a guarantee and the
+  check verifies registry metadata by name and version; it does not bind the installed tarball to the signed integrity. `audit-signatures.txt` therefore ends with the lockfile entry count per registry
   host next to npm's own "audited N packages" summary. A local run on 2026-10-24 reported 42 packages with verified signatures and
   13 with verified attestations (lockfile: 36 npmjs.org entries, 341 npmmirror.com entries). Moving the remaining entries to the
   npmjs registry is a separate decision (it changes `package-lock.json` and install reachability).
 - **SBOM diff vs the previous candidate artifact.** The step looks up the newest earlier successful run of the candidate workflow
-  on `main` or on a `v*` tag (runs dispatched from other branches are ignored, the current run is excluded), downloads its
+  on `main` or on a `v*` tag with event `push` or `workflow_dispatch` (pull-request runs and runs from other branches are ignored, the current run is excluded), downloads its
   `os-erp-candidate-*` artifact with `gh run download`, and diffs its SBOM (`sbom.cdx.json`, or for artifacts from before AF7 the single
   `<package>/release/sbom.cdx.json` entry of the zip) against this package's SBOM with `scripts/sbom-diff.mjs`. If no such run or
   artifact exists (14-day retention), the output says **first candidate**. The downloaded content is treated as data only: it is
