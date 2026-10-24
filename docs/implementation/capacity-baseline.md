@@ -448,7 +448,7 @@ node scripts/upgrade-rehearsal.mjs --from=62 --backup-dir=… --target-dir=… -
 ### 怎么用
 - 本地/流水线：`node scripts/synth-pipeline.mjs --dir <绝对新目录> --profile large-ci [--time-budget 240] [--out <报告>]`。`large-ci` 默认 `--skus 100000 --txns 1000000 --docs 100000 --batch-txns 200000 --min-free-mb 3072`；显式给的参数永远覆盖默认。
 - 工作流：`nightly-capacity.yml` 的手动输入 `scale` 增加选项 `large-ci`（默认仍 `medium`，定时运行不受影响）；选它时作业超时 355 分钟（GitHub 上限 360），生成预算 `--time-budget 240` 分钟，其余步骤（备份、两次恢复演练、explain-audit、压测、写档压测）在剩余时间内跑。
-- 新步骤 `Large-ci report` 只从原始流水线报告打印固定格式行：`partial`/原因/达到规模、`explain_audit violations=`、逐接口 `p50/p95/p99/errors`（p95 表）。现有 `Gate` 不变（违规或错误仍然红）；`capacity-summary.mjs` 未改，所以 summary 里 `scale` 对 large-ci 显示 `?`，**要看 large-ci 的 partial 状态只能看 `Large-ci report` 步骤的日志行**。
+- 新步骤 `Large-ci report` 只从原始流水线报告打印固定格式行：`partial`/原因/达到规模、`explain_audit violations=`、逐接口 `p50/p95/p99/errors`（p95 表）。现有 `Gate` 不变（违规或错误仍然红）；AC8 起 `capacity-summary.mjs` 对 large-ci 也输出 `scale: "large-ci"`、`profile`、`partial`、`partial_reason`（仅 `time_budget`/`disk_low`/`null`，其余记 `?`）与 `reached`（`skus/txns/txns_target/docs/docs_target`），此前 `scale` 显示 `?`。
 
 ### 分批与守卫（`synth-data.mjs`）
 - `--batch-txns N`：每当 `inventory_transactions` 的最大 rowid 越过 N 的整数倍（在单据事务之外的循环边界检查），先 `wal_checkpoint(TRUNCATE)`，再 `VACUUM`，再 checkpoint。目的是控制 WAL 与空闲页，不是改数据：同种子下分批与不分批的 `digest` 相同（测试断言）。
@@ -574,29 +574,40 @@ node scripts/upgrade-rehearsal.mjs --from=58 --backup-dir=/abs/new-dir/data/back
 
 ## 托管 runner（AB9：`nightly-capacity.yml` 在 GitHub 托管 runner 上的首次手动演练）
 
-**状态：尚未触发，下表全部待填。** 本节只登记触发方法与待填结果；没有任何托管 runner 的数字被写在这里。托管 runner 是共享虚拟机 + 合成数据 + 单次运行，数字只作趋势参考，**不是 `dmserver` 目标主机结果，不是容量承诺**；工作流只上传白名单的 `capacity-summary.json`，下表只抄摘要里的字段，不贴原始报告、库文件或日志。
+**状态（AC8，2026-10-24）：未能触发，下表全部待填（原因）。** 本节只登记触发方法与待填结果；没有任何托管 runner 的数字被写在这里。托管 runner 是共享虚拟机 + 合成数据 + 单次运行，数字只作趋势参考，**不是 `dmserver` 目标主机结果，不是容量承诺**；工作流只上传白名单的 `capacity-summary.json`，下表只抄摘要里的字段，不贴原始报告、库文件或日志。
 
-### 触发（只用 `gh workflow run`，不改仓库设置）
+### AC8 触发尝试记录
+- 检查：`gh api repos/osborn-studio/OS-ERP/contents/.github/workflows/nightly-capacity.yml?ref=main` 返回 HTTP 404，即 `main` 上**根本没有** `nightly-capacity.yml`（`main` 的工作流只有 `CI` 与 `OS ERP Linux validation`，`gh workflow list` 同）；该文件只存在于 `feat/batch-eleven`（PR #7 未合并）等分支，该分支上含 `scale=large-ci`、`rehearsal`、`snapshot_upto` 三个输入。
+- 尝试：`gh workflow run nightly-capacity.yml --ref feat/batch-eleven -f scale=small` 被 GitHub 拒绝：`HTTP 404: workflow nightly-capacity.yml not found on the default branch`。`workflow_dispatch` 只对默认分支上已存在的工作流文件开放，分支上的新工作流在合入默认分支前无法手动触发，也无法被定时触发。
+- 因此**一次运行也没有派发**（已派发 0/3；被拒绝的请求不产生 run id），三次规定运行（`rehearsal=true snapshot_upto=58`、`scale=large-ci`、默认）全部未执行。
+- 修复建议（需要用户决定，AC8 未改仓库设置也未改工作流）：合并 PR #7（或把 `nightly-capacity.yml` 单独 cherry-pick 进 `main`）之后，再按下面的命令触发三次；合并前在 PR 分支上无法验证该工作流能否在 GitHub 上跑通。
+
+### 触发（合入 `main` 之后；只用 `gh workflow run`，不改仓库设置）
 ```bash
-# 默认 medium 规模 + 升级演练（rehearsal=true）
-gh workflow run nightly-capacity.yml -f rehearsal=true
-# 指定规模（small / medium / large）
-gh workflow run nightly-capacity.yml -f scale=medium -f rehearsal=true
-# 查看与等待
+gh workflow run nightly-capacity.yml --ref main -f rehearsal=true -f snapshot_upto=58
+gh workflow run nightly-capacity.yml --ref main -f scale=large-ci
+gh workflow run nightly-capacity.yml --ref main
+# 查看与等待（每次等待设硬超时，用 gh run view 轮询）
 gh run list --workflow nightly-capacity.yml --limit 3
-gh run watch <run-id> --exit-status
+gh run view <run-id> --json status,conclusion
 gh run view <run-id> --log-failed
 ```
 
-### 结果登记（待填）
-| 项 | 值 |
-|---|---|
-| run id / commit | 待填 |
-| scale / rehearsal | 待填 |
-| runner 信息（OS、CPU 核数、磁盘余量） | 待填 |
-| 生成 / 备份 / 恢复演练耗时（s） | 待填 |
-| `explain-audit` 违规数 | 待填 |
-| `bench-api` 读 p95（ms，按接口） | 待填 |
-| `bench-api` 写 p95（ms）/ 完整性检查 | 待填 |
-| 升级演练逐迁移耗时（仅 rehearsal=true） | 待填 |
-| 失败 / 异常 | 待填 |
+### 结果登记
+下表三列各对应一次规定运行；摘要字段来自 `capacity-summary.json`（含 AC8 新增的 `scale/partial/partial_reason/reached`）。
+
+| 项 | `rehearsal=true snapshot_upto=58` | `scale=large-ci` | 默认（medium） |
+|---|---|---|---|
+| run id / commit / 结论 / 耗时 | 待填（未触发：工作流不在默认分支，GitHub 404） | 待填（同左） | 待填（同左） |
+| scale / partial / partial_reason / reached | 待填（同左） | 待填（同左） | 待填（同左） |
+| runner 信息（OS、CPU 核数、磁盘余量） | 待填（同左） | 待填（同左） | 待填（同左） |
+| 生成 / 备份 / 恢复演练耗时（s） | 待填（同左） | 待填（同左） | 待填（同左） |
+| `explain-audit` 违规数 | 待填（同左） | 待填（同左） | 待填（同左） |
+| `bench-api` 读 p95（ms，按接口） | 待填（同左） | 待填（同左） | 待填（同左） |
+| `bench-api` 写 p95（ms）/ 完整性检查 | 待填（同左） | 待填（同左） | 待填（同左） |
+| 升级演练逐迁移耗时 | 待填（同左） | 不适用 | 不适用 |
+| 失败 / 异常 | 待填（同左） | 待填（同左） | 待填（同左） |
+
+### 未验证
+工作流在 GitHub 上从未执行；`large-ci` 的 355 分钟超时、磁盘余量、partial 行为；`snapshot_upto` 输入校验的线上表现；所有托管 runner 数字。
+
