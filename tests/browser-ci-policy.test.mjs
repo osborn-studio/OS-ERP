@@ -105,7 +105,8 @@ test('driver registers every scenario file under tests/browser and each one pars
   const helpers = new Set(['lib.mjs', 'session-switch.mjs', 'scenario-data.mjs'])
   const files = readdirSync(path.join(ROOT, 'tests/browser')).filter((f) => f.endsWith('.mjs') && !helpers.has(f)).map((f) => f.replace(/\.mjs$/, ''))
   assert.deepEqual([...declared].sort(), files.sort())
-  for (const need of ['funds-review', 'scope-notice', 'my-scope', 'audit-logs', 'inventory-paging']) assert.ok(declared.includes(need))
+  for (const need of ['funds-review', 'scope-notice', 'my-scope', 'audit-logs', 'inventory-paging', 'approval-template-perm', 'pos-settle-perm']) assert.ok(declared.includes(need), `${need} must be registered in SCENARIOS`)
+  assert.equal(new Set(declared).size, declared.length, 'no scenario is registered twice')
   for (const f of readdirSync(path.join(ROOT, 'tests/browser')).filter((x) => x.endsWith('.mjs'))) {
     const r = spawnSync(process.execPath, ['--check', path.join(ROOT, 'tests/browser', f)], { encoding: 'utf8' })
     assert.equal(r.status, 0, `${f}: ${r.stderr}`)
@@ -148,6 +149,39 @@ test('AA8 scenarios assert API outcomes and observable page results, not only te
     assert.ok(data.includes(needle), `scenario-data must assert ${needle}`)
   }
   assert.match(read('tests/browser-scenario-contracts.test.mjs'), /scenario-data\.mjs/)
+})
+
+test('AB9 permission scenarios assert both the hidden control and the server verdict, and stay on loopback', () => {
+  const tpl = read('tests/browser/approval-template-perm.mjs')
+  for (const needle of ['system:approval:template', "'/api/approval/templates'", '/toggle', 'status, 403', '.status(), 200', '新建模板', 'count(), 0', '模板已停用', '模板已启用', 'externalRequests', 'screenshotPages']) {
+    assert.ok(tpl.includes(needle), `approval-template-perm must assert ${needle}`)
+  }
+  const pos = read('tests/browser/pos-settle-perm.mjs')
+  for (const needle of ['pos.shift.settle', 'pos.refund', '责任人承担', '公司承担', '作废', 'settle-variance', '/void', 'has(perms, SETTLE) ? 1 : 0', 'has(perms, REFUND) ? 1 : 0', "handled: 'charge'", 'externalRequests', 'screenshotPages']) {
+    assert.ok(pos.includes(needle), `pos-settle-perm must assert ${needle}`)
+  }
+  for (const f of ['approval-template-perm', 'pos-settle-perm']) {
+    const src = read(`tests/browser/${f}.mjs`)
+    assert.match(src, /from '\.\/lib\.mjs'/, `${f} uses the shared loopback/Linux helpers`)
+    assert.doesNotMatch(src, /https?:\/\/(?!127\.0\.0\.1|localhost)/, `${f} must not hard-code external origins`)
+    assert.doesNotMatch(src, /console\.log\([^)]*(password|token)/i, `${f} must not print credentials`)
+  }
+})
+
+test('driver gives every scenario a 5 minute kill timer and runs them in registration order (AA8 + AB9 included)', () => {
+  assert.match(driver, /SCENARIO_TIMEOUT_MS = 5 \* 60 \* 1000/)
+  assert.match(driver, /for \(const name of SCENARIOS\)/)
+  assert.ok(Number(job.match(/timeout-minutes:\s*(\d+)/)[1]) >= 25, 'job budget covers several scenario budgets')
+})
+
+test('capacity-baseline has a hosted-runner section with the exact manual dispatch commands, without claiming a run', () => {
+  const doc = read('docs/implementation/capacity-baseline.md')
+  const section = doc.match(/^## .*托管 runner[\s\S]*?(?=^## |(?![\s\S]))/m)?.[0]
+  assert.ok(section, '托管 runner section must exist')
+  assert.match(section, /gh workflow run nightly-capacity\.yml -f rehearsal=true/)
+  assert.match(section, /gh run (list|watch|view)/)
+  assert.match(section, /待填|尚未/, 'placeholder table must say it is unfilled')
+  assert.doesNotMatch(section, /\b\d{2,}(\.\d+)? ?ms\b/, 'no invented latency numbers')
 })
 
 test('ci.md documents the browser job and states the scenarios are unexecuted until hosted CI runs', () => {

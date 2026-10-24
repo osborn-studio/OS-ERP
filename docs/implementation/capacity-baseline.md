@@ -400,3 +400,32 @@ node scripts/upgrade-rehearsal.mjs --from=62 --backup-dir=… --target-dir=… -
 - `dmserver` 上用生产规模副本复跑；large 规模未跑。
 - `/dashboard/trend`、`/top`、`/todos`、`/inventory-dist` 等其它看板接口未剖析、未缓存。
 - 缓存只在单进程内；多进程部署时每个进程各有一份，靠 `data_version` 感知其它进程的提交（已测两个连接，未做多进程实测）。
+
+## 托管 runner（AB9：`nightly-capacity.yml` 在 GitHub 托管 runner 上的首次手动演练）
+
+**状态：尚未触发，下表全部待填。** 本节只登记触发方法与待填结果；没有任何托管 runner 的数字被写在这里。托管 runner 是共享虚拟机 + 合成数据 + 单次运行，数字只作趋势参考，**不是 `dmserver` 目标主机结果，不是容量承诺**；工作流只上传白名单的 `capacity-summary.json`，下表只抄摘要里的字段，不贴原始报告、库文件或日志。
+
+### 触发（只用 `gh workflow run`，不改仓库设置）
+```bash
+# 默认 medium 规模 + 升级演练（rehearsal=true）
+gh workflow run nightly-capacity.yml -f rehearsal=true
+# 指定规模（small / medium / large）
+gh workflow run nightly-capacity.yml -f scale=medium -f rehearsal=true
+# 查看与等待
+gh run list --workflow nightly-capacity.yml --limit 3
+gh run watch <run-id> --exit-status
+gh run view <run-id> --log-failed
+```
+
+### 结果登记（待填）
+| 项 | 值 |
+|---|---|
+| run id / commit | 待填 |
+| scale / rehearsal | 待填 |
+| runner 信息（OS、CPU 核数、磁盘余量） | 待填 |
+| 生成 / 备份 / 恢复演练耗时（s） | 待填 |
+| `explain-audit` 违规数 | 待填 |
+| `bench-api` 读 p95（ms，按接口） | 待填 |
+| `bench-api` 写 p95（ms）/ 完整性检查 | 待填 |
+| 升级演练逐迁移耗时（仅 rehearsal=true） | 待填 |
+| 失败 / 异常 | 待填 |
