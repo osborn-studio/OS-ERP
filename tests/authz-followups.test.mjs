@@ -372,6 +372,16 @@ test('AF10: permContext ignores inactive roles (primary included); login disclos
     assert.equal(scope.notice_code, 'ROLE_INACTIVE_NOTICE')
   })
 
+  await t.test('legacy requireRole gates (keyed on the primary role) also deny an inactive primary role; admin is exempt', async () => {
+    const write = (token) => api('/api/purchase/orders', { token, body: {} })
+    forbidden(await write(lone.token))
+    forbidden(await write(primaryInactive.token))
+    assert.notEqual((await write(f.admin)).status, 403, 'admin keeps the legacy gate')
+    setStatus('purchase', 'active')
+    assert.notEqual((await write(lone.token)).status, 403, 'active again: the legacy gate lets the primary role through (validation may reject the empty body)')
+    setStatus('purchase', 'inactive')
+  })
+
   await t.test('the disclosure is only the caller\'s own inactive roles; accounts without any get none', async () => {
     const r = await api('/api/auth/login', { body: { username: 'admin', password: '12345', industry: 'cosmetic' } })
     assert.deepEqual(r.body.data.roles_inactive, [])

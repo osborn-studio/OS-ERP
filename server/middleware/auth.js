@@ -332,6 +332,10 @@ export function requireRole(...roles) {
   return (req, res, next) => {
     if (!req.user) return fail(res, '未登录', 401, 401)
     if (req.user.role === 'admin') return next()
+    // AF10（Codex 审计 high）：旧闸只比对主角色名；主角色已停用时同样不放行（与 permContext 同一条 active-only 规则）
+    if (!isRoleActive(getDb(), req.user.role)) {
+      return fail(res, `当前角色「${ROLES[req.user.role] || req.user.role}」已停用，无此操作权限`, 403, 403)
+    }
     if (roles.length && !roles.includes(req.user.role)) {
       return fail(res, `当前角色「${ROLES[req.user.role] || req.user.role}」无此操作权限`, 403, 403)
     }
@@ -344,6 +348,10 @@ export function requireWrite(req, res, next) {
   // 纵深防御：写闸要能**自己**识别出"这不是后台身份"，而不是指望上游一定挂过 requireAuth。
   // 原来的写法只挡 `role === 'viewer'` —— 于是任何"新出现的"非后台角色都自动获得写权限
   // （C 端 `mall` 就是这样过的闸）。改成**后台角色白名单**：不在表里的一律拒写。
+  // AF10：账号的角色一个 active 的都没有（主角色与附加角色全停用）⇒ 拒写；admin / 超管不受角色表约束
+  if (req.user.role !== 'admin' && !splitRolesByStatus(getDb(), req.user.uid, req.user.role).active.length) {
+    return fail(res, '当前账号的角色已全部停用，不能执行写操作', 403, 403)
+  }
   if (!Object.prototype.hasOwnProperty.call(ROLES, req.user.role) || req.user.role === 'viewer') {
     return fail(
       res,
@@ -520,6 +528,11 @@ export function splitRolesByStatus(db, userId, primary) {
   const ph = granted.map(() => '?').join(',')
   const live = new Set(db.prepare(`SELECT code FROM roles WHERE status='active' AND code IN (${ph})`).all(...granted).map((r) => r.code))
   return { active: granted.filter((c) => live.has(c)), inactive: granted.filter((c) => !live.has(c)).sort() }
+}
+
+/** 单个角色码是否 active（旧 requireRole 闸用；库里没有该行按停用） */
+function isRoleActive(db, code) {
+  return !!db.prepare("SELECT 1 FROM roles WHERE code=? AND status='active'").get(code)
 }
 
 /** 某角色集合的权限点并集 */
