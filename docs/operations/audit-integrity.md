@@ -106,3 +106,34 @@ node scripts/audit-verify-chain.mjs --data-dir /abs/data --against-backup /path/
 - 能写库的人可以整链重算（含伪造锚点）；链只有配合“带外保存的 tip / 摘要”才抵抗这一点。
 - 哈希不覆盖 `user_name`、`module`、`ip`。
 - 详见 ADR-0049「限制」。
+
+## 8. 每日锚点（离机签名副本，ADR-0055）
+
+§6 的清单要靠人带外保存；每日锚点把**证据透明日志尾**和**各行业库审计链尾**一起签名写到另一处，由持钥者执行。
+
+前提：已用 `scripts/release-keygen.mjs` 在仓库外生成 Ed25519 密钥（私钥 0600、只在持钥机器；**公钥另行带外保存**，验证时才用）。
+
+每日（建议备份之后）：
+
+```sh
+# 目的地 A：另一块盘 / 已挂载的远端共享（必须是已存在的绝对目录，脚本不会创建，也不许在数据目录之内）
+node scripts/offbox-anchor.mjs --data-dir /abs/data --dest /Volumes/OFFBOX/os-erp-anchors --key /abs/keys/release-sign.key.pem
+# 目的地 B：经 ssh/scp 的远端。别名必须是 ~/.ssh/config 里已有的；脚本不改 SSH 配置或认证，只用 BatchMode（不会弹密码）
+node scripts/offbox-anchor.mjs --data-dir /abs/data --dest ssh://backup-box/srv/os-erp-anchors --key /abs/keys/release-sign.key.pem
+```
+
+- 产物 `anchor-<UTC时间戳>.json`，一次写入、永不覆盖，写完读回比对。可加 `--log <EVIDENCE-LOG.jsonl>`；缺省用仓库 `docs/release/EVIDENCE-LOG.jsonl`（不存在则只锚审计链）。
+- 链已断或日志无效时**不出锚点**（退出 1）：先用 `audit-verify-chain` 找断点。目的地写满 / 别名失效 / 远端目录不存在同样退出 1，没有半个锚点；请当日处理，不要跳过。
+- 远端路径只允许 `[A-Za-z0-9._-]` 组成的绝对路径，别名不接受 `user@host`、端口或选项。需要这些就在 `~/.ssh/config` 里为该主机起一个别名。
+
+复核（定期，或怀疑被动过时）：把最近几个锚点取回，用**带外获得的公钥**：
+
+```sh
+node scripts/audit-verify-chain.mjs --data-dir /abs/data --offbox /path/anchor-20261024T020000000Z.json --pubkey /abs/keys/release-sign.pub.pem
+node scripts/verify-release.mjs --log=/abs/repo/docs/release/EVIDENCE-LOG.jsonl --offbox /path/anchor-20261024T020000000Z.json --pubkey /abs/keys/release-sign.pub.pem   # 在发行包里执行
+```
+
+- 审计链：在用链必须是锚定链尾的后代。`rewrite/tip-row-differs` = 整链被改写并重算（隐私抹除后需对照操作记录）；`rewrite/behind` = 尾部被截或库被回滚；`unverifiable` = 锚定链尾已被保留清理删除或归档（给 `--archive-dir`）。被锚定的行业库不见了也算失败。
+- 透明日志：必须仍包含锚定的尾（截尾、整份换成另一条有效链、日志被删都失败）；之后新增的行是正常增长。
+- 不通过时**保留所有锚点与当前库 / 日志的副本**再排查；不要用新锚点覆盖旧证据。验证用旧锚点（几天前的）也应通过——它们是更难被同时篡改的参照。
+- 局限：锚点之间的窗口无保护；离机目的地被攻破可删最新锚点；时间是持钥机自述。

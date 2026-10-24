@@ -40,6 +40,10 @@ const DECLARED = [
   'server/db/migrations/068_audit_hash_chain.cjs',
   'scripts/audit-verify-chain.mjs',
   'scripts/audit-archive.mjs',
+  // 离机锚点（AD5，ADR-0055）
+  'scripts/offbox-anchor.mjs',
+  'scripts/lib/offbox-anchor.mjs',
+  'tests/offbox-anchor.test.mjs',
   'scripts/lib/audit-chain-cli.mjs',
   'tests/audit-chain.test.mjs',
   'server/lib/logger.js',

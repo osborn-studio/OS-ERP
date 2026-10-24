@@ -8,6 +8,10 @@
 
 <!-- generated -->
 
+## 第十三批（进行中）：见 roadmap-v9
+
+- [ADR-0055：透明日志与审计链的离机签名锚点（AD5）](docs/implementation/ADR-0055-offbox-anchors.md) — `scripts/offbox-anchor.mjs --data-dir <abs> --dest <abs 目录 | ssh://别名/绝对路径> --key <私钥PEM> [--log <EVIDENCE-LOG>]` 写出 `anchor-<stamp>.json`（`stamp` 为 UTC 毫秒时间戳）： `{"anchor": {format, created_at, log, audit, signature}, "sig": "<base64>"}`。 -…
+
 ## 第十二批（进行中）：见 roadmap-v8
 
 - [ADR-0050：MCP 采购订单读工具与剩余聚合读口和 HTTP 范围对齐（AC1）](docs/implementation/ADR-0050-mcp-purchase-scope-parity.md) — 单一谓词：`server/lib/purchase.js` 新增 `purchaseOrderScopeSql(orgScope, alias)`，返回 `{ sql, params, empty }`，判据就是既有 `purchaseScopeSql(...).wh`（入库仓 `warehouses.org_id`；全局 `1=1`；`dealer` / `none` / 空集合 `1=0`；仓无组织对受限范围不可见）。HTTP 订单列表、`/stats`、`assertP…
