@@ -257,10 +257,14 @@ jobs:
             if [ "${{ steps.regression.outcome }}" != "success" ]; then
               echo '::group::Failure diagnostics (filtered, long opaque strings redacted)'
               # Only lines that carry a failure signal; any 32+ char opaque string is masked so test credentials never print.
-              grep -E '失败|FAIL|Error|error|✗|退出码|assert|Timeout|EADDRINUSE|ECONNREFUSED' "$RAW_ROOT/runner.log" \
+              grep -E '失败|FAIL|Error|error|✗|退出码|assert|Timeout|EADDRINUSE|ECONNREFUSED|not ok|location:|expected|actual|Subtest|输出尾部|not ok 用例' "$RAW_ROOT/runner.log" \
                 | grep -vE '^  ✓' \
                 | sed -E 's/[A-Za-z0-9_.-]{32,}/[REDACTED]/g' \
-                | tail -120 || true
+                | tail -200 || true
+              echo '::endgroup::'
+              echo '::group::node:test tail (last 120 lines of the failed check output, redacted)'
+              # The node:test runner can die without a TAP summary (uncaught error in a hook); its raw tail names the file and stack.
+              awk '/✗ node:test/{p=1} p' "$RAW_ROOT/runner.log" | head -160 | sed -E 's/[A-Za-z0-9_.-]{32,}/[REDACTED]/g' | tail -120 || true
               echo '::endgroup::'
             fi
           fi
