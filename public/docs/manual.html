@@ -245,6 +245,39 @@
 <a class="toc-l3" data-depth="3" href="#433-刷新失败时">43.3 刷新失败时</a>
 <a class="toc-l3" data-depth="3" href="#434-排查时可看的东西">43.4 排查时可看的东西</a>
 <a class="toc-l3" data-depth="3" href="#435-如实边界">43.5 如实边界</a>
+<a class="toc-l2" data-depth="2" href="#四十四-角色矩阵页与-docsoperationsrole-matrixmd">四十四 角色矩阵页与 `docs/operations/role-matrix.md`</a>
+<a class="toc-l3" data-depth="3" href="#441-页面菜单角色与数据范围systemrole-matrix">44.1 页面：菜单&quot;角色与数据范围&quot;（`/system/role-matrix`）</a>
+<a class="toc-l3" data-depth="3" href="#442-文档docsoperationsrole-matrixmd生成物不要手改">44.2 文档：`docs/operations/role-matrix.md`（生成物，不要手改）</a>
+<a class="toc-l3" data-depth="3" href="#443-boss-与总部名单指向第四十一章">44.3 `boss` 与总部名单（指向第四十一章）</a>
+<a class="toc-l3" data-depth="3" href="#444-如实边界">44.4 如实边界</a>
+<a class="toc-l2" data-depth="2" href="#四十五-离机锚点每日签名副本与---offbox-复核">四十五 离机锚点：每日签名副本与 `--offbox` 复核</a>
+<a class="toc-l3" data-depth="3" href="#451-前提">45.1 前提</a>
+<a class="toc-l3" data-depth="3" href="#452-每日出锚点建议在备份之后">45.2 每日出锚点（建议在备份之后）</a>
+<a class="toc-l3" data-depth="3" href="#453-复核--offbox-与---pubkey">45.3 复核：`--offbox` 与 `--pubkey`</a>
+<a class="toc-l3" data-depth="3" href="#454-如实边界">45.4 如实边界</a>
+<a class="toc-l2" data-depth="2" href="#四十六-审计日志全文索引可选化设置-audit_fts_enabled-与---disable----enable">四十六 审计日志全文索引可选化：设置 `audit_fts_enabled` 与 `--disable` / `--enable`</a>
+<a class="toc-l3" data-depth="3" href="#461-两个开关的区别">46.1 两个开关的区别</a>
+<a class="toc-l3" data-depth="3" href="#462-脚本--disable-与---enable">46.2 脚本：`--disable` 与 `--enable`</a>
+<a class="toc-l3" data-depth="3" href="#463-启动自愈规则与不要这样做">46.3 启动自愈规则与不要这样做</a>
+<a class="toc-l3" data-depth="3" href="#464-ci-里的验证给交付人员的背景">46.4 CI 里的验证（给交付人员的背景）</a>
+<a class="toc-l2" data-depth="2" href="#四十七-mcp-速率限制与每日配额">四十七 MCP 速率限制与每日配额</a>
+<a class="toc-l3" data-depth="3" href="#471-两层限制">47.1 两层限制</a>
+<a class="toc-l3" data-depth="3" href="#472-超限时客户端看到什么429-语义">47.2 超限时客户端看到什么（429 语义）</a>
+<a class="toc-l3" data-depth="3" href="#473-运维与排查">47.3 运维与排查</a>
+<a class="toc-l3" data-depth="3" href="#474-如实边界">47.4 如实边界</a>
+<a class="toc-l2" data-depth="2" href="#四十八-ci-的-capacity-smoke-与-candidate-作业怎么手动派发产物是什么">四十八 CI 的 `capacity-smoke` 与 `candidate` 作业：怎么手动派发、产物是什么</a>
+<a class="toc-l3" data-depth="3" href="#481-怎么派发">48.1 怎么派发</a>
+<a class="toc-l3" data-depth="3" href="#482-capacity-smoke容量趋势指示">48.2 `capacity-smoke`：容量趋势指示</a>
+<a class="toc-l3" data-depth="3" href="#483-candidate未签名的发行候选包">48.3 `candidate`：未签名的发行候选包</a>
+<a class="toc-l3" data-depth="3" href="#484-如实边界">48.4 如实边界</a>
+<a class="toc-l2" data-depth="2" href="#四十九-写入序列的故障注入与恢复表指引与摘要">四十九 写入序列的故障注入与恢复表（指引与摘要）</a>
+<a class="toc-l3" data-depth="3" href="#491-这是什么">49.1 这是什么</a>
+<a class="toc-l3" data-depth="3" href="#492-摘要崩了以后看什么做什么">49.2 摘要：崩了以后看什么、做什么</a>
+<a class="toc-l2" data-depth="2" href="#五十-指标页的全局口径scoped-false-是什么意思">五十 指标页的&quot;全局口径&quot;：`scoped: false` 是什么意思</a>
+<a class="toc-l3" data-depth="3" href="#501-含义">50.1 含义</a>
+<a class="toc-l3" data-depth="3" href="#502-对运维和客户的含义">50.2 对运维和客户的含义</a>
+<a class="toc-l3" data-depth="3" href="#503-如实边界">50.3 如实边界</a>
+<a class="toc-l2" data-depth="2" href="#五十一-第十四批计划项本手册不描述">五十一 第十四批计划项：本手册不描述</a>
   </nav>
   <main id="doc">
 <h1 id="伴圆ai原生erp-操作手册">伴圆AI原生ERP 操作手册</h1>
@@ -779,18 +812,19 @@ node scripts/qimen-issue-key.mjs --help     # 本脚本有 --help，打印用法
 <tr><td><code>sales</code>（销售主管）</td><td>是</td><td>是</td><td>是</td></tr>
 <tr><td><code>warehouse</code>（仓储主管）</td><td>是</td><td>是</td><td>是</td></tr>
 <tr><td><code>purchase</code>（采购主管）</td><td>是</td><td><strong>否</strong></td><td>是</td></tr>
-<tr><td><code>scm</code>（供应链主管）</td><td>是</td><td><strong>否</strong></td><td>是</td></tr></tbody></table></div>
+<tr><td><code>scm</code>（供应链主管）</td><td>是</td><td><strong>否</strong></td><td>是</td></tr>
+<tr><td><code>boss</code>（老板 / 总经理）</td><td>是</td><td><strong>否</strong></td><td><strong>否</strong></td></tr></tbody></table></div>
 <p>要点：</p>
-<ul><li>采购主管和供应链主管不参与门店现金，所以不在 POS 总部接口名单里；它们只是为了继续读到门店要货（YQ）的流转留痕而并入单据流豁免。这是有意的：把身份并集直接用在 POS 上会让这两个角色静默获得日结确认和全店现金接口。</li><li><strong>不在名单里的</strong>：<code>boss</code>（老板 / 总经理）、<code>viewer</code>（只读访客）以及任何自定义角色。<code>dealer</code>、<code>store</code> 是外部主体，本来就被内部接口先挡住。</li><li><strong>关于 <code>boss</code> 的说明（需要知道）：</strong> 老板账号不在名单里，是旧名单本来如此，不是新近的疏漏。默认开关（41.2）打开时，一个<strong>没有绑定门店的 <code>boss</code> 账号</strong>，在单据流的 <code>/api/docflow/{events,overview,history,trace}</code> 里<strong>看不到日结（RC）、门店要货（YQ）、门店发货（SH）等按门店绑定的单据和它们的流转留痕</strong>（完整类型见 41.2）。设置页上该开关的说明文字只列了 RC / YQ / SH 三类，实际范围以 41.2 为准。&quot;是否把 <code>boss</code> 作为总部角色并入&quot;是产品决定，<strong>目前没有做出</strong>，也没有配置项可以改：并入需要改代码（在名单表里加一行并声明各用途是否放行）。在此之前不要手工改库或改角色名绕过；需要老板看到这些单据时，只能走 41.2 的临时关闭，并明白它的代价。</li><li>已绑定门店的总部角色账号仍只看本店（与门店路由一致）。<code>admin</code> 与超级管理员（<code>is_super</code>）不受此约束。</li></ul>
+<ul><li>采购主管和供应链主管不参与门店现金，所以不在 POS 总部接口名单里；它们只是为了继续读到门店要货（YQ）的流转留痕而并入单据流豁免。这是有意的：把身份并集直接用在 POS 上会让这两个角色静默获得日结确认和全店现金接口。</li><li><strong>不在名单里的</strong>：<code>viewer</code>（只读访客）以及任何自定义角色。<code>dealer</code>、<code>store</code> 是外部主体，本来就被内部接口先挡住。</li><li><strong>关于 <code>boss</code> 的决定（第十三批已作出，AD2，ADR-0051 补充）：</strong> 老板 / 总经理<strong>已并入</strong>总部名单，但<strong>只在单据流（docflow）这一个面放行</strong>，POS 总部接口与门店要货 / 发货总部接口<strong>不放行</strong>。理由是老板的内置角色本就是全部数据范围，&quot;总经理看不到门店日结&quot;在客户场景里是缺陷；而&quot;看得见&quot;与&quot;能操作&quot;是两件事，日结确认、全店现金接口、要货发货的总部写入口仍由各自的角色闸与权限点决定，老板不因此获得它们。因此：<strong>没有绑定门店的 <code>boss</code> 账号</strong>现在能在 <code>/api/docflow/{events,overview,history,trace}</code> 里看到日结（RC）、门店要货（YQ）、门店发货（SH）、POS 订单（PS）、POS 班次（PSF）以及经销商要货（DR，因为豁免的是整个&quot;未绑定&quot;分支）的单据与流转留痕；已绑门店 / 经销商的 <code>boss</code> 账号仍只看本店 / 本经销商。MCP 一侧不带总部豁免，<code>boss</code> 又没有 <code>pos.*</code> 查看权限点，所以 <code>boss</code> 的 MCP 令牌读不到 RC / YQ / SH / PS / PSF；DR 要的是经销商查看权限点，<code>boss</code> 的令牌在所有者绑定了经销商时仍可读（角色矩阵第二节标 <code>Y*</code>）。撤销这条决定需要改代码（删 <code>server/lib/hq-roles.js</code> 表里 <code>boss</code> 一行，角色矩阵文档随之漂移，需重新生成，见第四十四章）；没有配置项。设置页上该开关的说明文字仍只列 RC / YQ / SH 三类和&quot;admin / finance / sales / warehouse / purchase / scm 以外&quot;，没有写 <code>boss</code>，<strong>以本章和 <code>docs/operations/role-matrix.md</code> 为准</strong>。若手上的实例是更早的版本，<code>boss</code> 看不到这些单据是旧行为。</li><li>已绑定门店的总部角色账号仍只看本店（与门店路由一致）。<code>admin</code> 与超级管理员（<code>is_super</code>）不受此约束。</li></ul>
 <h3 id="412-开关-docflow_strict_store_binding">41.2 开关 <code>docflow_strict_store_binding</code></h3>
 <p>入口：<code>/system/settings</code>，分组&quot;运维&quot;，设置项&quot;单据流严格门店绑定&quot;（键 <code>docflow_strict_store_binding</code>）。它是<strong>危险配置</strong>：修改必须写理由，并进入配置变更审计。</p>
 <div class="table-wrap"><table><thead><tr><th>取值</th><th>行为</th></tr></thead><tbody><tr><td>开（缺省，值 <code>1</code>）</td><td>对&quot;未绑定门店（或经销商）、非总部角色&quot;的内部账号，<code>/api/docflow/{events,overview,history,trace}</code> 不再返回按门店绑定的单据类型与留痕（整类不可见）：日结 RC、门店要货 YQ、门店发货 SH，以及 POS 订单 PS、POS 班次 PSF，和按经销商绑定的经销商要货 DR；<code>POST /api/docflow/transition</code> 对这些类型，范围外的单据与不存在的单据同样返回 404&quot;记录不存在&quot;。总部角色、admin、超级管理员不受影响；已绑门店的账号只看本店</td></tr>
 <tr><td>关（值 <code>0</code>）</td><td>恢复本项出现之前的行为：docflow 只看数据范围，上述账号仍能读这三类</td></tr></tbody></table></div>
-<ul><li><strong>关闭就是放宽读权限。</strong> 只在确认确有&quot;非总部角色需要跨店只读&quot;（例如上面说的 <code>boss</code>）时临时使用；它是整个开关，会同时放开 41.2 里所有这些类型，写清理由，尽快用产品决定取代它。</li><li>开关只管 HTTP 的 <code>/api/docflow/*</code>。MCP 一侧恒定严格且不带总部豁免（比 HTTP 更严），不受这个开关影响。</li><li>取值口径：<code>0</code>、<code>false</code>、<code>no</code>、<code>off</code>、空串都算&quot;明确关闭&quot;，库里值缺失或写成非法值回落为缺省&quot;开&quot;（失败关闭）。通过设置页修改即可，不要手改库。</li></ul>
+<ul><li><strong>关闭就是放宽读权限。</strong> 只在确认确有&quot;非总部角色需要跨店只读&quot;（例如自定义角色、<code>viewer</code>）时临时使用；它是整个开关，会同时放开 41.2 里所有这些类型，写清理由，尽快用明确的角色设计取代它。老板账号不需要为此关闭开关（见 41.1）。</li><li>开关只管 HTTP 的 <code>/api/docflow/*</code>。MCP 一侧恒定严格且不带总部豁免（比 HTTP 更严），不受这个开关影响。</li><li>取值口径：<code>0</code>、<code>false</code>、<code>no</code>、<code>off</code>、空串都算&quot;明确关闭&quot;，库里值缺失或写成非法值回落为缺省&quot;开&quot;（失败关闭）。通过设置页修改即可，不要手改库。</li></ul>
 <h3 id="413-排障为什么某账号在单据流里看不到日结--要货--发货--pos-单据">41.3 排障：&quot;为什么某账号在单据流里看不到日结 / 要货 / 发货 / POS 单据&quot;</h3>
-<ol><li>先看该账号的角色和门店绑定：让账号本人打开「我的数据范围」（第二十六章），确认角色名、数据范围和绑定的门店。</li><li>角色是 <code>boss</code>、<code>viewer</code> 或自定义角色，且未绑门店：这是预期行为（41.1）。要么接受，要么按 41.2 评估是否临时关闭开关。</li><li>角色在名单里但仍看不到：看是否绑了某个门店（那就只看本店），再看目标单据是否属于别的门店。</li><li>刚改过开关或角色，请账号本人重新登录后再看。</li><li>仍不能解释：保存&quot;我的数据范围&quot;页面内容和单据号，交给开发，不要直接放宽开关。</li></ol>
+<ol><li>先看该账号的角色和门店绑定：让账号本人打开「我的数据范围」（第二十六章），确认角色名、数据范围和绑定的门店。</li><li>角色是 <code>viewer</code> 或自定义角色，且未绑门店：这是预期行为（41.1）。要么接受，要么按 41.2 评估是否临时关闭开关。<code>boss</code> 在第十三批之后属于总部名单，未绑门店也应能看到；若某个 <code>boss</code> 账号看不到，先确认实例版本（旧版本 <code>boss</code> 不在名单里），再按下一条排查。</li><li>角色在名单里但仍看不到：看是否绑了某个门店（那就只看本店），再看目标单据是否属于别的门店。</li><li>刚改过开关或角色，请账号本人重新登录后再看。</li><li>仍不能解释：保存&quot;我的数据范围&quot;页面内容和单据号，交给开发，不要直接放宽开关。</li></ol>
 <h3 id="414-如实边界">41.4 如实边界</h3>
-<p>这是读范围的收紧，不是整体权限模型的验收。<code>boss</code> 是否应属于总部角色尚无产品结论；开关缺省打开后的客户侧影响面（有哪些现有账号会因此看不到这些类型）没有在真实客户数据上评估过。</p>
+<p>这是读范围的收紧，不是整体权限模型的验收。<code>boss</code> 并入总部名单是第十三批的产品决定（只放行单据流读取）；开关缺省打开后的客户侧影响面（有哪些现有账号会因此看不到这些类型）没有在真实客户数据上评估过。</p>
 <h2 id="四十二-依赖安全门禁check-audit-allowlist-与到期白名单">四十二 依赖安全门禁：<code>check-audit-allowlist</code> 与到期白名单</h2>
 <p>依据 <code>docs/本地交付/06_依赖安全说明.md</code> 与 <code>docs/security/audit-allowlist.json</code>。面向负责发版和依赖维护的人员。这是 CI 里的一道门禁：运行依赖里的高危公告必须在带到期日的白名单里，否则构建失败。<strong>白名单是限期豁免，不是&quot;已修复&quot;。</strong></p>
 <h3 id="421-它检查什么">42.1 它检查什么</h3>
@@ -830,6 +864,111 @@ node scripts/check-audit-allowlist.mjs --audit-json /abs/audit.json</code></pre>
 <ul><li>响应头 <code>X-Dashboard-Cache: hit</code> 或 <code>miss</code>（用浏览器开发者工具的网络面板看），命中与否<strong>不在响应体里</strong>。</li><li>看板接口要求账号数据范围为&quot;全部&quot;，受限范围账号得到 403，并且不会预热缓存。</li><li>指标 <code>os_erp_dashboard_cache_total{result=&quot;hit|miss&quot;}</code>（第三十一章）统计汇总、趋势、排行、待办、库存分布和渠道的缓存命中；看板底部的最近订单（<code>/dashboard/recent</code>）不缓存也不计数。在缓存开启、且 30 分钟内计数的请求超过 60 次的前提下，命中率持续低于 20% 会触发告警 <code>OsErpDashboardCacheIneffective</code>（31.5），那是提示&quot;缓存在白跑&quot;，不是服务故障。<code>GML_DASHBOARD_CACHE_MS=0</code> 关闭缓存时不计数，也就不会触发这条告警。</li></ul>
 <h3 id="435-如实边界">43.5 如实边界</h3>
 <p>缓存和时间戳的效果（命中率、对大库的响应时间）在目标主机上没有实测，容量基线里的数字来自开发机与合成数据。</p>
+<h2 id="四十四-角色矩阵页与-docsoperationsrole-matrixmd">四十四 角色矩阵页与 <code>docs/operations/role-matrix.md</code></h2>
+<p>依据 ADR-0051（含 AD2 补充）与 AD11。面向管理员、实施顾问和需要回答&quot;某个角色为什么看得到 / 看不到某类单据&quot;的人。总部名单和 <code>boss</code> 的决定见第四十一章，这里只讲矩阵本身怎么看、怎么再生成。</p>
+<h3 id="441-页面菜单角色与数据范围systemrole-matrix">44.1 页面：菜单&quot;角色与数据范围&quot;（<code>/system/role-matrix</code>）</h3>
+<ul><li>任何已登录账号都能打开。上半部是&quot;我的数据范围&quot;（与第二十六章相同的信息），下半部是&quot;角色 × 单据类型&quot;可见度矩阵，并高亮当前账号所属角色那一列。数据来自 <code>GET /api/meta/role-matrix</code>（只读，只要求登录）。</li><li>管理员看到全部启用中角色的列（含自定义角色，按库里当前的角色权限点实时推演；不做并集、不看账号的数据范围覆盖）；<strong>非管理员只拿到自己角色那一列</strong>。接口不返回权限点码，也不返回用户、组织、门店、经销商的名称。</li><li>单元格分五档：<code>full</code>（管理员 / 超管，不受限制）、<code>scoped</code>（有查看权限点，可见行由账号的数据范围决定）、<code>bound</code>（必须绑定了门店 / 经销商 / 订货主体才看得到，且只看自己绑定的那部分）、<code>global_only</code>（没有组织归属的总账类单据，只有全局数据范围可见）、<code>none</code>（没有查看权限点，或外部主体访问仅限总部的类型）。</li><li>它是<strong>说明性视图，不是授权判据</strong>：真正的判据在各业务路由的权限点与数据范围检查里。页面按单一角色的权限点推演，一个账号被授予多个角色时不展开并集；下面 44.2 的生成文档则固定用&quot;默认账号&quot;夹具。</li></ul>
+<h3 id="442-文档docsoperationsrole-matrixmd生成物不要手改">44.2 文档：<code>docs/operations/role-matrix.md</code>（生成物，不要手改）</h3>
+<ul><li>内容：docflow 读接口的 G / O / B / <code>-</code>（全局 / 组织范围 / 仅绑定 / 不可见）、MCP 通用读工具的 <code>Y</code> / <code>Y*</code> / <code>-</code>（可读 / 可读但要绑定 / 不可读）、每类单据的查看权限点与范围谓词来源，以及内置角色与三份总部名单的对照（第四节）。文件头注明内置角色数、单据类型数和权限点总数；这些数字会随代码变化，<strong>以文件为准</strong>，手册不抄。</li><li>每个格子是对真实门禁函数求值的结果，不是手写结论。改了权限字典、<code>DOC_VIEW_PERMS</code>、<code>DOC_SCOPE_RESOLVERS</code> 或 <code>server/lib/hq-roles.js</code> 之后文件会漂移，CI 的 <code>gen-role-matrix --check</code> 变红，需要重新生成并提交。</li><li>命令（参数以 <code>scripts/gen-role-matrix.mjs</code> 为准，只认这几种）：</li></ul>
+<pre><code>node scripts/gen-role-matrix.mjs            # 重新生成并写入 docs/operations/role-matrix.md
+node scripts/gen-role-matrix.mjs --check    # 与仓库文件比对，漂移（含文件缺失、被手改）退出 1
+node scripts/gen-role-matrix.mjs --json     # 把求值结果以 JSON 打到标准输出</code></pre>
+<p><code>--check</code> 与 <code>--json</code> 不能同时用（退出 2）；<code>--file=&lt;绝对路径&gt;</code> 只给测试造漂移用，运维不需要。生成器在临时库里跑迁移，不读取也不改实例数据。</p>
+<ul><li>这是开发阶段文档，不是验收或上线声明。</li></ul>
+<h3 id="443-boss-与总部名单指向第四十一章">44.3 <code>boss</code> 与总部名单（指向第四十一章）</h3>
+<p>老板 / 总经理已并入总部名单，但只在单据流读取这一个面放行；POS 总部接口和门店要货 / 发货总部接口不放行。矩阵第四节的&quot;总部（并集）/ POS 总部闸 / 要货总部闸&quot;三列就是这个结论的出处。撤销要改代码，没有配置项。详见 41.1。</p>
+<h3 id="444-如实边界">44.4 如实边界</h3>
+<ul><li>生成文档描述的是各<strong>内置角色</strong>的<strong>默认账号</strong>：默认数据范围、放在某个组织里、未绑定门店 / 经销商。单个账号的 <code>data_scope</code> 覆盖、多角色叠加、自定义角色不在这份文档里；页面上能看到自定义角色的列，但同样不展开单账号覆盖与多角色并集。某个账号的实际效果请用&quot;我的数据范围&quot;（第二十六章）。</li><li>docflow 读接口只按数据范围和总部豁免收口，不按查看权限点收口；权限点由 MCP 读工具和各业务路由把关（矩阵正文已写明）。</li><li>没有在真实客户数据和真实账号分布上核对过矩阵。</li></ul>
+<h2 id="四十五-离机锚点每日签名副本与---offbox-复核">四十五 离机锚点：每日签名副本与 <code>--offbox</code> 复核</h2>
+<p>依据 ADR-0055（AD5）与 <code>docs/operations/audit-integrity.md</code> 第 8 节。第三十六章讲的审计链和备份清单要靠人把链尾&quot;带外&quot;保存；离机锚点把<strong>证据透明日志的尾</strong>和<strong>各行业库审计链的尾</strong>一起签名，写到另一个位置，由持钥者每天执行。</p>
+<h3 id="451-前提">45.1 前提</h3>
+<ul><li>一对 Ed25519 密钥，在持钥机器上、<strong>仓库之外</strong>生成，私钥权限 0600；<strong>公钥另行带外保存</strong>，复核时才用。生成命令（参数以 <code>scripts/release-keygen.mjs</code> 的用法为准，第三十五章有保管规则）：</li></ul>
+<pre><code>node scripts/release-keygen.mjs --out /absolute/path/to/new/empty/dir     # 产出 release-sign.key.pem 与 release-sign.pub.pem</code></pre>
+<ul><li>一个&quot;真正离机&quot;的目的地：另一块盘、已挂载的远端共享，或经 <code>ssh</code> 可达的另一台机器。脚本只能拒绝数据目录之内的路径，<strong>不能证明物理隔离</strong>——把目录挂在哪里由运维负责。</li></ul>
+<h3 id="452-每日出锚点建议在备份之后">45.2 每日出锚点（建议在备份之后）</h3>
+<pre><code># 目的地 A：本机已存在的绝对目录（另一块盘 / 挂载点）；脚本不会创建它
+node scripts/offbox-anchor.mjs --data-dir /abs/data --dest /Volumes/OFFBOX/os-erp-anchors --key /abs/keys/release-sign.key.pem
+# 目的地 B：ssh://&lt;别名&gt;/&lt;绝对路径&gt;
+node scripts/offbox-anchor.mjs --data-dir /abs/data --dest ssh://backup-box/srv/os-erp-anchors --key /abs/keys/release-sign.key.pem</code></pre>
+<p>参数（<code>scripts/offbox-anchor.mjs</code> 的解析器只认这四个，值与名称之间用空格）：<code>--data-dir</code>、<code>--dest</code>、<code>--key</code> 必填；<code>--log &lt;EVIDENCE-LOG.jsonl&gt;</code> 可选，缺省用仓库里的 <code>docs/release/EVIDENCE-LOG.jsonl</code>，该文件不存在则只锚审计链（锚点里记 <code>log.present=false</code>）；显式给了 <code>--log</code> 但文件不存在或无效则失败。</p>
+<ul><li>产物 <code>anchor-&lt;UTC毫秒时间戳&gt;.json</code>：先写临时名再以不覆盖语义改名（本地用 <code>link</code>，目标已存在即失败，文件系统不支持硬链接时退到独占创建；远端用 <code>test ! -e … &amp;&amp; mv</code>），写完读回比对。顺序执行时不会覆盖已有同名锚点；远端这一步不是对并发写入者的原子保证。内容是日志前 N 行的链尾、各行业库审计链的行数 / 链尾哈希 / 锚点明细，以及 Ed25519 签名；<strong>不含审计内容</strong>，文件本身不是机密，但应放在业务主机写不到的位置。</li><li><code>ssh://</code> 目的地：别名必须是 <code>~/.ssh/config</code> 里<strong>已有</strong>的别名（不接受 <code>user@host</code>、端口、选项）；远端路径必须是绝对路径，只含 <code>[A-Za-z0-9._-]</code> 组成的段。脚本只用 <code>ssh</code> / <code>scp</code> 的 <code>BatchMode</code>（不会弹密码），<strong>不修改</strong> SSH 配置或认证。需要特殊端口或用户，就在 <code>~/.ssh/config</code> 里为该主机起一个别名。</li><li>退出码：0 成功；1 拒绝（审计链已断、透明日志无效、目的地写满 / 别名失效 / 远端目录不存在等写入失败）；2 用法错误（含 <code>--dest</code> 在数据目录之内、本地目录不存在）。<strong>链断了不出锚点</strong>：先用 <code>audit-verify-chain.mjs</code>（36 章）找到断点。写入失败请当日处理，不要跳过。脚本会尽力清理临时文件，但在走&quot;独占创建&quot;回退的文件系统上，写到一半失败或读回比对失败可能留下终名文件：失败后检查目的地里最新的 <code>anchor-*.json</code>，不完整的不要拿去复核，确认后删掉并重新出锚点。</li><li>挂载提醒：脚本只检查 <code>--dest</code> 是已存在的目录且不在数据目录之内，<strong>不检查挂载点</strong>。盘没挂载但挂载点目录还在时，锚点会静默写到本机盘上，这正是离机的反面——出锚点前请自己确认挂载（或改用 <code>ssh://</code> 目的地）。</li></ul>
+<h3 id="453-复核--offbox-与---pubkey">45.3 复核：<code>--offbox</code> 与 <code>--pubkey</code></h3>
+<p>定期（或怀疑被动过时）把离机的最近几个锚点取回，用<strong>带外获得的公钥</strong>复核：</p>
+<pre><code>node scripts/audit-verify-chain.mjs --data-dir /abs/data --offbox /path/anchor-20261024T020000000Z.json --pubkey /abs/keys/release-sign.pub.pem
+node scripts/verify-release.mjs --log=/abs/repo/docs/release/EVIDENCE-LOG.jsonl --offbox /path/anchor-20261024T020000000Z.json --pubkey /abs/keys/release-sign.pub.pem</code></pre>
+<ul><li><code>audit-verify-chain</code> 的 <code>--offbox</code> 与 <code>--pubkey</code> <strong>必须同时给</strong>（任何一个单独出现都是用法错误）。它先验签再逐库比对；<code>verify-release</code> 的 <code>--offbox</code> 要求同时给 <code>--pubkey</code> 和 <code>--log=&lt;日志文件&gt;</code>（<code>--pubkey</code> 单独与 <code>--evidence</code> 用于验证发行证据签名，是另一个用途）（裸 <code>--log</code> 指仓库默认日志；可不带 <code>--evidence</code>），并在发行包里执行，因为它不接数据目录，<strong>审计链部分只由 <code>audit-verify-chain</code> 校验</strong>。</li><li>审计链：在用链必须是锚定链尾的后代。<code>rewrite/tip-row-differs</code> = 被锚定的那一行哈希变了（链被改写并重算会这样，合法的隐私抹除改写了该行也会这样，需对照操作记录）；<code>rewrite/behind</code> = 尾部被截或库被回滚；<code>unverifiable</code> = 锚定的链尾已不在在用库里：被归档搬走时，再给 <code>--archive-dir</code> 指向归档目录（含对应的 <code>.digest.json</code> 与 <code>.jsonl</code>）可以继续接上；被保留清理在在用库的 id 范围内删掉的，<code>--archive-dir</code> 帮不上，仍是 <code>unverifiable</code>，只能对照操作记录；被锚定的行业库不见了也算失败。</li><li><code>anchors-added/in-anchored-range</code>：锚点之后，在<strong>已锚定范围内</strong>新增了库内锚点。伪造的&quot;桥锚点&quot;可以洗白对历史行的改写，合法的保留清理、归档、隐私抹除也会产生同样的锚点。对照操作记录确认无误后，加 <code>--accept-new-anchors</code>（只能与 <code>--offbox</code> 一起用），或在这些操作之后立刻做一次新锚点、以后用新锚点复核。</li><li>透明日志：现日志必须仍包含锚定的尾；截尾、整份换成另一条有效链、日志被删都失败；之后新增的行是正常增长。以上只适用于<strong>出锚点时日志存在</strong>的锚点（<code>log.present=true</code>）；出锚点时没有日志，这一项没有东西可比，会直接跳过。</li><li>不通过时<strong>保留所有锚点以及当前库 / 日志的副本</strong>再排查，不要用新锚点覆盖旧证据。用几天前的旧锚点复核通常也应通过，它们是更难被同时篡改的参照；但合法的隐私抹除若改写了被锚定的行，旧锚点也会报不一致，需对照操作记录。</li></ul>
+<h3 id="454-如实边界">45.4 如实边界</h3>
+<ul><li>锚点只证明&quot;持钥者在 <code>created_at</code> 时看到过这个链尾&quot;；<code>created_at</code> 是持钥机器的自述时间。两次锚点之间的窗口没有保护；同时拿到私钥和离机副本的人、或离机目的地被攻破（可删最新锚点）不在防护范围。</li><li>公钥与锚点放在一起没有意义，必须带外获得。</li><li><code>ssh://</code> 目的地只在测试替身上验证过，<strong>未在真实主机上验证</strong>连通性、主机密钥确认和认证；这些由运维既有 SSH 配置负责。（<code>OS_ERP_SSH</code> / <code>OS_ERP_SCP</code> 是测试替身变量，见安装手册 6.6，不要在生产设置。）</li></ul>
+<h2 id="四十六-审计日志全文索引可选化设置-audit_fts_enabled-与---disable----enable">四十六 审计日志全文索引可选化：设置 <code>audit_fts_enabled</code> 与 <code>--disable</code> / <code>--enable</code></h2>
+<p>依据 ADR-0054（AD4）、迁移 071、<code>docs/operations/audit-search.md</code> 第 4 节。第三十八章讲索引的行为、<code>GML_AUDIT_FTS=0</code> 和 <code>--integrity-check</code> / <code>--optimize</code> / <code>--rebuild</code>；这一章讲&quot;把索引整个去掉 / 装回来&quot;。</p>
+<h3 id="461-两个开关的区别">46.1 两个开关的区别</h3>
+<div class="table-wrap"><table><thead><tr><th></th><th><code>GML_AUDIT_FTS=0</code>（环境变量，38.2）</th><th>设置 <code>audit_fts_enabled</code>（本章）</th></tr></thead><tbody><tr><td>作用</td><td>只切查询路径，一律走 <code>LIKE</code></td><td>真正删除（或重建）<code>audit_logs_fts</code> 表和三个触发器</td></tr>
+<tr><td>索引</td><td>仍在，写入仍维护它</td><td>关闭后不存在，审计写入少一次索引维护</td></tr>
+<tr><td>生效方式</td><td>改环境后重启服务</td><td>用脚本立即生效；只在界面改设置要等下次启动才收敛（46.3）</td></tr>
+<tr><td>可逆</td><td>去掉变量重启</td><td>可逆：再 <code>--enable</code> 重建并回填</td></tr></tbody></table></div>
+<ul><li>设置入口：<code>/system/settings</code> →&quot;运维&quot;，&quot;审计日志 FTS5 关键词索引&quot;（键 <code>audit_fts_enabled</code>）。它是<strong>危险配置</strong>：默认开；修改必须写理由，并留痕到配置变更审计（<code>setting_audit_log</code>）。取值口径：库里只有规范串 <code>0</code> 才算关闭，缺失或其他值一律按&quot;开&quot;（宁可保留索引，因为删除是破坏性的）。</li><li>关闭后审计关键词检索一律走 <code>LIKE</code>（与没有 FTS5 的构建同一条路径），稀有关键词在大库上读全表，100 万行约百毫秒级（<code>capacity-baseline.md</code> 的 AB3，不是目标主机结果）。<strong>关键词仍不搜索明细</strong>（27.2），两条路径返回的行相同。</li></ul>
+<h3 id="462-脚本--disable-与---enable">46.2 脚本：<code>--disable</code> 与 <code>--enable</code></h3>
+<pre><code>node scripts/audit-fts-maintain.mjs --data-dir /abs/data --industry cosmetic --disable --reason &quot;原因&quot;
+node scripts/audit-fts-maintain.mjs --data-dir /abs/data --industry cosmetic --enable  --reason &quot;原因&quot;</code></pre>
+<ul><li>这是 <code>audit-fts-maintain.mjs</code> 的第四、第五个动作，和 38.3 的三个动作一起&quot;<strong>必须且只能选一个</strong>&quot;；<code>--disable</code> / <code>--enable</code> 必须带 <code>--reason</code>（缺省退出 2）。<code>--data-dir</code>、<code>--industry</code>、<code>--out</code>、<code>--busy-ms</code> 的规则与 38.3 相同，一次一个行业库。</li><li>在<strong>同一个写事务</strong>里改设置并删除 / 重建索引对象：要么都成，要么都不改（拿不到写锁时 <code>status: &quot;busy&quot;</code>、退出 1，设置与对象都不变）。重复执行幂等（报告里 <code>setting_changed: false</code>）。</li><li><code>--enable</code> = 建表 + 触发器 + 回填存量行，成本等同 <code>--rebuild</code>，<strong>持写锁到结束</strong>（100 万行约数秒级，Mac mini 合成数据，目标主机请自行实测），请在低峰执行。构建不支持 FTS5 / trigram 时报 <code>unsupported</code>、退出 1，设置不改。</li><li>关闭状态下：<code>--integrity-check</code> 报 <code>status: &quot;absent&quot;</code> 退出 0；<code>--optimize</code> / <code>--rebuild</code> 因没有东西可维护退出 1——这是预期，不是故障。</li></ul>
+<h3 id="463-启动自愈规则与不要这样做">46.3 启动自愈规则与不要这样做</h3>
+<ul><li>服务启动时只在<strong>设置这样说</strong>时才动索引：设置开且对象缺失 → 重建并回填；设置关且对象存在 → 删除；设置关且对象已不在 → 什么都不做（不会每次启动重建）。所以只在界面或 API 里改设置，对象要等下次启动才收敛；要立即生效请用 46.2 的脚本。</li><li>在带 FTS5 的构建上建过索引的库，<strong>不要</strong>拿到不带 FTS5 的构建上写入：虚拟表模块不在，触发器引用它，写入会失败，表也删不掉。需要换构建，先在原构建上 <code>--disable</code>。</li><li>手工往库里写设置值或手工删表都不要做；用脚本。</li></ul>
+<h3 id="464-ci-里的验证给交付人员的背景">46.4 CI 里的验证（给交付人员的背景）</h3>
+<p>CI 有 <code>audit-no-fts5</code> job：从源码重编译、去掉 <code>SQLITE_ENABLE_FTS5</code> 的 better-sqlite3，先断言确实没有 FTS5，再跑 <code>tests/audit-logs-view.test.mjs</code> 与 <code>tests/audit-fts-maintain.test.mjs</code>。该 job 在 GitHub 上的<strong>首次托管运行结果尚未验证</strong>；本机只在 macOS 上验证过编译。</p>
+<h2 id="四十七-mcp-速率限制与每日配额">四十七 MCP 速率限制与每日配额</h2>
+<p>依据 ADR-0056（AD9）与 <code>docs/operations/monitoring.md</code> 第 1 节。面向启用了 MCP 的实例的管理员：给每个 MCP 令牌设短窗口的调用上限，防止死循环的 Agent 或被盗令牌在几秒内打出成千上万次调用。</p>
+<p><strong>先确认能不能用</strong>：生产模式下 MCP 整体关闭（第二十一章开头），本章只适用于演示 / 测试模式，以及未来经单独验收启用 Agent 能力之后。</p>
+<h3 id="471-两层限制">47.1 两层限制</h3>
+<div class="table-wrap"><table><thead><tr><th>层</th><th>设置位置</th><th>缺省</th><th>范围</th><th>说明</th></tr></thead><tbody><tr><td>总额度</td><td>环境变量 <code>GML_MCP_TOKEN_RPM</code></td><td>600 次 / 60 秒</td><td>1 至 1000000</td><td>全部 <code>tools/call</code> 与 <code>resources/read</code></td></tr>
+<tr><td>写额度</td><td>环境变量 <code>GML_MCP_WRITE_RPM</code></td><td>60 次 / 60 秒</td><td>1 至 1000000</td><td>只算 <code>level: write</code> 的工具；写调用<strong>同时</strong>计入总额度</td></tr>
+<tr><td>日配额</td><td>设置键 <code>mcp_token_daily_quota</code></td><td>0（关闭）</td><td>0 至 100000000</td><td>按令牌、按本地日历日统计调用审计行，过本地午夜归零</td></tr></tbody></table></div>
+<ul><li>环境变量放在 <code>node scripts/local-manage.mjs start</code> 前面（同安装手册 5.4），<strong>启动时读定，改值需重启服务</strong>；非数字或超出范围的值回落到缺省，不报错。详见安装手册 6.5。</li><li>日配额在 <code>/system/settings</code> →&quot;运维&quot;，&quot;MCP 令牌每日调用配额&quot;。它是<strong>危险配置</strong>（调低 = 令牌当日更早被拒），改动必须写理由并留痕。0 表示不限（每分钟额度仍然生效）。</li><li>额度按<strong>验签通过的令牌</strong>计，不看 IP、请求头或请求体，所以换工具名、换 JSON-RPC id、伪造头都换不到额度；不同行业库里同号的令牌各自独立计数。无效令牌在验签处就被拒，不占额度。</li><li><code>tools/list</code>、<code>initialize</code>、<code>ping</code> 不限速（它们不执行工具）。未知工具、没有权限、参数非法的 <code>tools/call</code> 调用<strong>同样占额度</strong>，猜工具名也受限；<code>resources/read</code> 对已知资源在访问判定之前占读额度，而资源地址本身不存在时在限流之前就返回 JSON-RPC 错误，不占额度。<code>level: danger</code> 的工具只受总额度约束。</li><li>与既有的&quot;每令牌每小时调用上限&quot;（令牌自身的 <code>rate_limit</code>，超限返回 <code>TOKEN_RATE_LIMITED</code>）并存，先到先拒。</li></ul>
+<h3 id="472-超限时客户端看到什么429-语义">47.2 超限时客户端看到什么（429 语义）</h3>
+<ul><li>HTTP 状态 <strong>429</strong>，带 <code>Retry-After</code>（秒）。速率超限时是距当前 60 秒窗口结束的秒数（1 至 60）；日配额超限时是距本地午夜的秒数。</li><li>响应体保留 JSON-RPC 外壳（<code>jsonrpc</code>、<code>id</code>），并带工具级错误形态 <code>result.isError: true</code>；<code>result.content[0].text</code> 里是 <code>{&quot;error&quot;:&quot;MCP_RATE_LIMITED&quot;,&quot;message&quot;:…,&quot;detail&quot;:…}</code>。业务码 <code>MCP_RATE_LIMITED</code> 在 <code>detail.code</code>；<strong>没有</strong>顶层 <code>error</code> 成员。</li><li><code>detail.reason</code> 取值：<code>rpm</code>（总额度）、<code>write_rpm</code>（写额度）、<code>daily_quota</code>（日配额）、<code>unavailable</code>（限流状态不可用，例如桶表满 10000 个、日配额读库失败；为安全起见拒绝而不是放行）。</li><li>被限流的调用<strong>不写</strong> <code>mcp_call_logs</code>（避免洪泛变成对 SQLite 的写放大），但计入 <code>os_erp_mcp_tool_calls_total{code=&quot;MCP_RATE_LIMITED&quot;}</code>。所以审计页看不到被拒的那部分，只能看放行的那部分里按 <code>token_name</code> 谁的调用量最大。</li><li>被写额度拒绝的调用不消耗总额度；日配额不统计被速率限制直接拒绝的调用。</li></ul>
+<h3 id="473-运维与排查">47.3 运维与排查</h3>
+<ul><li>告警 <code>OsErpMcpRateLimited</code>（<code>docs/operations/alerts/os-erp-ab10.yml</code>）：10 分钟内被限流超过 20 次并持续 10 分钟，severity warning。触发后：到 MCP 控制台调用审计按令牌名找调用量最大的令牌；确认滥用就吊销令牌，合理用量就调 <code>GML_MCP_TOKEN_RPM</code> / <code>GML_MCP_WRITE_RPM</code>（重启生效）或日配额。</li><li>客户端看到 429 先按 <code>Retry-After</code> 退避重试，不要立刻重放写操作（写工具要带幂等键，第二十一章）。</li><li>速率桶在<strong>进程内存</strong>：重启清零，多进程各自计数。日配额读审计表，所以是持久的；审计写失败时另有进程内影子计数取较大值，配额仍然生效。</li></ul>
+<h3 id="474-如实边界">47.4 如实边界</h3>
+<ul><li>滑动窗口是&quot;当前窗口 + 上一窗口按比例折算&quot;的近似，不是逐请求精确日志。</li><li>默认额度（600 / 60）不是按真实 Agent 流量标定的；没有在目标主机上实测。</li><li>多进程共享计数、重启持久化目前<strong>没有</strong>（见第五十一章）。</li></ul>
+<h2 id="四十八-ci-的-capacity-smoke-与-candidate-作业怎么手动派发产物是什么">四十八 CI 的 <code>capacity-smoke</code> 与 <code>candidate</code> 作业：怎么手动派发、产物是什么</h2>
+<p>依据 <code>docs/implementation/capacity-baseline.md</code> 的 &quot;AD8&quot; 一节、<code>docs/release/README.md</code> 的 &quot;Hosted CI candidate (AD10)&quot; 与 ADR-0047 / ADR-0052。仓库公开、尚未开始收费期间，Linux 验证走 GitHub 托管 runner（<code>.github/workflows/ci.yml</code>）；这两个作业只在手动触发时（候选包另可在 <code>v*</code> 标签推送时）运行。<strong>它们的结果都不是 <code>dmserver</code> 目标主机结果，也不是发行或生产验收。</strong></p>
+<h3 id="481-怎么派发">48.1 怎么派发</h3>
+<p><code>ci.yml</code> 有一个手动输入 <code>rounds</code>（隔离回归轮数，缺省 3）。用 GitHub CLI：</p>
+<pre><code>gh workflow run ci.yml --ref &lt;分支名&gt; -f rounds=1
+gh run list --workflow ci.yml --limit 5
+gh run watch &lt;run-id&gt;</code></pre>
+<ul><li><code>workflow_dispatch</code> 会把 <code>ci.yml</code> 里<strong>没有触发条件限制的所有作业</strong>（checks、audit-no-fts5、docker、browser、regression 等）连同 <code>capacity-smoke</code> 与 <code>candidate</code> 一起启动，耗时和占用的 runner 分钟数都不小；<code>rounds=1</code> 只缩短回归那一个作业。</li><li><code>gh workflow run</code> 对&quot;工作流文件必须在默认分支上存在&quot;有要求；<code>ci.yml</code> 已在默认分支上，所以按 GitHub 的规则可以指定其他分支运行，但<strong>这条分支派发的方式本手册没有实际执行验证过</strong>，也没有任何 <code>capacity-smoke</code> 或 <code>candidate</code> 的托管运行结果。</li><li>下载产物（名称里带运行号和重试号）：</li></ul>
+<pre><code>gh run download &lt;run-id&gt; -n os-erp-capacity-smoke-&lt;run-id&gt;-&lt;attempt&gt; -D /abs/new/empty/dir
+gh run download &lt;run-id&gt; -n os-erp-candidate-&lt;run-id&gt;-&lt;attempt&gt; -D /abs/another/new/dir</code></pre>
+<h3 id="482-capacity-smoke容量趋势指示">48.2 <code>capacity-smoke</code>：容量趋势指示</h3>
+<ul><li>仅 <code>workflow_dispatch</code> 触发（不在 push / pull_request 上跑）；作业上限 30 分钟。步骤：合成流水线（<code>synth-pipeline.mjs</code>，medium：2 万 SKU、3 万单据、15 万流水，生成预算 20 分钟）→ 在库副本上跑写档压测 → 把报告缩成白名单摘要（<code>capacity-summary.mjs --scale medium</code>）。</li><li><strong>只上传</strong> <code>capacity-summary.json</code>（保留 14 天），原始日志、数据库、备份都在作业结尾删掉。读法与失败判定同第二十九章：失败原因码列在 29.2（流水线步骤失败、索引审计违规、压测错误数大于 0，以及报告缺失 / 读不出 / 写档完整性核对失败）；<strong>延迟只记录不设阈值</strong>，作业绿不代表性能好。</li><li>它不含升级演练、<code>large-ci</code> 规模和 <code>audit_fts</code> 输入，这些仍属于夜间容量工作流（<code>nightly-capacity.yml</code>，当时不在默认分支上，见 29.4）。</li><li>托管 runner 是共享虚拟机，单次数字波动大；合成数据、单次运行，只当同规模下的趋势。该作业<strong>至今没有在 GitHub 上运行过</strong>，30 分钟内能否跑完没有数据。</li></ul>
+<h3 id="483-candidate未签名的发行候选包">48.3 <code>candidate</code>：未签名的发行候选包</h3>
+<ul><li>触发：<code>workflow_dispatch</code>，以及推送 <code>v*</code> 标签；不在 pull_request 或推送到 <code>main</code> 时运行。同一时间只允许一个（<code>concurrency</code>，不取消进行中的），上限 90 分钟。</li><li>做什么：在托管 runner 上执行 <code>release-candidate --run-tests --ci-run=auto</code>（脚本自己跑聚焦测试集与守卫、做生产验收），再在解压后的包里执行 <code>verify-release --evidence --artifact --log</code> 自校验。</li><li>产物：<strong>恰好三个文件</strong>，保留 14 天——<code>RC-&lt;版本&gt;-&lt;短提交&gt;.zip</code>、<code>EVIDENCE.json</code>、<code>evidence-log-line.jsonl</code>（这次构建&quot;本来会追加&quot;的透明日志行）。它<strong>不创建标签、不创建 GitHub Release、不发布、不提交回仓库</strong>；想把那一行记入 <code>docs/release/EVIDENCE-LOG.jsonl</code>，由维护者手工提交。</li><li><code>--ci-run=auto</code> 会用 <code>gh run list</code> 找<strong>同一提交</strong>上最近一次成功的 <code>ci.yml</code> 运行（只查该提交最近的 30 条 <code>ci.yml</code> 运行，更早的成功不在查询范围内）；找不到就在 <code>EVIDENCE.json</code> 里写 <code>ci_run_id: null</code> 和原因，不会猜。所以想要带 CI 运行号的证据，要先有该提交的成功运行。</li><li><strong>&quot;未签名&quot;是什么意思：</strong> 托管 runner 不持有签名私钥，<code>EVIDENCE.json</code> 里 <code>built_by: hosted-ci</code>、<code>signature: null</code>（作业里设了 <code>GML_RELEASE_SIGN_KEY</code> 脚本也会拒绝）。<code>verify-release</code> 对它会在标准错误输出打 <code>WARNING: UNSIGNED CANDIDATE</code>，退出码不变；<code>--require-signature</code>（需 <code>--pubkey</code>）会把它升级为失败。<strong>托管候选未签名，正式发行须持钥者在受控机器重签</strong>：从干净检出、设 <code>GML_RELEASE_SIGN_KEY</code>、带 <code>--log</code> 构建，公钥带外分发，并用 <code>--pubkey --require-signature --log</code> 校验（第三十五章）。同一候选名在透明日志里只能出现一次，对已记入日志的提交重签需要新提交。</li><li>托管候选是开发候选，不是发行或生产验收；候选自己的验收只在构建它的那台托管机上跑过。</li></ul>
+<h3 id="484-如实边界">48.4 如实边界</h3>
+<p>两个作业都没有在 GitHub 上实际运行过；本章依据工作流文件、脚本和既有文档，不是运行结果。</p>
+<h2 id="四十九-写入序列的故障注入与恢复表指引与摘要">四十九 写入序列的故障注入与恢复表（指引与摘要）</h2>
+<p>依据 AD6 与 <code>docs/operations/audit-integrity.md</code> 第 5b 节（<strong>完整的逐点表在那里</strong>，以那里为准）。面向要处理&quot;归档 / 备份 / 证据日志追加被中途杀掉之后怎么办&quot;的运维。</p>
+<h3 id="491-这是什么">49.1 这是什么</h3>
+<p><code>scripts/lib/fs-fault.mjs</code> 在多步写入序列的相邻两步之间放了命名注入点，测试用来模拟崩溃（<code>GML_TEST_FS_FAULT=&lt;点名&gt;</code>，<code>GML_TEST_FS_FAULT_MODE=throw|abort</code>，<code>abort</code> 即 <code>process.abort()</code>，最接近断电）。测试对每个点 × 两种模式起子进程，断言崩后状态属于文档表中的一种，且下一次正常运行 / <code>--resume</code> 能安全、幂等地接续。</p>
+<ul><li><strong>只能在 <code>GML_RUNTIME_MODE=test</code> 下使用。</strong> 其他模式下只要设了这两个变量，<code>audit-archive</code> 和 <code>db-backup</code> 在做任何写入之前就以 <code>FS_FAULT_FORBIDDEN</code> 退出 2，<code>release-candidate --log</code> 在构建前失败；点名拼错报 <code>FS_FAULT_UNKNOWN</code>。<strong>生产与交付实例不要设置它们</strong>（安装手册 6.6）。</li><li><code>abort</code> 只能模拟&quot;进程死了、页缓存还在&quot;；真正掉电丢失尚未 fsync 的字节，靠各步骤的 fsync 顺序和表里&quot;撕裂尾部&quot;一行的处理保证。</li></ul>
+<h3 id="492-摘要崩了以后看什么做什么">49.2 摘要：崩了以后看什么、做什么</h3>
+<p>下表按&quot;进程被杀&quot;（<code>abort</code>，最接近断电）写；<code>throw</code> 模式（脚本自己的失败清理路径）的差别在每行末尾单列。<strong>逐点的完整表以 <code>audit-integrity.md</code> 5b 为准。</strong></p>
+<div class="table-wrap"><table><thead><tr><th>序列</th><th><code>abort</code> 后的状态</th><th>处理</th><th><code>throw</code> 时</th></tr></thead><tbody><tr><td><code>audit-archive</code>：导出已写 / 已 fsync 但摘要未写（<code>archive.after-export-write</code>、<code>archive.after-export-fsync</code>）</td><td>库不动；只有 JSONL，没有摘要</td><td><code>--resume</code> 报 <code>RESUME_INCOMPLETE</code>，正常重跑报 <code>OUT_EXISTS</code>。人工确认库未变后删掉孤儿 JSONL，按 36 章做新归档</td><td>脚本删除本次创建的导出文件，库不动：直接重跑</td></tr>
+<tr><td><code>audit-archive</code>：导出与摘要都已落盘，删除前后（<code>archive.before-delete</code>、<code>archive.after-delete</code>、<code>archive.after-anchor</code>）</td><td>库不动（未提交的事务整体回滚）；JSONL 与摘要完整</td><td>先 <code>--resume</code> 演练，再 <code>--resume --confirm &lt;口令&gt;</code>；续做不重写导出（36 章）</td><td>事务回滚且新建的导出文件被删除：没有可续做的导出，直接重跑</td></tr>
+<tr><td><code>db-backup</code>：<code>VACUUM INTO</code> 之后、校验之前（<code>backup.after-db-copy</code>）</td><td>没有终名 <code>.db</code>，只有 <code>.partial</code>（有密钥时是 0600 的 <code>.plain.tmp</code> 明文临时文件）</td><td>之前的备份不受影响，下一次正常运行照常完成；残留的 <code>.partial</code> / <code>.plain.tmp</code> 由运维清理，<strong><code>.plain.tmp</code> 须擦除</strong>（7.6）</td><td>无密钥时快照被改名为 <code>.db.failed</code>，有密钥时明文被擦除；本次非零退出</td></tr>
+<tr><td><code>db-backup</code>：备份已验证、清单未写（<code>backup.before-sidecar</code>）</td><td>有已验证的 <code>.db</code>，没有 <code>.audit-manifest.json</code>：可用，缺链清单</td><td>要离机保存清单就重新备份一次；孤儿 <code>.db</code> 确认后可手工删除，否则按 keep 规则被裁剪</td><td>清单失败路径删除这份半成品备份，非零退出</td></tr>
+<tr><td><code>db-backup</code>：备份与清单都在、报告未写（<code>backup.after-sidecar</code>）</td><td>备份 + 清单完整，没有本次报告</td><td>备份可用，下一次正常运行写出新报告</td><td>同左（未捕获异常，进程非零退出）</td></tr>
+<tr><td>证据日志追加（<code>log.after-lock</code>、<code>log.after-write-before-fsync</code>、<code>log.after-fsync-before-unlock</code>）</td><td>残留锁文件 <code>&lt;log&gt;.lock</code>。三个点的日志状态不同：<code>after-lock</code> 时日志<strong>没变</strong>，它可以是有效的但<strong>不含</strong>这次候选；<code>after-write-before-fsync</code> 时新行通常已在，真正掉电可能只剩半行；<code>after-fsync-before-unlock</code> 时该行已入账</td><td>先确认没有进程在追加，再手工删锁；<strong>看日志里有没有这个候选</strong>：没有就重跑；已有则该候选已入账，重跑会报已存在，换新提交；半行 ⇒ 日志被拒绝、不自动修复，<code>git checkout</code> 已提交的日志再重跑</td><td>锁被释放；<code>after-lock</code> 与 <code>after-write-before-fsync</code> 时日志与追加前逐字节相同（后者被截回原长度）；<code>after-fsync-before-unlock</code> 时该行已入账</td></tr></tbody></table></div>
+<ul><li>任何状态下库里都不会出现&quot;段已删但锚点缺失&quot;：删除、锚点、审计在同一个事务里，提交前崩溃一律回滚。</li><li>同一条规则贯穿三类序列：<strong>先保留现场（残留文件、日志）再动手；不要手工删导出文件或改库</strong>。</li><li>相关命令与退出码仍以各脚本为准（36 章、7.1、第二十八章）。</li></ul>
+<h2 id="五十-指标页的全局口径scoped-false-是什么意思">五十 指标页的&quot;全局口径&quot;：<code>scoped: false</code> 是什么意思</h2>
+<p>依据 ADR-0053（AD1）。入口 <code>/system/metrics</code>（权限点 <code>system:metrics:view</code>）与 <code>GET /api/metrics</code>、<code>/api/metrics/values</code>、<code>/api/metrics/catalog</code>。回答：&quot;为什么仓管 / 门店账号在指标页看到的有些数字旁边写着'全局口径'？&quot;</p>
+<h3 id="501-含义">50.1 含义</h3>
+<ul><li>受限账号（数据范围不是全部）调用指标接口时，<strong>有范围语义的指标</strong>按账号范围算，只是本范围内的数：库存类（<code>stock_qty</code>、<code>available_qty</code>、<code>stock_amount</code>、<code>turnover_days</code>、<code>below_safe</code>、<code>expiring_qty</code>）和采购订单类（<code>purchase_amount</code>、<code>purchase_amount_effective</code>、<code>closed_order_ratio</code>）。空范围、<code>none</code>、<code>dealer</code> 范围读 0，不回落到全局。</li><li><strong>没有范围语义的指标</strong>（销售、线上 OMS、<code>payable_open</code>、订货中心、POS、经销商信用、审批等）：值<strong>仍是全局数字</strong>，响应里带 <code>scoped: false</code>（<code>/values</code> 另带并列的 <code>scoped</code> 映射，<code>values</code> 本身不变），页面在数值旁（列表与详情）标橙色小字&quot;全局口径&quot;，悬停提示&quot;该指标尚未按组织范围过滤，受限账号看到的是全局数字&quot;。</li><li>全局数据范围的调用者所有指标都是 <code>scoped: true</code>，不会看到这个标签。</li></ul>
+<h3 id="502-对运维和客户的含义">50.2 对运维和客户的含义</h3>
+<ul><li>看到&quot;全局口径&quot;，说明这个数<strong>不随账号的数据范围收窄</strong>，不要把它当成&quot;本店 / 本组织&quot;的数字去对账或汇报。</li><li>这是<strong>标注，不是收口</strong>：这些全局数字对受限角色仍然返回，并不是 fail-closed。指标接口只要求 <code>system:metrics:view</code>，没有逐指标要求对应的业务查看权限；&quot;对受限角色直接隐藏这些指标&quot;的方案属于第十四批计划，当前代码<strong>没有</strong>（见第五十一章）。</li><li>同批的相关收紧：MCP <code>report.dashboard_kpi</code> 按所有者此刻的权限逐子项取舍，缺权限的子项被<strong>省略</strong>（不是 403）；<code>POST /api/demand/dealer/summary</code> 在原有角色限制之外要求采购订单读权限，缺权限的总部角色由 200 变 403。</li><li>排查&quot;数字对不上&quot;：先看数值旁有没有&quot;全局口径&quot;；再对照该指标是否在 50.1 的范围感知清单里；再让账号本人看&quot;我的数据范围&quot;（第二十六章）。</li></ul>
+<h3 id="503-如实边界">50.3 如实边界</h3>
+<p>受限范围下指标子查询多一层仓库子查询，大库上的成本没有评估；<code>/api/metrics/stale</code>、<code>/defs</code> 只含定义，未改。</p>
+<h2 id="五十一-第十四批计划项本手册不描述">五十一 第十四批计划项：本手册不描述</h2>
+<p>下列内容在路线图 v10（第十四批）里<strong>计划</strong>，<strong>不在本分支的代码里</strong>，所以手册没有写它们的行为，也不要按其他文档里的计划描述去操作：指标对受限角色的隐藏模式；角色矩阵对自定义角色与账号覆盖的覆盖；离机锚点的意图（intents）扩展；MCP 速率限制的数据库存储模式；标签推送只跑候选作业与候选的 CI 运行回退；依赖审查（dependency review）作业。这些落地后，对应章节需要随代码一起补写。</p>
   </main>
 </div>
 <div class="foot">
