@@ -26,10 +26,12 @@
 import crypto from 'node:crypto'
 import { isSealed, sealSecret, openSecret, maskSecret } from './secret-box.js'
 import { localNow } from './dates.js'
+import { runtimeMode } from '../runtime.js'
 
 export const WINDOW_MS = 5 * 60 * 1000
 export const NONCE_RETAIN_MS = 11 * 60 * 1000
 const MAX_DEPTH = 32
+const RETIRED_PUBLIC_DEMO_CONSTANT = 'GML-DEMO-SECRET' // 仅用于拒绝；迁移 069 会把库内同值清空
 const NONCE_RE = /^[A-Za-z0-9_-]{16,64}$/
 const TS_RE = /^\d{13}$/
 
@@ -95,6 +97,8 @@ export function verifyQimenRequest(db, platform, body, now = Date.now()) {
   } catch {
     return fail(QIMEN_CODES.SECRET_NOT_ISSUED, '平台密钥无法读取，请重新签发')
   }
+  // 兜底（审计）：已退役的公开演示常量即使被写进库里也永不接受
+  if (secret === RETIRED_PUBLIC_DEMO_CONSTANT) return fail(QIMEN_CODES.SECRET_NOT_ISSUED, '平台尚未签发密钥，请联系管理员')
   const expected = signQimen(secret, {
     appKey: platform.app_key,
     method: typeof body.method === 'string' ? body.method : '',
@@ -144,6 +148,31 @@ export function issuePlatformSecret(db, platformId, { rotate = false, env = proc
   return { id: pf.id, app_key: pf.app_key, secret, rotated: had, rotated_at: rotatedAt, secret_last4: maskSecret(secret).secret_last4 }
 }
 
+/**
+ * 演示/测试模式启动时的"按安装"密钥（AB8）：演示平台 = id 最小且有 app_key 的 active 平台；它还没有密钥时，
+ * 生成一个随机 `qsk_` 密钥封存进 `platforms`。明文**不返回、不记录、不落仓库** —— 这个密钥只是让演示平台"不是空的也不是公开常量"，
+ * 要联调的人用 `scripts/qimen-issue-key.mjs --rotate` 拿一个自己看得见的。已有密钥（含管理员签发的）一律不动，重启不换。
+ * 生产模式一律不生成（缺密钥的平台继续 401 `1005`，且网关本身由能力闸门 503 关闭）。
+ * @returns {{created:false, reason:string}|{created:true, platform_id:number, app_key_prefix:string, secret_last4:string}}
+ */
+export function ensureDemoQimenSecret(db, { env = process.env } = {}) {
+  if (runtimeMode(env) === 'production') return { created: false, reason: 'production' }
+  const pf = db
+    .prepare("SELECT id, app_key, app_secret_sealed FROM platforms WHERE app_key IS NOT NULL AND app_key<>'' AND status='active' ORDER BY id LIMIT 1")
+    .get()
+  if (!pf) return { created: false, reason: 'no-platform' }
+  if (pf.app_secret_sealed) return { created: false, reason: 'exists' }
+  const secret = `qsk_${crypto.randomBytes(32).toString('hex')}`
+  const last4 = maskSecret(secret).secret_last4
+  db.prepare('UPDATE platforms SET app_secret_sealed=?, app_secret_rotated_at=?, app_secret_masked=? WHERE id=?')
+    .run(sealSecret(secret, env), localNow(), `****${last4}`, pf.id)
+  return { created: true, platform_id: pf.id, app_key_prefix: String(pf.app_key).slice(0, 4), secret_last4: last4 }
+}
+
+/** app_key 对外只给前 4 位（AB8）：足够管理员对号入座，不足以冒充调用方。 */
+export const APP_KEY_PREFIX_LEN = 4
+export const appKeyPrefix = (appKey) => String(appKey ?? '').slice(0, APP_KEY_PREFIX_LEN)
+
 /** 平台行的对外形态：去掉封存值，换成 has_secret / rotated_at。 */
 export function publicPlatform(row) {
   if (!row) return row
@@ -160,4 +189,4 @@ export const PLATFORM_PUBLIC_SELECT =
    platforms.app_secret_rotated_at AS secret_rotated_at`
 export const PLATFORM_PROTECTED_FIELDS = ['app_secret_sealed', 'app_secret_rotated_at', 'app_secret_masked']
 
-export default { WINDOW_MS, NONCE_RETAIN_MS, QIMEN_CODES, canonicalJson, canonicalString, signQimen, verifyQimenRequest, issuePlatformSecret, publicPlatform }
+export default { WINDOW_MS, NONCE_RETAIN_MS, QIMEN_CODES, canonicalJson, canonicalString, signQimen, verifyQimenRequest, issuePlatformSecret, ensureDemoQimenSecret, appKeyPrefix, publicPlatform }

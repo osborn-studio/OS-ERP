@@ -122,6 +122,12 @@ export class SettingError extends Error {
   }
 }
 
+/**
+ * 迁移写入的"事实记录"键：不是可配项（没有标签/默认值/值域，不进界面、不进 ensureSettings），
+ * 配置审计（lib/settings.js 的 auditSettingTrail）整体忽略它。目前只有 069（AB8）：库里曾有公开奇门演示常量，已清除。值不含任何密钥。
+ */
+export const INTERNAL_MARKER_KEYS = ['qimen_demo_secret_cleared']
+
 // ---------------------------------------------------------------------------
 // 一、配置定义表 —— **全项目唯一的「配置定义」**
 // ---------------------------------------------------------------------------
@@ -768,7 +774,8 @@ export function auditSettingTrail(db, { log = null, settings = null } = {}) {
 
   const known = Object.keys(SETTING_ACTIONS)
   const allLog = log || db.prepare('SELECT * FROM setting_audit_log ORDER BY id').all()
-  const allSet = settings || db.prepare('SELECT key, value FROM settings ORDER BY key').all()
+  // 迁移写的事实记录键不是配置项：不参与 ③⑥⑦（它没有登记、也没有变更日志）
+  const allSet = (settings || db.prepare('SELECT key, value FROM settings ORDER BY key').all()).filter((r) => !INTERNAL_MARKER_KEYS.includes(r.key))
 
   // ① 动作名必须是代码认识的
   const unknownActions = [...new Set(allLog.map((r) => r.action))].filter((a) => !known.includes(a))

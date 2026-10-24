@@ -39,7 +39,7 @@
 | 0030 | [ADR-0030：日志保留清理与个人信息处理](ADR-0030-retention-and-privacy.md) | 第七批 | （ADR 未写出状态） | `lib/privacy-common.mjs`<br>`privacy-erase.mjs`<br>`privacy-export.mjs`<br>`retention.mjs`<br>`test-setting-audit.mjs` | — |
 | 0031 | [ADR-0031：采购链动作路由与 MCP 采购工具的单据范围](ADR-0031-purchase-action-scope.md) | 第八批（进行中） | 开发实现，尚非产品上线验收 | `check-route-authz.mjs`<br>`test-mcp-purchase.mjs` | — |
 | 0032 | [ADR-0032：单据流读接口按账号数据范围过滤](ADR-0032-docflow-scope.md) | 第八批（进行中） | （ADR 未写出状态） | `check-route-authz.mjs` | — |
-| 0033 | [ADR-0033：奇门网关平台凭据、签名契约与重新开放验收清单](ADR-0033-qimen-credentials.md) | 第八批（进行中） | 开发实现，尚非产品上线验收 | `check-route-authz.mjs` | — |
+| 0033 | [ADR-0033：奇门网关平台凭据、签名契约与重新开放验收清单](ADR-0033-qimen-credentials.md) | 第八批（进行中） | 开发实现，尚非产品上线验收 | `check-route-authz.mjs`<br>`qimen-issue-key.mjs` | — |
 | 0034 | [ADR-0034：报价、MCP 销售工具与 OMS 入口按组织范围收口](ADR-0034-quote-sales-mcp-scope.md) | 第八批（进行中） | 开发实现，尚非产品上线验收 | `check-route-authz.mjs` | — |
 | 0035 | [ADR-0035：写路径并发与 SQLITE_BUSY 治理](ADR-0035-write-contention.md) | 第八批（进行中） | （ADR 未写出状态） | `lib/bench-contender.mjs` | — |
 | 0036 | [ADR-0036 安全响应头与后台会话传输（Y11）](ADR-0036-security-headers-and-session-transport.md) | 第八批（进行中） | 已采纳 | — | — |

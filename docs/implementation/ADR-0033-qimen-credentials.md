@@ -22,6 +22,16 @@
 
 只读审计（`git diff integration...HEAD`）无高危；三项中危已修：（1）网关日志只剥顶层 `sign` 不够 —— `oms_sync_logs.payload` 现在对整个请求做递归脱敏（`lib/redact.js`，凭据类键名整体遮盖）；（2）签发/轮换改用 `auditStrict` 并与凭据变更同事务，审计写不进去则密钥不变；（3）迁移 060 的 `up()` 只在权限点**首次出现**时给 admin 授权，结构修复重跑不会恢复被收回的授权（测试删除 nonce 索引后重跑验证）。审计确认未发现签名伪造或重放绕过路径。
 
+## AB8 补充：按安装生成密钥，库内不留公开常量（迁移 069）
+
+日期：2026-10-23。承接第 1 条与"已知限制"：060 删除了代码里的演示常量，但库里仍可能残留（旧库里被人写入明文，或把常量封存后写入）；演示环境也一直是"全部平台无密钥"，联调必须先手工签发。
+
+1. **迁移 `069_qimen_clear_demo_secret`**：`platforms.app_secret_sealed` 明文等于常量、或封存值用当前密钥打开后等于常量的行，密钥/签发时间/掩码置空并清掉该平台的 nonce；至少清掉一行时在 `settings` 记 `qimen_demo_secret_cleared`（JSON：累计次数、时间，不含密钥），一行都没有就不写。封存值打不开（密钥已换）按"不是常量"处理，不会误清真实密钥。`verify()` 与 `up()` 共用同一判据：仍有持常量的行即失败并自愈。该键在 `lib/settings.js` 里列入 `INTERNAL_MARKER_KEYS`，配置审计（未登记键 / 重放对账）忽略它。
+2. **签发唯一来源**：管理接口（第 2 条）与新增的 `scripts/qimen-issue-key.mjs`（共用 `issuePlatformSecret`，同事务严格审计，明文只在标准输出出现一次，已有密钥不带 `--rotate` 拒绝）。
+3. **按安装随机密钥（仅演示/测试）**：`lib/qimen-auth.js` 的 `ensureDemoQimenSecret`，由 `db/boot.js` 在灌数之后调用；演示平台 = id 最小的有 `app_key` 的 active 平台，没有密钥才生成 `qsk_`+32 随机字节，封存入库。明文不返回、不进日志（日志只有 AppKey 前 4 位与密钥末 4 位和签发命令提示）、不进仓库；已有密钥一律不动。`runtimeMode()==='production'` 时函数直接拒绝，生产启动路径（`production-boot.js`）也不调用它：无密钥的平台保持 401 `1005`，网关仍受能力闸门 503。
+4. **`/capabilities` 的 `app_key` 只给前 4 位**（`app_key_masked: true`）。完整值在平台档案页按权限查看；调试页据此改了提示。
+5. **测试**：`tests/qimen-auth.test.mjs` 新增迁移 069（明文/封存/真实密钥/干净库/幂等/verify/settings 行）、启动生成（只一个平台、封存、日志无明文）、`ensureDemoQimenSecret` 的幂等与生产拒绝、命令行签发/轮换/拒绝重复；既有用例改为跳过 id 最小的演示平台。
+
 ## 契约变化
 
 - `POST /api/qimen`：必填字段增加 `timestamp`、`nonce`；`sign` 算法由 MD5 改为 HMAC-SHA256；新增 401 协议码 `1005`（未签发）、`1006`（时间戳）、`1007`（nonce）、`1008`（重放）。

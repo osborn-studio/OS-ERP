@@ -1129,14 +1129,17 @@ Prometheus 文本指标渲染 + 抓取令牌校验（ADR-0045）
 
 | 导出 | 类型 | 路由 | MCP 工具 | 被模块调用 |
 |---|---|---|---|---|
+| `APP_KEY_PREFIX_LEN` | const | — | — | — |
 | `NONCE_RETAIN_MS` | const | — | — | — |
 | `PLATFORM_PROTECTED_FIELDS` | const | — | — | — |
 | `PLATFORM_PUBLIC_SELECT` | const | — | — | — |
 | `QIMEN_CODES` | const | — | — | — |
 | `QimenCredentialError` | class | — | — | — |
 | `WINDOW_MS` | const | — | — | — |
+| `appKeyPrefix` | fn | GET /api/qimen/capabilities | — | — |
 | `canonicalJson` | fn | — | — | — |
 | `canonicalString` | fn | — | — | — |
+| `ensureDemoQimenSecret` | fn | — | — | — |
 | `issuePlatformSecret` | fn | POST /api/qimen/platforms/:id/secret | — | — |
 | `publicPlatform` | fn | GET /api/oms/platforms | — | — |
 | `signQimen` | fn | — | — | — |
@@ -1381,6 +1384,7 @@ Prometheus 文本指标渲染 + 抓取令牌校验（ADR-0045）
 
 | 导出 | 类型 | 路由 | MCP 工具 | 被模块调用 |
 |---|---|---|---|---|
+| `INTERNAL_MARKER_KEYS` | const | — | — | — |
 | `SETTING_ACTIONS` | const | — | — | — |
 | `SETTING_GROUPS` | const | — | — | — |
 | `SETTING_KEYS` | const | — | — | — |
