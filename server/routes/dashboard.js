@@ -178,7 +178,7 @@ r.get(
   requireAuth,
   wrap((req, res) => {
     const days = Number(req.query.days || 90)
-    return ok(res, cachedRead('dashboard.channel', `channel:${days}`, (db, prof) => computeChannel(db, prof, days)))
+    return okCached(res, cachedRead('dashboard.channel', `channel:${days}`, (db, prof) => computeChannel(db, prof, days)))
   })
 )
 
