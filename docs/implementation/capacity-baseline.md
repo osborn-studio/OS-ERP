@@ -400,3 +400,39 @@ node scripts/upgrade-rehearsal.mjs --from=62 --backup-dir=… --target-dir=… -
 - `dmserver` 上用生产规模副本复跑；large 规模未跑。
 - `/dashboard/trend`、`/top`、`/todos`、`/inventory-dist` 等其它看板接口未剖析、未缓存。
 - 缓存只在单进程内；多进程部署时每个进程各有一份，靠 `data_version` 感知其它进程的提交（已测两个连接，未做多进程实测）。
+
+## AB5 真正旧结构库上的 059–066 逐迁移耗时（**Mac mini / 合成 medium / 非目标主机 / 单次墙钟 / 整机高负载**）
+
+脚本：`scripts/schema-snapshot.mjs`（ADR-0048）产出"版本 58 备份集"，再 `upgrade-rehearsal.mjs --from=58 --backup-dir=<集>/data/backups`。与 AA11 的区别：这里**没有截断**（报告 `baseline_registry.truncation='skipped'`，`registry_truncated=[]`，`indexes_dropped=[]`），库的表、列、索引、字典行本来就是 58 版的，所以 059–066 的 `structure_preexisting` **全部为 false**（AA11 里 062 是 true，耗时不能代表升级成本）。
+
+### 数据与口径
+
+快照：`schema-snapshot.mjs --upto=58 --synth=medium`（`synth-data.mjs --skus 20000 --docs 30000 --txns 150000`，种子 20261023）在最新结构里生成，再拷进旧结构库：1,272,489 行 / 192 张表；`permissions` / `role_permissions` 因迁移 >58 会改动而**不拷**；拷后 `foreign_key_check`=0、verify-seed 风格不变量 24/24 绿；商品 6,667 / 采购单 12,000 / 库存流水 150,000 / 库存行 84,736 / `doc_events` 170,747；**`audit_logs` 只有 1 行**（合成数据不写审计流水）。cosmetic 备份 221,999,104 字节（≈212 MiB），food / apparel 各 2.7 MB（只有结构与指纹，无业务数据）。快照耗时：建三库 1.6 s、合成生成 608 s、拷入+不变量校验 308 s、备份 4.5 s（共 923 s，**整机负载平均值 26–47**，其他任务并行，所以这些是上界量级）。
+
+同一份快照连跑两次演练（运行 1、运行 2），机器：Mac mini（Apple M4，10 核，16 GB，Node v22.22.1）。下面是 **cosmetic 库**（food / apparel 为空库，各步 29–65 ms，是纯运行器开销）：
+
+| 迁移 | 性质 | 运行 1：耗时 / 写锁（busy_span–blocked）(ms) | 运行 2：耗时 / 写锁 (ms) |
+|---|---|---|---|
+| 059_indexes | 21 个索引（真建）| 389.1 / 321.6–325.2 | 617.8 / 531.5–534.4 |
+| 060_qimen_secrets | 2 列 + 1 表 + 1 索引 + 权限行 | 58.9 / 22.9–25.7 | 46.2 / 3.0–6.3 |
+| 061_hot_query_indexes | 3 个索引（真建）| 103.7 / 48.0–51.3 | 138.8 / 78.7–84.0 |
+| 062_audit_view_permission | 权限字典行 | 37.1 / 0–0 | 47.5 / 0–0 |
+| 063_approval_template_perm | 权限字典行 | 37.2 / 0–0 | 42.8 / 0–0 |
+| 065_audit_log_indexes | 3 个索引，但 `audit_logs` 仅 1 行 | 34.5 / 0–0 | 57.7 / 0–0 |
+| 066_pos_settle_permission | 权限字典行 | 41.3 / 0–0 | 55.1 / 0–0 |
+| 合计（7 步）| | 701.8 | 1005.9 |
+
+两次都通过全部核对且 `warnings` 为空：`checksums_verified`（62/62）、`production_rerun_is_noop`、`registry_covers_all_migrations`（62 行）、`integrity_ok`、`foreign_keys_not_worse`（0→0）、`probes_retained`（users 1 / products 6667 / purchase_orders 12000 前后相同）、`seed_invariants_not_regressed`（24/24 → 24/24）。库文件 221,999,104 → 236,957,696 字节（+15 MB，新建索引的页）。演练总耗时 340 s / 475 s，其中 verify-seed 风格不变量占绝大部分（升级前 197 / 284 s、升级后 131 / 175 s；高负载下），迁移本身 1.3 / 2.0 s。
+
+### 读法与诚实边界
+
+- 与 AA11（截断路径，059 约 0.34–1.02 s）量级一致：059 是主要成本，在 15 万行流水量级约 0.4–0.6 s、持写锁约 0.3–0.55 s；060 / 061 是几十到一百多毫秒；其余是字典行 upsert。063 / 066 以前没有测过，这里是第一次。
+- **065 的数字不代表审计表大时的成本**：合成库的 `audit_logs` 只有 1 行，三棵索引几乎是空建。AA6 在 100 万行审计表上单独测过 065 的 `up` 约 5.1 s（见上文 AA6 一节）；本次没有把合成审计行灌进旧结构库。
+- 单次墙钟，**整机平均负载 26–47**；059 在两次间相差 1.6 倍，只能看量级。没有在 `dmserver` 上测，没有真实规模/真实分布的数据，没有测读者，没有测并发业务写入与迁移同时进行时的 `SQLITE_BUSY`。
+- 结构是**今天的** `schema.sql` + 迁移 ≤ 58，业务数据由今天的领域函数写入后拷入（只含两边都有的列），不是"58 版本代码当年写出的数据"。
+- `nightly-capacity.yml` 的 `snapshot_upto` 输入只验证了 YAML 语法与静态策略测试，**尚未在 GitHub 上执行**。
+
+```sh
+node scripts/schema-snapshot.mjs --upto=58 --synth=medium --out=/abs/new-dir
+node scripts/upgrade-rehearsal.mjs --from=58 --backup-dir=/abs/new-dir/data/backups --target-dir=/abs/empty/rehearsal
+```

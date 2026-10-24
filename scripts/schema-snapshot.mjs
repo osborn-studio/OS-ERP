@@ -101,7 +101,7 @@ function checkOut(outArg) {
 
 /** 暂存迁移目录：_helpers 与编号 ≤ upto（或全部）的迁移文件，字节级复制并逐个核对。 */
 function makeStage(dir, files) {
-  fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
+  fs.mkdirSync(dir, { mode: 0o700 })
   const copy = (f) => {
     const src = path.join(MIGRATIONS_DIR, f)
     const dest = path.join(dir, f)
@@ -190,8 +190,11 @@ const t0 = performance.now()
 const phases = {}
 const phase = async (name, fn) => { const t = performance.now(); try { return await fn() } finally { phases[name] = Math.round(performance.now() - t) } }
 let out = null
-let outExisted = true
+let madeOut = false
 let exitCode = 1
+/** 本次调用独占创建（mkdir 无 recursive，已存在即失败）的路径；失败清理只删这些，绝不碰别人放进 --out 的东西。 */
+const owned = []
+const claim = (dir) => { fs.mkdirSync(dir, { mode: 0o700 }); owned.push(dir) }
 
 try {
   const args = parseArgs(process.argv.slice(2))
@@ -201,12 +204,12 @@ try {
   const { n: upto, files } = resolveUpto(args.upto)
   const chk = checkOut(args.out)
   out = chk.out
-  outExisted = chk.existed
-  fs.mkdirSync(out, { recursive: true, mode: 0o700 })
+  if (!chk.existed) { fs.mkdirSync(path.dirname(out), { recursive: true, mode: 0o700 }); fs.mkdirSync(out, { mode: 0o700 }); madeOut = true }
   const uptoFiles = files.filter((f) => Number(f.slice(0, 3)) <= upto)
   const dataDir = path.join(out, 'data')
   const stage = path.join(out, 'stage')
-  fs.mkdirSync(dataDir, { mode: 0o700 })
+  claim(dataDir)
+  claim(stage)
   makeStage(path.join(stage, 'upto'), uptoFiles)
   makeStage(path.join(stage, 'all'), files)
 
@@ -221,7 +224,8 @@ try {
         const warnings = []
         runMigrations(db, { migrationsDir: path.join(stage, 'upto'), mode: 'production', warn: (m) => warnings.push(m) })
         if (warnings.length) throw new Error(`迁移运行器告警：${warnings[0]}`)
-        ensureSettings(db)
+        // ensureSettings 读写 setting_audit_log（迁移 038 创建）：更早的版本没有这张表，settings 缺省值由读取方的缺省兜底
+        if (db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='setting_audit_log'").get()) ensureSettings(db)
         addFingerprint(db)
         const reg = db.prepare('SELECT id, checksum, checksum_origin FROM schema_migrations ORDER BY id').all()
         const want = uptoFiles.map((f) => f.replace(/\.cjs$/, ''))
@@ -238,6 +242,7 @@ try {
   let synthLoad = null
   if (PROFILES[synthName] !== null) {
     const srcDir = path.join(out, 'synth-src')
+    claim(srcDir)
     await phase('synth_generate_ms', () => {
       const r = spawnSync(process.execPath, ['scripts/synth-data.mjs', '--no-verify', '--quiet', ...PROFILES[synthName]], { cwd: ROOT, env: childEnv(srcDir), encoding: 'utf8', timeout: 3600000, maxBuffer: 64 * 1024 * 1024 })
       if (r.status !== 0) throw new Error(`合成库生成失败（exit ${r.status}）：${tail(r)}`)
@@ -265,6 +270,7 @@ try {
       }
     })
     fs.rmSync(srcDir, { recursive: true, force: true })
+    owned.splice(owned.indexOf(srcDir), 1)
   }
 
   // ---- 备份目录必须解析到 --out 之内，再备份 ----
@@ -284,6 +290,7 @@ try {
   // ---- 擦除在用库，只留备份集 + 清单 ----
   for (const code of codes) for (const suffix of ['', '-wal', '-shm']) fs.rmSync(`${built[code].file}${suffix}`, { force: true })
   fs.rmSync(stage, { recursive: true, force: true })
+  owned.splice(owned.indexOf(stage), 1)
   const manifest = {
     script: 'scripts/schema-snapshot.mjs',
     schema_version: 1,
@@ -304,7 +311,7 @@ try {
     timing: { ...phases, total_ms: Math.round(performance.now() - t0) },
     scope_notice: '合成/空库。结构 = 今天的 schema.sql + 迁移 ≤ upto；业务数据由今天的领域函数写入后拷入。不是客户数据，不是目标主机（dmserver）结果。'
   }
-  fs.writeFileSync(path.join(out, 'snapshot-manifest.json'), JSON.stringify(manifest, null, 2) + '\n', { mode: 0o600 })
+  fs.writeFileSync(path.join(out, 'snapshot-manifest.json'), JSON.stringify(manifest, null, 2) + '\n', { mode: 0o600, flag: 'wx' })
   console.log(`  快照：版本 ${upto}（版本表 ${uptoFiles.length} 行）× ${codes.length} 库，合成数据 ${synthName}${synthLoad ? `（拷入 ${synthLoad.rows_copied} 行 / ${synthLoad.tables_copied} 张表，跳过迁移所有的表 ${synthLoad.owned_tables_skipped.join('、') || '无'}）` : ''}`)
   console.log(`  备份集：${backupDir}（stamp ${set.stamp}）`)
   console.log(`  耗时：${Object.entries(phases).map(([k, v]) => `${k.replace(/_ms$/, '')} ${round1(v / 1000)}s`).join(' / ')}`)
@@ -314,12 +321,8 @@ try {
   exitCode = e.exitCode ?? 1
   console.error(exitCode === 2 ? e.message : `schema-snapshot: ${e.message}`)
   if (exitCode !== 2 && !e.exitCode) console.error(e.stack)
-  // 本次在 --out 里创建的全部内容都是新建的（判据保证它开始时为空）：失败即清空，不留半成品
-  if (out) {
-    try {
-      if (outExisted) for (const f of fs.readdirSync(out)) fs.rmSync(path.join(out, f), { recursive: true, force: true })
-      else fs.rmSync(out, { recursive: true, force: true })
-    } catch { /* best effort */ }
-  }
+  // 只清理本次独占创建的路径（claim）；--out 本身只有在本次新建且清理后仍为空时才删除。别人放进去的文件一个都不动。
+  for (const p of owned) { try { fs.rmSync(p, { recursive: true, force: true }) } catch { /* best effort */ } }
+  if (out && madeOut) { try { fs.rmdirSync(out) } catch { /* 非空（别人放了东西）就留着 */ } }
 }
 process.exit(exitCode)

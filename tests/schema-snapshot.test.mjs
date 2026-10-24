@@ -94,6 +94,16 @@ test('--upto 58 builds the three industry DBs from schema.sql + migrations <= 58
   assert.equal(statSync(path.join(r.out, 'snapshot-manifest.json')).mode & 0o077, 0)
 })
 
+test('very old baselines work too (no setting_audit_log before 038): --upto=1 and --upto=37', { timeout: 600000 }, (t) => {
+  for (const n of [1, 37]) {
+    const r = snapshot(t, [`--upto=${n}`, '@out'])
+    assert.equal(r.status, 0, `${n}: ${r.stdout}${r.stderr}`)
+    assert.equal(manifestOf(r.out).registry_max, n)
+    const db = openBackup(r.out, 'food')
+    try { assert.deepEqual(db.prepare('SELECT id FROM schema_migrations ORDER BY id').all().map((x) => x.id), ids(n)) } finally { db.close() }
+  }
+})
+
 test('--synth tiny loads business data into the OLD structure and keeps the seed invariants green', { timeout: 600000 }, async (t) => {
   const r = snapshot(t, ['--upto=58', '--synth=tiny', '@out'])
   assert.equal(r.status, 0, r.stdout + r.stderr)
