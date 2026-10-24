@@ -8,6 +8,7 @@ import bcrypt from 'bcryptjs'
 import { requireDataDirectory } from '../runtime.js'
 import { assertDatabaseMode } from '../db/runtime-policy.js'
 import { validateNewPassword } from './password-policy.js'
+import { insertAuditRow } from './audit-trail.js'
 
 const fail = (code, message) => { throw Object.assign(new Error(message), { code }) }
 const hasControls = value => /[\u0000-\u001f\u007f]/u.test(value)
@@ -64,8 +65,8 @@ export function bootstrapAdmin(db, input) {
     db.prepare("INSERT INTO user_orgs (user_id,org_id,relation) VALUES (?,?,'manager')").run(userId, orgId)
     const addFunction = db.prepare('INSERT INTO org_functions (org_id,func_code,enabled) VALUES (?,?,1)')
     for (const code of ['purchase', 'sales', 'inventory', 'finance']) addFunction.run(orgId, code)
-    db.prepare(`INSERT INTO audit_logs (user_id,user_name,action,module,entity,entity_id,detail)
-      VALUES (?,?,'BOOTSTRAP_ADMIN','system','user',?,?)`).run(userId, name, String(userId), JSON.stringify({ companyCode, source: 'local-cli' }))
+    // 唯一 INSERT 点：同一事务内入哈希链（ADR-0049）
+    insertAuditRow(db, { userId, userName: name, action: 'BOOTSTRAP_ADMIN', module: 'system', entity: 'user', entityId: userId, detail: { companyCode, source: 'local-cli' } })
     db.prepare('INSERT INTO os_egp_admin_bootstrap (id,user_id,org_id) VALUES (1,?,?)').run(userId, orgId)
     return { userId, username, orgId, companyCode }
   }).immediate()
