@@ -49,13 +49,19 @@ import {
 } from '../lib/docflow.js'
 import { listDocNoRules, previewDocNo, nextDocNoAuto, nextDocNoByRule } from '../lib/docno.js'
 import { audit } from '../middleware/audit.js'
+import { readSetting } from '../lib/settings.js'
 // 领域库在求值期把各自的范围谓词登记到 doc-scope-registry；本路由依赖它们，显式 import 保证一定已登记（ADR-0032）。
 import '../lib/purchase.js'
 import '../lib/sales-order.js'
 import '../lib/order-center.js'
 
 /** 读接口的范围上下文：req.orgScope 由 attachOrgScope 挂上；缺失 ⇒ 失败关闭（按无范围算）。 */
-const scopeCtx = (req) => ({ db: getDb(), user: req.user, orgScope: req.orgScope || { scope: 'none', orgIds: [] } })
+const scopeCtx = (req) => {
+  const db = getDb()
+  // ADR-0051：默认严格门店绑定（未绑门店的非总部账号读不到 RC / YQ / SH），总部角色豁免；设置键 docflow_strict_store_binding=0 回退
+  const strict = readSetting(db, 'docflow_strict_store_binding') === true
+  return { db, user: req.user, orgScope: req.orgScope || { scope: 'none', orgIds: [] }, strictBinding: strict, hqExempt: strict }
+}
 
 const r = Router()
 

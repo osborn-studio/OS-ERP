@@ -37,6 +37,7 @@ import { getDb } from '../db/index.js'
 import { localNow } from './dates.js'
 import { docScopeBuilder } from './doc-scope-registry.js'
 import { boundStoreId, storeBindingExempt } from './store-binding.js'
+import { isHqRole } from './hq-roles.js'
 
 export class DocFlowError extends Error {
   constructor(message, { code = 'DOC_FLOW_ERROR', httpStatus = 400, detail = null } = {}) {
@@ -190,7 +191,8 @@ export function docScopeOf(ctx, docType) {
     const sid = boundStoreId(ctx.user)
     if (sid == null) {
       // 未绑门店：HTTP 路由按角色名放行总部角色（保持）；严格模式（MCP）一律不可见
-      if (ctx.strictBinding) return null
+      // ADR-0051：HTTP docflow 的严格模式带 hqExempt——总部角色（hq-roles.js）仍按数据范围放行；MCP 不带，维持"比 HTTP 严"
+      if (ctx.strictBinding && !(ctx.hqExempt && isHqRole(ctx.user.role))) return null
     } else if (ctx.orgScope && ctx.orgScope.scope === 'all') {
       return { sql: `t.${spec.cols[0]} = ?`, params: [sid] }
     }

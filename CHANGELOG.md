@@ -8,6 +8,10 @@
 
 <!-- generated -->
 
+## 第十二批（进行中）：见 roadmap-v8
+
+- [ADR-0051 总部角色名单单点与 docflow 严格门店绑定（AC2）](docs/implementation/ADR-0051-hq-roles-docflow-binding.md) — 一张表，三种派生，全部冻结
+
 ## 第十一批（进行中）：见 roadmap-v7
 
 - [ADR-0046：主数据下拉仓库项、采购订单读与 QC 聚合按仓库组织范围收口](docs/implementation/ADR-0046-master-options-qc-scope.md) — 判据唯一化：全部复用既有谓词，不新写 SQL 口径——仓库按 `stockScopeSql(orgScope, '', 'id')`，采购订单按 `purchaseScopeSql(orgScope,'po').wh` 与详情的 `assertPurchaseDocInScope(db,'PO',…)`，QC 聚合按 `stockScopeSql(orgScope,'')`（`warehouse_id`，与 `listRequests / listInspections / …
