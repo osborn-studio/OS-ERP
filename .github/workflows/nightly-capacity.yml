@@ -1,0 +1,197 @@
+name: Nightly capacity
+
+# Z10: nightly synthetic-database capacity baseline on a GitHub-hosted runner (pre-revenue phase, user decision 2026-10-22).
+# Flow: scripts/synth-pipeline.mjs (generate -> backup -> restore drill -> explain-audit -> bench-api read profile)
+#       -> bench-api write profile on a copy of the pipeline's bench copy -> scripts/capacity-summary.mjs (allowlisted summary).
+# Numbers are TREND INDICATORS ONLY: shared hosted VM, synthetic data, single run. They are not target-host (dmserver)
+# results, not a capacity commitment, and not release or production acceptance.
+# The job fails only when: a pipeline step fails, explain-audit reports violations, or a bench profile has errors > 0
+# (write profile: or its integrity check fails). Latency never fails the job.
+# Only the allowlisted capacity-summary.json is uploaded; raw reports, databases, backups and logs never are.
+# This workflow has not been executed on GitHub yet; the first scheduled or manual run is its first real test.
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+    inputs:
+      scale:
+        description: Synthetic database scale (small = 2k SKU, medium = 20k SKU / 30k docs, large = 20k SKU / 50k docs, large-ci = AB11 100k SKU / 1M txns with a 240 min generation budget)
+        required: false
+        default: medium
+        type: choice
+        options:
+          - small
+          - medium
+          - large
+          - large-ci
+      # AA11: optional, default off. Scheduled runs never set it, so they never run the rehearsal.
+      rehearsal:
+        description: Also run the upgrade rehearsal (replay migrations 059+ on a copy of the synthetic database, timings in the log only)
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+      # AB5: optional string, default empty (= off). Only used together with rehearsal=true.
+      snapshot_upto:
+        description: With rehearsal=true, rehearse a genuinely old-structure database instead of the pipeline database - a migration number N (for example 58) builds a version-N backup set with synthetic data at the chosen scale, then replays N+1 onward
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-capacity
+  cancel-in-progress: false
+
+jobs:
+  capacity:
+    name: Synthetic capacity baseline (hosted, trend only)
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.scale == 'large-ci' && 355 || 60 }}
+    env:
+      CI: 'true'
+      HOST: 127.0.0.1
+      GML_DB: ''
+      SCALE_INPUT: ${{ inputs.scale }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Install locked dependencies and selected native build hooks
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm rebuild better-sqlite3 esbuild --no-audit --no-fund
+      # The scale comes in through an environment variable and is matched against a fixed list; it is never
+      # interpolated into a script. Scheduled runs have no input and use medium.
+      - name: Prepare scale and throwaway admin password
+        run: |
+          set -euo pipefail
+          scale="${SCALE_INPUT:-medium}"
+          case "$scale" in
+            small)  args='--skus 2000 --docs 3000 --txns 15000' ;;
+            medium) args='--skus 20000 --docs 30000 --txns 150000' ;;
+            large)  args='--skus 20000 --docs 50000 --txns 250000' ;;
+            large-ci) args='--profile large-ci --time-budget 240' ;; # AB11: stops early (partial:true, still green) when the budget or disk guard trips
+            *) echo '::error::unknown scale'; exit 1 ;;
+          esac
+          pw="$(node -e "process.stdout.write(require('node:crypto').randomBytes(24).toString('hex'))")"
+          echo "::add-mask::$pw"
+          {
+            echo "CAP_SCALE=$scale"
+            echo "CAP_ARGS=$args"
+            echo "GML_PIPELINE_ADMIN_PASSWORD=$pw"
+            echo "CAP_RUN=$RUNNER_TEMP/capacity-run"
+            echo "CAP_REPORTS=$RUNNER_TEMP/capacity-reports"
+            echo "CAP_SUMMARY=$RUNNER_TEMP/capacity-summary"
+          } >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/capacity-reports" "$RUNNER_TEMP/capacity-summary"
+      # Exit 1 = a pipeline step failed (explain-audit findings do NOT fail this step; the summary step judges them).
+      - name: Synthetic pipeline (generate, backup, restore drill, explain-audit, bench read profile)
+        id: pipeline
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          # stdout and stderr go to a disposable file; only fixed-format timing lines are echoed (no paths, no error text).
+          # shellcheck disable=SC2086
+          node scripts/synth-pipeline.mjs --dir "$CAP_RUN" --keep $CAP_ARGS --iterations 100 --concurrency 4 --out "$CAP_REPORTS/pipeline-report.json" > "$CAP_REPORTS/pipeline.log" 2>&1
+          rc=$?
+          grep -E '^\[pipeline\] [a-z_]+: exit [0-9a-z]+ in [0-9.]+s$' "$CAP_REPORTS/pipeline.log" || true
+          [ "$rc" -eq 0 ] || echo "::error::pipeline exited with code $rc (raw output withheld)"
+          exit "$rc"
+      # AB11 (large-ci only): honest report straight from the raw pipeline report. Prints only numbers and fixed names (no paths, no error text).
+      - name: Large-ci report (partial flag, reached scale, p95 table, explain-audit violations)
+        if: inputs.scale == 'large-ci' && always()
+        continue-on-error: true
+        run: |
+          node -e "const fs=require('fs');let r;try{r=JSON.parse(fs.readFileSync(process.argv[1],'utf8'))}catch{console.log('large-ci: no pipeline report');process.exit(0)}const n=(v)=>(typeof v==='number'&&Number.isFinite(v)?v:'?');const w=(v)=>String(v??'').replace(/[^A-Za-z0-9_.\/-]/g,'?').slice(0,64);const x=r.reached||{};console.log('large-ci partial='+(r.partial===true)+' reason='+w(r.partial_reason)+' skus='+n(x.skus)+' txns='+n(x.txns)+'/'+n(x.txns_target)+' docs='+n(x.docs)+'/'+n(x.docs_target));const ea=r.steps&&r.steps.explain_audit;console.log('large-ci explain_audit violations='+n(ea&&ea.violations));for(const e of ((r.steps&&r.steps.bench_api&&r.steps.bench_api.endpoints)||[]).slice(0,40))console.log('large-ci p95 '+w(e.name)+' p50='+n(e.p50)+' p95='+n(e.p95)+' p99='+n(e.p99)+' errors='+n(e.errors))" "$CAP_REPORTS/pipeline-report.json"
+      # The write profile mutates its database, so it runs on a fresh copy of the pipeline's (already disposable, test-classified) bench copy.
+      - name: Bench write profile (on a copy of the bench database)
+        id: bench_write
+        if: steps.pipeline.outcome == 'success'
+        continue-on-error: true
+        env:
+          GML_RUNTIME_MODE: test
+          GML_BENCH_USER: synthadmin
+        run: |
+          set -uo pipefail
+          cp -R "$CAP_RUN/bench-copy" "$CAP_RUN/write-copy" || exit 1
+          GML_DATA_DIR="$CAP_RUN/write-copy" GML_BENCH_PASSWORD="$GML_PIPELINE_ADMIN_PASSWORD" \
+            node scripts/bench-api.mjs --profile=write --iterations 50 --concurrency 4 --max-error-rate 0 --out "$CAP_REPORTS/bench-write.json" > "$CAP_REPORTS/bench-write.log" 2>&1
+          rc=$?
+          [ "$rc" -eq 0 ] || echo "::error::bench write profile exited with code $rc (raw output withheld)"
+          exit "$rc"
+      # AA11 (optional, default off): replay migrations > 058 one by one on a copy of the pipeline's synthetic database and print
+      # per-migration timings (fixed-format lines only, no paths). It never changes the gate: a failure here is a warning, not a red job.
+      # AB5: with snapshot_upto=N the step first builds a version-N backup set (scripts/schema-snapshot.mjs: schema.sql + migrations <= N,
+      # synthetic data at the chosen scale; large uses medium) and rehearses that instead; the value is validated as 1-3 digits and never interpolated.
+      - name: Upgrade rehearsal (optional, off by default)
+        id: rehearsal
+        if: inputs.rehearsal == 'true' && steps.pipeline.outcome == 'success'
+        continue-on-error: true
+        env:
+          SNAPSHOT_UPTO_INPUT: ${{ inputs.snapshot_upto }}
+        run: |
+          set -uo pipefail
+          snap="${SNAPSHOT_UPTO_INPUT:-}"
+          if [ -z "$snap" ]; then
+            node scripts/upgrade-rehearsal.mjs --from=58 --synth-dir="$CAP_RUN/data" --target-dir="$CAP_RUN/upgrade-rehearsal" > "$CAP_REPORTS/rehearsal.log" 2>&1
+            rc=$?
+          else
+            case "$snap" in
+              [0-9]|[0-9][0-9]|[0-9][0-9][0-9]) ;;
+              *) echo '::error::snapshot_upto must be a migration number'; exit 1 ;;
+            esac
+            case "$CAP_SCALE" in small) profile=small ;; *) profile=medium ;; esac
+            node scripts/schema-snapshot.mjs --upto="$snap" --synth="$profile" --out="$CAP_RUN/snapshot" > "$CAP_REPORTS/snapshot.log" 2>&1
+            rc=$?
+            if [ "$rc" -eq 0 ]; then
+              node scripts/upgrade-rehearsal.mjs --from="$snap" --backup-dir="$CAP_RUN/snapshot/data/backups" --target-dir="$CAP_RUN/upgrade-rehearsal" > "$CAP_REPORTS/rehearsal.log" 2>&1
+              rc=$?
+            else
+              echo "::warning::schema snapshot exited with code $rc (raw output withheld)"
+              : > "$CAP_REPORTS/rehearsal.log"
+            fi
+          fi
+          grep -E '^    [0-9]{3}_[A-Za-z0-9_.-]+ +(ok|failed|unexpected|pending) ' "$CAP_REPORTS/rehearsal.log" || true
+          [ "$rc" -eq 0 ] || echo "::warning::upgrade rehearsal exited with code $rc (raw output withheld)"
+          exit "$rc"
+      - name: Reduce reports to the allowlisted summary (printed to the log)
+        id: summary
+        if: always()
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          node scripts/capacity-summary.mjs --pipeline "$CAP_REPORTS/pipeline-report.json" --write "$CAP_REPORTS/bench-write.json" --out "$CAP_SUMMARY/capacity-summary.json" --scale "$CAP_SCALE"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: os-erp-capacity-summary-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/capacity-summary/capacity-summary.json
+          if-no-files-found: error
+          retention-days: 30
+      - name: Remove databases, backups and raw reports
+        if: always()
+        run: rm -rf "$CAP_RUN" "$CAP_REPORTS"
+      # The gate: red only for a failed pipeline step, explain-audit violations or bench errors (all judged by the summary step).
+      - name: Gate
+        if: always()
+        env:
+          PIPELINE_OUTCOME: ${{ steps.pipeline.outcome }}
+          WRITE_OUTCOME: ${{ steps.bench_write.outcome }}
+          SUMMARY_OUTCOME: ${{ steps.summary.outcome }}
+        run: |
+          echo "pipeline=$PIPELINE_OUTCOME bench_write=$WRITE_OUTCOME summary=$SUMMARY_OUTCOME"
+          if [ "$PIPELINE_OUTCOME" = failure ] || [ "$WRITE_OUTCOME" = failure ] || [ "$SUMMARY_OUTCOME" != success ]; then
+            echo '::error::nightly capacity failed: see the summary step for the failure codes'
+            exit 1
+          fi

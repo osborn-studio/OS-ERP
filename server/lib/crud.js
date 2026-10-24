@@ -26,11 +26,11 @@ export function tableColumns(table) {
   return db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name)
 }
 
-function pickFields(table, body) {
+function pickFields(table, body, protectedFields = []) {
   const cols = tableColumns(table)
   const out = {}
   for (const [k, v] of Object.entries(body || {})) {
-    if (!cols.includes(k) || PROTECTED.has(k)) continue
+    if (!cols.includes(k) || PROTECTED.has(k) || protectedFields.includes(k)) continue
     out[k] = v === '' ? null : v
   }
   return out
@@ -50,7 +50,9 @@ export function crudRouter(opt) {
     selectSql = null,
     fromSql = null,
     extraWhere = '',
-    nameField = 'name'
+    nameField = 'name',
+    // 通用接口永远不可写、不可作过滤条件的列（例如封存的凭据；读取侧另用 selectSql 排除）
+    protectedFields = []
   } = opt
   const r = Router()
   const base = fromSql || table
@@ -73,7 +75,7 @@ export function crudRouter(opt) {
       for (const [k, v] of Object.entries(req.query)) {
         if (['page', 'pageSize', 'keyword', 'all'].includes(k)) continue
         if (v === '' || v == null) continue
-        if (tableColumns(table).includes(k)) {
+        if (tableColumns(table).includes(k) && !protectedFields.includes(k)) {
           conds.push(`${alias}${k} = ?`)
           params.push(v)
         }
@@ -108,7 +110,7 @@ export function crudRouter(opt) {
     requireRole(...writeRoles),
     wrap((req, res) => {
       const db = getDb()
-      const data = pickFields(table, req.body)
+      const data = pickFields(table, req.body, protectedFields)
       if (!Object.keys(data).length) return fail(res, '没有可写入的字段')
       for (const key of searchFields) {
         if (data[key] && key.endsWith('code')) {
@@ -134,7 +136,7 @@ export function crudRouter(opt) {
       const id = Number(req.params.id)
       const exist = db.prepare(`SELECT * FROM ${table} WHERE id=?`).get(id)
       if (!exist) return fail(res, '记录不存在', 404)
-      const data = pickFields(table, req.body)
+      const data = pickFields(table, req.body, protectedFields)
       const keys = Object.keys(data)
       if (!keys.length) return fail(res, '没有可更新的字段')
       db.prepare(`UPDATE ${table} SET ${keys.map((k) => `${k}=?`).join(',')} WHERE id=?`).run(

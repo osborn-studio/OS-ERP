@@ -41,6 +41,7 @@ import { getDb } from '../db/index.js'
 import { ok, fail, wrap, bizFail } from '../lib/http.js'
 import { requireAuth, requirePerm, currentUser } from '../middleware/auth.js'
 import { audit } from '../middleware/audit.js'
+import { withWriteRetry } from '../lib/tx.js'
 // 证据闸 + 二人复核（ADR-0018）：确认收款不再直接落地，先过 `confirmFunds`；复核走 `reviewFunds`。
 // 判据（证据必填 / 阈值 / 自审拒绝）只在 lib/funds-review.js 一处。
 import { confirmFunds, reviewFunds, assertNotPending, reviewOf, FUNDS_REVIEW_PERM, FUNDS_REVIEW_LABEL } from '../lib/funds-review.js'
@@ -348,11 +349,11 @@ r.post('/receipts/:id/confirm', requireAuth, requirePerm('finance.receipt.approv
   const id = Number(req.params.id)
   const actor = actorOf(req)
   const b = req.body || {}
-  const out = confirmFunds(db, {
+  const out = withWriteRetry(db, () => confirmFunds(db, {
     kind: 'receipt', id, actor,
     evidence: { ref: b.evidence_ref, note: b.evidence_note },
     apply: () => confirmReceipt(db, { id, actor, releaseCredit: b.release_credit !== false })
-  })
+  }), { label: 'receipt.confirm' })
   if (out.applied) audit(req, { action: 'RC_CONFIRM', module: 'finance', entity: 'receipts', entityId: id, detail: out.row.doc_no })
   ok(res, { ...(out.result || out.row), review: out.review, allocations: getReceipt(db, id)?.allocations || [] })
 }))
@@ -363,10 +364,10 @@ r.post('/receipts/:id/review', requireAuth, requirePerm(FUNDS_REVIEW_PERM), guar
   const id = Number(req.params.id)
   const actor = actorOf(req)
   const b = req.body || {}
-  const out = reviewFunds(db, {
+  const out = withWriteRetry(db, () => reviewFunds(db, {
     kind: 'receipt', id, actor, decision: b.decision, comment: b.comment ?? null,
     apply: () => confirmReceipt(db, { id, actor, releaseCredit: b.release_credit !== false })
-  })
+  }), { label: 'receipt.review' })
   if (out.applied) audit(req, { action: 'RC_CONFIRM', module: 'finance', entity: 'receipts', entityId: id, detail: out.row.doc_no })
   ok(res, { ...(out.result || out.row), review: out.review, allocations: getReceipt(db, id)?.allocations || [] })
 }))

@@ -122,6 +122,12 @@ export class SettingError extends Error {
   }
 }
 
+/**
+ * 迁移写入的"事实记录"键：不是可配项（没有标签/默认值/值域，不进界面、不进 ensureSettings），
+ * 配置审计（lib/settings.js 的 auditSettingTrail）整体忽略它。目前只有 069（AB8）：库里曾有公开奇门演示常量，已清除。值不含任何密钥。
+ */
+export const INTERNAL_MARKER_KEYS = ['qimen_demo_secret_cleared']
+
 // ---------------------------------------------------------------------------
 // 一、配置定义表 —— **全项目唯一的「配置定义」**
 // ---------------------------------------------------------------------------
@@ -335,6 +341,28 @@ export const SETTING_RULES = {
     group: 'ops', label: '每库保留备份份数', type: 'int', default: '10', is_danger: false, wired: true,
     gt: 0,
     impact: '备份数超出它时按时间清理最旧的（只清本工具命名规则生成的文件）。'
+  },
+  // ---- 数据保留（ADR-0030）：`scripts/retention.mjs` 读取；缩短窗口 = 更早永久删除日志，所以是危险键 ----
+  retention_audit_days: {
+    group: 'ops', label: '审计日志保留天数', type: 'int', default: '365', is_danger: true, wired: true,
+    min: 90, max: 3650,
+    impact: '`scripts/retention.mjs --execute` 只清理早于该天数的**普通**审计行；财务/资金/配置/账号/审批/隐私/保留模块的审计永不清理。缩短会让更多历史被永久删除。'
+  },
+  retention_notify_log_days: {
+    group: 'ops', label: '通知发送日志保留天数', type: 'int', default: '90', is_danger: true, wired: true,
+    min: 7, max: 3650,
+    impact: '`scripts/retention.mjs --execute` 清理早于该天数的 notify_logs（含发出的消息体）。缩短会更早永久删除发送记录。'
+  },
+  retention_mcp_log_days: {
+    group: 'ops', label: 'MCP 调用日志保留天数', type: 'int', default: '90', is_danger: true, wired: true,
+    min: 7, max: 3650,
+    impact: '`scripts/retention.mjs --execute` 清理早于该天数的 mcp_call_logs（danger 级别调用永不清理）。缩短会更早永久删除 AI 调用记录。'
+  },
+
+  // ---- 审批（ADR-0037 补充，Z9） ----
+  approval_manager_global: {
+    group: 'approval', label: '审批管理员全局可见', type: 'bool', default: '1', is_danger: true, wired: true,
+    impact: '开（默认，ADR-0015 现状）：持 `system:approval:manage` 的审批管理员在「待我审批」/ 待办 / 列表 / 总览里看到全库 pending 实例。关：受限数据范围的审批管理员只看到指向其组织范围内单据的实例，外加当前级审批人是本人的队列；全局范围账号不受影响。关掉会让跨组织的待审单从管理员视野里消失。'
   }
 }
 
@@ -348,7 +376,8 @@ export const SETTING_GROUPS = [
   { key: 'quote', label: '销售报价', note: '报价的审批与有效期' },
   { key: 'credit', label: '信用控制', note: '逾期拦截' },
   { key: 'funds', label: '资金收付', note: '收款确认 / 付款执行的证据与二人复核（ADR-0018）—— 关掉等于允许一人凭空确认收付款，修改必须写理由' },
-  { key: 'ops', label: '运维', note: '备份等本地工具参数' }
+  { key: 'ops', label: '运维', note: '备份等本地工具参数' },
+  { key: 'approval', label: '审批', note: '审批管理员的可见范围（ADR-0037）—— 修改必须写理由' }
 ]
 
 /** 全部登记键（顺序 = 定义表顺序） */
@@ -745,7 +774,8 @@ export function auditSettingTrail(db, { log = null, settings = null } = {}) {
 
   const known = Object.keys(SETTING_ACTIONS)
   const allLog = log || db.prepare('SELECT * FROM setting_audit_log ORDER BY id').all()
-  const allSet = settings || db.prepare('SELECT key, value FROM settings ORDER BY key').all()
+  // 迁移写的事实记录键不是配置项：不参与 ③⑥⑦（它没有登记、也没有变更日志）
+  const allSet = (settings || db.prepare('SELECT key, value FROM settings ORDER BY key').all()).filter((r) => !INTERNAL_MARKER_KEYS.includes(r.key))
 
   // ① 动作名必须是代码认识的
   const unknownActions = [...new Set(allLog.map((r) => r.action))].filter((a) => !known.includes(a))

@@ -85,6 +85,115 @@
 
 ### 明确记录的边界（矩阵中不是漏判）
 
-- `report.dashboard_kpi` / `org.tree` / `doc.list_types` / `doc.query` / `doc.get` 没有功能权限点（`perms: []`），与 HTTP 侧同类接口"只要登录、按范围收窄"一致，矩阵里记为 `NO_PERM_POINT`；它们的停用与范围两格照常断言。若要给通用单据读工具加按类型的查看权限点，是新的产品决定，不在本次验收内。
+- `report.dashboard_kpi` / `org.tree` 没有功能权限点（`perms: []`），与 HTTP 侧同类接口"只要登录、按范围收窄"一致，矩阵里记为 `NO_PERM_POINT`；它们的停用与范围两格照常断言。`doc.list_types` / `doc.query` / `doc.get` 原先同属此列，已由文末「X5 补充」改为按单据类型校验，不再记为 `NO_PERM_POINT`。
 - `pricing.update_price` 改的是全局价格主数据，HTTP 的 `master.price.edit` 也只验权限点；范围外状态下它仍执行（矩阵记 `GLOBAL_PARITY`，且只允许改价格表与留痕）。
-- 幂等重放发生在领域范围判定之前：同一令牌、同一幂等键、同一参数的重放会返回**首次执行时**缓存的结果，不会再次写业务行。所有者随后被撤权 / 缩范围时，这一重放仍会回放旧结果（凭据层的停用 / 版本失效 / 权限闸门仍先于重放生效）。矩阵每次调用换新幂等键，以免把"命中缓存"误判成"范围放行"。
+- （已由文末「Z8 补充」关闭）幂等重放发生在领域范围判定之前：同一令牌、同一幂等键、同一参数的重放会返回**首次执行时**缓存的结果，不会再次写业务行。所有者随后被撤权 / 缩范围时，这一重放仍会回放旧结果（凭据层的停用 / 版本失效 / 权限闸门仍先于重放生效）。矩阵每次调用换新幂等键，以免把"命中缓存"误判成"范围放行"。
+
+## X5 补充：通用单据读工具按单据类型校验所有者查看权限
+
+**缺口**：`doc.list_types` / `doc.query` / `doc.get` 以内核 `doc_types` 驱动，原先 `perms: []`，只受数据范围约束——仓库角色没有 `finance.voucher.view`，HTTP 查不了凭证，委托令牌却能 `doc.get VOUCHER`，违反"令牌能做的事 = 令牌范围 ∩ 所有者当前权限"。
+
+**决定**：
+1. 单一映射表 `DOC_VIEW_PERMS`（`server/mcp/doc-perms.js`）：`doc_type → 任一命中即可的权限点`。HTTP 侧有 `requirePerm` 的类型直接取同一码（采购链复用 `PO_READ_PERMS`）；HTTP 侧只有 `requireAuth` 或按角色名闸的类型，按模块「查看」权限点显式钉死（`explicit`，比 HTTP 严，委托不应比本人宽）。
+2. `doc.query` / `doc.get`：先取类型，再校验所有者**此刻**权限（`TOKEN_OWNER_PERM_DENIED`，HTTP 403 语义），然后才取行与判范围——权限判定与单据是否存在无关，不构成存在性探测。
+3. `doc.list_types`：只返回所有者有权查看的类型（及其动作）；有主令牌一个类型都看不了时直接 `TOKEN_OWNER_PERM_DENIED`。
+4. 外部主体：所有者是经销商 / 门店身份时，`INTERNAL_MODULES`（purchase / inventory / produce / outsource / quality / finance，与 docflow、审批入口同一判据）及 oms / dealer 模块的类型一律拒绝，即使被授予了权限点（对应 HTTP 路由整体 `requireInternal`）。
+5. 未映射类型 fail-closed：`doc.query` / `doc.get` 报 `DOC_TYPE_UNMAPPED`（对有主与无主令牌都拒绝），`doc.list_types` 不列出；`scripts/check-mcp-coverage.mjs` 的 ②b 节在映射缺类型、含不存在的权限点、含已删除类型、含空权限列表时报红。
+6. 无主令牌（独立服务主体）没有所有者可对照，对已映射类型不查权限点（口径同 ADR-0011 既有约定）。
+7. 工具本身保持 `perms: []`（`tools/list` 仍可见），类型级判定在 handler 内；`doc.transition` 不变（边权限 `assertEdgePermitted` 已按类型判定）。
+
+**映射表**（`explicit` = HTTP 侧无 `requirePerm`，本表新定）：
+
+| doc_type | 查看权限点 | 来源 |
+|---|---|---|
+| PRQ / PO / GR / PRT / PI / PST / PAY | purchase.order.view \| purchase.inbound \| purchase.return（`PO_READ_PERMS`，purchase-chain.js `readGate`） | http |
+| INS | quality.inspect.view | http（qc.js） |
+| QCI / DH / QCR | quality.qc.view | http（qc2.js） |
+| SO / DL / SR | sales.order.view | explicit |
+| QT | sales.quote.view | http |
+| SI | sales.invoice.view | http |
+| AR / RCP | finance.receipt.view | http（ar.js） |
+| RFD | finance.refund.view | http |
+| VOUCHER | finance.voucher.view | http |
+| CA | cost.view | http |
+| CK / TF / AS | inventory.stock.view | explicit |
+| MO / MR | produce.bom.view | http（manufacture.js `P_VIEW`） |
+| WW / WM / WR | produce.order.view | explicit |
+| OC | order.view | explicit |
+| OCS | order.statement.view | http |
+| DR / DS / RB | dms.dealer.view | explicit |
+| OM | oms.order.view | explicit |
+| PS | pos.cashier | explicit |
+| PSF | pos.shift | explicit |
+| RC | pos.dailyclose | explicit |
+| YQ / SH | pos.store.requisition | explicit |
+
+**验收**：`tests/mcp-doc-perms.test.mjs`（映射完整性、逐类型拒绝/放行、权限实时回读、无存在性探测、未映射拒绝、无主令牌）；矩阵"权限移除"状态下这三个工具为 `DENIED` 且错误码精确为 `TOKEN_OWNER_PERM_DENIED`，不再出现 `NO_PERM_POINT`。
+
+**Codex 审计（原文要点）**：映射初版有 4 处 P1——QCI/DH 用了 `quality.inspect.view`（HTTP 为 `quality.qc.view`）、PRQ/PI/PST/PAY 用了单据自己的 view 码（HTTP 为 `PO_READ_PERMS`）、MO/MR 用了 `produce.order.view`（HTTP 为 `produce.bom.view`）、未复刻 `requireInternal` 的外部主体限制。均已修正并补测试。
+
+**已知残余（二审 P1，未修，说明）**：POS（`RC`）与门店要货（`YQ` / `SH`）的 HTTP 路由除权限点外还有按角色名 / 门店绑定的闸（`pos.js` 门店绑定或 HQ 角色、`requisitions.js` `requireRole(...HQ)`）。MCP 这里只复刻"权限点 + 内部/外部主体 + 实体范围"，不复刻按角色名的闸：角色名闸是旧机制，权限点矩阵才是委托口径（"令牌 ≤ 所有者权限点"），且受限所有者的门店 / 组织范围仍由 `scopeEntityIds` 收窄。无门店绑定又 `data_scope=all` 的所有者拿到 `pos.dailyclose` 即可读日结单，属于权限点授予过宽的配置问题，后续由角色权限收口（X 系列）统一处理，而非在 MCP 层再造第二套角色名判据。
+
+**产品影响**：此前依赖 AI 令牌读取其角色无权查看的单据类型的集成会开始被拒绝；需要为该角色补授上表对应权限点。
+
+## Y6 补充：门店 / 经销商 / 订货主体绑定（关闭 X5 的残余）
+
+**缺口**：X5 只复刻"权限点 + 内部/外部主体 + 实体范围"。POS（PS/PSF/RC）、门店要货（YQ/SH）、经销商要货（DR）、订货中心（OC/OCS）的 HTTP 路由除权限点外还按**账号绑定**（`users.store_id` / `dealer_id`，ADR-0025 的 `requireStore` + `storeCtx`；`demand.js` 的 `dealerCtx`；`order-center.js` 的 `selfCustomerId` / `ocAccessCheck`）限定"只能看自己门店 / 自己经销商 / 自己订货主体的单据"。MCP 令牌的所有者即使没有任何绑定（`data_scope=all`、授予了 `pos.dailyclose` 之类权限点），也能经 `doc.query` / `doc.get` 读到**全部门店**的日结 / 要货 / 发货单。
+
+**决定**（`server/mcp/doc-perms.js` 单一声明，`DOC_VIEW_PERMS[type].binding` + `bindCol`）：
+
+| doc_type | binding | 归属列 | HTTP 依据 |
+|---|---|---|---|
+| PS（pos_orders）/ PSF（pos_shifts）/ RC（pos_daily_closes） | store | `store_id` | pos.js `requireStore` + `storeCtx`；跨店一律 404（ADR-0025） |
+| YQ（store_requisitions）/ SH（store_shipments） | store | `store_id` | requisitions.js `storeCtx`；`head.store_id !== store.id` 403 |
+| DR（dealer_requisitions） | dealer | `dealer_id` | demand.js `dealerCtx`（`WHERE dr.dealer_id=?`） |
+| OC（oc_orders）/ OCS（oc_statements） | subject | `customer_id` | order-center.js：role=dealer 取经销商档案、role=store 取门店档案，对应 `oc_customers(source_type,source_id)`；内部账号走组织范围 |
+| DS（dealer_statements）/ RB（dealer_rebates） | **不绑定** | — | dealers.js / dms.js 整体 `requireInternal` 的总部读，没有"经销商自视图"可绑；外部主体已被 X5 的 `dealer` 模块闸挡住（经销商看自己的对账走 OCS） |
+
+**判定**（每次调用回库读 `users`）：
+1. **豁免**：超管 / admin 所有者（`permContext.isSuper`，HTTP 侧 admin 不受绑定约束）与无主令牌（没有所有者可对照，ADR-0011 既有约定）。
+2. **类型级**：其余所有者必须具备该类型要求的绑定（store → `store_id`；dealer → `dealer_id`；subject → 仅外部主体：role=dealer 需 `dealer_id`、role=store 需 `store_id`，内部账号不要求）。缺则 `doc.query` / `doc.get` 报 `TOKEN_OWNER_BINDING_REQUIRED`（403），`doc.list_types` 不列出该类型。该判定先于取行，与单据是否存在无关（无存在性探测）。
+3. **单据级**：`doc.query` 把 `col = 所有者绑定` 下推进 SQL（subject 为 `customer_id IN (绑定档案)`），`limit` 准确；`doc.get` 取行后不属于绑定对象一律 `NOT_FOUND`（与"不存在"同形，不泄露存在性）。归属列取不到 ⇒ 拒绝（fail-closed）。叠加原有的令牌组织范围，二者取交集。
+4. 顺序：类型权限点（`TOKEN_OWNER_PERM_DENIED`）→ 绑定（`TOKEN_OWNER_BINDING_REQUIRED`）→ 取行 → 范围 / 绑定行级（`NOT_FOUND`）。
+
+**有意比 HTTP 严的一点（需知悉）**：HTTP 侧总部角色（`HQ_ROLES` / `HQ`，按角色名）可经 `/hq/*`、`requireRole(HQ)` 路由跨店读 POS / 要货 / 发货 / 经销商要货。MCP 不复刻角色名闸（X5 已说明），所以**非 admin 的总部角色所有者没有门店 / 经销商绑定时，读这些类型会被拒绝**；需要总部跨店读取的集成应使用 admin 所有者的令牌，或为所有者账号绑定具体门店 / 经销商。这是 fail-closed 的取舍，比 X5 时"权限点授予过宽即可读全部门店"的残余更安全。
+
+**验收**：`tests/mcp-doc-perms.test.mjs`（绑定表与归属列存在；无绑定逐类型 query/get/不存在 id 均 `TOKEN_OWNER_BINDING_REQUIRED` 且 list_types 隐藏；门店 / 经销商 / 订货主体绑定后只见本方、他方 `NOT_FOUND`、改绑 / 撤绑下一次调用即生效；admin 与无主令牌豁免；缺权限点仍为 `TOKEN_OWNER_PERM_DENIED`）；`tests/mcp-tool-matrix.test.mjs` 新增第 4 态 `owner_lacks_binding`（所有门店 / 经销商绑定类型 × query/get/list_types，写入矩阵 JSON 的 `binding_state`）；`scripts/check-mcp-coverage.mjs` ②b 增加绑定声明合法性与读工具已接入绑定闸的检查。
+
+**产品影响**：此前用"无绑定的非 admin 所有者"令牌读 POS / 要货 / 发货 / 日结 / 经销商要货 / 订货中心（外部主体）单据的集成会开始被拒绝；需为所有者账号绑定门店 / 经销商，或改用 admin 所有者令牌。
+
+## Z8 补充：幂等缓存 / 二次确认命中前重验（关闭「矩阵验收」节记录的重放残余）
+
+**缺口**：同令牌、同幂等键、同参数的重放命中 `mcp_idempotency` 后直接回放首次结果；凭据 / 级别 / 所有者权限点的闸门其实已在缓存查询之前重跑（失权时本来就返回当前错误），但工具在 handler 里做的**领域数据范围判定**（`ORG_OUT_OF_SCOPE` 等）不会被触达——所有者被缩范围后，旧结果仍被回放。
+
+**决定**（只动 `server/mcp/server.js` 的幂等分支与 `delegation.js` 的两个纯函数，不碰 `tools.js`）：
+1. **范围快照**：首次成功执行时，缓存行 `result_json` 写成 `{"__replay":1,"scope":{scope,orgIds},"data":…}`（首次执行的有效范围 = 令牌范围 ∩ 所有者当时范围）。无迁移、无新列；读取时兼容 Z8 之前的裸 data 行（范围记为未知）。
+2. **命中前重验**：`scopeCovers(当前有效范围, 快照)`——当前不受限则放行；快照未知（旧行）或快照不受限而当前受限则拒；其余要求快照的组织集合是当前集合的子集。不覆盖 ⇒ 返回当前错误 `ORG_OUT_OF_SCOPE`，**不回放缓存**，也不进 handler。覆盖 ⇒ 缓存原样回放（`_idempotent_replay: true`，结果不变）。
+3. **权限快照（Codex 审计 P1）**：`perms: []` 的工具（目前仅 `doc.transition`，权限点在 handler 内按边判）命中缓存时进不了 handler，因此缓存同时记下首次执行时所有者的权限集合，重放要求当前集合不少于它，否则 `TOKEN_OWNER_PERM_DENIED` + `cache_denied`；声明了 `perms` 的工具仍由 `ownerToolDenied` 精确重判。
+4. **不重跑 handler**：重验是纯比较，没有任何业务写入，因此不可能重复过账；业务过账、缓存、确认消费、严格审计仍在原来那一个事务里。代价是偏保守：范围缩小但仍包含首次目标时重放也会被拒——被拒时错误信息要求先查询核对、不要换键重提（首次调用已提交，换键会重复执行）。
+5. **审计标记**：凡是"本可命中缓存 / 确认单却被当前闸门挡下"的拒绝，`mcp_call_logs.result_summary` 以 `cache_denied` 开头（含幂等键列），`error_code` 为当前错误码（`TOKEN_OWNER_PERM_DENIED`、`SCOPE_DENIED`、`TOKEN_OWNER_*`、`ORG_OUT_OF_SCOPE`…）。旧行（Z8 前）在受限范围下一律不回放（fail-closed），不受限范围照常回放。
+6. **二次确认**：确认单不是结果缓存——`used` 的确认单永远 `CONFIRM_NOT_APPROVED`，不会重复执行。`confirmed` 但未使用的确认单在使用时与其他调用同样重跑全部闸门（权限点在前、领域范围在 handler 内），被挡下时事务回滚、确认单保持 `confirmed`、审计带 `cache_denied`；闸门恢复后恰好执行一次。
+
+**验收**：`tests/mcp-delegation.test.mjs` 新增五条（失权后重放返回 `TOKEN_OWNER_PERM_DENIED` + `cache_denied` + 业务行不变、恢复后回放缓存且不新增行；范围缩小后重放 `ORG_OUT_OF_SCOPE`；旧缓存行受限范围下 fail-closed；他令牌复用键仍 `IDEMPOTENCY_CONFLICT`；确认单失权 / 缩范围保持未消费、恢复后恰好执行一次、用过的不再执行）。`tests/mcp-tool-matrix.test.mjs` 增加 `replay_after_permission_loss` 状态：对每个首次成功的写型工具，用同一幂等键依次在"权限被撤""范围被缩""全部恢复"下重放，断言前两格得到当前错误、不带 `_idempotent_replay`、业务表行数不变，第三格回放缓存且行数不变。
+
+**契约变化**：范围缩小后的幂等重放由"回放旧结果"变为 `ORG_OUT_OF_SCOPE`；`mcp_idempotency.result_json` 的内部格式带了范围快照（只被 `server.js` 读写）。
+
+## AB7 补充：RC / YQ / SH 的门店绑定进入 DOC_SCOPE_RESOLVERS（与 HTTP 同一判据）
+
+**缺口**：Y6 把门店 / 经销商绑定写在 `doc-perms.js` 一处（`bindingWhere` / `rowInBinding`），而 `DOC_SCOPE_RESOLVERS`（`/api/docflow/*`、`doc.get` / `doc.query` / `order.trace_document` 共用的范围注册表）对 RC（日结）/ YQ（门店要货）/ SH（门店发货）只按组织范围收口：账号绑了门店、`data_scope=all` 的非 admin 用户在注册表眼里是"全局范围"，别家门店的这三类单据（及其流转留痕）不会被挡。绑定因此只靠 MCP 读工具各自再调一次 `rowInBinding`，新增读路径漏调就泄露。
+
+**决定**：
+1. **判据单点**：新增 `server/lib/store-binding.js`（`boundStoreId(user)`、`storeBindingExempt(user)`，纯函数、不碰库、不拼 SQL）。POS 路由 `storeCtx`、门店要货路由 `storeCtx`、注册表的 `store` 构建器都调它；SQL 谓词仍只在 `docflow.js` 的 `store` 构建器里有一份（`t.store_id = 绑定门店`），没有复制。
+2. **注册表声明**：`DOC_SCOPE_RESOLVERS` 的 RC / YQ / SH 行加 `binding: 'store'`。`docScopeOf` 对带 `binding` 的类型在**任何数据范围（含 all）**下先过绑定闸：admin 与无主上下文豁免（HTTP `requireStore` 对 admin 放行）；已绑门店 ⇒ 谓词收窄到本店；`docEventScope` 在全局范围下对被收窄的类型改为按谓词过滤、其余类型照旧整类放行。`doc.get` / `doc.query` / `order.trace_document` 的范围上下文统一为 `docScopeCtx`（`doc.get` 原来手写了一份），自动生效，各工具 handler 其余部分不动。
+3. **未绑门店 = 严格模式**：HTTP 对未绑门店的总部角色按**角色名**放行（`HQ_ROLES` / `HQ`），MCP 仍不复刻角色名（见 Y6 "有意比 HTTP 严"）。注册表上下文带 `strictBinding: true`（仅 MCP 的 `docScopeCtx` 设置）时，未绑门店的非 admin 所有者在这三类上**整类不可见**（`docScopeOf` 返回 null，`docInScope` 为 false）；`/api/docflow/*` 不设该标志，行为不变（除第 2 点的"已绑门店 + 全局范围"收窄）。
+4. **与 Y6 的关系**：`doc-perms.js` 的类型级 `TOKEN_OWNER_BINDING_REQUIRED` 与 `rowInBinding` 保留（错误码与 `doc.list_types` 隐藏仍由它负责），注册表是第二道、且是 `/api/docflow` 也共用的一道；`check-mcp-coverage` 校验两处声明不漂移。
+
+**豁免口径**：`storeBindingExempt` = `role==='admin'` 或 `users.is_super`，与 `doc-perms.js` 的 `isSuper` 豁免同口径（Codex 审计 medium：此前注册表只认 admin，会把非 admin 超管所有者新挡掉）。
+
+**已知残余（Codex 审计 high，非本次引入、HTTP 侧）**：`/api/docflow/*` 的上下文不设 `strictBinding`，所以"未绑门店、`data_scope=all`、非总部角色名"的内部自定义角色账号仍可经 docflow 读 RC / YQ / SH 的留痕——门店路由会拒它、总部路由因角色名拒它，但 docflow 只看数据范围。要在 HTTP 侧收紧必须先复刻总部角色名闸（`HQ_ROLES` / `HQ` 两份名单并不相同），会改变 finance 等总部角色现有的可见性，需单独的产品决定，登记到 backlog，不在 AB7 范围。
+
+**HTTP 行为变化（需知悉）**：`/api/docflow/{events,overview,history,trace}` 对"绑了门店的非 admin 账号 + `data_scope=all`"不再放行别家门店的 RC / YQ / SH 单据与留痕；此前该组合在注册表层面等同全局范围。未绑门店的总部角色不受影响。
+
+**仍无绑定规则的类型（残余）**：PS / PSF 的 `store` 构建器已按 `ctx.user.store_id` 在受限范围内收窄，但全局范围下尚未带 `binding` 标记（读工具仍由 Y6 的 `rowInBinding` 挡住）；DR（经销商）、OC / OCS（订货主体）、DS / RB（无自视图）未并入注册表绑定。后续如要把它们并入，沿用同一个 `binding` 字段与 `strictBinding` 约定。
+
+**验收**：`tests/mcp-doc-perms.test.mjs` 的 AB7 用例——三类 × {未绑定、绑本店、绑他店（改绑即时生效）、admin 所有者、无主令牌}：未绑 ⇒ query / get 为 `TOKEN_OWNER_BINDING_REQUIRED`、`order.trace_document` 与注册表 `docInScope` 为不可见；绑定 ⇒ 只见本店、他店 `NOT_FOUND`（get 与 trace）；全程业务表 / `audit_logs` / `doc_events` / 幂等 / 确认表行数不变（零写）；注册表单测覆盖 `data_scope=all` 的绑定收窄、admin 豁免、非严格模式保持 HTTP 角色名口径。`scripts/check-mcp-coverage.mjs` 增三项检查。

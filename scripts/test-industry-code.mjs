@@ -223,9 +223,15 @@ const api = async (method, p, { headers = {}, body } = {}) => {
   return { status: res.status, body: json, raw: text }
 }
 
-// 公开端点：返回当前库的 products 计数（**哨兵**：据此判断"读的哪个库"）
-const health = (headerIndustry) =>
-  api('GET', '/api/meta/health', { headers: headerIndustry === undefined ? {} : { 'x-industry': headerIndustry } })
+// 健康端点：ADR-0029 起 `database.products` 只对管理员返回，所以哨兵读取带上对应库 admin 的令牌
+// （行业头非法/缺省时用 cosmetic 库的令牌；行业判定本身仍由头部决定）。
+let healthTokens = null
+const health = (headerIndustry) => {
+  const code = headerIndustry && healthTokens && healthTokens[headerIndustry] ? headerIndustry : 'cosmetic'
+  const headers = headerIndustry === undefined ? {} : { 'x-industry': headerIndustry }
+  if (healthTokens && healthTokens[code]) headers.Authorization = `Bearer ${healthTokens[code]}`
+  return api('GET', '/api/meta/health', { headers })
+}
 
 try {
   // ---- 服务就绪 ----
@@ -276,6 +282,7 @@ try {
     db.close()
   }
   console.log(`哨兵 products 计数 = ${JSON.stringify(sentinel)}`)
+  healthTokens = Object.fromEntries(Object.entries(tokenUsers).map(([c, u]) => [c, signToken(u, c)]))
   // 哨兵前提自证：三库计数必须两两不同，否则"读到哪个库"判不出来（守卫的判据就失效了）
   ok(
     new Set(Object.values(sentinel)).size === 3,

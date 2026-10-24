@@ -36,7 +36,15 @@ const p = (name, desc, schema = { type: 'string' }) => ({ name, in: 'path', requ
 export function buildOpenApi() {
   const paths = {
     '/api/meta/health': {
-      get: { tags: ['系统'], summary: '健康检查', security: [], responses: { 200: jsonResp(null, '服务状态') } }
+      get: { tags: ['系统'], summary: '健康检查（匿名只返回 status/版本/构建 SHA/时间；带 admin 令牌另返回 database 与 ops 运维块，ADR-0029）', security: [], responses: { 200: jsonResp(null, '服务状态') } }
+    },
+    '/api/meta/metrics': {
+      get: {
+        tags: ['系统'],
+        summary: '运维计数器（备份年龄/迁移校验和不一致/节流存储/磁盘；仅 admin 或 is_super，ADR-0029）。format=prometheus 返回 text/plain 指标（os_erp_ 前缀），另接受 GML_METRICS_TOKEN Bearer（仅此格式，ADR-0045）',
+        parameters: [q('format', 'json（默认）或 prometheus；其它值 400')],
+        responses: { 200: jsonResp(null, '计数器（json）或 Prometheus 文本（prometheus）'), 400: jsonResp(null, 'format 非法'), 401: jsonResp(null, '未认证'), 403: jsonResp(null, '非管理员') }
+      }
     },
     '/api/meta/dict': {
       get: { tags: ['系统'], summary: '枚举字典（状态/角色/单据类型）', security: [], responses: { 200: jsonResp(null, '字典') } }
@@ -81,6 +89,20 @@ export function buildOpenApi() {
     '/api/meta/settings/audit/check': {
       get: { tags: ['系统参数'], summary: '配置变更链自证（重放日志==现状 / 键集合一致 / 危险项变更都写了理由 / 值域合法）', responses: { 200: jsonResp(null, '{ ok, problems, keys_checked, entries_checked, registered_keys }') } }
     },
+    '/api/meta/audit-logs': {
+      get: {
+        tags: ['系统'], summary: '审计日志查询（权限 system:audit:view；分页 + 模块/动作/用户/对象/日期/关键字过滤；detail 读取时再脱敏；附保留策略提示）',
+        parameters: [q('module', '模块（精确）'), q('action', '动作（精确）'), q('user', '操作人：纯数字按 user_id（走索引），否则按用户名包含'), q('entity', '对象类型（精确）'), q('entity_id', '对象 ID（精确）'), q('from', '起始日期 YYYY-MM-DD（含）'), q('to', '截止日期 YYYY-MM-DD（含）'), q('keyword', '关键字：至少 2 个有效字符，只搜 action / entity / user_name（子串，不搜 detail）；不足返回 400'), q('page', '页码'), q('pageSize', '每页条数，上限 200')],
+        responses: { 200: jsonResp(null, '{ list, total（封顶估算，最多 10001）, has_more（total>10000）, total_cap, page, pageSize, totalPages, retention, export_max_rows }'), 400: { description: '日期格式或区间不合法 / 关键字太短 / 翻页超过 10000 条上限' }, 403: { description: '缺 system:audit:view' } }
+      }
+    },
+    '/api/meta/audit-logs/export.csv': {
+      get: {
+        tags: ['系统'], summary: '审计日志 CSV 导出（同一过滤；分批流式；行数封顶；公式注入安全；导出动作写严格审计 AUDIT_LOG_EXPORT）',
+        parameters: [q('module', '模块（精确）'), q('action', '动作（精确）'), q('user', '操作人'), q('entity', '对象类型'), q('entity_id', '对象 ID'), q('from', '起始日期'), q('to', '截止日期'), q('keyword', '关键字（至少 2 个有效字符，同列表）')],
+        responses: { 200: { description: 'text/csv（UTF-8 BOM；响应头 X-Export-Truncated 表示是否被行数上限截断）' }, 403: { description: '缺 system:audit:view' } }
+      }
+    },
     '/api/auth/login': {
       post: {
         tags: ['认证'], summary: '登录获取 Token', security: [],
@@ -121,6 +143,7 @@ export function buildOpenApi() {
     // `roles/{code}/permissions` 是**整体覆盖**（后端先删后插），调用方必须提交完整勾选集合。
     '/api/auth/permissions': { get: { tags: ['认证'], summary: '权限点字典（按模块分组，供角色权限矩阵渲染）', responses: { 200: jsonResp(null) } } },
     '/api/auth/my-permissions': { get: { tags: ['认证'], summary: '当前用户的有效权限点与数据范围（前端据此收敛按钮与数据）', responses: { 200: jsonResp(null) } } },
+    '/api/auth/my-scope': { get: { tags: ['认证'], summary: '**当前用户的有效数据范围**与白话解释（只读，仅描述调用者自己：角色、是否管理员、生效范围及来源、所属组织/门店/经销商、范围内组织数与前 20 个名称）', responses: { 200: jsonResp(null), 401: jsonResp(null) } } },
     '/api/auth/roles-permissions': { get: { tags: ['认证'], summary: '**角色与权限矩阵**：每个角色的权限点集合（仅管理员）', responses: { 200: jsonResp(null), 403: jsonResp(null) } } },
     '/api/auth/roles/{code}/permissions': {
       put: {
@@ -236,15 +259,15 @@ export function buildOpenApi() {
       post: { tags: ['采购域'], summary: '新建请购单（未给价的行自动走取价链）', responses: { 200: jsonResp(null) } }
     },
     '/api/purchase/requisitions/{id}': { get: { tags: ['采购域'], summary: '请购单详情（含明细与可转数量）。门：内部主体 + 采购读权限；不在调用者组织范围内按不存在处理 404（ADR-0020）', parameters: [idParam], responses: { 200: jsonResp(null), 403: jsonResp(null), 404: jsonResp(null) } } },
-    '/api/purchase/requisitions/{id}/{action}': { post: { tags: ['采购域'], summary: '请购单流转（submit/approve/reject/cancel/close）', parameters: [idParam], responses: { 200: jsonResp(null) } } },
-    '/api/purchase/requisitions/{id}/convert': { post: { tags: ['采购域'], summary: '请购转采购订单（支持部分转单，受供货目录与起订量硬拦）', parameters: [idParam], responses: { 200: jsonResp(null) } } },
+    '/api/purchase/requisitions/{id}/{action}': { post: { tags: ['采购域'], summary: '请购单流转（submit/approve/reject/cancel/close）。ADR-0031：内部主体 + 组织范围；单据不在调用者范围内按不存在处理（404，不泄漏存在性），在任何写之前判定', parameters: [idParam], responses: { 200: jsonResp(null), 403: jsonResp(null), 404: jsonResp(null) } } },
+    '/api/purchase/requisitions/{id}/convert': { post: { tags: ['采购域'], summary: '请购转采购订单（支持部分转单，受供货目录与起订量硬拦）。ADR-0031：内部主体 + 组织范围；单据不在调用者范围内按不存在处理（404，不泄漏存在性），在任何写之前判定；显式指定的入库仓同样须在范围内', parameters: [idParam], responses: { 200: jsonResp(null), 403: jsonResp(null), 404: jsonResp(null) } } },
 
     '/api/purchase/invoices': {
       get: { tags: ['采购域'], summary: '采购发票列表（含费用发票）。门：内部主体 + 采购读权限（与 /chain/todos 同一道门）；内容按调用者组织范围过滤，范围为空返回空结果（ADR-0017），summary 合计同口径', parameters: [q('status', '状态'), q('supplier_id', '供应商'), q('invoice_type', '发票类型')], responses: { 200: jsonResp(null), 403: jsonResp(null) } },
       post: { tags: ['采购域'], summary: '录入采购发票（票号重复会被拒）', responses: { 200: jsonResp(null) } }
     },
     '/api/purchase/invoices/{id}': { get: { tags: ['采购域'], summary: '发票详情（含三单匹配结果）。门：内部主体 + 采购读权限；不在调用者组织范围内按不存在处理 404（ADR-0020）', parameters: [idParam], responses: { 200: jsonResp(null), 403: jsonResp(null), 404: jsonResp(null) } } },
-    '/api/purchase/invoices/{id}/{action}': { post: { tags: ['采购域'], summary: '发票流转（submit/verify/post/void）；校验时发票量不得超入库量', parameters: [idParam], responses: { 200: jsonResp(null) } } },
+    '/api/purchase/invoices/{id}/{action}': { post: { tags: ['采购域'], summary: '发票流转（submit/verify/post/void）；校验时发票量不得超入库量。ADR-0031：内部主体 + 组织范围；单据不在调用者范围内按不存在处理（404，不泄漏存在性），在任何写之前判定', parameters: [idParam], responses: { 200: jsonResp(null), 403: jsonResp(null), 404: jsonResp(null) } } },
     '/api/purchase/invoices-available-lines': { get: { tags: ['采购域'], summary: '可开票的入库行（已入库未开票）。门：内部主体 + 采购读权限；入库按调用者组织范围汇总（ADR-0020）', parameters: [q('supplier_id', '供应商')], responses: { 200: jsonResp(null), 403: jsonResp(null) } } },
 
     '/api/purchase/settlements': {
@@ -252,7 +275,7 @@ export function buildOpenApi() {
       post: { tags: ['采购域'], summary: '生成结算单（settle_mode: auto 按票 / manual 按入库暂估 / fee 含费用发票）', responses: { 200: jsonResp(null) } }
     },
     '/api/purchase/settlements/{id}': { get: { tags: ['采购域'], summary: '结算单详情（已生效核销 / 未生效计划 / 未结清金额分列）。门：内部主体 + 采购读权限；不在调用者组织范围内按不存在处理 404（ADR-0020）', parameters: [idParam], responses: { 200: jsonResp(null), 403: jsonResp(null), 404: jsonResp(null) } } },
-    '/api/purchase/settlements/{id}/{action}': { post: { tags: ['采购域'], summary: '结算单流转（submit/audit/settle/void）', parameters: [idParam], responses: { 200: jsonResp(null) } } },
+    '/api/purchase/settlements/{id}/{action}': { post: { tags: ['采购域'], summary: '结算单流转（submit/audit/settle/void）。ADR-0031：内部主体 + 组织范围；单据不在调用者范围内按不存在处理（404，不泄漏存在性），在任何写之前判定', parameters: [idParam], responses: { 200: jsonResp(null), 403: jsonResp(null), 404: jsonResp(null) } } },
     '/api/purchase/settlement-preview': { get: { tags: ['采购域'], summary: '结算预览（先看金额与差异，不落库）。门：内部主体 + 采购读权限；入库与发票按调用者组织范围汇总（ADR-0020）', responses: { 200: jsonResp(null), 403: jsonResp(null) } } },
 
     '/api/purchase/payments': {
@@ -260,13 +283,13 @@ export function buildOpenApi() {
       post: { tags: ['采购域'], summary: '新建付款单（不传核销分配则按 FIFO 自动核销）', responses: { 200: jsonResp(null) } }
     },
     '/api/purchase/payments/{id}': { get: { tags: ['采购域'], summary: '付款单详情（含核销明细）。门：内部主体 + 采购读权限；不在调用者组织范围内按不存在处理 404（ADR-0020）', parameters: [idParam], responses: { 200: jsonResp(null), 403: jsonResp(null), 404: jsonResp(null) } } },
-    '/api/purchase/payments/{id}/review': { post: { tags: ['采购域'], summary: '付款执行的第二人复核（ADR-0018，需 finance.funds.review）：approve 在同一事务里执行 pay（核销 + 已付）+ 严格审计；reject 退回已审批并记原因。发起人自审 409 FUNDS_SELF_REVIEW；不在待复核 409 FUNDS_NOT_PENDING。响应含 review 块', parameters: [idParam], requestBody: body('FundsReview'), responses: { 200: jsonResp(null), 400: jsonResp(null), 403: jsonResp(null), 409: jsonResp(null) } } },
-    '/api/purchase/payments/{id}/{action}': { post: { tags: ['采购域'], summary: '付款单流转（submit 核销生效 / pay 执行付款 / void 作废并回退已付）。pay 过证据闸与二人复核（ADR-0018）：必须带 evidence_ref（funds_evidence_required，缺失 400 FUNDS_EVIDENCE_REQUIRED）；金额 ≥ funds_review_threshold 且 funds_review_required 时只挂待复核（review.status=pending_review，结算单不动），否则直接执行；待复核期间任何动作 409 FUNDS_REVIEW_PENDING。响应为付款单行 + review 块', parameters: [idParam], requestBody: { required: false, description: 'pay 时的证据；其它动作可空', content: { 'application/json': { schema: { $ref: '#/components/schemas/PaymentAction' } } } }, responses: { 200: jsonResp(null), 400: jsonResp(null), 409: jsonResp(null) } } },
+    '/api/purchase/payments/{id}/review': { post: { tags: ['采购域'], summary: '付款执行的第二人复核（ADR-0018，需 finance.funds.review）：approve 在同一事务里执行 pay（核销 + 已付）+ 严格审计；reject 退回已审批并记原因。发起人自审 409 FUNDS_SELF_REVIEW；不在待复核 409 FUNDS_NOT_PENDING。响应含 review 块。ADR-0031：内部主体 + 组织范围；单据不在调用者范围内按不存在处理（404，不泄漏存在性），在任何写之前判定', parameters: [idParam], requestBody: body('FundsReview'), responses: { 200: jsonResp(null), 400: jsonResp(null), 403: jsonResp(null), 404: jsonResp(null), 409: jsonResp(null) } } },
+    '/api/purchase/payments/{id}/{action}': { post: { tags: ['采购域'], summary: '付款单流转（submit 核销生效 / pay 执行付款 / void 作废并回退已付）。pay 过证据闸与二人复核（ADR-0018）：必须带 evidence_ref（funds_evidence_required，缺失 400 FUNDS_EVIDENCE_REQUIRED）；金额 ≥ funds_review_threshold 且 funds_review_required 时只挂待复核（review.status=pending_review，结算单不动），否则直接执行；待复核期间任何动作 409 FUNDS_REVIEW_PENDING。响应为付款单行 + review 块。ADR-0031：内部主体 + 组织范围；单据不在调用者范围内按不存在处理（404），在任何写之前判定', parameters: [idParam], requestBody: { required: false, description: 'pay 时的证据；其它动作可空', content: { 'application/json': { schema: { $ref: '#/components/schemas/PaymentAction' } } } }, responses: { 200: jsonResp(null), 400: jsonResp(null), 403: jsonResp(null), 404: jsonResp(null), 409: jsonResp(null) } } },
     '/api/purchase/payment-plan': { get: { tags: ['采购域'], summary: 'FIFO 核销计划预览（按结算日期先老后新）。门：内部主体 + 采购读权限；只列并只核销调用者组织范围内的结算单（ADR-0020）', parameters: [q('supplier_id', '供应商', true), q('amount', '付款金额', true)], responses: { 200: jsonResp(null), 403: jsonResp(null) } } },
 
     '/api/purchase/payables': { get: { tags: ['采购域'], summary: '应付账款（按供应商：已结算/已付/未付）+ **采购退货披露**。⚠️ 退货金额放在单独的 `returns` 块里、**不参与** settle/paid/open 口径 —— 结算怎么抵减退货是业务规则（按单抵 / 按期间抵 / 已审是否追溯），不是实现细节。门：内部主体 + 采购读权限（与 /chain/todos 同一道门）；内容按调用者组织范围过滤，范围为空返回空结果（ADR-0017）；退货披露经仓的组织过滤', parameters: [q('supplier_id', '供应商')], responses: { 200: jsonResp(null), 403: jsonResp(null) } } },
     '/api/purchase/orders/{id}/closes': { get: { tags: ['采购域'], summary: '采购订单四段关闭（到货/入库/开票/付款，只进不退）。门：内部主体 + 采购读权限；不在调用者组织范围内按不存在处理 404（ADR-0020）', parameters: [idParam], responses: { 200: jsonResp(null), 403: jsonResp(null), 404: jsonResp(null) } } },
-    '/api/purchase/orders/{id}/receive-check': { post: { tags: ['采购域'], summary: '收货前超量校验（写库前拦，非事后回滚）', parameters: [idParam], responses: { 200: jsonResp(null) } } },
+    '/api/purchase/orders/{id}/receive-check': { post: { tags: ['采购域'], summary: '收货前超量校验（写库前拦，非事后回滚）。ADR-0031：内部主体 + 组织范围；单据不在调用者范围内按不存在处理（404，不泄漏存在性），在任何写之前判定', parameters: [idParam], responses: { 200: jsonResp(null), 403: jsonResp(null), 404: jsonResp(null) } } },
     '/api/purchase/supplier-last-price': { post: { tags: ['采购域'], summary: '供应商最近成交价（收货回写的数据来源）', responses: { 200: jsonResp(null) } } },
 
     // —— 质检（模块 07：到货单记事实、质检单记判断，两单分开）——
@@ -284,23 +307,23 @@ export function buildOpenApi() {
     '/api/purchase/inspections/{id}/cancel': { post: { tags: ['质检'], summary: '作废质检单（作废后可对同票重开）', parameters: [idParam], responses: { 200: jsonResp(null) } } },
 
     '/api/sales/orders': {
-      get: { tags: ['销售'], summary: '销售订单列表（支持渠道/状态/日期/关键字）', parameters: [q('channel', '渠道 dealer/store/online/platform/live'), q('status', '状态'), q('startDate', '开始日期'), q('endDate', '结束日期'), q('keyword', '关键字')], responses: { 200: jsonResp(null) } },
-      post: { tags: ['销售'], summary: '新建销售订单（自动按渠道与经销商折扣取价）', requestBody: body('SalesOrderCreate'), responses: { 200: jsonResp(null) } }
+      get: { tags: ['销售'], summary: '销售订单列表（支持渠道/状态/日期/关键字；内部账号按组织数据范围过滤，ADR-0026）', parameters: [q('channel', '渠道 dealer/store/online/platform/live'), q('status', '状态'), q('startDate', '开始日期'), q('endDate', '结束日期'), q('keyword', '关键字')], responses: { 200: jsonResp(null) } },
+      post: { tags: ['销售'], summary: '新建销售订单（自动按渠道与经销商折扣取价；出货仓与门店须在调用者组织范围内，否则 403）', requestBody: body('SalesOrderCreate'), responses: { 200: jsonResp(null), 403: jsonResp(null) } }
     },
-    '/api/sales/orders/{id}': { get: { tags: ['销售'], summary: '销售订单详情', parameters: [idParam], responses: { 200: jsonResp(null) } }, put: { tags: ['销售'], summary: '修改草稿订单', parameters: [idParam], responses: { 200: jsonResp(null) } } },
-    '/api/sales/orders/{id}/confirm': { post: { tags: ['销售'], summary: '确认订单并占用库存（库存不足会拒绝）', parameters: [idParam], responses: { 200: jsonResp(null) } } },
-    '/api/sales/orders/{id}/deliver': { post: { tags: ['销售'], summary: '发货出库（批次先进先出）', parameters: [idParam], responses: { 200: jsonResp(null) } } },
-    '/api/sales/orders/{id}/payment': { post: { tags: ['销售'], summary: '登记回款', parameters: [idParam], responses: { 200: jsonResp(null) } } },
-    '/api/sales/orders/{id}/cancel': { post: { tags: ['销售'], summary: '取消订单并释放占用', parameters: [idParam], responses: { 200: jsonResp(null) } } },
-    '/api/sales/orders/{id}/complete': { post: { tags: ['销售'], summary: '完成订单（签收结案）', parameters: [idParam], responses: { 200: jsonResp(null) } } },
-    '/api/sales/deliveries': { get: { tags: ['销售'], summary: '发货单列表', responses: { 200: jsonResp(null) } } },
-    '/api/sales/deliveries/{id}': { get: { tags: ['销售'], summary: '发货单详情', parameters: [idParam], responses: { 200: jsonResp(null) } } },
-    '/api/sales/deliveries/{id}/receive': { post: { tags: ['销售'], summary: '发货单签收（已发货 → 已签收；状态不对返回 409）', parameters: [idParam], responses: { 200: jsonResp(null), 409: jsonResp(null) } } },
-    '/api/sales/returns': { get: { tags: ['销售'], summary: '销售退货列表', responses: { 200: jsonResp(null) } }, post: { tags: ['销售'], summary: '新建销售退货（入库）', responses: { 200: jsonResp(null) } } },
-    '/api/sales/returns/{id}/complete': { post: { tags: ['销售'], summary: '退货完成（已确认 → 已完成；状态不对返回 409）', parameters: [idParam], responses: { 200: jsonResp(null), 409: jsonResp(null) } } },
-    '/api/sales/stats': { get: { tags: ['销售'], summary: '销售分析（渠道/趋势/商品/经销商/门店排行）', parameters: [q('days', '统计天数，默认 30')], responses: { 200: jsonResp(null) } } },
+    '/api/sales/orders/{id}': { get: { tags: ['销售'], summary: '销售订单详情（组织范围外 404，与不存在同形）', parameters: [idParam], responses: { 200: jsonResp(null), 403: jsonResp(null), 404: jsonResp(null) } }, put: { tags: ['销售'], summary: '修改草稿订单（组织范围外 404；改仓目标不在范围内 403）', parameters: [idParam], responses: { 200: jsonResp(null), 403: jsonResp(null), 404: jsonResp(null) } } },
+    '/api/sales/orders/{id}/confirm': { post: { tags: ['销售'], summary: '确认订单并占用库存（库存不足会拒绝；组织范围外 404）', parameters: [idParam], responses: { 200: jsonResp(null), 404: jsonResp(null) } } },
+    '/api/sales/orders/{id}/deliver': { post: { tags: ['销售'], summary: '发货出库（批次先进先出；组织范围外 404，发货仓不在范围内 403）', parameters: [idParam], responses: { 200: jsonResp(null), 403: jsonResp(null), 404: jsonResp(null) } } },
+    '/api/sales/orders/{id}/payment': { post: { tags: ['销售'], summary: '登记回款（组织范围外 404）', parameters: [idParam], responses: { 200: jsonResp(null), 404: jsonResp(null) } } },
+    '/api/sales/orders/{id}/cancel': { post: { tags: ['销售'], summary: '取消订单并释放占用（组织范围外 404）', parameters: [idParam], responses: { 200: jsonResp(null), 404: jsonResp(null) } } },
+    '/api/sales/orders/{id}/complete': { post: { tags: ['销售'], summary: '完成订单（签收结案；组织范围外 404）', parameters: [idParam], responses: { 200: jsonResp(null), 404: jsonResp(null) } } },
+    '/api/sales/deliveries': { get: { tags: ['销售'], summary: '发货单列表（内部账号按所属订单的组织范围过滤）', responses: { 200: jsonResp(null) } } },
+    '/api/sales/deliveries/{id}': { get: { tags: ['销售'], summary: '发货单详情（组织范围外 404）', parameters: [idParam], responses: { 200: jsonResp(null), 403: jsonResp(null), 404: jsonResp(null) } } },
+    '/api/sales/deliveries/{id}/receive': { post: { tags: ['销售'], summary: '发货单签收（已发货 → 已签收；状态不对返回 409；组织范围外 404）', parameters: [idParam], responses: { 200: jsonResp(null), 404: jsonResp(null), 409: jsonResp(null) } } },
+    '/api/sales/returns': { get: { tags: ['销售'], summary: '销售退货列表（内部账号按来源订单 / 自身仓与门店的组织范围过滤）', responses: { 200: jsonResp(null) } }, post: { tags: ['销售'], summary: '新建销售退货（入库；来源订单范围外 404，入库仓 / 门店不在范围内 403）', responses: { 200: jsonResp(null), 403: jsonResp(null), 404: jsonResp(null) } } },
+    '/api/sales/returns/{id}/complete': { post: { tags: ['销售'], summary: '退货完成（已确认 → 已完成；状态不对返回 409；组织范围外 404）', parameters: [idParam], responses: { 200: jsonResp(null), 404: jsonResp(null), 409: jsonResp(null) } } },
+    '/api/sales/stats': { get: { tags: ['销售'], summary: '销售分析（渠道/趋势/商品/经销商/门店排行；内部账号只含组织范围内订单）', parameters: [q('days', '统计天数，默认 30')], responses: { 200: jsonResp(null) } } },
 
-    '/api/inventory/stocks': { get: { tags: ['存货'], summary: '库存明细（仓库/批次/效期/可用量）', parameters: [q('warehouse_id', '仓库'), q('sku_id', 'SKU'), q('batch_no', '批次'), q('keyword', '关键字'), q('expiring', 'N 天内临期')], responses: { 200: jsonResp(null) } } },
+    '/api/inventory/stocks': { get: { tags: ['存货'], summary: '库存明细（仓库/批次/效期/可用量）', parameters: [q('warehouse_id', '仓库'), q('sku_id', 'SKU'), q('batch_no', '批次'), q('keyword', '关键字'), q('expiring', 'N 天内临期'), q('pageSize', '每页条数，默认 50，上限 500'), q('after_id', '游标：上一页最后一行 id（按 id 升序；total/summary 仅首页返回）')], responses: { 200: jsonResp(null) } } },
     '/api/inventory/stocks/by-sku': { get: { tags: ['存货'], summary: '按 SKU 汇总库存（跨仓库）', responses: { 200: jsonResp(null) } } },
     '/api/inventory/transactions': { get: { tags: ['存货'], summary: '库存流水（收发明细）', parameters: [q('sku_id', 'SKU'), q('warehouse_id', '仓库'), q('doc_type', '单据类型'), q('startDate', '开始日期'), q('endDate', '结束日期')], responses: { 200: jsonResp(null) } } },
     '/api/inventory/ledger': { get: { tags: ['存货'], summary: '收发存台账（期初/入库/出库/期末）', parameters: [q('sku_id', 'SKU（必填）', true), q('warehouse_id', '仓库'), q('startDate', '开始日期'), q('endDate', '结束日期')], responses: { 200: jsonResp(null) } } },
@@ -343,22 +366,23 @@ export function buildOpenApi() {
     '/api/dealers/statements/{id}/close': { post: { tags: ['经销商'], summary: '结清对账单（须同主体同期间应收已收齐；force 手动结清须写理由）', parameters: [idParam], responses: { 200: jsonResp(null) } } },
     '/api/dealers/statements/{id}/void': { post: { tags: ['经销商'], summary: '作废对账单（只作废本凭证，不动底层应收台账；须写理由）', parameters: [idParam], responses: { 200: jsonResp(null) } } },
 
-    '/api/oms/platforms': { get: { tags: ['线上 OMS'], summary: '平台店铺列表（含订单数/GMV/最近同步）', responses: { 200: jsonResp(null) } } },
-    '/api/oms/sync/{platformId}': { post: { tags: ['线上 OMS'], summary: '从平台拉取订单（演示为模拟数据源）', parameters: [{ name: 'platformId', in: 'path', required: true, schema: { type: 'integer' } }], responses: { 200: jsonResp(null) } } },
-    '/api/oms/orders': { get: { tags: ['线上 OMS'], summary: '线上订单列表', parameters: [q('platform_id', '平台'), q('status', '状态'), q('pending', '=1 只看待发货'), q('startDate', '开始日期'), q('endDate', '结束日期'), q('keyword', '关键字')], responses: { 200: jsonResp(null) } } },
-    '/api/oms/orders/{id}': { get: { tags: ['线上 OMS'], summary: '线上订单详情', parameters: [idParam], responses: { 200: jsonResp(null) } } },
-    '/api/oms/orders/{id}/convert': { post: { tags: ['线上 OMS'], summary: '线上订单转销售订单（占库）', parameters: [idParam], responses: { 200: jsonResp(null) } } },
-    '/api/oms/orders/convert-batch': { post: { tags: ['线上 OMS'], summary: '批量转单', responses: { 200: jsonResp(null) } } },
-    '/api/oms/orders/{id}/ship': { post: { tags: ['线上 OMS'], summary: '发货并回传平台（同时出库）', parameters: [idParam], responses: { 200: jsonResp(null) } } },
-    '/api/oms/orders/{id}/refund': { post: { tags: ['线上 OMS'], summary: '退款处理（释放占用）', parameters: [idParam], responses: { 200: jsonResp(null) } } },
+    '/api/oms/platforms': { get: { tags: ['线上 OMS'], summary: '平台店铺列表（含订单数/GMV/最近同步）；受限范围只列履约仓归属组织在范围内的平台（ADR-0039）', responses: { 200: jsonResp(null) } } },
+    '/api/qimen/platforms/{id}/secret': { post: { tags: ['线上 OMS'], summary: '签发/轮换奇门平台密钥（oms.platform.manage；明文仅此一次返回；已有密钥需 rotate:true，ADR-0033）', parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'integer' } }], responses: { 200: jsonResp(null), 403: jsonResp(null), 404: jsonResp(null), 409: jsonResp(null) } } },
+    '/api/oms/sync/{platformId}': { post: { tags: ['线上 OMS'], summary: '从平台拉取订单（演示为模拟数据源；生产 503）。订单归平台绑定组织（履约仓所属组织）：平台未绑定 422 PLATFORM_ORG_UNBOUND，履约仓不在调用者组织范围内 403', parameters: [{ name: 'platformId', in: 'path', required: true, schema: { type: 'integer' } }], responses: { 200: jsonResp(null), 403: jsonResp(null), 404: jsonResp(null), 422: jsonResp(null) } } },
+    '/api/oms/orders': { get: { tags: ['线上 OMS'], summary: '线上订单列表；按平台绑定组织（履约仓所属组织）过滤，未绑定平台的订单仅全局范围可见（ADR-0039）', parameters: [q('platform_id', '平台'), q('status', '状态'), q('pending', '=1 只看待发货'), q('startDate', '开始日期'), q('endDate', '结束日期'), q('keyword', '关键字')], responses: { 200: jsonResp(null) } } },
+    '/api/oms/orders/{id}': { get: { tags: ['线上 OMS'], summary: '线上订单详情；范围外与不存在同形 404（ADR-0039）', parameters: [idParam], responses: { 200: jsonResp(null), 404: jsonResp(null) } } },
+    '/api/oms/orders/{id}/convert': { post: { tags: ['线上 OMS'], summary: '线上订单转销售订单（占库）；销售订单归平台绑定组织的履约仓，平台未绑定 422，平台范围外 404', parameters: [idParam], responses: { 200: jsonResp(null), 404: jsonResp(null), 422: jsonResp(null) } } },
+    '/api/oms/orders/convert-batch': { post: { tags: ['线上 OMS'], summary: '批量转单（逐单同上：范围外按「订单不存在」、未绑定平台按原因计入 failed）', responses: { 200: jsonResp(null) } } },
+    '/api/oms/orders/{id}/ship': { post: { tags: ['线上 OMS'], summary: '发货并回传平台（同时出库）；订单须在平台绑定组织范围内（范围外 404），关联销售订单的出货仓须在范围内（403，ADR-0042）', parameters: [idParam], responses: { 200: jsonResp(null), 403: jsonResp(null), 404: jsonResp(null) } } },
+    '/api/oms/orders/{id}/refund': { post: { tags: ['线上 OMS'], summary: '退款处理（释放占用）；范围口径同发货（范围外 404、出货仓越界 403，ADR-0042）', parameters: [idParam], responses: { 200: jsonResp(null), 403: jsonResp(null), 404: jsonResp(null) } } },
     // 线上订单完成（OM shipped → completed）。平台侧早就完成了，系统里一直显示「已发货」
     // （三库停在 shipped 的 88/64/93 张）⇒ 看不出哪些真的结了。
     // ⚠️ `OM` 内核里**没有 `closed` 状态**（`STATES.OM` = pending/shipped/completed/refunded/cancelled），
     //    别照 `meta.js` 里那条历史遗留的 `closed` 文案去写这个动作。
-    '/api/oms/orders/{id}/complete': { post: { tags: ['线上 OMS'], summary: '完成线上订单（OM shipped → completed；纯状态，不动库存）', parameters: [idParam], responses: { 200: jsonResp(null), 404: jsonResp(null), 409: jsonResp(null) } } },
-    '/api/oms/stock-push': { post: { tags: ['线上 OMS'], summary: '推送可售库存至平台', responses: { 200: jsonResp(null) } } },
-    '/api/oms/sync-logs': { get: { tags: ['线上 OMS'], summary: '同步日志', parameters: [q('platform_id', '平台'), q('sync_type', '类型 order/stock/shipment/refund/price')], responses: { 200: jsonResp(null) } } },
-    '/api/oms/stats': { get: { tags: ['线上 OMS'], summary: '线上经营分析（平台 GMV/趋势/热销）', parameters: [q('days', '统计天数')], responses: { 200: jsonResp(null) } } },
+    '/api/oms/orders/{id}/complete': { post: { tags: ['线上 OMS'], summary: '完成线上订单（OM shipped → completed；纯状态，不动库存）；订单须在平台绑定组织范围内，范围外 404（ADR-0042）', parameters: [idParam], responses: { 200: jsonResp(null), 404: jsonResp(null), 409: jsonResp(null) } } },
+    '/api/oms/stock-push': { post: { tags: ['线上 OMS'], summary: '推送可售库存至平台；只推范围内平台、库存合计只含范围内仓，指定平台在范围外 404（ADR-0042）', responses: { 200: jsonResp(null), 404: jsonResp(null) } } },
+    '/api/oms/sync-logs': { get: { tags: ['线上 OMS'], summary: '同步日志；只含范围内平台（ADR-0039）', parameters: [q('platform_id', '平台'), q('sync_type', '类型 order/stock/shipment/refund/price')], responses: { 200: jsonResp(null) } } },
+    '/api/oms/stats': { get: { tags: ['线上 OMS'], summary: '线上经营分析（平台 GMV/趋势/热销）；只统计范围内平台（ADR-0039）', parameters: [q('days', '统计天数')], responses: { 200: jsonResp(null) } } },
 
     '/api/dashboard/summary': { get: { tags: ['看板'], summary: '经营 KPI 总览', responses: { 200: jsonResp(null) } } },
     '/api/dashboard/trend': { get: { tags: ['看板'], summary: '销售/采购/线上趋势', parameters: [q('days', '统计天数')], responses: { 200: jsonResp(null) } } },
@@ -444,7 +468,7 @@ export function buildOpenApi() {
       post: { tags: ['系统'], summary: '新建 / 修改编号规则（段可配：常量/日期/SKU/流水）', responses: { 200: jsonResp(null) } }
     },
     '/api/docflow/no-preview': { post: { tags: ['系统'], summary: '试取号（不占用计数器，改公式前先验证）', responses: { 200: jsonResp(null) } } },
-    '/api/docflow/no-issue': { post: { tags: ['系统'], summary: '正式取号（占用计数器）', responses: { 200: jsonResp(null) } } },
+    '/api/docflow/no-issue': { post: { tags: ['系统'], summary: '正式取号（占用计数器）；非干跑需该单据类型的创建权限，未映射类型 403 DOC_TYPE_PERM_UNMAPPED（ADR-0028）', responses: { 200: jsonResp(null), 403: jsonResp(null) } } },
 
     '/api/master/bundles': {
       get: { tags: ['主数据'], summary: '组合装（捆绑商品）列表', responses: { 200: jsonResp(null) } },
@@ -611,9 +635,9 @@ export function buildOpenApi() {
     '/api/approval/instances/{id}/cancel': { post: { tags: ['审批中心'], summary: '撤回审批（提交人本人或管理员）', parameters: [idParam], responses: { 200: jsonResp(null) } } },
     '/api/approval/templates': {
       get: { tags: ['审批中心'], summary: '审批模板列表（含级次）', responses: { 200: jsonResp(null) } },
-      post: { tags: ['审批中心'], summary: '新建 / 修改审批模板（级次整体重建；需 system:approval:manage）', responses: { 200: jsonResp(null) } }
+      post: { tags: ['审批中心'], summary: '新建 / 修改审批模板（级次整体重建；需 system:approval:template 且全局数据范围；指定人员须存在，AA3）', responses: { 200: jsonResp(null) } }
     },
-    '/api/approval/templates/{id}/toggle': { post: { tags: ['审批中心'], summary: '启用 / 停用模板（未标记需审批的动作不允许启用）', parameters: [idParam], responses: { 200: jsonResp(null) } } },
+    '/api/approval/templates/{id}/toggle': { post: { tags: ['审批中心'], summary: '启用 / 停用模板（未标记需审批的动作不允许启用；需 system:approval:template 且全局数据范围）', parameters: [idParam], responses: { 200: jsonResp(null) } } },
     '/api/approval/todos': { get: { tags: ['审批中心'], summary: '审批待办（按单据类型分组）。门：审批中心任一权限点；只统计当前级指到本人的 pending 实例，admin / system:approval:manage 全见（ADR-0015）', responses: { 200: jsonResp(null), 403: jsonResp(null) } } },
 
     // —— 模块 23 数据口径字典 ——
@@ -647,17 +671,17 @@ export function buildOpenApi() {
     // 报价侧四条硬口径：① 价由价格中心算出并留痕来源；② 有效期是硬约束（过期不能转单）；
     // ③ 低于最低限价 / 低于客户政策折扣 / 超金额阈值必须审批；④ 转单只能成功一次。
     '/api/sales/quotes/meta': { get: { tags: ['销售报价'], summary: '报价枚举（状态 / 客户类型 / 渠道 / 转单目标 / 审批阈值 / 默认有效期）', responses: { 200: jsonResp(null) } } },
-    '/api/sales/quotes/overview': { get: { tags: ['销售报价'], summary: '报价概览（各状态数量 + 待审批数 + 7 天内到期 + 已转单金额）', responses: { 200: jsonResp(null) } } },
-    '/api/sales/quotes/price': { post: { tags: ['销售报价'], summary: '取价试算（不落库）：按客户算每行价格、折扣率、是否低于最低限价，并给出是否需要审批', requestBody: body('QuotePriceRequest'), responses: { 200: jsonResp(null), 400: jsonResp(null) } } },
+    '/api/sales/quotes/overview': { get: { tags: ['销售报价'], summary: '报价概览（各状态数量 + 待审批数 + 7 天内到期 + 已转单金额；按调用者组织范围统计，ADR-0034）', responses: { 200: jsonResp(null) } } },
+    '/api/sales/quotes/price': { post: { tags: ['销售报价'], summary: '取价试算（不落库；给出的仓库 / 门店 / 订货客户须在组织范围内，否则 403）：按客户算每行价格、折扣率、是否低于最低限价，并给出是否需要审批', requestBody: body('QuotePriceRequest'), responses: { 200: jsonResp(null), 400: jsonResp(null), 403: jsonResp(null) } } },
     '/api/sales/quotes': {
-      get: { tags: ['销售报价'], summary: '报价单列表', parameters: [q('status', '状态'), q('customer_type', '客户类型'), q('dealer_id', '经销商'), q('customer_id', '订货客户'), q('keyword', '单号/客户'), q('valid_only', '1=只看可转单（已审批且未过期）'), q('page', '页码'), q('pageSize', '每页条数')], responses: { 200: jsonResp(null) } },
-      post: { tags: ['销售报价'], summary: '新建报价单（草稿；价由价格中心算出，手工改价需同时保留挂牌价与成交价）', requestBody: body('QuoteCreate'), responses: { 200: jsonResp(null), 400: jsonResp(null) } }
+      get: { tags: ['销售报价'], summary: '报价单列表（按仓库 / 门店 / 订货客户的组织归属过滤，ADR-0034）', parameters: [q('status', '状态'), q('customer_type', '客户类型'), q('dealer_id', '经销商'), q('customer_id', '订货客户'), q('keyword', '单号/客户'), q('valid_only', '1=只看可转单（已审批且未过期）'), q('page', '页码'), q('pageSize', '每页条数')], responses: { 200: jsonResp(null) } },
+      post: { tags: ['销售报价'], summary: '新建报价单（草稿；价由价格中心算出，手工改价需同时保留挂牌价与成交价）；受限范围下仓库 / 门店 / 订货客户须都在范围内且至少给一个，否则 403；改版来源范围外 404', requestBody: body('QuoteCreate'), responses: { 200: jsonResp(null), 400: jsonResp(null), 403: jsonResp(null), 404: jsonResp(null) } }
     },
-    '/api/sales/quotes/{id}': { get: { tags: ['销售报价'], summary: '报价单详情（含行级取价来源、最低限价快照、是否已过期 / 已转单）', parameters: [idParam], responses: { 200: jsonResp(null), 404: jsonResp(null) } } },
-    '/api/sales/quotes/{id}/action': { post: { tags: ['销售报价'], summary: '报价流转：submit 提交 / approve 审批通过 / reject 驳回 / resubmit 修改后再提交 / cancel 取消', parameters: [idParam], requestBody: body('QuoteAction'), responses: { 200: jsonResp(null), 409: jsonResp(null) } } },
-    '/api/sales/quotes/{id}/convert': { post: { tags: ['销售报价'], summary: '报价转订单（**唯一有后果的动作**）：生成销售订单（沿用报价价）或订货单；已审批且未过期才可转，一张报价只能转一次；超信默认拦住，force+reason 为特批放行', parameters: [idParam], requestBody: body('QuoteConvert'), responses: { 200: jsonResp(null), 409: jsonResp(null) } } },
-    '/api/sales/quotes/{id}/copy': { post: { tags: ['销售报价'], summary: '复制改版：生成新草稿且 version+1（已报出去的价不改，要改就出新版本）', parameters: [idParam], requestBody: body('QuoteCopy'), responses: { 200: jsonResp(null) } } },
-    '/api/sales/quotes/expire': { post: { tags: ['销售报价'], summary: '批量把过了有效期的报价置为「已过期」（系统动作，不是状态机里的按钮）', requestBody: body('QuoteExpire'), responses: { 200: jsonResp(null) } } },
+    '/api/sales/quotes/{id}': { get: { tags: ['销售报价'], summary: '报价单详情（含行级取价来源、最低限价快照、是否已过期 / 已转单）；组织范围外 404', parameters: [idParam], responses: { 200: jsonResp(null), 404: jsonResp(null) } } },
+    '/api/sales/quotes/{id}/action': { post: { tags: ['销售报价'], summary: '报价流转：submit 提交 / approve 审批通过 / reject 驳回 / resubmit 修改后再提交 / cancel 取消；组织范围外 404（与不存在同形）', parameters: [idParam], requestBody: body('QuoteAction'), responses: { 200: jsonResp(null), 404: jsonResp(null), 409: jsonResp(null) } } },
+    '/api/sales/quotes/{id}/convert': { post: { tags: ['销售报价'], summary: '报价转订单（**唯一有后果的动作**）：生成销售订单（沿用报价价）或订货单；已审批且未过期才可转，一张报价只能转一次；超信默认拦住，force+reason 为特批放行；组织范围外 404，仓库 / 门店 / 订货客户不全在范围内 403', parameters: [idParam], requestBody: body('QuoteConvert'), responses: { 200: jsonResp(null), 403: jsonResp(null), 404: jsonResp(null), 409: jsonResp(null) } } },
+    '/api/sales/quotes/{id}/copy': { post: { tags: ['销售报价'], summary: '复制改版：生成新草稿且 version+1（已报出去的价不改，要改就出新版本）；组织范围外 404', parameters: [idParam], requestBody: body('QuoteCopy'), responses: { 200: jsonResp(null), 403: jsonResp(null), 404: jsonResp(null) } } },
+    '/api/sales/quotes/expire': { post: { tags: ['销售报价'], summary: '批量把过了有效期的报价置为「已过期」（系统动作，不是状态机里的按钮；只处理调用者组织范围内的报价）', requestBody: body('QuoteExpire'), responses: { 200: jsonResp(null) } } },
 
     // 信用侧三条硬口径：① 已用额 = 统一台账 + 订货中心同主体占用，不读缓存列；
     // ② 占用 / 释放 / 核销成对，核销只认回款（货发了钱没到，额度仍占着）；
@@ -1166,7 +1190,7 @@ export function buildOpenApi() {
     openapi: '3.0.3',
     info: {
       title: 'GML 供应链协同系统 API',
-      version: '1.34.0',
+      version: '1.39.0',
       description:
         '化妆品 / 服装 双行业轻量级供应链协同系统接口文档。覆盖主数据、采购、销售、存货、经销商、门店要货、委外管理、计划与生产、生产制造（BOM / 领料 / 完工入库）、质量检验、线上 OMS 与经营看板。\n\n' +
         '**多行业**：登录 `POST /api/auth/login` 时传 `industry`（`cosmetic` / `apparel`）选择行业版本；' +
