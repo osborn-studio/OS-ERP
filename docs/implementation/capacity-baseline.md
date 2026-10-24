@@ -748,3 +748,20 @@ gh run view <run-id> --log-failed
 - `--disable` 只是 `DROP`，近乎瞬时（约 19 ms），但**数据库文件不会缩小**（页进入空闲链表，431 → 431 MB）；要回收磁盘需要另行 `VACUUM`（本次未测，大库上要重写整个文件并持写锁）。
 - 启用后库增量约 +116 MB（373 → 489，含 WAL 里待检查点的页；稳定后索引约 +58 MB，见 `--integrity-check` 前后 431 MB 对 373 MB），合成数据的 `detail` 很短，三列文本也短。
 - 未覆盖：`dmserver` 与生产规模副本；服务在满负荷写入下执行 `--enable` 时的写入者失败率；回收磁盘的 `VACUUM`。
+
+## AE9 MCP 限速 db 存储模式：每次调用的额外开销（**Mac mini / 临时 WAL 库 / 单进程单连接 / 非目标主机 / 整机高负载 / 单次运行**）
+
+`GML_MCP_RATE_STORE=db` 把每次放行变成一个 `BEGIN IMMEDIATE` 短事务（读当前与上一窗口计数 → 滑动窗口判定 → `INSERT … ON CONFLICT DO UPDATE SET count=count+1`，写型调用同事务写两行）。基准只量 `consume()` 本身（不含 HTTP / 鉴权 / 工具执行），额度开到最大，只走放行路径；预热 500 次后每组 20000 次，50 个令牌轮转。
+
+| 模式 | 调用类型 | p50 | p95 | p99 | 平均 |
+|---|---|---|---|---|---|
+| memory | read | 0.4 µs | 0.7 µs | 1.3 µs | 0.4 µs |
+| db | read | 13.1 µs | 37.9 µs | 56.0 µs | 17.8 µs |
+| memory | write | 0.7 µs | 0.8 µs | 0.9 µs | 0.7 µs |
+| db | write | 13.8 µs | 36.3 µs | 53.2 µs | 19.4 µs |
+
+读法：`db` 模式比 `memory` 多约 **13 µs（中位）/ 18–19 µs（平均）/ 约 38 µs（p95）**，对一次 MCP 调用（HTTP + 令牌验签 + 工具查询 + 审计写，毫秒级）是小数；写型调用的第二行 UPSERT 几乎不增加（同一事务）。真正的代价不在 CPU 而在**写锁**：每次放行都持一次 SQLite 写锁，MCP 高频调用会与业务写入排队（BUSY 由 `withWriteRetry` 重试，用尽 ⇒ fail closed）。因此默认仍是 `memory`；多进程部署或需要重启后不清零时才开 `db`。
+
+- 复现：`node scripts/bench-mcp-rate-store.mjs [--n=20000] [--tokens=50]`。
+- 未覆盖：`dmserver`；多进程同时写时的锁等待分布（正确性由 `tests/mcp-rate-store-db.test.mjs` 的 4 进程竞速用例验证：恰好放行 `rpm` 次，不是性能数据）；与业务写入争用下的尾延迟；`synchronous=FULL` / 网络盘；表在长期运行后的体积（每令牌每分钟至多 2 个窗口 × 2 种 kind 的行，清理线之外的行由定时器删除）。
+

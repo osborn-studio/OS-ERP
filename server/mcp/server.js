@@ -134,16 +134,20 @@ function argsFingerprint(args) {
 // 同时保留 JSON-RPC 外壳（jsonrpc / id）与工具级错误的 `result.isError` 形态，MCP 客户端仍能把原因交给模型。
 // 被限流的调用不写审计行（否则洪泛会变成对 SQLite 的写放大），只进进程内计数器 `os_erp_mcp_tool_calls_total{code="MCP_RATE_LIMITED"}`。
 const mcpLimiter = createMcpRateLimiter()
+/** 后台定时器入口（server/index.js）：清理某个行业库里的过期限速桶（memory 模式为空操作） */
+export function purgeMcpRateBuckets(db) { return mcpLimiter.purge(db) }
+export const mcpRateStore = mcpLimiter.policy.store
 const RATE_TEXT = {
   rpm: (d) => `该 Token 每分钟调用已达上限（${mcpLimiter.policy.rpm} 次），请 ${d.retryAfter} 秒后重试`,
   write_rpm: (d) => `该 Token 每分钟写型调用已达上限（${mcpLimiter.policy.writeRpm} 次），请 ${d.retryAfter} 秒后重试`,
   daily_quota: (d) => `该 Token 今日调用已达配额（${d.quota} 次），请次日再试或联系管理员调整`,
+  store_unavailable: () => '限流存储（mcp_rate_buckets）写入失败，为安全起见拒绝本次调用，请稍后重试或联系管理员',
   unavailable: () => '限流状态暂不可用，为安全起见拒绝本次调用，请稍后重试'
 }
 
 function rateLimited(res, id, tool, d) {
   incMcpToolCall(tool?.name, 'MCP_RATE_LIMITED')
-  const reason = d.reason === 'daily_quota' || d.reason === 'rpm' || d.reason === 'write_rpm' ? d.reason : 'unavailable'
+  const reason = ['daily_quota', 'rpm', 'write_rpm', 'store_unavailable'].includes(d.reason) ? d.reason : 'unavailable'
   const retryAfter = Math.max(1, Math.floor(d.retryAfter || 1))
   const err = Object.assign(new Error(RATE_TEXT[reason]({ ...d, retryAfter })), {
     code: 'MCP_RATE_LIMITED', status: 429, detail: { reason, retry_after: retryAfter }
@@ -164,7 +168,7 @@ function rateLimited(res, id, tool, d) {
 /** 速率 + 日配额的一次判定；通过返回 null，否则返回拒绝详情 */
 function mcpBudget(db, tokenId, level) {
   const scope = getCurrentIndustry() ?? '' // 令牌 id 在各行业库里各自编号，限流键必须带库标识
-  const rate = mcpLimiter.consume(tokenId, level, scope)
+  const rate = mcpLimiter.consume(tokenId, level, scope, db)
   if (!rate.allowed) return rate
   const q = mcpLimiter.daily(db, tokenId, scope)
   return q.allowed ? null : q

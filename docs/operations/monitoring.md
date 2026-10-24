@@ -24,6 +24,8 @@ curl -sS -H "Authorization: Bearer $GML_METRICS_TOKEN" 'http://127.0.0.1:3000/ap
 
 **MCP 速率限制与日配额（AD9，ADR-0056）**：每个 MCP 令牌（按验签后的令牌 id 计，与 IP 无关）有两个 60 秒滑动窗口额度：`GML_MCP_TOKEN_RPM`（全部工具调用与 `resources/read`，默认 600）与 `GML_MCP_WRITE_RPM`（`level: write` 工具，默认 60；写调用同时计入总额度）。取值范围 1..1000000，非法值回退默认。超限返回 HTTP 429、`Retry-After`、业务码 `MCP_RATE_LIMITED`（在 `detail.code`；响应仍带 JSON-RPC 外壳与 `result.isError`，无顶层 `error`），并计入 `os_erp_mcp_tool_calls_total{code="MCP_RATE_LIMITED"}`；被限流的调用不写 `mcp_call_logs`。可选日配额：设置键 `mcp_token_daily_quota`（系统设置 > 运维，危险键，改动须写理由；默认 0 = 关闭），按令牌统计本地当日的调用审计行，过本地午夜归零，超出同样返回 429（`detail.reason=daily_quota`）。限流桶在进程内存（重启清零、多进程各自计数），桶数上限 10000，满了且无可清理项时拒绝新桶（fail closed）。告警见 `OsErpMcpRateLimited`。
 
+**限速桶存到数据库（AE9）**：`GML_MCP_RATE_STORE=memory|db`（默认 `memory`，行为不变；其它取值启动即报 `MCP_RATE_STORE_INVALID`）。`db` 模式把窗口计数放在表 `mcp_rate_buckets`（迁移 073），多个进程共用同一份数据目录时**共享额度**，重启不清零；每次放行多一个短写事务（`withWriteRetry`，单进程基准见 capacity-baseline「AE9」，约 +13 µs 中位 / +38 µs p95）。过期桶由服务内的后台定时器每分钟清理（请求路径不删除）。存储写入失败时 **fail closed**：该次调用返回 429 `MCP_RATE_LIMITED`、`detail.reason=store_unavailable`，并使 `os_erp_mcp_rate_store_failures_total{reason="write_failed"}` +1（后台清理失败为 `purge_failed`，不影响放行）。告警见 `OsErpMcpRateStoreUnavailable`。注意：开启 `db` 模式后，高频 MCP 调用与业务写入争用同一个 SQLite 写锁；日配额与影子计数的口径不变。
+
 ## 2. Prometheus 抓取配置
 
 ```yaml
@@ -71,7 +73,7 @@ AB10 新增：
 
 计数器是进程内的，重启归零；用 `increase()`/`rate()`，不要直接比较绝对值。收到 `SIGTERM`（`kill`、`docker stop`、systemd 停止）时，服务在优雅退出前向标准输出写**一行** JSON 快照（`"msg":"metrics_snapshot","event":"shutdown"`，含计数器、直方图、写重试；不含路径与账号），重启前后可据此对账。`SIGKILL` 与崩溃不会有快照。
 
-## 4. 告警规则（6 条 + AB10 的 4 条 + AD9 的 1 条，见 4.1）
+## 4. 告警规则（6 条 + AB10 的 4 条 + AD9 的 1 条 + AE9 的 1 条，见 4.1）
 
 以上 6 条规则在 `docs/operations/alerts/os-erp.yml`（CI 的 docker job 用 `promtool check rules` 校验；Prometheus 的 `rule_files` 直接引用该文件）。
 
