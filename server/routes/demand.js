@@ -17,7 +17,9 @@ import { Router } from 'express'
 import { localDate } from '../lib/dates.js'
 import { getDb } from '../db/index.js'
 import { ok, fail, wrap, pageParams, paged, bizFail } from '../lib/http.js'
-import { requireAuth, requireRole, currentUser } from '../middleware/auth.js'
+import { requireAuth, requireRole, currentUser, attachOrgScope } from '../middleware/auth.js'
+import { stockScopeSql, assertWarehouseInScope } from '../lib/stock.js'
+import { purchaseOrderScopeSql } from '../lib/purchase.js'
 import { audit } from '../middleware/audit.js'
 import { nextDocNo } from '../lib/docno.js'
 import { advanceStatus, tryTransition, nowText, logEvent, allowedActions } from '../lib/docflow.js'
@@ -50,10 +52,12 @@ function requireDealer() {
   }
 }
 
-function defaultCentralWarehouse(db) {
+function defaultCentralWarehouse(db, orgScope = null) {
+  // ADR-0050：受限范围只在范围内的仓里挑默认仓（空范围 ⇒ 无默认仓）
+  const sc = stockScopeSql(orgScope, '', 'id')
   return db
-    .prepare("SELECT * FROM warehouses WHERE type IN ('central','region') AND status='active' ORDER BY CASE type WHEN 'central' THEN 0 ELSE 1 END, id LIMIT 1")
-    .get()
+    .prepare(`SELECT * FROM warehouses WHERE type IN ('central','region') AND status='active' AND ${sc.sql} ORDER BY CASE type WHEN 'central' THEN 0 ELSE 1 END, id LIMIT 1`)
+    .get(...sc.params)
 }
 
 function monthsBetween(start, end) {
@@ -354,14 +358,20 @@ r.post(
   '/dealer/summary',
   requireAuth,
   requireRole(...HQ),
+  attachOrgScope,
   wrap((req, res) => {
     const db = getDb()
     const startDate = req.body?.startDate
     const endDate = req.body?.endDate
     if (!startDate || !endDate) return fail(res, '请选择汇总时间段（开始/结束日期）')
+    // ADR-0050：显式仓库必须在调用者仓库组织范围内（范围外 / 不存在 ⇒ 403 TARGET_OUT_OF_SCOPE）；全局范围不变
+    if (req.body?.warehouse_id) {
+      try { assertWarehouseInScope(db, Number(req.body.warehouse_id), req.orgScope) } catch (e) { return bizFail(res, e) }
+    }
     const wh = req.body?.warehouse_id
       ? db.prepare('SELECT * FROM warehouses WHERE id=?').get(Number(req.body.warehouse_id))
-      : defaultCentralWarehouse(db)
+      : defaultCentralWarehouse(db, req.orgScope)
+    const poScope = purchaseOrderScopeSql(req.orgScope, 'o')
     const includePlans = req.body?.include_plans !== false
     const includeRequests = req.body?.include_requests !== false
     const months = monthsBetween(startDate, endDate)
@@ -423,9 +433,9 @@ r.post(
           .prepare(
             `SELECT COALESCE(SUM(i.qty - i.received_qty),0) q
              FROM purchase_order_items i JOIN purchase_orders o ON o.id=i.order_id
-             WHERE i.sku_id=? AND o.status IN ('submitted','approved') AND o.fulfill_type='hq'`
+             WHERE i.sku_id=? AND o.status IN ('submitted','approved') AND o.fulfill_type='hq' AND ${poScope.sql}`
           )
-          .get(sku.id).q
+          .get(sku.id, ...poScope.params).q
         const net = Math.max(0, Number((demand - stock - inTransit).toFixed(2)))
         bySku.push({
           sku_id: sku.id,
@@ -492,13 +502,16 @@ r.post(
   '/dealer/summary/to-orders',
   requireAuth,
   requireRole('purchase', 'warehouse', 'scm', 'admin'),
+  attachOrgScope,
   wrap((req, res) => {
     const db = getDb()
     const u = currentUser(req)
     const { period_start, period_end, warehouse_id, lines = [] } = req.body || {}
     if (!period_start || !period_end) return fail(res, '缺少汇总期间')
     if (!Array.isArray(lines) || !lines.length) return fail(res, '请勾选要生成的净需求行')
-    const hqWh = warehouse_id ? db.prepare('SELECT * FROM warehouses WHERE id=?').get(Number(warehouse_id)) : defaultCentralWarehouse(db)
+    // ADR-0050（Codex 同类入口）：生成订单的入库仓同样必须在范围内，先于任何写
+    try { assertWarehouseInScope(db, warehouse_id ? Number(warehouse_id) : defaultCentralWarehouse(db, req.orgScope)?.id, req.orgScope) } catch (e) { return bizFail(res, e) }
+    const hqWh = warehouse_id ? db.prepare('SELECT * FROM warehouses WHERE id=?').get(Number(warehouse_id)) : defaultCentralWarehouse(db, req.orgScope)
     if (!hqWh) return fail(res, '未找到入库仓库')
     const today = localDate()
 

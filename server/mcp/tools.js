@@ -41,7 +41,8 @@ import {
   // 这里只是调用方。原来这份判据长在 MCP 这一层，于是 HTTP 入口完全没有它
   // （`POST /orders/:id/status {"action":"receive"}` 一路 200、账却不动）。
   // 现在 HTTP / MCP / 通用流转入口三条路调**同一份**，被拒时的码与文案逐字相同。
-  assertNotParamOnly
+  assertNotParamOnly,
+  purchaseOrderScopeSql
 } from '../lib/purchase.js'
 import {
   DocFlowError, getDocType, assertEdgePermitted, dispatchTransition, docInScope, docScopeOf
@@ -278,8 +279,9 @@ function entityRowVisible(e, row, { orgs = [], stores = [], dealers = [], wareho
 // 其余单据类型按"这张表上真的能回答'归谁'的那一列"来定。
 const PURCHASE_DOC_SCOPE = {
   PRQ: { name: '请购单', table: 'purchase_requisitions', orgs: ['org_id'], warehouses: ['warehouse_id'] },
-  // ↓ 与 `purchase.list_orders` 的 entityScopeClause 参数完全一致
-  PO: { name: '采购订单', table: 'purchase_orders', warehouses: ['warehouse_id'], stores: ['target_store_id'] },
+  // ADR-0050：采购订单只按入库仓归属（与 HTTP `purchaseOrderScopeSql` 同判据）；`target_store_id` 不再放行。
+  // 读列表 / KPI 直接调 `purchaseOrderScopeSql`，这里的逐行判断（写闸门）只留仓库列，与其保持一致。
+  PO: { name: '采购订单', table: 'purchase_orders', warehouses: ['warehouse_id'] },
   GR: { name: '收货单', table: 'purchase_receipts', warehouses: ['warehouse_id'] },
   PRT: { name: '采购退货单', table: 'purchase_returns', warehouses: ['warehouse_id'] },
   // ↓ 这三张单没有仓库/门店列，用它们自己的 `org_id`（建单时写入）。
@@ -598,7 +600,7 @@ export const TOOLS = [
       }
       const skus = db.prepare('SELECT * FROM product_skus WHERE product_id=?').all(product.id)
       const skuIds = skus.map((s) => s.id)
-      const f = orgFilter(ctx, 's', 'owner_org_id')
+      const f = invFilter(ctx, 's', 'owner_org_id') // ADR-0050（Codex）：货主过滤叠加仓库组织范围
       const stocks = skuIds.length
         ? db.prepare(`
             SELECT s.sku_id, s.warehouse_id, w.name AS warehouse_name, s.batch_no, s.owner_org_id,
@@ -892,10 +894,9 @@ export const TOOLS = [
       if (args.status) { where.push('po.status=?'); params.push(args.status) }
       if (args.supplier_id) { where.push('po.supplier_id=?'); params.push(args.supplier_id) }
       if (args.start_date) { where.push('po.order_date >= ?'); params.push(args.start_date) }
-      // A03 增量：handler 必须接收 ctx 并施加组织过滤（原来不接收 ⇒ 令牌绑了组织也照样看全量）
-      // 归属列直接取 `PURCHASE_DOC_SCOPE.PO` —— 与写闸门（`purchase.advance_order` 等）
-      // 是**同一个对象**，不是"两处写了相同的一行"。
-      const f = entityScopeClause(scopeEntityIds(ctx, db), PURCHASE_DOC_SCOPE.PO, { alias: 'po' })
+      // ADR-0050：订单范围谓词只有 `lib/purchase.js` 的 `purchaseOrderScopeSql` 一份（HTTP 同调），这里不再自带 SQL。
+      const sc = purchaseOrderScopeSql(ctx.scope, 'po')
+      const f = { sql: ` AND ${sc.sql} `, params: sc.params }
       const rows = db.prepare(`
         SELECT po.*, s.name AS supplier_name,
                (SELECT COUNT(*) FROM purchase_order_items i WHERE i.order_id=po.id) AS item_count
@@ -1027,12 +1028,13 @@ export const TOOLS = [
     inputSchema: { type: 'object', properties: { currency: S.str('币种，默认 CNY') } },
     handler({ db, args, ctx }) {
       const cur = args.currency || 'CNY'
-      const f = orgFilter(ctx, 's', 'owner_org_id')
+      const f = invFilter(ctx, 's', 'owner_org_id') // ADR-0050（Codex）：库存价值同样叠加仓库组织范围
       const stockValue = db.prepare(`SELECT ROUND(SUM(cost_amount),2) v, COUNT(*) c FROM inventory_stocks s WHERE s.currency=? ${f.sql}`).get(cur, ...f.params)
       const skuCount = db.prepare('SELECT COUNT(*) c FROM product_skus').get().c
       const entities = scopeEntityIds(ctx, db)
       const salesScope = entityScopeClause(entities, { stores: ['store_id'], dealers: ['dealer_id'], warehouses: ['warehouse_id'] }, { alias: 'so' })
-      const purchaseScope = entityScopeClause(entities, { warehouses: ['warehouse_id'], stores: ['target_store_id'] }, { alias: 'po' })
+      const poScope = purchaseOrderScopeSql(ctx.scope, 'po')
+      const purchaseScope = { sql: ` AND ${poScope.sql} `, params: poScope.params }
       const pendingShip = db.prepare(`SELECT COUNT(*) c FROM sales_orders so WHERE status IN ('confirmed','pending','approved') ${salesScope.sql}`).get(...salesScope.params).c
       const purchaseInTransit = db.prepare(`SELECT COUNT(*) c FROM purchase_orders po WHERE status IN ('approved','partial') ${purchaseScope.sql}`).get(...purchaseScope.params).c
       return ok({

@@ -581,7 +581,7 @@ HTTP 响应与错误归一：`ok` / `fail` / `wrap` 的**唯一实现**（统一
 | 导出 | 类型 | 路由 | MCP 工具 | 被模块调用 |
 |---|---|---|---|---|
 | `GENERIC_5XX_MESSAGE` | const | — | — | — |
-| `bizFail` | fn | 9 条：auth.js×1, demand.js×1, meta.js×1, notify.js×1, outsourcing.js×1, quote.js×1, sales.js×3 | — | — |
+| `bizFail` | fn | 11 条：auth.js×1, demand.js×3, meta.js×1, notify.js×1, outsourcing.js×1, quote.js×1, sales.js×3 | — | — |
 | `fail` | fn | 192 条：accounting.js×1, ai.js×1, approval.js×5, ar.js×4, auth.js×2, costing.js×1, credit.js×5, dealers.js×10, demand.js×9, dms.js×7, docflow.js×8, im.js×3, inventory.js×14, invoice.js×2, mall.js×7, manufacture.js×5, master.js×11, meta.js×4, notify.js×1, oms.js×10, order-center.js×8, outsourcing.js×7, pos.js×10, pricing.js×3, promo.js×5, purchase-chain.js×10, purchase.js×7, qc.js×2, qc2.js×5, qimen.js×1, quote.js×2, refund.js×1, requisitions.js×11, sales.js×10 | — | lib/crud.js |
 | `failFromError` | fn | 170 条：accounting.js×18, auth.js×1, dms.js×17, mall.js×3, meta.js×2, pos.js×3, promo.js×40, purchase-chain.js×33, purchase.js×10, refund.js×4, report.js×39 | — | — |
 | `hidesInternals` | fn | — | — | — |
@@ -1071,9 +1071,10 @@ Prometheus 文本指标渲染 + 抓取令牌校验（ADR-0045）
 | `normalizePurchaseOrderLines` | fn | PUT /api/purchase/orders/:id | — | — |
 | `planAllocation` | fn | GET /api/purchase/payment-plan | — | — |
 | `purchaseActions` | fn | GET /api/purchase/chain/actions<br>GET /api/purchase/requisitions/:id<br>GET /api/purchase/invoices/:id<br>GET /api/purchase/settlements/:id<br>GET /api/purchase/payments/:id | — | — |
+| `purchaseOrderScopeSql` | fn | POST /api/demand/dealer/summary<br>GET /api/purchase/orders<br>GET /api/purchase/stats | purchase.list_orders, report.dashboard_kpi | mcp/tools.js |
 | `purchaseOverview` | fn | GET /api/purchase/chain/overview | — | — |
 | `purchaseReturnSource` | fn | — | — | — |
-| `purchaseScopeSql` | fn | 11 条：purchase-chain.js×7, purchase.js×4 | — | lib/approval.js |
+| `purchaseScopeSql` | fn | 9 条：purchase-chain.js×7, purchase.js×2 | — | lib/approval.js |
 | `purchaseTodos` | fn | GET /api/purchase/chain/todos | — | — |
 | `recalcOrder` | fn | PUT /api/purchase/orders/:id | — | — |
 | `receivePurchaseOrder` | fn | POST /api/purchase/orders/:id/receive | purchase.receive_order | mcp/tools.js |
@@ -1442,7 +1443,7 @@ Prometheus 文本指标渲染 + 抓取令牌校验（ADR-0045）
 | `applyStockIn` | fn | POST /api/inventory/assembly/:id/confirm<br>POST /api/outsourcing/orders/:id/receive<br>POST /api/requisitions/store/shipments/:id/receive | — | lib/mfg.js, lib/pos2.js, lib/purchase.js, lib/returns.js, lib/transfer.js |
 | `applyStockOut` | fn | 7 条：inventory.js×3, oms.js×1, outsourcing.js×1, requisitions.js×1, sales.js×1 | — | lib/mfg.js, lib/pos2.js, lib/purchase.js, lib/qc2.js, lib/transfer.js |
 | `assertStockDocInScope` | fn | 18 条：inventory.js×7, qc.js×4, qc2.js×7 | — | — |
-| `assertWarehouseInScope` | fn | 12 条：inventory.js×3, master.js×1, oms.js×3, purchase.js×4, qc2.js×1 | — | lib/transfer.js |
+| `assertWarehouseInScope` | fn | 14 条：demand.js×2, inventory.js×3, master.js×1, oms.js×3, purchase.js×4, qc2.js×1 | — | lib/transfer.js |
 | `availableQty` | fn | — | — | — |
 | `clearInvTypeCache` | fn | POST /api/master/inv-txn-types<br>PUT /api/master/inv-txn-types/:code | — | — |
 | `clearParamCache` | fn | — | — | — |
@@ -1463,7 +1464,7 @@ Prometheus 文本指标渲染 + 抓取令牌校验（ADR-0045）
 | `resolveCurrency` | fn | — | — | — |
 | `resolveOwnerOrg` | fn | — | inventory.adjust, inventory.get_cost, inventory.ownership_transfer, inventory.pick_suggestion, inventory.stock_in, inventory.stock_out, inventory.transfer | mcp/tools.js |
 | `setStockNowProvider` | fn | — | — | — |
-| `stockScopeSql` | fn | 18 条：inventory.js×14, master.js×2, oms.js×1, warehouses.js×1 | inventory.list_batches, inventory.list_transactions, inventory.query_stock, inventory.stock_alert | lib/qc.js, lib/qc2.js, lib/transfer.js, mcp/tools.js |
+| `stockScopeSql` | fn | 28 条：demand.js×2, inventory.js×14, master.js×10, oms.js×1, warehouses.js×1 | inventory.list_batches, inventory.list_transactions, inventory.query_stock, inventory.stock_alert, master.get_product_360, report.dashboard_kpi | lib/qc.js, lib/qc2.js, lib/transfer.js, mcp/tools.js |
 | `warehouseInScope` | fn | 35 条：inventory.js×1, pos.js×31, qc2.js×2, warehouses.js×1 | inventory.adjust, inventory.get_cost, inventory.ownership_transfer, inventory.pick_suggestion, inventory.stock_in, inventory.stock_out, inventory.transfer | lib/qc2.js, mcp/tools.js |
 
 ## `server/lib/store-binding.js`
@@ -1671,7 +1672,7 @@ MCP 工具入参校验（唯一实现）。
 | 工具 | 级别 | 权限点 | 调用的 lib 函数 | 工具内 SQL 表 | 经 lib 触达的表 |
 |---|---|---|---|---|---|
 | `master.search_products` | read | master.product.view | — | brands, categories, product_skus, products | — |
-| `master.get_product_360` | read | master.product.view | — | inventory_stocks, inventory_transactions, orgs, product_skus, products, warehouses | — |
+| `master.get_product_360` | read | master.product.view | lib/stock.js: stockScopeSql | inventory_stocks, inventory_transactions, orgs, product_skus, products, warehouses | — |
 | `master.list_partners` | read | master.partner.view | — | dealers, stores, suppliers | — |
 | `inventory.query_stock` | read | inventory.stock.view | lib/stock.js: stockScopeSql | inventory_stocks, orgs, product_skus, products, warehouses | — |
 | `inventory.list_batches` | read | inventory.batch.view | lib/dates.js: localNow<br>lib/stock.js: stockScopeSql | inventory_batches, inventory_stocks, product_skus | warehouses |
@@ -1679,11 +1680,11 @@ MCP 工具入参校验（唯一实现）。
 | `inventory.pick_suggestion` | read | inventory.stock.query | lib/stock.js: pickBatches, resolveOwnerOrg, warehouseInScope | warehouses | inv_params, inventory_batches, inventory_stocks, product_skus, products |
 | `inventory.list_transactions` | read | inventory.stock.query | lib/stock.js: stockScopeSql | inventory_transactions, orgs, warehouses | — |
 | `inventory.stock_alert` | read | inventory.stock.view | lib/stock.js: getInvParam, listBelowSafe, stockScopeSql | inventory_stocks, product_skus, warehouses | inv_params, products |
-| `purchase.list_orders` | read | purchase.order.view, purchase.inbound, purchase.return | — | dealers, purchase_invoices, purchase_order_items, purchase_orders, purchase_payments, purchase_receipts, purchase_requisitions, purchase_returns, purchase_settlements, stores, suppliers, warehouses | — |
+| `purchase.list_orders` | read | purchase.order.view, purchase.inbound, purchase.return | lib/purchase.js: purchaseOrderScopeSql | purchase_order_items, purchase_orders, suppliers | warehouses |
 | `sales.list_orders` | read | sales.order.view | lib/sales-order.js: salesScopeSql | sales_order_items, sales_orders | stores, warehouses |
 | `order.trace_document` | read | sales.order.view, purchase.order.view, inventory.stock.view | lib/docflow.js: docInScope<br>mcp/doc-perms.js: canViewDocType, rowInBinding | dealers, doc_types, inventory_transactions, stores, users, warehouses | ar_documents, assembly_orders, cost_adjustments, dealer_rebates, dealer_requisitions, dealer_statements, material_issues, oc_customers, oc_orders, oc_statements, oms_orders, outsourcing_materials, outsourcing_orders, outsourcing_receipts, pos_daily_closes, pos_orders, pos_shifts, production_orders, purchase_inspections, purchase_invoices, purchase_orders, purchase_payments, purchase_receipts, purchase_requisitions, purchase_returns, purchase_settlements, qc_defect_handlings, qc_inspections, qc_requests, receipts, refunds, role_permissions, sales_deliveries, sales_invoices, sales_orders, sales_quotes, sales_returns, stock_checks, stock_transfers, store_requisitions, store_shipments, user_roles, vouchers |
 | `report.sales_summary` | read | sales.order.view | lib/dates.js: localDate | dealers, sales_orders, stores, warehouses | — |
-| `report.dashboard_kpi` | read | — | — | dealers, inventory_stocks, product_skus, purchase_orders, sales_orders, stores, warehouses | — |
+| `report.dashboard_kpi` | read | — | lib/purchase.js: purchaseOrderScopeSql<br>lib/stock.js: stockScopeSql | dealers, inventory_stocks, product_skus, purchase_orders, sales_orders, stores, warehouses | — |
 | `org.tree` | read | — | — | orgs | — |
 | `inventory.stock_in` | write | purchase.inbound | lib/dates.js: localDate<br>lib/stock.js: resolveOwnerOrg, warehouseInScope | warehouses | — |
 | `inventory.stock_out` | write | sales.outbound | lib/dates.js: localDate<br>lib/stock.js: pickBatches, resolveOwnerOrg, warehouseInScope | warehouses | inv_params, inventory_batches, inventory_stocks, product_skus, products |

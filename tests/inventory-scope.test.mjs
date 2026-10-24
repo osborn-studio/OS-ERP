@@ -820,3 +820,104 @@ test('AB1: master options warehouses, purchase order list/detail and QC overview
     assert.equal(okData(await api('/api/purchase/inspections/overview', { token: NONEtoken })).total, 0)
   })
 })
+
+test('AC1: MCP purchase tools, dealer summary and master aggregates follow the warehouse-org scope (ADR-0050)', { timeout: 300000 }, async (t) => {
+  const f = await server(t)
+  const { db, api } = f
+  process.env.GML_RUNTIME_MODE = 'test'
+  const { TOOLS } = await import('../server/mcp/tools.js')
+  const { purchaseOrderScopeSql } = await import('../server/lib/purchase.js')
+  const engine = await import('../server/lib/stock.js')
+  const call = (name, args, scope) => TOOLS.find((x) => x.name === name).handler({ db, args, ctx: { scope, tokenName: 'ac1', orgId: null, engine } })
+  const whA = db.prepare("SELECT id, org_id FROM warehouses WHERE code='WH01'").get()
+  const whB = db.prepare("SELECT id, org_id FROM warehouses WHERE code='WH03'").get()
+  assert.notEqual(whA.org_id, whB.org_id)
+  const supplierId = db.prepare('SELECT id FROM suppliers ORDER BY id LIMIT 1').get().id
+  const skus = db.prepare('SELECT id FROM product_skus ORDER BY id LIMIT 2').all()
+  const sku = skus[0].id
+  // A 组织的门店：订单入库仓在 B、目标门店在 A —— HTTP 不放行，MCP 旧口径放行
+  const storeA = Number(db.prepare("INSERT INTO stores (code, name, status, org_id) VALUES ('AC1-S-A','AC1 store A','active',?)").run(whA.org_id).lastInsertRowid)
+  const insPo = db.prepare("INSERT INTO purchase_orders (doc_no, supplier_id, warehouse_id, target_store_id, order_date, status, fulfill_type) VALUES (?,?,?,?,date('now','localtime'),'approved','hq')")
+  const poA = Number(insPo.run('AC1-PO-A', supplierId, whA.id, null).lastInsertRowid)
+  const poBstoreA = Number(insPo.run('AC1-PO-B-STORE-A', supplierId, whB.id, storeA).lastInsertRowid)
+  const poB = Number(insPo.run('AC1-PO-B', supplierId, whB.id, null).lastInsertRowid)
+  const insItem = db.prepare('INSERT INTO purchase_order_items (order_id, sku_id, qty, price, tax_rate, amount) VALUES (?,?,?,1,13,?)')
+  insItem.run(poA, sku, 3, 3); insItem.run(poBstoreA, sku, 5, 5); insItem.run(poB, sku, 7, 7)
+  const scopeA = { scope: 'restricted', orgIds: [whA.org_id] }
+  const scopeNone = { scope: 'none', orgIds: [] }
+  const scopeAll = { scope: 'all', orgIds: null }
+  const grant = db.prepare('INSERT OR IGNORE INTO role_permissions (role_code, perm_code) VALUES (?,?)')
+  grant.run('warehouse', 'purchase.order.view')
+  const A = await f.account('ac1_wh_a', 'warehouse', { org_id: whA.org_id, data_scope: 'org' })
+
+  await t.test('one purchase-order predicate: lib export agrees with HTTP, MCP list and KPI', async () => {
+    const sc = purchaseOrderScopeSql(scopeA, 'po')
+    const viaLib = db.prepare(`SELECT po.doc_no FROM purchase_orders po WHERE po.doc_no LIKE 'AC1-%' AND ${sc.sql}`).all(...sc.params).map((r) => r.doc_no)
+    assert.deepEqual(viaLib, ['AC1-PO-A'])
+    const http = okData(await api('/api/purchase/orders?pageSize=500', { token: A.token })).list.map((x) => x.doc_no).filter((x) => x.startsWith('AC1-'))
+    assert.deepEqual(http, viaLib)
+    const mcp = call('purchase.list_orders', { limit: 200 }, scopeA).data.list.map((x) => x.doc_no).filter((x) => x.startsWith('AC1-'))
+    assert.deepEqual(mcp, viaLib, 'MCP must not admit an order through its target store')
+    assert.equal(call('purchase.list_orders', { limit: 200 }, scopeNone).data.list.length, 0)
+    assert.equal(call('purchase.list_orders', { limit: 200 }, scopeAll).data.list.filter((x) => x.doc_no.startsWith('AC1-')).length, 3)
+    const inA = db.prepare("SELECT COUNT(*) c FROM purchase_orders WHERE status IN ('approved','partial') AND warehouse_id IN (SELECT id FROM warehouses WHERE org_id=?)").get(whA.org_id).c
+    assert.equal(call('report.dashboard_kpi', {}, scopeA).data.purchase_in_transit, inA)
+    assert.equal(call('report.dashboard_kpi', {}, scopeNone).data.purchase_in_transit, 0)
+    assert.equal(call('report.dashboard_kpi', {}, scopeAll).data.purchase_in_transit, db.prepare("SELECT COUNT(*) c FROM purchase_orders WHERE status IN ('approved','partial')").get().c)
+  })
+
+  await t.test('dealer summary: out-of-scope warehouse is 403, in-transit counts only in-scope purchases', async () => {
+    const dealer = db.prepare('SELECT id FROM dealers ORDER BY id LIMIT 1').get().id
+    db.prepare("INSERT INTO dealer_requisition_plans (dealer_id, period, sku_id, plan_qty, plan_amount, status) VALUES (?, '2099-01', ?, 100, 100, 'confirmed')").run(dealer, sku)
+    const body = (wh) => ({ startDate: '2099-01-01', endDate: '2099-01-31', include_requests: false, ...(wh == null ? {} : { warehouse_id: wh }) })
+    const hid = await api('/api/demand/dealer/summary', { token: A.token, body: body(whB.id) })
+    expectStatus(hid, 403, 'foreign warehouse')
+    assert.equal(hid.body.error, 'TARGET_OUT_OF_SCOPE')
+    const own = okData(await api('/api/demand/dealer/summary', { token: A.token, body: body(whA.id) }))
+    const row = (d) => d.bySku.find((x) => x.sku_id === sku)
+    const hqIn = (where) => db.prepare(`SELECT COALESCE(SUM(i.qty-i.received_qty),0) q FROM purchase_order_items i JOIN purchase_orders o ON o.id=i.order_id WHERE i.sku_id=? AND o.status IN ('submitted','approved') AND o.fulfill_type='hq' AND ${where}`).get(sku, ...(where.includes('?') ? [whA.org_id] : [])).q
+    const inScope = hqIn('o.warehouse_id IN (SELECT id FROM warehouses WHERE org_id=?)')
+    assert.equal(row(own).in_transit, inScope)
+    const all = okData(await api('/api/demand/dealer/summary', { token: f.admin, body: body(whB.id) }))
+    assert.equal(row(all).in_transit, hqIn('1=1'), 'global scope unchanged')
+    assert.ok(row(all).in_transit > inScope)
+    const none = await api('/api/demand/dealer/summary', { token: f.admin, body: body() })
+    assert.equal(none.status, 200)
+  })
+
+  await t.test('master products / overview: stock_qty and warehouse count follow the scope', async () => {
+    const adj = async (wh, qty) => okData(await api('/api/inventory/adjust', { token: f.admin, body: { warehouse_id: wh, sku_id: sku, batch_no: 'AC1', qty, direction: 'in', reason: 'ac1' } }))
+    await adj(whA.id, 4); await adj(whB.id, 9)
+    const inScopeQty = db.prepare('SELECT COALESCE(SUM(qty_on_hand),0) q FROM inventory_stocks WHERE sku_id=? AND warehouse_id IN (SELECT id FROM warehouses WHERE org_id=?)').get(sku, whA.org_id).q
+    const allQty = db.prepare('SELECT COALESCE(SUM(qty_on_hand),0) q FROM inventory_stocks WHERE sku_id=?').get(sku).q
+    assert.ok(allQty > inScopeQty)
+    const productId = db.prepare('SELECT product_id FROM product_skus WHERE id=?').get(sku).product_id
+    const prod = (r) => okData(r).list.find((p) => p.id === productId)
+    assert.equal(prod(await api('/api/master/products?pageSize=1000', { token: A.token })).stock_qty, db.prepare('SELECT COALESCE(SUM(qty_on_hand),0) q FROM inventory_stocks st JOIN product_skus s ON s.id=st.sku_id WHERE s.product_id=? AND st.warehouse_id IN (SELECT id FROM warehouses WHERE org_id=?)').get(productId, whA.org_id).q)
+    assert.equal(okData(await api(`/api/master/products/${productId}`, { token: A.token })).stock_qty, db.prepare('SELECT COALESCE(SUM(qty_on_hand),0) q FROM inventory_stocks st JOIN product_skus s ON s.id=st.sku_id WHERE s.product_id=? AND st.warehouse_id IN (SELECT id FROM warehouses WHERE org_id=?)').get(productId, whA.org_id).q)
+    assert.equal(okData(await api(`/api/master/products/${productId}`, { token: f.admin })).stock_qty, db.prepare('SELECT COALESCE(SUM(qty_on_hand),0) q FROM inventory_stocks st JOIN product_skus s ON s.id=st.sku_id WHERE s.product_id=?').get(productId).q, 'global unchanged')
+    const skuRow = (r) => okData(r).find((x) => x.id === sku)
+    assert.equal(skuRow(await api('/api/master/skus', { token: A.token })).stock_qty, inScopeQty)
+    assert.equal(skuRow(await api('/api/master/skus', { token: f.admin })).stock_qty, allQty)
+    const ov = okData(await api('/api/master/overview', { token: A.token }))
+    assert.equal(ov.warehouses, db.prepare("SELECT COUNT(*) c FROM warehouses WHERE status='active' AND org_id=?").get(whA.org_id).c)
+    assert.equal(okData(await api('/api/master/overview', { token: f.admin })).warehouses, db.prepare("SELECT COUNT(*) c FROM warehouses WHERE status='active'").get().c)
+  })
+
+  await t.test('Codex follow-ups: A-owned stock in a foreign warehouse stays out of KPI / product 360, and foreign serials do not scan', async () => {
+    const putStock = (wh, batch) => engine.applyStockIn(db, { bizDate: new Date().toISOString().slice(0, 10), docType: 'ADJ_IN', docNo: `AC1-${batch}`, warehouseId: wh, ownerOrgId: whA.org_id, skuId: sku, batchNo: batch, qty: 6, unitCost: 2, expireAt: '2099-01-01 00:00:00', source: 'test', operator: 'ac1' })
+    putStock(whA.id, 'AC1-OWN-A')
+    putStock(whB.id, 'AC1-OWN-A-IN-B')
+    const scopeOwn = { scope: 'restricted', orgIds: [whA.org_id] }
+    const productId = db.prepare('SELECT product_id FROM product_skus WHERE id=?').get(sku).product_id
+    const batches = call('master.get_product_360', { product_id: productId }, scopeOwn).data.stocks.map((x) => x.batch_no)
+    assert.ok(batches.includes('AC1-OWN-A') && !batches.includes('AC1-OWN-A-IN-B'), `product 360: ${batches}`)
+    const expect = db.prepare('SELECT ROUND(SUM(cost_amount),2) v FROM inventory_stocks s WHERE s.currency=? AND s.owner_org_id IN (?) AND s.warehouse_id IN (SELECT id FROM warehouses WHERE org_id=?)').get('CNY', whA.org_id, whA.org_id).v || 0
+    assert.equal(call('report.dashboard_kpi', {}, scopeOwn).data.stock_value, expect)
+    db.prepare("INSERT INTO serial_numbers (serial_no, sku_id, warehouse_id, status) VALUES ('AC1-SN-B', ?, ?, 'in_stock')").run(sku, whB.id)
+    db.prepare("INSERT INTO serial_numbers (serial_no, sku_id, warehouse_id, status) VALUES ('AC1-SN-A', ?, ?, 'in_stock')").run(sku, whA.id)
+    assert.equal((await api('/api/master/scan?code=AC1-SN-A', { token: A.token })).status, 200)
+    expectStatus(await api('/api/master/scan?code=AC1-SN-B', { token: A.token }), 404, 'foreign serial')
+    assert.equal((await api('/api/master/scan?code=AC1-SN-B', { token: f.admin })).status, 200)
+  })
+})

@@ -2110,6 +2110,17 @@ export function purchaseScopeSql(orgScope, alias = '') {
 }
 
 /**
+ * 采购订单可见范围的**唯一**谓词（ADR-0050）：订单经入库仓 `warehouses.org_id` 归属，不看 `target_store_id`。
+ * HTTP 列表 / 统计、`assertPurchaseDocInScope('PO')`、MCP `purchase.list_orders` / `report.dashboard_kpi` 都从这里取，
+ * 不再各抄一份 SQL。返回 `{ sql, params, empty }`：`sql` 是完整谓词（无前导 AND），全局范围恒为 `1=1`，
+ * 空 / dealer / none 范围为 `1=0`（并置 `empty: true`）。`alias` 为 `purchase_orders` 的表别名。
+ */
+export function purchaseOrderScopeSql(orgScope, alias = '') {
+  const s = purchaseScopeSql(orgScope, alias)
+  return { sql: s.wh, params: s.params, empty: s.empty }
+}
+
+/**
  * 单据是否在调用者组织范围内（ADR-0020）：详情 / 动作 / 预览类读接口取单前的同一道判据。
  * 与 `purchaseScopeSql` 同一口径 —— 请购 / 发票 / 结算 / 付款按自身 `org_id`，订单 / 收货经 `warehouses.org_id`；
  * 归属 NULL 对受限范围不可见、对全局范围可见。不在范围内与不存在**同形**（404 + 同一句话），不泄漏存在性。
@@ -2125,7 +2136,7 @@ export function assertPurchaseDocInScope(db, docType, id, orgScope) {
   if (!def) throw new PurchaseError(`不支持的单据类型 ${docType}`, { code: 'BAD_DOC_TYPE' })
   const scope = purchaseScopeSql(orgScope, 't')
   const row = Number.isFinite(Number(id))
-    ? db.prepare(`SELECT t.* FROM ${def[0]} t WHERE t.id=? AND ${scope[def[1]]}`).get(Number(id), ...scope.params)
+    ? db.prepare(`SELECT t.* FROM ${def[0]} t WHERE t.id=? AND ${docType === 'PO' ? purchaseOrderScopeSql(orgScope, 't').sql : scope[def[1]]}`).get(Number(id), ...scope.params)
     : null
   if (!row) throw new PurchaseError('单据不存在', { code: 'DOC_NOT_FOUND', httpStatus: 404 })
   return row

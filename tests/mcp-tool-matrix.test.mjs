@@ -639,3 +639,35 @@ test('MCP delegation matrix: every tool x {owner inactive, permission removed, s
   assert.deepEqual(failures, [], `tools that slipped through:\n${failures.join('\n')}`)
   assert.ok(Object.values(saved.tools).every((x) => Object.values(x.states).every((c) => c.result !== 'LEAK')))
 })
+
+// AC1（ADR-0050）：采购订单在 MCP 读工具里的可见范围与 HTTP 完全一致 —— 只按入库仓的组织，目标门店不放行。
+test('AC1: purchase.list_orders / report.dashboard_kpi admit a purchase order by warehouse org only, like HTTP', { timeout: 300000 }, async (t) => {
+  const f = await server(t)
+  const { db, api, mcp } = f
+  const admin = (await api('/api/auth/login', { body: { username: 'admin', password: '12345', industry: 'cosmetic' } })).body.data
+  const whA = db.prepare("SELECT id, org_id FROM warehouses WHERE code='WH01'").get()
+  const whB = db.prepare("SELECT id, org_id FROM warehouses WHERE code='WH03'").get()
+  assert.notEqual(whA.org_id, whB.org_id)
+  const supplier = db.prepare('SELECT id FROM suppliers ORDER BY id LIMIT 1').get().id
+  const storeA = Number(db.prepare("INSERT INTO stores (code, name, status, org_id) VALUES ('AC1-MX-S','AC1 matrix store','active',?)").run(whA.org_id).lastInsertRowid)
+  const ins = db.prepare("INSERT INTO purchase_orders (doc_no, supplier_id, warehouse_id, target_store_id, order_date, status) VALUES (?,?,?,?,date('now','localtime'),'approved')")
+  ins.run('AC1-MX-WH-A', supplier, whA.id, null)
+  ins.run('AC1-MX-WH-B-STORE-A', supplier, whB.id, storeA)
+  ins.run('AC1-MX-WH-B', supplier, whB.id, null)
+  for (const p of ['purchase.order.view']) db.prepare('INSERT OR IGNORE INTO role_permissions (role_code, perm_code) VALUES (?,?)').run('warehouse', p)
+  const mk = async (username, extra) => {
+    const r = (await api('/api/auth/users', { token: admin.token, body: { username, name: username, role: 'warehouse', password: secret(), ...extra } })).body
+    assert.equal(r.success, true, JSON.stringify(r))
+    return createToken(db, { name: username, ownerUserId: r.data.id, industry: 'cosmetic', scopes: 'read' }).token
+  }
+  const tokA = await mk('ac1_mx_a', { org_id: whA.org_id, data_scope: 'org' })
+  const tokAll = await mk('ac1_mx_all', { data_scope: 'all' })
+  const docs = async (token) => payload(await mcp('tools/call', { name: 'purchase.list_orders', arguments: { limit: 200 } }, token)).list.map((x) => x.doc_no).filter((x) => x.startsWith('AC1-MX-')).sort()
+  assert.deepEqual(await docs(tokA), ['AC1-MX-WH-A'], 'target store in scope must not admit an order stored in another org warehouse')
+  assert.equal((await docs(tokAll)).length, 3, 'global scope unchanged')
+  const kpi = async (token) => payload(await mcp('tools/call', { name: 'report.dashboard_kpi', arguments: {} }, token)).purchase_in_transit
+  const expectA = db.prepare("SELECT COUNT(*) c FROM purchase_orders WHERE status IN ('approved','partial') AND warehouse_id IN (SELECT id FROM warehouses WHERE org_id=?)").get(whA.org_id).c
+  assert.equal(await kpi(tokA), expectA)
+  assert.equal(await kpi(tokAll), db.prepare("SELECT COUNT(*) c FROM purchase_orders WHERE status IN ('approved','partial')").get().c)
+  assert.ok(expectA < await kpi(tokAll))
+})
