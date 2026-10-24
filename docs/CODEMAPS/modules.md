@@ -548,7 +548,7 @@ BOM 服务层（模块 10B · 一个 BOM + 三类执行单）
 | 导出 | 类型 | 路由 | MCP 工具 | 被模块调用 |
 |---|---|---|---|---|
 | `DOC_CREATE_PERMS` | const | — | — | — |
-| `DOC_SCOPE_RESOLVERS` | const | — | — | — |
+| `DOC_SCOPE_RESOLVERS` | const | — | — | lib/approval.js |
 | `DocFlowError` | class | — | purchase.build_settlement, purchase.convert_requisition, purchase.create_invoice, purchase.create_order, purchase.create_payment, purchase.create_requisition, purchase.create_return, purchase.receive_order | lib/purchase.js, mcp/tools.js |
 | `advanceStatus` | fn | 25 条：demand.js×2, inventory.js×7, oms.js×3, outsourcing.js×1, pos.js×1, purchase.js×3, requisitions.js×3, sales.js×5 | — | lib/pos2.js, lib/returns.js, lib/sales-order.js |
 | `allowedActions` | fn | PUT /api/dealers/rebates/:id<br>POST /api/demand/dealer/requisitions/:id/status<br>GET /api/docflow/actions<br>POST /api/requisitions/store/shipments/:id/receive<br>POST /api/requisitions/shipments/:id/ship | — | lib/order-center.js, lib/purchase.js |
@@ -558,7 +558,7 @@ BOM 服务层（模块 10B · 一个 BOM + 三类执行单）
 | `createPermOf` | fn | POST /api/docflow/no-issue | — | — |
 | `dispatchTransition` | fn | POST /api/docflow/transition | doc.transition, purchase.advance_invoice, purchase.advance_payment, purchase.advance_requisition, purchase.advance_settlement | mcp/tools.js |
 | `docEventScope` | fn | GET /api/docflow/overview<br>GET /api/docflow/history/:docType/:id<br>GET /api/docflow/trace<br>GET /api/docflow/events | — | — |
-| `docInScope` | fn | POST /api/docflow/transition<br>GET /api/docflow/history/:docType/:id | doc.get, order.trace_document | mcp/tools.js |
+| `docInScope` | fn | POST /api/docflow/transition<br>GET /api/docflow/history/:docType/:id | doc.get, order.trace_document | lib/approval.js, mcp/tools.js |
 | `docScopeOf` | fn | GET /api/docflow/overview | doc.query | mcp/tools.js |
 | `effectOwnerOf` | fn | POST /api/docflow/transition | — | lib/approval.js |
 | `explainLifecycle` | fn | GET /api/docflow/types/:code/lifecycle<br>GET /api/purchase/chain/flow | — | — |
@@ -1516,8 +1516,10 @@ Prometheus 文本指标渲染 + 抓取令牌校验（ADR-0045）
 
 | 导出 | 类型 | 路由 | MCP 工具 | 被模块调用 |
 |---|---|---|---|---|
-| `boundStoreId` | fn | 36 条：pos.js×31, requisitions.js×5 | — | lib/docflow.js |
-| `storeBindingExempt` | fn | — | — | lib/docflow.js |
+| `boundDealerId` | fn | — | — | lib/approval.js, lib/docflow.js |
+| `boundStoreId` | fn | 36 条：pos.js×31, requisitions.js×5 | — | lib/approval.js, lib/docflow.js |
+| `isExternalSubject` | fn | — | — | lib/approval.js, lib/docflow.js |
+| `storeBindingExempt` | fn | — | — | lib/approval.js, lib/docflow.js |
 
 ## `server/lib/transfer.js`
 
@@ -1736,7 +1738,7 @@ MCP 工具入参校验（唯一实现）。
 | `inventory.adjust` | danger | inventory.adjust | lib/dates.js: localDate<br>lib/stock.js: applyStockGain, resolveOwnerOrg, warehouseInScope | warehouses | cost_periods, inv_params, inv_txn_types, inventory_batches, inventory_stocks, inventory_transactions, stock_cost_ledger |
 | `pricing.update_price` | danger | master.price.edit | lib/pricing.js: logPriceChange | — | price_change_logs |
 | `sales.cancel_order` | danger | sales.order.edit | lib/sales-order.js: cancelOrder | — | credit_accounts, credit_ledger, dealers, doc_actions, doc_events, doc_states, doc_types, inv_params, inventory_batches, inventory_reservations, inventory_stocks, oc_customers, product_skus, products, sales_deliveries, sales_order_items, sales_orders, sales_returns, stores, warehouses |
-| `approval.approve` | danger | approval.instance.act | lib/approval.js: decideApproval | approval_instances, dealers, doc_types, stores, users, warehouses | approval_records, approval_steps, brands, doc_actions, doc_events, doc_states, doc_transition_policy, oc_addresses, oc_customers, orgs, permissions, product_skus, products, purchase_order_items, purchase_orders, purchase_receipts, role_permissions, roles, sales_orders, suppliers, user_roles |
+| `approval.approve` | danger | approval.instance.act | lib/approval.js: decideApproval | approval_instances, dealers, doc_types, stores, users, warehouses | approval_records, approval_steps, ar_documents, assembly_orders, brands, cost_adjustments, dealer_rebates, dealer_requisitions, dealer_statements, doc_actions, doc_events, doc_states, doc_transition_policy, material_issues, oc_addresses, oc_customers, oc_orders, oc_statements, oms_orders, orgs, outsourcing_materials, outsourcing_orders, outsourcing_receipts, permissions, pos_daily_closes, pos_orders, pos_shifts, product_skus, production_orders, products, purchase_inspections, purchase_invoices, purchase_order_items, purchase_orders, purchase_payments, purchase_receipts, purchase_requisitions, purchase_returns, purchase_settlements, qc_defect_handlings, qc_inspections, qc_requests, receipts, refunds, role_permissions, roles, sales_deliveries, sales_invoices, sales_orders, sales_quotes, sales_returns, stock_checks, stock_transfers, store_requisitions, store_shipments, suppliers, user_roles, vouchers |
 | `purchase.create_requisition` | write | purchase.req.edit | lib/purchase.js: createRequisition, resolvePurchasePrices | users | doc_no_counters, doc_no_rules, doc_types, product_skus, products, purchase_order_items, purchase_orders, purchase_requisition_items, purchase_requisitions, role_permissions, supplier_products, user_roles |
 | `purchase.create_order` | write | purchase.order.edit | lib/purchase.js: createPurchaseOrder | users | brands, doc_no_counters, doc_no_rules, doc_types, product_skus, products, purchase_order_items, purchase_orders, purchase_receipts, role_permissions, settings, suppliers, user_roles, warehouses |
 | `purchase.create_invoice` | write | purchase.invoice.edit | lib/purchase.js: createInvoice | users | doc_no_counters, doc_no_rules, doc_types, product_skus, purchase_invoice_items, purchase_invoices, purchase_order_items, purchase_orders, purchase_receipts, purchase_settlement_items, purchase_settlements, role_permissions, suppliers, user_roles |

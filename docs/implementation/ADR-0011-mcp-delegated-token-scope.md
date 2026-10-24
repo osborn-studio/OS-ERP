@@ -199,3 +199,38 @@
 **仍无绑定规则的类型（残余）**：PS / PSF 的 `store` 构建器已按 `ctx.user.store_id` 在受限范围内收窄，但全局范围下尚未带 `binding` 标记（读工具仍由 Y6 的 `rowInBinding` 挡住）；DR（经销商）、OC / OCS（订货主体）、DS / RB（无自视图）未并入注册表绑定。后续如要把它们并入，沿用同一个 `binding` 字段与 `strictBinding` 约定。
 
 **验收**：`tests/mcp-doc-perms.test.mjs` 的 AB7 用例——三类 × {未绑定、绑本店、绑他店（改绑即时生效）、admin 所有者、无主令牌}：未绑 ⇒ query / get 为 `TOKEN_OWNER_BINDING_REQUIRED`、`order.trace_document` 与注册表 `docInScope` 为不可见；绑定 ⇒ 只见本店、他店 `NOT_FOUND`（get 与 trace）；全程业务表 / `audit_logs` / `doc_events` / 幂等 / 确认表行数不变（零写）；注册表单测覆盖 `data_scope=all` 的绑定收窄、admin 豁免、非严格模式保持 HTTP 角色名口径。`scripts/check-mcp-coverage.mjs` 增三项检查。
+
+## AC3 补充：剩余绑定类型并入 DOC_SCOPE_RESOLVERS（关闭 AB7 的"仍无绑定规则的类型"残余）
+
+**缺口**：AB7 只把 RC / YQ / SH 的 `binding: 'store'` 写进注册表。PS / PSF 的 `store` 构建器只在受限范围里按 `ctx.user.store_id` 收窄，`data_scope=all` 的快捷路径直接放行；DR 没有 `dealer_id` 判定；OC / OCS 的 `ocScope`（外部主体只看自己的订货档案）同样被 `all` 快捷路径绕过；DS / RB 的 `dealer` 构建器没有"绑定账号不可见"的规则。MCP 读工具靠 `doc-perms.js` 的 `rowInBinding` 兜底，`/api/docflow/*` 与以后任何直接调注册表的读路径没有这层保护；`check-mcp-coverage` 还带着 `AB7_RESIDUAL = {PS, PSF}` 白名单。
+
+**决定**（判据仍只在一处：`server/lib/store-binding.js` 加 `boundDealerId` / `isExternalSubject`，纯函数；SQL 谓词仍只在 `docflow.js` 的构建器与 `order-center.js` 的 `ocScope` 里）：
+
+| doc_type | 注册表 binding | 规则（`docScopeOf`，任何数据范围含 `all` 都先过绑定闸） |
+|---|---|---|
+| PS / PSF | store | 已绑门店 ⇒ `t.store_id = 绑定门店`（`all` 与受限范围一致）；未绑 ⇒ 严格模式（MCP）整类不可见，HTTP 保持角色名口径 |
+| DR | dealer | 已绑经销商 ⇒ `t.dealer_id = 绑定经销商`（受限范围里再叠加"经销商档案在范围内"）；未绑 ⇒ 同上 |
+| OC / OCS | subject | 外部主体（role=dealer\|store）即使 `all` 也走构建器 ⇒ `t.customer_id = 自己的订货档案`；未绑定或尚无档案 ⇒ 不可见（不论是否严格模式，与 HTTP `SUBJECT_BINDING_REQUIRED` 403 同向）；内部账号保持组织范围 |
+| DS / RB | hq | 总部专属、没有自视图：任何门店 / 经销商绑定的账号或外部主体账号整类不可见（不论范围、不论严格模式）；未绑定的内部账号与 admin / 超管 / 无主上下文保持原范围 |
+
+通用：admin / 超管（`storeBindingExempt`）与无主上下文（`ctx.user` 为空）豁免。`docEventScope` 在全局范围下对被收窄或隐藏的类型按谓词过滤（AB7 已有机制，PS / PSF / DR / OC / OCS / DS / RB 自动纳入），所以 `/api/docflow/{events,overview,history,trace}` 与 `order.trace_document` 的留痕也同步收口。
+
+**订货中心构建器不再写库**：HTTP 的 `selfCustomerId` 会 `ensureCustomer` 建档；注册表构建器（读路径）改为只读查 `oc_customers(source_type, source_id)`，外部主体尚无档案 ⇒ 无单据可见。读工具因此保持"零写"。
+
+**check-mcp-coverage**：旧的 RC/YQ/SH 专项与 `AB7_RESIDUAL` 白名单换成四项通用断言——① `DOC_VIEW_PERMS` 每个 `binding` 类型在 `DOC_SCOPE_RESOLVERS` 都有同一个 `binding`；② 反向，注册表的 store / dealer / subject 绑定在 `DOC_VIEW_PERMS` 里也有；③ `dealer` 构建器的类型要么按经销商绑定（DR）、要么声明 `hq`（DS / RB），`hq` 不得用于别处；④ store / dealer 的归属列两处一致。无任何残留白名单。
+
+**HTTP 行为变化（需知悉，限 `/api/docflow/*` 读接口）**：
+- "绑了门店的非 admin 账号 + `data_scope=all`" 不再能经 docflow 读别家门店的 PS / PSF 单据与留痕（此前只有 RC / YQ / SH 被收窄）。
+- "绑了经销商（`dealer_id`）的非 admin 内部账号"读 DR 只剩本经销商；读 DS / RB 整类不可见。
+- 外部主体（dealer / store 角色）若 `data_scope=all`，OC / OCS 只剩自己的订货档案；未绑定外部主体读到的仍为空。
+- POS / 要货 / 订货 / 经销商业务路由本身未改动。DR 的经销商账号（`orgScope.scope='dealer'`）在 docflow 里本来就因构建器要求组织范围而不可见，本次不放宽。
+
+**验收**：`tests/mcp-doc-perms.test.mjs` 的 AC3 两条——注册表层（binding 声明与 `DOC_VIEW_PERMS` 镜像、`all` 范围下 PS / PSF / DR / OC / OCS / DS / RB 的绑定本方 / 他方 / 未绑定（严格与非严格）/ admin / 无主、事件范围收窄、读注册表不写 `oc_customers`）与 MCP 矩阵（每类型 × {绑定本方、绑定他方、未绑定、admin}，经 `doc.get` / `doc.query` / `order.trace_document`，改绑即时生效，业务表 / `audit_logs` / `doc_events` / 幂等 / 确认 / `oc_customers` 行数不变；RB 没有单据号列，不参与按单号追溯）。`tests/mcp-tool-matrix.test.mjs` 增 `registry_ac3_state`，`registry_binding_state` 扩到 PS / PSF。
+
+**与 AC2 的合并说明**：AC2 在注册表加总部角色豁免与设置键；本工作流只动各类型的 `binding` 声明、`GENERIC_BUILDERS.dealer` 的经销商收窄与 `docScopeOf` 里 `all` 快捷路径之前的绑定闸。实际的 `DOC_SCOPE_RESOLVERS` / `docScopeOf` 住在 `server/lib/docflow.js`（`doc-scope-registry.js` 只是构建器登记表）。
+
+**Codex 审计（AC3，`gpt-6.1-sol`，只读）**：
+1. **high — 审批域绕过绑定（已修）**：`approval.js` 的 `approvalDocScope` / `instanceVisibleTo` / `isGlobalCtx` 在 `scope=all` 下无条件放行，绑定账号能经审批实例列表 / 详情 / 历史读到注册表已隐藏的单据。修复：`isGlobalCtx` 对"绑了门店 / 经销商或外部订货主体的非 admin 账号"不再视为全局；`approvalDocScope` 在 `all` 范围且单据类型带 `binding` 时转调 `docInScope`（其余类型照旧全局放行，提交人本人与"我的待办"口径不变）。`tests/approval-scope.test.mjs` 增 AC3 用例。
+2. **high — 未绑定的 HTTP 账号对 PS / PSF / DR 仍不受限（既有残余，未修）**：注册表只在 `strictBinding`（MCP）下对未绑定账号整类隐藏；`/api/docflow/*` 的上下文不设该标志，所以"未绑门店 / 经销商、`data_scope=all`、非总部角色名"的自定义内部角色仍可经 docflow 读这些类型的留痕。这与 AB7 登记的 RC / YQ / SH 残余同源（需要先复刻 `pos.js` / `demand.js` 的总部角色名闸），属 AC2（`hq-roles.js` 单一名单 + docflow `strictBinding` + 总部豁免 + 回退开关）的范围，AC3 不抢先改；AC2 合入后 PS / PSF / DR 自动纳入该开关。
+3. **medium — DS / RB 对"绑了门店 / 经销商的内部账号"整类隐藏（有意的策略，记录）**：`requireInternal` 只拒 `dealer` / `store` 角色，所以绑定的 finance 之类账号经业务路由仍能读 DS / RB。本次按"总部专属、无自视图、绑定账号即非总部口径"收口，与任务要求一致；若某总部角色确实会被绑定门店，应在 AC2 的总部角色名单落地后对 `hq` 规则加角色豁免，而不是放宽绑定判据。
+审计另确认：订货中心构建器的外部主体分支只读（无 `ensureCustomer`）、`docEventScope` / `docInScope` 与三个 MCP 读工具无新增绕过。

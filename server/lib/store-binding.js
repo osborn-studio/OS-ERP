@@ -23,3 +23,15 @@ export function boundStoreId(user) {
 export function storeBindingExempt(user) {
   return !!user && (user.role === 'admin' || user.is_super === 1 || user.is_super === true)
 }
+
+/** 账号绑定的经销商 id（正整数）；未绑定 / 非法 ⇒ null（`dealerCtx` 的 `u.dealer_id` 判据，demand.js）。 */
+export function boundDealerId(user) {
+  if (!user || user.dealer_id == null || user.dealer_id === '') return null
+  const n = Number(user.dealer_id)
+  return Number.isInteger(n) && n > 0 ? n : null
+}
+
+/** 外部订货主体账号（role=dealer|store）：订货中心 `selfCustomerId` 的判据，只看自己的订货档案。 */
+export function isExternalSubject(user) {
+  return !!user && (user.role === 'dealer' || user.role === 'store')
+}

@@ -440,7 +440,7 @@ test('MCP delegation matrix: every tool x {owner inactive, permission removed, s
   // 未绑定 ⇒ 全部拒绝；全程零写。
   matrix.registry_binding_state = { state: 'registry_store_binding', types: {} }
   {
-    const types = ['RC', 'YQ', 'SH']
+    const types = ['PS', 'PSF', 'RC', 'YQ', 'SH']
     for (const code of types) for (const p of DOC_VIEW_PERMS[code].perms) grant.run('warehouse', p)
     for (const p of ['sales.order.view', 'purchase.order.view', 'inventory.stock.view']) grant.run('warehouse', p)
     try {
@@ -465,6 +465,39 @@ test('MCP delegation matrix: every tool x {owner inactive, permission removed, s
         const good = cell.bound_foreign === 'NOT_FOUND' && cell.trace_foreign === 'NOT_FOUND' && cell.unbound_get === 'TOKEN_OWNER_BINDING_REQUIRED' && cell.unbound_trace === 'NOT_FOUND' && changed.length === 0
         matrix.registry_binding_state.types[code] = { ...cell, result: good ? 'DENIED' : 'LEAK' }
         if (!good) failures.push(`registry_store_binding ${code}: ${JSON.stringify(cell)} ${changed.join(';')}`)
+      }
+    } finally {
+      restorePerms()
+    }
+  }
+
+  // ---- 状态 4c（AC3）：DR（dealer 绑定）与 DS / RB（hq：无自视图）在 DOC_SCOPE_RESOLVERS 里声明 ----
+  // DR：绑他家经销商 ⇒ 本家单据可读、他家 NOT_FOUND，未绑定 ⇒ BINDING_REQUIRED；DS / RB：任何经销商 / 门店绑定的账号读不到，全程零写。
+  matrix.registry_ac3_state = { state: 'registry_dealer_hq_binding', types: {} }
+  {
+    const types = ['DR', 'DS', 'RB']
+    for (const code of types) for (const p of DOC_VIEW_PERMS[code].perms) grant.run('warehouse', p)
+    try {
+      for (const code of types) {
+        const tn = db.prepare('SELECT table_name FROM doc_types WHERE code=?').get(code).table_name
+        const dealers = db.prepare(`SELECT dealer_id FROM ${tn} WHERE dealer_id IS NOT NULL GROUP BY dealer_id ORDER BY COUNT(*) DESC, dealer_id LIMIT 2`).all()
+        assert.equal(dealers.length, 2, `${code}: fixture needs two dealers with documents`)
+        const rowOf = (did) => db.prepare(`SELECT id FROM ${tn} WHERE dealer_id=? ORDER BY id LIMIT 1`).get(did)
+        const own = rowOf(dealers[0].dealer_id)
+        const foreign = rowOf(dealers[1].dealer_id)
+        const cell = {}
+        const before = snapshot()
+        db.prepare('UPDATE users SET dealer_id=? WHERE id=?').run(dealers[0].dealer_id, ownerId)
+        cell.bound_own = outcome(await mcp('tools/call', { name: 'doc.get', arguments: { doc_type: code, id: own.id } }, token)).kind
+        cell.bound_foreign = outcome(await mcp('tools/call', { name: 'doc.get', arguments: { doc_type: code, id: foreign.id } }, token)).code
+        db.prepare('UPDATE users SET dealer_id=NULL WHERE id=?').run(ownerId)
+        cell.unbound_get = outcome(await mcp('tools/call', { name: 'doc.get', arguments: { doc_type: code, id: own.id } }, token)).code
+        const changed = diff(before, snapshot())
+        const good = code === 'DR'
+          ? cell.bound_own === 'ok' && cell.bound_foreign === 'NOT_FOUND' && cell.unbound_get === 'TOKEN_OWNER_BINDING_REQUIRED'
+          : cell.bound_own !== 'ok' && cell.bound_foreign === 'NOT_FOUND' && cell.unbound_get == null
+        matrix.registry_ac3_state.types[code] = { ...cell, result: good && changed.length === 0 ? 'DENIED' : 'LEAK' }
+        if (!good || changed.length) failures.push(`registry_ac3 ${code}: ${JSON.stringify(cell)} ${changed.join(';')}`)
       }
     } finally {
       restorePerms()
@@ -630,7 +663,9 @@ test('MCP delegation matrix: every tool x {owner inactive, permission removed, s
   assert.equal(covered, TOOLS.length, 'matrix must cover every tool in every state')
   assert.equal(saved.tool_count, TOOLS.length)
   assert.ok(Object.keys(saved.binding_state.types).length >= 6 && Object.values(saved.binding_state.types).every((x) => x.result === 'DENIED'), 'every store/dealer bound type is denied to an unbound owner')
-  assert.deepEqual(Object.keys(saved.registry_binding_state.types).sort(), ['RC', 'SH', 'YQ'], 'AB7: registry store binding is exercised for RC / YQ / SH')
+  assert.deepEqual(Object.keys(saved.registry_binding_state.types).sort(), ['PS', 'PSF', 'RC', 'SH', 'YQ'], 'AB7 / AC3: registry store binding is exercised for PS / PSF / RC / YQ / SH')
+  assert.deepEqual(Object.keys(saved.registry_ac3_state.types).sort(), ['DR', 'DS', 'RB'], 'AC3: dealer and hq registry bindings')
+  assert.ok(Object.values(saved.registry_ac3_state.types).every((x) => x.result === 'DENIED'), 'AC3: bound-to-other-dealer / bound owners read nothing from DR / DS / RB')
   assert.ok(Object.values(saved.registry_binding_state.types).every((x) => x.result === 'DENIED'), 'AB7: bound-to-other-store and unbound owners read nothing')
   assert.ok(Object.keys(saved.history_scope_state.cases).length >= 2 && Object.values(saved.history_scope_state.cases).every((x) => x.result !== 'LEAK'), 'history tool honors the owner scope')
   assert.ok(Object.keys(saved.trace_query_scope_state.cases).length >= 6 && Object.values(saved.trace_query_scope_state.cases).every((x) => x.result !== 'LEAK'), 'order.trace_document and doc.query honor the owner scope and view permission')
