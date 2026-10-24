@@ -464,27 +464,30 @@ r.get(
   '/stats',
   requireAuth,
   requirePerm(...PO_READ_PERMS),
+  attachOrgScope,
   wrap((req, res) => {
     const db = getDb()
     const days = Number(req.query.days || 30)
-    const byStatus = db.prepare('SELECT status, COUNT(*) cnt, COALESCE(SUM(total_amount),0) amount FROM purchase_orders GROUP BY status').all()
+    // ADR-0046（Codex 审计）：统计与列表同一订单范围谓词
+    const sc = purchaseScopeSql(req.orgScope, 'po')
+    const byStatus = db.prepare(`SELECT status, COUNT(*) cnt, COALESCE(SUM(total_amount),0) amount FROM purchase_orders po WHERE ${sc.wh} GROUP BY status`).all(...sc.params)
     const trend = db
       .prepare(
         `SELECT order_date AS date, COUNT(*) orders, COALESCE(SUM(total_amount),0) amount
-         FROM purchase_orders WHERE order_date >= date('now','localtime', ?) GROUP BY order_date ORDER BY order_date`
+         FROM purchase_orders po WHERE ${sc.wh} AND order_date >= date('now','localtime', ?) GROUP BY order_date ORDER BY order_date`
       )
-      .all(`-${days} day`)
+      .all(...sc.params, `-${days} day`)
     const topSuppliers = db
       .prepare(
         `SELECT s.name, COUNT(po.id) orders, COALESCE(SUM(po.total_amount),0) amount
          FROM purchase_orders po JOIN suppliers s ON s.id=po.supplier_id
-         WHERE po.order_date >= date('now','localtime', ?)
+         WHERE ${sc.wh} AND po.order_date >= date('now','localtime', ?)
          GROUP BY s.id ORDER BY amount DESC LIMIT 10`
       )
-      .all(`-${days} day`)
+      .all(...sc.params, `-${days} day`)
     const pending = db
-      .prepare("SELECT COUNT(*) c FROM purchase_orders WHERE status IN ('submitted','approved')")
-      .get().c
+      .prepare(`SELECT COUNT(*) c FROM purchase_orders po WHERE ${sc.wh} AND status IN ('submitted','approved')`)
+      .get(...sc.params).c
     return ok(res, { byStatus, trend, topSuppliers, pending })
   })
 )

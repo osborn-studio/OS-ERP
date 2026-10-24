@@ -1034,7 +1034,7 @@ Prometheus 文本指标渲染 + 抓取令牌校验（ADR-0045）
 | `purchaseActions` | fn | GET /api/purchase/chain/actions<br>GET /api/purchase/requisitions/:id<br>GET /api/purchase/invoices/:id<br>GET /api/purchase/settlements/:id<br>GET /api/purchase/payments/:id | — | — |
 | `purchaseOverview` | fn | GET /api/purchase/chain/overview | — | — |
 | `purchaseReturnSource` | fn | — | — | — |
-| `purchaseScopeSql` | fn | 10 条：purchase-chain.js×7, purchase.js×3 | — | lib/approval.js |
+| `purchaseScopeSql` | fn | 11 条：purchase-chain.js×7, purchase.js×4 | — | lib/approval.js |
 | `purchaseTodos` | fn | GET /api/purchase/chain/todos | — | — |
 | `recalcOrder` | fn | PUT /api/purchase/orders/:id | — | — |
 | `receivePurchaseOrder` | fn | POST /api/purchase/orders/:id/receive | purchase.receive_order | mcp/tools.js |

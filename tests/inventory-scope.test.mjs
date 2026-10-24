@@ -767,6 +767,15 @@ test('AB1: master options warehouses, purchase order list/detail and QC overview
     assert.deepEqual(hid.body, (await api('/api/purchase/orders/999999', { token: A.token })).body, 'same shape as missing')
     assert.equal((await api(`/api/purchase/orders/${poB}`, { token: f.admin })).status, 200)
     expectStatus(await api(`/api/purchase/orders/${poA}`, { token: NONEtoken }), 404, 'no-org detail')
+    // /stats 同一范围谓词：A 的 pending 只数 A 仓的订单，无组织为空
+    db.prepare("UPDATE purchase_orders SET status='submitted' WHERE id IN (?,?)").run(poA, poB)
+    const pend = (r) => okData(r).pending
+    const inA = db.prepare("SELECT COUNT(*) c FROM purchase_orders WHERE status IN ('submitted','approved') AND warehouse_id IN (SELECT id FROM warehouses WHERE org_id=?)").get(whA.org_id).c
+    assert.equal(pend(await api('/api/purchase/stats', { token: A.token })), inA)
+    assert.equal(pend(await api('/api/purchase/stats', { token: f.admin })), db.prepare("SELECT COUNT(*) c FROM purchase_orders WHERE status IN ('submitted','approved')").get().c)
+    assert.ok(inA < pend(await api('/api/purchase/stats', { token: f.admin })))
+    assert.equal(pend(await api('/api/purchase/stats', { token: NONEtoken })), 0)
+    assert.equal(okData(await api('/api/purchase/stats', { token: NONEtoken })).byStatus.length, 0)
   })
 
   await t.test('QC overview and audit aggregate only in-scope warehouses', async () => {

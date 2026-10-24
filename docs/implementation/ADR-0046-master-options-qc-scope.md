@@ -40,7 +40,12 @@ ADR-0038 / 0042 把库存域、采购动作与 QC 处置按 `warehouses.org_id` 
 
 ## Codex 审计
 
-（见提交后的补记。）
+`codex exec -m gpt-6.1-sol --sandbox read-only`，静态审查（未跑测试），无 SQL 注入发现（内联的范围 id 经 `Number()` + `isFinite` 过滤，可为小数但不可注入）。发现与处理：
+
+- **高** MCP `purchase.list_orders` / `report.dashboard_kpi`（`server/mcp/tools.js:282/897/1034`）的采购订单可见规则为「入库仓**或** `target_store_id` 属范围」，比 HTTP 仅按仓更宽：**未修，登记为 open**（文件在 AB1 范围外，MCP 解析表归 AB7 / 后续批）。
+- 中 `GET /api/purchase/stats` 只有功能权限、全表聚合：**已修**（`attachOrgScope` + `purchaseScopeSql(...).wh` 作用于四个查询；断言补入 AB1 用例，该条先实现后补测，未单独验证红）。
+- 中 `POST /api/demand/dealer/summary`（`routes/demand.js:362`）接受外仓 id 且在途采购不分仓；中 `GET /api/master/products(/:id)` 的 `stock_qty` 汇总全部仓：**未修，open**（范围外文件 / 设计取舍）。
+- 低 `/api/master/overview` 全库仓库数：已在边界登记，**open**。
 
 ## 验证入口
 
