@@ -168,3 +168,38 @@ under a header that repeats the commit and that this is a candidate.
 - Review `RELEASE-NOTES.md`, the dependency alerts and the open items in the backlog.
 - Explicit owner authorization to tag, publish a GitHub release, or deploy. None of that is done by this script.
 - Transfer the zip with its `.sha256` and re-check the hash on the receiving side.
+
+## Supply-chain self-checks (AF7)
+
+Two steps of the hosted candidate job (after the self-verify step, before the upload) check the dependency supply chain. Both are
+read-only toward the repository and need network access.
+
+- **`npm audit signatures --registry=https://registry.npmjs.org`** verifies the registry signatures (and provenance attestations
+  where published) of the installed packages. A verification failure **fails the job**. The registry is given on the command line
+  because `.npmrc` points installs at `registry.npmmirror.com`, which has no audit or signature endpoint. Consequence, stated
+  honestly: with that override npm audits only the packages whose lockfile `resolved` URL is on `registry.npmjs.org`; the entries
+  resolved from npmmirror are **not** covered. `audit-signatures.txt` therefore ends with the lockfile entry count per registry
+  host next to npm's own "audited N packages" summary. A local run on 2026-10-24 reported 42 packages with verified signatures and
+  13 with verified attestations (lockfile: 36 npmjs.org entries, 341 npmmirror.com entries). Moving the remaining entries to the
+  npmjs registry is a separate decision (it changes `package-lock.json` and install reachability).
+- **SBOM diff vs the previous candidate artifact.** The step looks up the newest earlier successful run of the candidate workflow
+  on `main` or on a `v*` tag (runs dispatched from other branches are ignored, the current run is excluded), downloads its
+  `os-erp-candidate-*` artifact with `gh run download`, and diffs its SBOM (`sbom.cdx.json`, or for artifacts from before AF7 the single
+  `<package>/release/sbom.cdx.json` entry of the zip) against this package's SBOM with `scripts/sbom-diff.mjs`. If no such run or
+  artifact exists (14-day retention), the output says **first candidate**. The downloaded content is treated as data only: it is
+  parsed as JSON with a 32 MB cap, never executed, and the table is sanitised against control characters. A malformed previous SBOM is
+  reported in `sbom-diff.txt` and as a warning but does not fail the build. The uploaded artifact additionally carries
+  `sbom.cdx.json`, `sbom-diff.json`, `sbom-diff.txt` and `audit-signatures.txt`.
+
+Manual use, anywhere:
+
+```
+node scripts/verify-release.mjs --sbom-diff <previous.cdx.json>          # run in the extracted package; prints the table and a sbom-diff-json line
+node scripts/sbom-diff.mjs <previous.cdx.json> [<current.cdx.json>] [--json-out=<file>] [--table-out=<file>]
+```
+
+Both use `scripts/lib/sbom-diff.mjs`. Components are keyed by `group/name`; a name only on one side is added/removed, a different
+version set is a `version` change, and the same `name@version` with a different integrity hash on both sides is an `integrity`
+change (the one to look at first). Exit code is 0 with or without differences; it is non-zero only when the previous (or current)
+SBOM is missing, unreadable or not a structurally valid CycloneDX 1.x document (or, for `verify-release`, when any other check fails).
+This is an informational comparison, not a vulnerability or licence analysis, and the hosted steps have not run on GitHub yet.
