@@ -359,6 +359,12 @@ export const SETTING_RULES = {
     impact: '`scripts/retention.mjs --execute` 清理早于该天数的 mcp_call_logs（danger 级别调用永不清理）。缩短会更早永久删除 AI 调用记录。'
   },
 
+  // ---- 审计日志关键词检索索引（ADR-0054）：关闭 = 删除 FTS5 表与触发器（可逆：再开启重建并回填） ----
+  audit_fts_enabled: {
+    group: 'ops', label: '审计日志 FTS5 关键词索引', type: 'bool', default: '1', is_danger: true, wired: true,
+    impact: '**打开（默认）**：迁移 067 的 `audit_logs_fts`（FTS5 外部内容表 + 三个触发器）存在，稀有关键词走索引。**关闭**：索引表与触发器被删除，关键词检索一律走 LIKE（与无 FTS5 的构建完全一致，命中稀少的关键词在大库上更慢），审计写入少一次索引维护。改值本身不动索引：用 `scripts/audit-fts-maintain.mjs --disable|--enable --reason ...`（同事务改值并删除/重建），或重启时由迁移 071 的自愈按本值收敛；再开启时重建并回填存量行，大库上持写锁。'
+  },
+
   // ---- 单据流门店绑定（ADR-0051） ----
   docflow_strict_store_binding: {
     group: 'ops', label: '单据流严格门店绑定', type: 'bool', default: '1', is_danger: true, wired: true,

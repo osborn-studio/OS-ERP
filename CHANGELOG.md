@@ -13,6 +13,7 @@
 - [ADR-0050：MCP 采购订单读工具与剩余聚合读口和 HTTP 范围对齐（AC1）](docs/implementation/ADR-0050-mcp-purchase-scope-parity.md) — 单一谓词：`server/lib/purchase.js` 新增 `purchaseOrderScopeSql(orgScope, alias)`，返回 `{ sql, params, empty }`，判据就是既有 `purchaseScopeSql(...).wh`（入库仓 `warehouses.org_id`；全局 `1=1`；`dealer` / `none` / 空集合 `1=0`；仓无组织对受限范围不可见）。HTTP 订单列表、`/stats`、`assertP…
 - [ADR-0051 总部角色名单单点与 docflow 严格门店绑定（AC2）](docs/implementation/ADR-0051-hq-roles-docflow-binding.md) — 一张表，三种派生，全部冻结
 - [ADR-0052：发行证据透明日志与 CI 签名口径（AC6）](docs/implementation/ADR-0052-evidence-transparency-log.md) — `docs/release/EVIDENCE-LOG.jsonl`，一行一个候选：`{schema:1, name, evidence_sha256, signature, built_by, timestamp, prev}`。 - `evidence_sha256` = 规范化 EVIDENCE.json（ADR-0047 规范化 v1，与签名相同的字节）的 sha256；`signature` = `EVIDENCE.sig` 文本（去首尾空白）的 sha256 或 `…
+- [ADR-0054：审计 FTS5 索引可选化与无 FTS5 构建的真实验证（AD4）](docs/implementation/ADR-0054-audit-fts-optional.md) — 登记在 `server/lib/settings.js`（bool、`is_danger`、改值必须写理由、留痕到 `setting_audit_log`）；危险键数 19 → 20（`scripts/test-setting-audit.mjs`）。 - 语义：库里存的值恰为 `"0"` 才算关；没有 settings 表 / 没有这一行 / 其它值都按默认（开）。
 
 ## 第十一批（进行中）：见 roadmap-v7
 

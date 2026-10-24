@@ -26,8 +26,11 @@ import * as m067 from '../server/db/migrations/067_audit_fts.cjs'
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url))
 // AC5：CI 以 GML_AUDIT_FTS=0 再跑一遍本文件（真实的无 FTS 路径）。此时依赖"FTS 路径可用"的用例跳过（原因写明），其余用例照跑
-const NOFTS = process.env.GML_AUDIT_FTS === '0'
-const needsFts = NOFTS ? { skip: 'GML_AUDIT_FTS=0: this case asserts the FTS path is available' } : {}
+// AD4：CI 的 audit-no-fts5 job 在真正没有 FTS5 的 SQLite 构建上跑本文件；探测一次，依赖 FTS5 的用例跳过（写明原因），无 FTS5 用例真实执行
+const NO_FTS5_BUILD = !m067.ftsSupported(new Database(':memory:'))
+const NOFTS = process.env.GML_AUDIT_FTS === '0' || NO_FTS5_BUILD
+const needsFts = process.env.GML_AUDIT_FTS === '0' ? { skip: 'GML_AUDIT_FTS=0: this case asserts the FTS path is available' } : NO_FTS5_BUILD ? { skip: 'this SQLite build has no FTS5: this case asserts the FTS path is available' } : {}
+const needsFts5Build = NO_FTS5_BUILD ? { skip: 'this SQLite build has no FTS5' } : {}
 
 async function fixture(t, extraEnv = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), 'os-erp-auditview-'))
@@ -342,7 +345,7 @@ test('AA6 migration 065: idempotent, non-UNIQUE, checksummed, three indexes with
   assert.deepEqual(runMigrations(db, { mode: 'production', warn: () => {} }).applied, [])
 })
 
-test('AA6 explain-audit: the filtered audit list / count / export statements are green only with migration 065', (t) => {
+test('AA6 explain-audit: the filtered audit list / count / export statements are green only with migration 065', needsFts5Build, (t) => {
   const targets = STATEMENTS.filter(s => s.id.startsWith('audit.'))
   const allow = ALLOW.filter(a => a.statement.startsWith('audit.'))
   assert.ok(targets.length >= 15)
@@ -378,7 +381,7 @@ const ftsRows = (db, q) => db.prepare('SELECT rowid FROM audit_logs_fts WHERE au
 const auditRow = (db, r) => db.prepare('INSERT INTO audit_logs (user_id,user_name,action,module,entity,entity_id) VALUES (?,?,?,?,?,?)')
   .run(r.uid ?? 1, r.user ?? 'alice', r.action ?? 'CREATE', r.module ?? 'sales', r.entity ?? 'order', r.eid ?? '1').lastInsertRowid
 
-test('AB3 migration 067: FTS5 external-content table + three triggers, idempotent, checksummed, backfills existing rows', (t) => {
+test('AB3 migration 067: FTS5 external-content table + three triggers, idempotent, checksummed, backfills existing rows', needsFts5Build, (t) => {
   const db = new Database(':memory:')
   t.after(() => db.close())
   db.exec(readFileSync(new URL('../server/db/schema.sql', import.meta.url), 'utf8'))
@@ -405,7 +408,7 @@ test('AB3 migration 067: FTS5 external-content table + three triggers, idempoten
   assert.deepEqual(runMigrations(db, { mode: 'production', warn: () => {} }).applied, [])
 })
 
-test('AB3 triggers keep the index exact across insert / update / delete, and survive extra columns (AB6 prev_hash / row_hash)', (t) => {
+test('AB3 triggers keep the index exact across insert / update / delete, and survive extra columns (AB6 prev_hash / row_hash)', needsFts5Build, (t) => {
   const db = migrated(t)
   assert.equal(m067.verify(db), true)
   const a = auditRow(db, { action: 'PRICEUP', user: 'alice', entity: 'sku' })
@@ -436,7 +439,7 @@ test('AB3 triggers keep the index exact across insert / update / delete, and sur
   assert.equal(m067.verify(db), true)
 })
 
-test('AB3 an UPDATE of the content rowid (id) re-indexes the row; external-content integrity-check passes', (t) => {
+test('AB3 an UPDATE of the content rowid (id) re-indexes the row; external-content integrity-check passes', needsFts5Build, (t) => {
   const db = migrated(t)
   const id = auditRow(db, { action: 'MOVEDROW' })
   db.prepare('UPDATE audit_logs SET id=? WHERE id=?').run(900001, id)
@@ -444,7 +447,7 @@ test('AB3 an UPDATE of the content rowid (id) re-indexes the row; external-conte
   db.prepare("INSERT INTO audit_logs_fts(audit_logs_fts, rank) VALUES('integrity-check', 1)").run() // 外部内容表的完整性校验：索引与内容表逐行一致，否则抛错
 })
 
-test('AB3 verify() notices a dropped trigger / table and the runner heals it (and re-indexes missed rows)', (t) => {
+test('AB3 verify() notices a dropped trigger / table and the runner heals it (and re-indexes missed rows)', needsFts5Build, (t) => {
   const db = migrated(t)
   db.exec('DROP TRIGGER audit_logs_fts_ai')
   assert.equal(m067.verify(db), false)
@@ -452,7 +455,8 @@ test('AB3 verify() notices a dropped trigger / table and the runner heals it (an
   assert.deepEqual(ftsRows(db, '"MISSEDWHILEDOWN"'), [])
   const r = runMigrations(db, { mode: 'test', warn: () => {} })
   // 068（AB6 哈希链）的 verify 会把裸 INSERT 留下的未接链尾行一并自愈，所以这里只断言 067 被自愈
-  assert.ok(r.healed.includes('067_audit_fts'), `healed: ${r.healed.join(',')}`)
+  // AD4：067 的自检由迁移 071 接管（按设置 audit_fts_enabled 判断），所以自愈记在 071 名下
+  assert.ok(r.healed.includes('071_audit_fts_optional') && !r.healed.includes('067_audit_fts'), `healed: ${r.healed.join(',')}`)
   assert.equal(m067.verify(db), true)
   assert.deepEqual(ftsRows(db, '"MISSEDWHILEDOWN"'), [Number(missed)], 'heal rebuilds the index')
 })
@@ -561,7 +565,7 @@ test('AB3 action-only filter needs a module: unit + bizcode over HTTP (list and 
   assert.equal((await f.request('/api/meta/audit-logs?module=sales', admin)).body.data.total, 1)
 })
 
-test('AB3 over HTTP: FTS path answers keyword searches (3+ and 2 chars); dropping the FTS objects falls back to LIKE with identical answers', { timeout: 90000 }, async t => {
+test('AB3 over HTTP: FTS path answers keyword searches (3+ and 2 chars); dropping the FTS objects falls back to LIKE with identical answers', { timeout: 90000, ...needsFts5Build }, async t => {
   const f = await fixture(t)
   const admin = await f.login('ab3_http', 'admin', { isSuper: 1 })
   assert.equal(ftsAvailable(f.db), !NOFTS, 'server migrated to 067 (the FTS path is switched off by GML_AUDIT_FTS=0)')
@@ -602,7 +606,7 @@ test('AB3 explain-audit on a database without audit_logs_fts: FTS-only statement
   assert.ok(r.statements.find(s => s.id === 'audit.count_keyword_nofts').plan.length > 0, 'fallback statement is really audited')
 })
 
-test('AB3 explain-audit: FTS keyword statements are green and use the FTS table; LIKE fallback statements carry an exemption with a reason', (t) => {
+test('AB3 explain-audit: FTS keyword statements are green and use the FTS table; LIKE fallback statements carry an exemption with a reason', needsFts5Build, (t) => {
   const db = migrated(t)
   const targets = STATEMENTS.filter(s => s.id.startsWith('audit.'))
   const allow = ALLOW.filter(a => a.statement.startsWith('audit.'))
@@ -620,7 +624,7 @@ test('AB3 explain-audit: FTS keyword statements are green and use the FTS table;
 // ---------------------------------------------------------------------------------------------------------------------------
 // AC5：GML_AUDIT_FTS=0 环境开关（真实无 FTS 路径；CI 的 checks job 以该开关再跑一遍本文件）
 // ---------------------------------------------------------------------------------------------------------------------------
-test('AC5 GML_AUDIT_FTS=0 forces the LIKE path: only the exact string "0" switches FTS off, read on every call', (t) => {
+test('AC5 GML_AUDIT_FTS=0 forces the LIKE path: only the exact string "0" switches FTS off, read on every call', needsFts5Build, (t) => {
   const prev = process.env.GML_AUDIT_FTS
   t.after(() => { if (prev === undefined) delete process.env.GML_AUDIT_FTS; else process.env.GML_AUDIT_FTS = prev })
   const db = migrated(t)
@@ -645,7 +649,7 @@ test('AC5 GML_AUDIT_FTS=0 forces the LIKE path: only the exact string "0" switch
   assert.equal(ftsAvailable(db), true)
 })
 
-test('AC5 over HTTP: a server started with GML_AUDIT_FTS=0 answers from the base table, not the FTS index (a row the index never saw is found)', { timeout: 90000 }, async t => {
+test('AC5 over HTTP: a server started with GML_AUDIT_FTS=0 answers from the base table, not the FTS index (a row the index never saw is found)', { timeout: 90000, ...needsFts5Build }, async t => {
   const prev = process.env.GML_AUDIT_FTS
   t.after(() => { if (prev === undefined) delete process.env.GML_AUDIT_FTS; else process.env.GML_AUDIT_FTS = prev })
   delete process.env.GML_AUDIT_FTS // 本进程里 FTS 可用；子进程显式带 0
@@ -661,4 +665,142 @@ test('AC5 over HTTP: a server started with GML_AUDIT_FTS=0 answers from the base
   assert.equal(r.body.data.total, 1, 'server with GML_AUDIT_FTS=0 uses LIKE')
   const csv = await (await f.raw('/api/meta/audit-logs/export.csv?keyword=GHOSTACTION', admin)).text()
   assert.equal(csv.trim().split('\r\n').length - 1, 1, 'export uses LIKE too')
+})
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// AD4：FTS 可选化（ADR-0054，迁移 071）：设置键 audit_fts_enabled、"表缺失 = 无 FTS5 构建"、启动自愈只在设置允许时重建
+// ---------------------------------------------------------------------------------------------------------------------------
+const m071 = await import('../server/db/migrations/071_audit_fts_optional.cjs')
+const { SETTING_RULES, writeSetting, ensureSettings, readSetting } = await import('../server/lib/settings.js')
+const ftsObjects = (db) => db.prepare("SELECT type,name FROM sqlite_master WHERE (type='trigger' AND name LIKE 'audit_logs_fts%') OR name='audit_logs_fts' ORDER BY name").all().map(r => `${r.type}:${r.name}`)
+const setFtsSetting = (db, v) => { ensureSettings(db); writeSetting(db, { key: 'audit_fts_enabled', value: v, reason: 'ad4 test', actor: { id: null, name: 'ad4-test', source: 'script' } }) }
+
+test('AD4 setting audit_fts_enabled: registered, dangerous, boolean, default on; migration 071 is checksummed and idempotent', (t) => {
+  const def = SETTING_RULES.audit_fts_enabled
+  assert.ok(def, 'registered in lib/settings.js')
+  assert.equal(def.is_danger, true); assert.equal(def.type, 'bool'); assert.equal(def.default, '1')
+  const db = migrated(t)
+  assert.equal(readSetting(db, 'audit_fts_enabled'), true, 'default on')
+  assert.equal(m071.verify(db), true)
+  const row = db.prepare("SELECT checksum FROM schema_migrations WHERE id='071_audit_fts_optional'").get()
+  assert.match(row.checksum, /^[0-9a-f]{64}$/)
+  const before = ftsObjects(db)
+  m071.up(db); m071.up(db)
+  assert.deepEqual(ftsObjects(db), before, 'up() with the setting on changes nothing')
+  assert.equal(before.length, NO_FTS5_BUILD ? 0 : 4, 'table + three triggers (none on a build without FTS5)')
+  assert.deepEqual(runMigrations(db, { mode: 'production', warn: () => {} }).applied, [])
+})
+
+test('AD4 on a SQLite build WITHOUT FTS5 (CI audit-no-fts5): migrations apply, nothing FTS exists, 071 is satisfied, keyword search answers from LIKE', { skip: NO_FTS5_BUILD ? false : 'this SQLite build has FTS5; the audit-no-fts5 CI job runs this case' }, (t) => {
+  const db = migrated(t)
+  assert.equal(db.pragma('compile_options').some(r => r.compile_options === 'ENABLE_FTS5'), false)
+  assert.throws(() => db.exec('CREATE VIRTUAL TABLE temp.x USING fts5(a)'), /no such module: fts5/)
+  assert.equal(m067.ftsSupported(db), false)
+  assert.deepEqual(ftsObjects(db), [])
+  assert.equal(m067.verify(db), true); assert.equal(m071.verify(db), true)
+  // 067 / 071 仍被登记为已执行，且再次启动不自愈
+  assert.equal(db.prepare("SELECT COUNT(*) c FROM schema_migrations WHERE id IN ('067_audit_fts','071_audit_fts_optional')").get().c, 2)
+  assert.ok(!runMigrations(db, { mode: 'test', warn: () => {} }).healed.some(h => /fts/.test(h)))
+  auditRow(db, { user: '张三丰', action: 'DEL100%_done' })
+  assert.equal(ftsAvailable(db), false); assert.equal(keywordUsesFts(db, 'DEL100'), false)
+  const w = buildWhere(parseFilters({ keyword: '100%' }), { fts: keywordUsesFts(db, '100%') })
+  assert.equal(db.prepare(`SELECT COUNT(*) c FROM audit_logs ${w.where}`).get(...w.args).c, 1)
+  // 开启设置也建不出索引：不抛、什么都不建
+  setFtsSetting(db, '1'); assert.equal(m071.enableFts(db), false); assert.deepEqual(ftsObjects(db), [])
+})
+
+test('AD4 setting off: 071 drops the FTS table + triggers (verify false before, true after); startup healing does NOT rebuild them', needsFts5Build, (t) => {
+  const db = migrated(t)
+  auditRow(db, { action: 'KEEPME' })
+  setFtsSetting(db, '0')
+  assert.equal(m071.verify(db), false, 'objects still present while the setting says off')
+  const r1 = runMigrations(db, { mode: 'test', warn: () => {} })
+  assert.ok(r1.healed.includes('071_audit_fts_optional'), r1.healed.join())
+  assert.deepEqual(ftsObjects(db), [], 'dropped')
+  // 之后每次启动：既不重建（067 的 verify 被 071 接管），也不再自愈
+  for (let i = 0; i < 2; i++) {
+    const r = runMigrations(db, { mode: 'test', warn: () => {} })
+    assert.ok(!r.healed.includes('067_audit_fts') && !r.healed.includes('071_audit_fts_optional'), r.healed.join())
+    assert.deepEqual(ftsObjects(db), [])
+  }
+  assert.equal(m071.verify(db), true)
+  // audit_logs 的写入在没有触发器时照常
+  assert.doesNotThrow(() => auditRow(db, { action: 'WRITEOK' }))
+  assert.equal(db.prepare("SELECT COUNT(*) c FROM audit_logs WHERE action IN ('KEEPME','WRITEOK')").get().c, 2, 'audit rows untouched')
+  // audit-view：表缺失 = 无 FTS5 构建
+  assert.equal(ftsAvailable(db), false); assert.equal(keywordUsesFts(db, 'KEEPME'), false)
+})
+
+test('AD4 setting back on: startup healing rebuilds and backfills rows written while FTS was off', needsFts5Build, (t) => {
+  const db = migrated(t)
+  setFtsSetting(db, '0'); runMigrations(db, { mode: 'test', warn: () => {} })
+  const whileOff = auditRow(db, { action: 'WRITTENWHILEOFF' })
+  setFtsSetting(db, '1')
+  assert.equal(m071.verify(db), false, 'setting on but objects absent')
+  const r = runMigrations(db, { mode: 'test', warn: () => {} })
+  assert.ok(r.healed.includes('071_audit_fts_optional'), r.healed.join())
+  assert.equal(ftsObjects(db).length, 4)
+  assert.deepEqual(ftsRows(db, '"WRITTENWHILEOFF"'), [Number(whileOff)], 'backfilled')
+  db.prepare("INSERT INTO audit_logs_fts(audit_logs_fts, rank) VALUES('integrity-check', 1)").run()
+  assert.equal(ftsAvailable(db), true)
+})
+
+test('AD4 dropFts / enableFts are reversible and idempotent; an unsupported build is never touched', needsFts5Build, (t) => {
+  const db = migrated(t)
+  const id = auditRow(db, { action: 'ROUNDTRIP' })
+  m071.dropFts(db); m071.dropFts(db)
+  assert.deepEqual(ftsObjects(db), [])
+  m071.enableFts(db); m071.enableFts(db)
+  assert.deepEqual(ftsRows(db, '"ROUNDTRIP"'), [Number(id)])
+  const calls = []
+  const noFts = { pragma: (q) => { calls.push(q); return [{ compile_options: 'ENABLE_FTS3' }] }, exec: (q) => { calls.push(q); throw new Error('must not touch') }, prepare: (q) => { calls.push(q); throw new Error('must not query') } }
+  assert.doesNotThrow(() => m071.up(noFts)); assert.equal(m071.verify(noFts), true)
+  assert.equal(m071.enableFts(noFts), false, 'reports that FTS5 is unavailable')
+  assert.ok(calls.every(c => /compile_options/.test(c)))
+})
+
+test('AD4 migration 071 without migration 067 on disk (older directory) is tolerant: nothing is created, nothing throws', (t) => {
+  const dir = mkd(path.join(tmpdir(), 'os-ad4-no067-'))
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  cpSync(MIGRATIONS_DIR, dir, { recursive: true })
+  rm(path.join(dir, '067_audit_fts.cjs'))
+  const db = migrated(t, { migrationsDir: dir })
+  assert.deepEqual(ftsObjects(db), [])
+})
+
+test('AD4 table absent + GML_AUDIT_FTS=0 together, and with an FTS-less build simulated: identical answers over every path (list, count, export filter)', needsFts5Build, (t) => {
+  const prev = process.env.GML_AUDIT_FTS
+  t.after(() => { if (prev === undefined) delete process.env.GML_AUDIT_FTS; else process.env.GML_AUDIT_FTS = prev; setFtsOverride(null) })
+  const db = migrated(t)
+  for (const [u, a, e] of [['alice', 'CREATE', '销售订单'], ['张三丰', 'DEL100%_done', 'order'], ['bob', 'APPROVE', 'po']]) auditRow(db, { user: u, action: a, entity: e })
+  const keywords = ['alice', 'CREAT', '销售订单', '张三', '100%', '%_d', 'approve', '" OR 1=1', 'NEAR(', 'al*', 'zzabsent', 'ob']
+  const ask = () => Object.fromEntries(keywords.map(k => {
+    const w = buildWhere(parseFilters({ keyword: k }), { fts: keywordUsesFts(db, k) })
+    return [k, db.prepare(`SELECT id FROM audit_logs ${w.where} ORDER BY id`).all(...w.args).map(r => r.id)]
+  }))
+  delete process.env.GML_AUDIT_FTS
+  const viaFts = ask()
+  setFtsSetting(db, '0'); runMigrations(db, { mode: 'test', warn: () => {} })
+  assert.deepEqual(ftsObjects(db), [])
+  assert.deepEqual(ask(), viaFts, 'table absent: same rows as the FTS path')
+  process.env.GML_AUDIT_FTS = '0'
+  assert.deepEqual(ask(), viaFts, 'table absent AND env switch: same rows')
+  for (const k of keywords) assert.equal(keywordUsesFts(db, k), false, `${k}: LIKE only`)
+  setFtsOverride(false)
+  assert.deepEqual(ask(), viaFts, 'override as well')
+})
+
+test('AD4 over HTTP: a server whose FTS objects were dropped keeps writing audit rows and answers keyword searches like a no-FTS5 build', { timeout: 90000 }, async t => {
+  const f = await fixture(t)
+  const admin = await f.login('ad4_http', 'admin', { isSuper: 1 })
+  ins(f.db, { user: 'alice', action: 'GHOSTACTION', module: 'sales' })
+  const before = (await f.request('/api/meta/audit-logs?keyword=GHOSTACTION', admin)).body.data.total
+  assert.equal(before, 1)
+  m071.dropFts(f.db)
+  assert.equal(ftsAvailable(f.db), false)
+  ins(f.db, { user: 'bob', action: 'LATEACTION', module: 'sales' }) // 没有触发器：写入照常
+  assert.equal((await f.request('/api/meta/audit-logs?keyword=LATEACTION', admin)).body.data.total, 1, 'LIKE path finds the row')
+  assert.equal((await f.request('/api/meta/audit-logs?keyword=GHOSTACTION', admin)).body.data.total, 1)
+  const csv = await (await f.raw('/api/meta/audit-logs/export.csv?keyword=LATEACTION', admin)).text()
+  assert.equal(csv.trim().split('\r\n').length - 1, 1)
 })

@@ -3,7 +3,7 @@
 <!-- generated -->
 <!-- 由 `node scripts/gen-codemap.mjs` 生成，勿手改；CI 校验不漂移 -->
 
-共 51 个 ADR 文件。批次来自 `scripts/gen-changelog.mjs` 的 BATCHES（编号区间）；状态是 ADR 原文“状态：”一句的摘录（没有就如实标注），**不代表验收**；“守卫 / 测试”是 ADR 正文里提到的文件路径（静态正则提取，路径不存在时标注“（不存在）”），不证明该测试覆盖了 ADR 的全部决定。
+共 52 个 ADR 文件。批次来自 `scripts/gen-changelog.mjs` 的 BATCHES（编号区间）；状态是 ADR 原文“状态：”一句的摘录（没有就如实标注），**不代表验收**；“守卫 / 测试”是 ADR 正文里提到的文件路径（静态正则提取，路径不存在时标注“（不存在）”），不证明该测试覆盖了 ADR 的全部决定。
 
 | 编号 | 标题 | 批次 | 状态（原文摘录） | 守卫（scripts/） | 测试（tests/） |
 |---|---|---|---|---|---|
@@ -58,3 +58,4 @@
 | 0050 | [ADR-0050：MCP 采购订单读工具与剩余聚合读口和 HTTP 范围对齐（AC1）](ADR-0050-mcp-purchase-scope-parity.md) | 第十二批（进行中） | 开发实现，尚非产品上线验收 | — | — |
 | 0051 | [ADR-0051 总部角色名单单点与 docflow 严格门店绑定（AC2）](ADR-0051-hq-roles-docflow-binding.md) | 第十二批（进行中） | 开发实现，尚非产品上线验收 | `test-setting-audit.mjs` | — |
 | 0052 | [ADR-0052：发行证据透明日志与 CI 签名口径（AC6）](ADR-0052-evidence-transparency-log.md) | 第十二批（进行中） | 开发实现，尚非产品上线验收 | `lib/evidence-log.mjs` | — |
+| 0054 | [ADR-0054：审计 FTS5 索引可选化与无 FTS5 构建的真实验证（AD4）](ADR-0054-audit-fts-optional.md) | 第十二批（进行中） | 开发实现，尚非产品上线验收 | `audit-fts-maintain.mjs`<br>`test-setting-audit.mjs` | — |

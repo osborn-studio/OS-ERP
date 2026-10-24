@@ -82,6 +82,43 @@ jobs:
           export GML_JWT_SECRET="$(node -e "process.stdout.write(require('node:crypto').randomBytes(32).toString('hex'))")"
           npm run test:focused
 
+  audit-no-fts5:
+    # AD4 (ADR-0054): a REAL SQLite build without FTS5. better-sqlite3 enables FTS5 only through the SQLITE_ENABLE_FTS5 define in
+    # deps/defines.gypi (there is no OMIT switch to pass; FTS5 is off unless enabled), so this job deletes that one define from the
+    # installed module and rebuilds it from source (about 40 s locally). It then proves the build has no fts5 module and runs the audit
+    # view and maintenance tests, where FTS-dependent cases skip with a stated reason and the no-FTS5 cases run for real.
+    name: Audit search on a SQLite build without FTS5
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Install locked dependencies without native build hooks
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Rebuild better-sqlite3 from source without SQLITE_ENABLE_FTS5
+        run: |
+          set -euo pipefail
+          sed -i "/'SQLITE_ENABLE_FTS5',/d" node_modules/better-sqlite3/deps/defines.gypi
+          if grep -q SQLITE_ENABLE_FTS5 node_modules/better-sqlite3/deps/defines.gypi; then echo '::error::could not remove SQLITE_ENABLE_FTS5'; exit 1; fi
+          npm rebuild better-sqlite3 --build-from-source --no-audit --no-fund
+      - name: Prove the build has no FTS5
+        run: |
+          node --input-type=module -e "
+          import Database from 'better-sqlite3'
+          const db = new Database(':memory:')
+          const opts = db.pragma('compile_options').map((r) => r.compile_options)
+          if (opts.includes('ENABLE_FTS5')) { console.error('FTS5 is still compiled in'); process.exit(1) }
+          try { db.exec('CREATE VIRTUAL TABLE t USING fts5(x)'); console.error('fts5 table could be created'); process.exit(1) } catch { console.log('confirmed: no FTS5 in this SQLite build') }
+          "
+      - name: Audit view and FTS maintenance tests (no-FTS5 build)
+        run: node --test --test-concurrency=1 tests/audit-logs-view.test.mjs tests/audit-fts-maintain.test.mjs
+
   docker:
     # Builds the ADR-0012 runtime image for linux/amd64 (no registry, no push, no login) and runs
     # scripts/docker-smoke.mjs against it: startup gates (missing / public-default secret are refused),
