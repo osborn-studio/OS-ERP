@@ -16,6 +16,7 @@ import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Card, SectionTitle, useFetch } from '../../components/ui'
 import { ScopeBlocked, firstFailure } from '../../components/ScopeNotice'
+import RoleMatrixCustomRoles, { type CustomRoleItem } from './RoleMatrixCustomRoles'
 
 type Access = 'full' | 'scoped' | 'bound' | 'global_only' | 'none'
 type RoleMatrixData = {
@@ -90,6 +91,9 @@ export default function RoleMatrix() {
               ))}
             </ul>
           </Card>
+
+          {/* AE11 SLOT（布局）：AE2 的"自定义角色"分组。AE2 合入后在此传入 roles；没有自定义角色时槽位不占版面。 */}
+          <RoleMatrixCustomRoles roles={(data as { custom_roles?: CustomRoleItem[] }).custom_roles} />
 
           <Card>
             <div className="mb-3 flex items-center gap-2 flex-wrap">
