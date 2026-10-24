@@ -123,8 +123,28 @@ The `candidate` job in `.github/workflows/ci.yml` builds a candidate on a GitHub
 within 90 minutes. It runs `release-candidate --run-tests --ci-run=auto --log=<runner temp> --output=<runner temp>`, then
 `verify-release --evidence --artifact --log` on the extracted package, and uploads exactly three files as a workflow artifact
 kept for 14 days: `RC-<version>-<shortsha>.zip`, `EVIDENCE.json` and `evidence-log-line.jsonl` (the log line this build would
-append). It creates no tag, no GitHub Release, and does not commit the log line back: a maintainer who wants it in
-`docs/release/EVIDENCE-LOG.jsonl` commits it by hand.
+append). It creates no tag, no GitHub Release, and does not commit the log line back.
+
+On a `v*` tag push the other `ci.yml` jobs (`checks`, `docker`, `browser`, `regression`) are skipped (`if: !startsWith(github.ref, 'refs/tags/')`);
+the candidate job runs the focused suite and the guards itself. Pull requests (`refs/pull/N/merge`) and pushes to `main` are unaffected,
+so the checks that branch protection requires still run for them; tags are not PR heads. Because no successful `ci.yml` run
+exists for a tagged commit in that case, `--ci-run=auto` falls back (hosted CI only, `GITHUB_ACTIONS=true` and a numeric `GITHUB_RUN_ID`
+for this commit) to recording the current run with `ci_lookup.ci_run_origin: "hosted-ci-self"` and a `SELF-REFERENTIAL` note. That run
+was still in progress when recorded: it is a pointer to the build itself, **not** evidence that the `ci.yml` checks passed, carries no
+`conclusion`, and `verify-release` prints a warning for it. Outside hosted CI no such record is invented (`ci_run_id` stays `null`).
+
+**Maintainer flow: download artifact, ingest, commit.** The log line is never pushed back by CI:
+
+```
+gh run download <run-id> --dir <empty dir>                                           # untrusted download; inspect before use
+node scripts/evidence-log-ingest.mjs --line <empty dir>/<artifact>/evidence-log-line.jsonl   # optional: --log <repo log> (default docs/release/EVIDENCE-LOG.jsonl)
+git diff docs/release/EVIDENCE-LOG.jsonl     # then stage and commit the one new line
+```
+
+`evidence-log-ingest` appends under the same lock as `release-candidate --log` and refuses (exit 1, log unchanged) unless the file is
+exactly one canonical line with `built_by: hosted-ci` and `signature: null`, `prev` equal to the current log tail hash (genesis for an
+empty log), a candidate name not yet in the log and a non-decreasing timestamp. It does not download, sign or commit anything and does
+not prove the evidence true: check the line against the run that produced it.
 
 **托管候选未签名，正式发行须持钥者在受控机器重签** (hosted candidates are unsigned: `built_by: hosted-ci`, `signature: null`;
 the job never holds `GML_RELEASE_SIGN_KEY`). The artifact is a development candidate, not release or production acceptance.

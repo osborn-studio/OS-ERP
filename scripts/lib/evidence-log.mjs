@@ -138,3 +138,41 @@ export function appendEntry(file, { name, evidence, sigText, builtBy, timestamp 
     return entry
   } finally { fs.closeSync(fd); fs.rmSync(lock, { force: true }) }
 }
+
+/** AE10：追加一条**已成型**的行（来自托管 CI 的 artifact）。同一把独占锁、同样的追加 → fsync → 失败截回语义。
+ *  只接受：恰好一行规范化 JSON、built_by=hosted-ci、prev 等于当前链尾（或日志为空时的 genesis）、名称不重复；
+ *  全部通过"现有日志文本 + 这一行"整体重新走 verifyLog，任何一项不满足 ⇒ 拒绝且不改动日志。 */
+export function appendVerifiedLine(file, lineText) {
+  const text = String(lineText)
+  if (text.length > 4096) throw new Error('evidence log line is too large (> 4096 bytes)')
+  if (!text.endsWith('\n') || text.slice(0, -1).includes('\n') || text.includes('\r')) throw new Error('the line file must contain exactly one line ending in a single LF')
+  const line = text.slice(0, -1)
+  let parsed
+  try { parsed = JSON.parse(line) } catch (error) { throw new Error(`line is not JSON (${error.message})`) }
+  if (!parsed || typeof parsed !== 'object' || parsed.built_by !== 'hosted-ci') throw new Error('only built_by "hosted-ci" lines can be ingested (key-holder and local builds append directly through release-candidate --log)')
+  assertFsFaultAllowed()
+  fs.mkdirSync(path.dirname(file), { recursive: true })
+  const lock = `${file}.lock`
+  let fd
+  try { fd = fs.openSync(lock, 'wx', 0o600) } catch (error) {
+    throw new Error(error.code === 'EEXIST' ? `evidence log lock ${lock} is held by another process (or left by a crashed one; remove it only after confirming nothing is appending)` : `cannot take evidence log lock ${lock} (${error.code || error.message})`)
+  }
+  try {
+    const current = readLog(file, { allowMissing: true })
+    if (!current.ok) throw new Error(`${current.reason} (the chain is broken; it is never repaired automatically)`)
+    const existing = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : ''
+    const check = verifyLog(existing + text)
+    if (!check.ok) throw new Error(`${check.reason} (the line does not extend the current log tail ${current.tip.slice(0, 12)}…)`)
+    const lfd = fs.openSync(file, 'a')
+    const sizeBefore = fs.fstatSync(lfd).size
+    try {
+      const buf = Buffer.from(text, 'utf8')
+      for (let off = 0; off < buf.length;) off += fs.writeSync(lfd, buf, off)
+      fs.fsyncSync(lfd)
+    } catch (error) {
+      try { fs.ftruncateSync(lfd, sizeBefore) } catch { /* 下一次校验会报告半行 */ }
+      throw error
+    } finally { fs.closeSync(lfd) }
+    return check.entries[check.entries.length - 1]
+  } finally { fs.closeSync(fd); fs.rmSync(lock, { force: true }) }
+}

@@ -108,7 +108,10 @@ if (evidenceArg) {
       if (!cl || typeof cl !== 'object' || !['auto', 'operator-supplied', 'none'].includes(cl.mode)) bad('ci_lookup', 'mode must be auto, operator-supplied or none')
       else if (cl.mode === 'auto') {
         if (ev.ci_run_id === null && !String(cl.reason ?? '').trim()) bad('ci_lookup', 'an auto lookup that found no run must state the reason')
-        if (ev.ci_run_id !== null && (cl.conclusion !== 'success' || cl.source !== 'gh run list' || cl.head_sha !== ev.commit)) bad('ci_lookup', 'an auto-resolved run id must come from gh run list with conclusion success for exactly this commit (head_sha)')
+        if (ev.ci_run_id !== null && cl.ci_run_origin === 'hosted-ci-self') { // AE10：自指引用，不得声称 success
+          if (cl.source !== 'GITHUB_RUN_ID' || cl.head_sha !== ev.commit || cl.conclusion !== undefined || ev.built_by !== 'hosted-ci' || !/SELF-REFERENTIAL/.test(String(cl.note ?? ''))) bad('ci_lookup', 'a hosted-ci-self run id must come from GITHUB_RUN_ID for exactly this commit, built_by hosted-ci, carry the self-referential note and no conclusion')
+          console.warn('[verify] WARNING: ci_run_id is the building run itself (hosted-ci-self); it is not evidence of a passing ci.yml run')
+        } else if (ev.ci_run_id !== null && (cl.conclusion !== 'success' || cl.source !== 'gh run list' || cl.head_sha !== ev.commit)) bad('ci_lookup', 'an auto-resolved run id must come from gh run list with conclusion success for exactly this commit (head_sha)')
         if (cl.gh_override) console.warn('[verify] WARNING: ci_lookup used the OS_ERP_GH override binary; this is not a genuine GitHub lookup')
       } else if (cl.mode === 'none' && ev.ci_run_id !== null) bad('ci_lookup', 'mode none cannot carry a run id')
     }

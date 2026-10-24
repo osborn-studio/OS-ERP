@@ -91,3 +91,29 @@ test('docs/release/README.md states hosted candidates are unsigned and need a ke
   assert.match(readme, /workflow_dispatch/)
   assert.match(readme, /14 days|14 天/)
 })
+
+test('AE10: checks, docker, browser and regression skip tag pushes; the candidate job condition is unchanged', () => {
+  for (const name of ['checks', 'docker', 'browser', 'regression']) {
+    const body = workflow.match(new RegExp(`^  ${name}:\\n([\\s\\S]*?)(?=^  \\S|(?![\\s\\S]))`, 'm'))?.[0]
+    assert.ok(body, `${name} job exists`)
+    const cond = body.replace(/^\s*#.*$/gm, '').match(/^    if:\s*(.+?)(?:\s+#.*)?$/m)?.[1]
+    assert.equal(cond, "${{ !startsWith(github.ref, 'refs/tags/') }}", `${name} must skip refs/tags/* pushes`)
+    assert.doesNotMatch(cond, /pull_request|refs\/heads|main/, `${name} keeps running for PR and main`)
+  }
+  // PR 的 github.ref 是 refs/pull/N/merge、main 推送是 refs/heads/main，都不以 refs/tags/ 开头，分支保护所依赖的检查不受影响
+  assert.match(workflow, /^    if: github\.event_name == 'workflow_dispatch' \|\| \(github\.event_name == 'push' && startsWith\(github\.ref, 'refs\/tags\/v'\)\)$/m)
+})
+
+test('AE10: no job in ci.yml has a publish, release, tag or push-back step', () => {
+  const all = workflow.replace(/^\s*#.*$/gm, '')
+  assert.doesNotMatch(all, /gh release|softprops|action-gh-release|create-release|npm publish|docker push|docker login/i)
+  assert.doesNotMatch(all, /git (push|tag|commit)\b/)
+  assert.doesNotMatch(all, /contents:\s*write|packages:\s*write|id-token/)
+})
+
+test('AE10: README documents the artifact, ingest, commit maintainer flow and the self-referential CI record', () => {
+  const readme = read('docs/release/README.md')
+  assert.match(readme, /evidence-log-ingest\.mjs --line/)
+  assert.match(readme, /hosted-ci-self/)
+  assert.match(readme, /refs\/tags\//)
+})

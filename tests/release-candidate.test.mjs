@@ -404,3 +404,66 @@ test('without gh the candidate still builds, with ci_run_id null and the reason 
   assert.equal(ev.focused_tests.result, 'not run') // 没有 --run-tests 就不得出现 produced 的焦点结果
   assert.equal(ev.focused_tests.origin, undefined)
 })
+
+// ---- AE10：标签推送没有成功的 ci.yml run 时，托管 CI 回退为记录当前 run（自指引用，如实标注） ----
+test('selfCiRun only applies on hosted CI with a numeric run id for this very commit, and never claims success', async () => {
+  const { selfCiRun } = await import(pathToFileURL(path.join(ROOT, 'scripts/release-candidate.mjs')).href)
+  assert.equal(selfCiRun(HEAD40, {}), null, 'not on CI')
+  assert.equal(selfCiRun(HEAD40, { GITHUB_ACTIONS: 'true' }), null, 'no run id')
+  assert.equal(selfCiRun(HEAD40, { GITHUB_ACTIONS: 'true', GITHUB_RUN_ID: 'abc' }), null, 'non-numeric run id')
+  assert.equal(selfCiRun(HEAD40, { GITHUB_ACTIONS: 'false', GITHUB_RUN_ID: '7' }), null, 'GITHUB_ACTIONS must be exactly true')
+  assert.equal(selfCiRun(HEAD40, { GITHUB_ACTIONS: 'true', GITHUB_RUN_ID: '7', GITHUB_SHA: 'c'.repeat(40) }), null, 'other commit')
+  const s = selfCiRun(HEAD40, { GITHUB_ACTIONS: 'true', GITHUB_RUN_ID: '7', GITHUB_SHA: HEAD40 })
+  assert.equal(s.id, '7')
+  assert.equal(s.lookup.ci_run_origin, 'hosted-ci-self')
+  assert.equal(s.lookup.conclusion, undefined)
+  assert.match(s.lookup.note, /SELF-REFERENTIAL/)
+})
+
+test('--ci-run=auto on hosted CI without a successful ci.yml run records the current run as hosted-ci-self; verify-release accepts it with a warning and rejects forgeries', { timeout: 290000 }, (t) => {
+  const src = minimalSource(t)
+  const head = git(src, 'rev-parse', 'HEAD').stdout.trim()
+  const gh = fakeGh(t, { stdout: '[]' })
+  const out = path.join(tempDir(t, 'os-erp-rc-out-'), 'release')
+  const r = candidate(src, out, ['--ci-run=auto'], { OS_ERP_GH: gh.file, GITHUB_ACTIONS: 'true', GITHUB_RUN_ID: '555001', GITHUB_SHA: head })
+  assert.equal(r.status, 0, r.stderr.slice(-3000) + r.stdout.slice(-3000))
+  const name = readdirSync(out).find(f => f.endsWith('.evidence'))
+  const dir = path.join(out, name)
+  const ev = JSON.parse(readFileSync(path.join(dir, 'EVIDENCE.json'), 'utf8'))
+  assert.equal(ev.ci_run_id, '555001')
+  assert.equal(ev.built_by, 'hosted-ci')
+  assert.equal(ev.ci_lookup.mode, 'auto')
+  assert.equal(ev.ci_lookup.ci_run_origin, 'hosted-ci-self')
+  assert.equal(ev.ci_lookup.source, 'GITHUB_RUN_ID')
+  assert.equal(ev.ci_lookup.conclusion, undefined)
+  assert.match(ev.ci_lookup.lookup_reason, /no ci\.yml run recorded/)
+  assert.match(ev.ci_lookup.note, /SELF-REFERENTIAL/)
+  const pkg = tempDir(t, 'os-erp-rc-pkg-')
+  for (const [n, bytes] of Object.entries(unzipSync(new Uint8Array(readFileSync(path.join(out, name.replace('.evidence', '.zip'))))))) if (!n.endsWith('/')) put(pkg, n.split('/').slice(1).join('/'), bytes)
+  const verify = file => spawnSync(process.execPath, ['scripts/verify-release.mjs', `--evidence=${file}`], { cwd: pkg, env: { PATH }, encoding: 'utf8' })
+  const ok = verify(path.join(dir, 'EVIDENCE.json'))
+  assert.equal(ok.status, 0, ok.stderr)
+  assert.match(ok.stderr, /hosted-ci-self/)
+  for (const [label, fn] of [
+    ['claims success', e => { e.ci_lookup.conclusion = 'success' }],
+    ['other commit', e => { e.ci_lookup.head_sha = 'f'.repeat(40) }],
+    ['note removed', e => { delete e.ci_lookup.note }],
+    ['wrong source', e => { e.ci_lookup.source = 'gh run list' }],
+    ['not hosted-ci', e => { e.built_by = 'local' }]
+  ]) {
+    const e = JSON.parse(JSON.stringify(ev)); fn(e)
+    const f = path.join(dir, 'tampered.json'); writeFileSync(f, JSON.stringify(e))
+    const x = verify(f)
+    assert.notEqual(x.status, 0, label)
+  }
+})
+
+test('outside hosted CI a missing successful run stays null (no self record is invented locally)', { timeout: 290000 }, (t) => {
+  const src = minimalSource(t)
+  const out = path.join(tempDir(t, 'os-erp-rc-out-'), 'release')
+  const r = candidate(src, out, ['--ci-run=auto'], { OS_ERP_GH: fakeGh(t, { stdout: '[]' }).file, GITHUB_RUN_ID: '555001' })
+  assert.equal(r.status, 0, r.stderr.slice(-2000))
+  const ev = JSON.parse(readFileSync(path.join(out, readdirSync(out).find(f => f.endsWith('.evidence')), 'EVIDENCE.json'), 'utf8'))
+  assert.equal(ev.ci_run_id, null)
+  assert.equal(ev.ci_lookup.ci_run_origin, undefined)
+})
