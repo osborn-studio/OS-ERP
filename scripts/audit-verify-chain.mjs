@@ -14,7 +14,8 @@
  *     链尾已被归档搬出库时，用 `--archive-dir` 指向归档摘要目录证明。`--strict-anchors`：备份之后新增 / 消失的锚点也算失败。
  *   · `--offbox <anchor-*.json> --pubkey <公钥PEM>`（AD5，ADR-0055）：验 `offbox-anchor.mjs` 写出的签名锚点（改文件 / 换钥 / 去签名都失败），
  *     并要求每个被锚定的行业库的在用链是锚定链尾的**后代**（同 `--against-backup` 的 ok / rewrite / unverifiable 口径；`--archive-dir` 同样适用）。
- *     被锚定为有链的行业库现已不存在 ⇒ 失败。只检查本次选中的行业。
+ *     被锚定为有链的行业库现已不存在 ⇒ 失败。只检查本次选中的行业。在已锚定范围内新增的库内锚点（可能是伪造的桥锚点）默认失败，
+ *     核对操作记录后用 `--accept-new-anchors` 明确接受。
  *   退出码：0 全部 OK；1 有断点（或库未迁移到 068、`--against-backup` 非 ok）；2 参数 / 环境错误。
  * 【边界】不改库、不创建缺失的行业库；不覆盖 user_name / module / ip 三列（规格如此，见 ADR-0049「限制」）。
  * ============================================================================
@@ -23,11 +24,12 @@ import path from 'node:path'
 import Database from 'better-sqlite3'
 import { parseArgs, locateDatabases, die } from './lib/audit-chain-cli.mjs'
 
-const args = parseArgs(process.argv.slice(2), { values: ['--data-dir', '--industry', '--expect-tip', '--against-backup', '--archive-dir', '--offbox', '--pubkey'], flags: ['--json', '--strict-anchors'] })
+const args = parseArgs(process.argv.slice(2), { values: ['--data-dir', '--industry', '--expect-tip', '--against-backup', '--archive-dir', '--offbox', '--pubkey'], flags: ['--json', '--strict-anchors', '--accept-new-anchors'] })
 if (!args['data-dir'] && !process.env.GML_DATA_DIR) die('USAGE', '用法：audit-verify-chain.mjs --data-dir <绝对路径> [--industry <行业>] [--expect-tip <hash>] [--json]')
 if (args['expect-tip'] && !/^[0-9a-f]{64}$/.test(args['expect-tip'])) die('USAGE', '--expect-tip 必须是 64 位小写十六进制')
 if (args['expect-tip'] && !args.industry) die('USAGE', '--expect-tip 只对单个行业有意义，请同时给 --industry')
 
+if (args['accept-new-anchors'] && !args.offbox) die('USAGE', '--accept-new-anchors 只与 --offbox 一起使用')
 if (!!args.offbox !== !!args.pubkey) die('USAGE', '--offbox 与 --pubkey 必须同时给出（公钥须带外获得）')
 if ((args['archive-dir'] || args['strict-anchors']) && !args['against-backup'] && !(args['archive-dir'] && args.offbox && !args['strict-anchors'])) die('USAGE', '--archive-dir / --strict-anchors 只与 --against-backup 一起使用')
 
@@ -96,7 +98,17 @@ for (const { code, file } of targets) {
       else if (entry.status !== 'chain') off = { status: 'ok', note: `锚点记录该行业为 ${entry.status}` }
       else {
         off = compareLiveToBackup(db, asManifest(code, entry), { archiveDir: args['archive-dir'] ? path.resolve(args['archive-dir']) : null })
-        delete off.anchors_added // 锚点之后新增的保留清理 / 归档锚点是正常的；消失的才失败（compare 已处理）
+        // 锚点之后新增、但落在已锚定范围内（at_row_id <= 锚定链尾 id）的库内锚点：伪造的"桥"锚点可以洗白一次对历史行的改写
+        // （改第 k 行并重算它，再登记一条把新哈希接回第 k+1 行原 prev_hash 的锚点；链校验与链尾比对都会通过）。
+        // 合法的保留清理 / 归档 / 隐私抹除在已锚定范围内也会产生这类锚点，所以默认失败并列出，操作者对照操作记录后用
+        // --accept-new-anchors 明确接受（或先做一次新锚点）。锚点之后的追加区间里新增的锚点是正常增长，不在此列。
+        const inRange = (off.anchors_added || []).filter((a) => entry.last_id != null && a.at_row_id <= entry.last_id)
+        off.anchors_added_in_range = inRange.length
+        if (inRange.length && off.status === 'ok' && !args['accept-new-anchors']) {
+          off.status = 'anchors-added'
+          off.kind = 'in-anchored-range'
+          off.message = `锚点之后在已锚定范围内新增了 ${inRange.length} 条库内锚点（${inRange.map((a) => `${a.kind}@${a.at_row_id}`).join(', ')}）：可能是保留清理 / 归档 / 隐私抹除，也可能是伪造的桥锚点；对照操作记录，确认后加 --accept-new-anchors`
+        }
       }
       if (off.status !== 'ok' && off.status !== 'not-anchored') report.ok = false
     } else if (offbox) report.ok = false

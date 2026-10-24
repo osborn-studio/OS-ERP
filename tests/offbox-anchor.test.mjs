@@ -210,6 +210,28 @@ test('audit descent: advanced ok; whole-chain recompute (rewrite) and tail trunc
   w.db.close()
 })
 
+test('audit descent: a forged bridge anchor inside the anchored range cannot launder an edited past row (Codex AD5-H1)', (t) => {
+  const w = world(t)
+  assert.equal(w.anchor().status, 0)
+  const anchorFile = w.first()
+  const spec = (r, prev) => sha(JSON.stringify([r.id, r.created_at, r.user_id, r.action, r.entity, r.entity_id, r.detail, prev].map((v) => (v === null || v === undefined ? null : String(v)))))
+  const r1 = w.db.prepare('SELECT * FROM audit_logs WHERE id=1').get()
+  const r2 = w.db.prepare('SELECT * FROM audit_logs WHERE id=2').get()
+  const edited = { ...r1, detail: '{"forged":true}' }
+  const newHash = spec(edited, GENESIS)
+  w.db.prepare('UPDATE audit_logs SET detail=?, row_hash=? WHERE id=1').run(edited.detail, newHash)
+  w.db.prepare("INSERT INTO audit_chain_anchors (kind, at_row_id, anchor_hash, prev_id, prev_row_hash, reason) VALUES ('retention', 2, ?, 1, ?, 'forged bridge')").run(r2.prev_hash, newHash)
+  assert.equal(run(VERIFY_CHAIN, ['--data-dir', w.data]).status, 0, 'the live chain verifies on its own: the forged anchor bridges the edit')
+  const r = w.chain(anchorFile)
+  assert.equal(r.status, 1, r.stdout)
+  const o = JSON.parse(r.stdout).industries.cosmetic.offbox
+  assert.deepEqual([o.status, o.kind], ['anchors-added', 'in-anchored-range'])
+  const accepted = w.chain(anchorFile, ['--accept-new-anchors'])
+  assert.equal(accepted.status, 0, 'explicit operator opt-in lists the anchors and passes')
+  assert.equal(JSON.parse(accepted.stdout).industries.cosmetic.offbox.anchors_added.length, 1)
+  w.db.close()
+})
+
 test('audit descent: anchored industry whose database disappeared fails; deleted anchor rows are reported', (t) => {
   const w = world(t)
   assert.equal(w.anchor().status, 0)

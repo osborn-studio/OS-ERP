@@ -23,7 +23,7 @@
 - 测试接缝：`OS_ERP_SSH` / `OS_ERP_SCP` 指向替身（与 `OS_ERP_GH` 同类）。只设 `OS_ERP_SSH` 不设 `OS_ERP_SCP` 时拒绝，避免真 `scp` 经替身 `ssh` 出网。测试从不连接真实主机。
 
 ### 3. 校验
-- `audit-verify-chain --offbox <文件> --pubkey <公钥PEM>`（二者必须同时给）：先验签（改文件、换钥、去签名、多余字段、`format` 不符都失败），再对每个被选中行业：在用链自身通过校验 + 锚定链尾是其祖先（沿用 AC7 `compareLiveToBackup`：`ok` / `rewrite`（`tip-row-differs`、`behind`、`anchors-removed`）/ `unverifiable`）；被锚定有链的行业库现已不存在 ⇒ 失败；锚点之后新增的锚点（保留清理 / 归档会产生）只是正常增长，不报错。锚定链尾被保留清理删除或归档搬出时需 `--archive-dir`，否则 `unverifiable`（失败）。
+- `audit-verify-chain --offbox <文件> --pubkey <公钥PEM>`（二者必须同时给）：先验签（改文件、换钥、去签名、多余字段、`format` 不符都失败），再对每个被选中行业：在用链自身通过校验 + 锚定链尾是其祖先（沿用 AC7 `compareLiveToBackup`：`ok` / `rewrite`（`tip-row-differs`、`behind`、`anchors-removed`）/ `unverifiable`）；被锚定有链的行业库现已不存在 ⇒ 失败；锚点之后在**追加区间**（`at_row_id` 大于锚定链尾 id）新增的库内锚点是正常增长；但在**已锚定范围内**（`at_row_id` ≤ 锚定链尾 id）新增的库内锚点默认失败（`anchors-added/in-anchored-range`）并列出——伪造的"桥"锚点可以洗白对历史行的改写（见审计记录），而合法的保留清理 / 归档 / 隐私抹除在该范围内也会产生同样的锚点，所以由操作者对照操作记录后用 `--accept-new-anchors` 明确接受（或先做一次新锚点再比对）。锚定链尾被保留清理删除或归档搬出时需 `--archive-dir`，否则 `unverifiable`（失败）。
 - `verify-release --log=<日志> --offbox <文件> --pubkey <公钥PEM>`（三者必须同时给；可不带 `--evidence`）：验签后要求现日志自身是有效链、行数不少于锚定行数，且第 `lines` 行的哈希等于锚定的 `tail_hash`——截尾、整份替换为另一条有效链、改中间行、日志被删都失败。裸 `--log`（不带 `=`）沿用既有语义，指仓库默认日志。`verify-release` 不接数据目录，因此审计链部分只由 `audit-verify-chain` 校验。
 
 ## 诚实边界
@@ -38,4 +38,6 @@
 - 锚点内含审计链尾哈希与锚点明细，不含审计内容；文件本身不是机密，但应放在不能被业务主机写的位置。
 
 ## 审计记录
-（Codex 审计见下方，完成后填写。）
+Codex 审计（gpt-6.1-sol，只读，针对相对 batch-twelve 的差异）：
+- 高：`audit-verify-chain --offbox` 丢弃了 `anchors_added`，攻击者可改第 k 行并重算，再往库里插一条把新哈希接回第 k+1 行原 `prev_hash` 的桥锚点；链校验与链尾比对都通过（审计方在内存库中复现）⇒ 已修：已锚定范围内新增的库内锚点默认失败并列出，需 `--accept-new-anchors` 明确接受；回归测试 `forged bridge anchor` 先红后绿。局限：接受该开关后的桥锚点仍无法与合法清理区分，只能靠操作记录。
+- 审计确认：未发现经 `--dest ssh://别名/路径` 的命令 / 选项注入（别名与路径白名单、`--` 终止选项、参数数组调用、远端路径单引号）；未发现私钥泄露路径（私钥只经 `loadSigningKey`，不写入锚点、不进命令行输出）。
