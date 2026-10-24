@@ -16,7 +16,7 @@
 import fs from 'node:fs'
 import { createRequire } from 'node:module'
 
-const { GENESIS, hashRow } = createRequire(import.meta.url)('./audit-chain.cjs')
+const { GENESIS, hashRow, anchorAccepts } = createRequire(import.meta.url)('../db/migrations/_audit_chain.cjs')
 
 const BATCH = 20000
 const COLS = 'id, created_at, user_id, action, entity, entity_id, detail, prev_hash, row_hash'
@@ -30,15 +30,16 @@ export function verifyChain(db, { maxId = Number.MAX_SAFE_INTEGER, expectTip } =
   const anchors = new Map()
   const hasAnchors = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='audit_chain_anchors'").get()
   if (hasAnchors) {
-    for (const a of db.prepare('SELECT at_row_id, anchor_hash FROM audit_chain_anchors').all()) {
-      if (!anchors.has(a.at_row_id)) anchors.set(a.at_row_id, new Set())
-      anchors.get(a.at_row_id).add(a.anchor_hash)
+    for (const a of db.prepare('SELECT at_row_id, anchor_hash, prev_id, prev_row_hash FROM audit_chain_anchors').all()) {
+      if (!anchors.has(a.at_row_id)) anchors.set(a.at_row_id, [])
+      anchors.get(a.at_row_id).push(a)
     }
   }
   const page = db.prepare(`SELECT ${COLS} FROM audit_logs WHERE id > ? AND id <= ? ORDER BY id LIMIT ?`)
   const out = { ok: true, rows: 0, firstId: null, lastId: null, tipHash: null, anchorsUsed: 0, brk: null }
   let cursor = 0
   let prev = GENESIS
+  let prevId = null
   for (;;) {
     const rows = page.all(cursor, maxId, BATCH)
     if (!rows.length) break
@@ -48,10 +49,11 @@ export function verifyChain(db, { maxId = Number.MAX_SAFE_INTEGER, expectTip } =
       const recomputed = hashRow(r, r.prev_hash)
       if (recomputed !== r.row_hash) return fail('content', recomputed, r.row_hash)
       if (r.prev_hash !== prev) {
-        if (anchors.get(r.id)?.has(r.prev_hash)) out.anchorsUsed += 1
+        if (anchorAccepts(anchors.get(r.id), r, prevId, prevId === null ? null : prev)) out.anchorsUsed += 1
         else return fail('link', prev, r.prev_hash)
       }
       prev = r.row_hash
+      prevId = r.id
       out.rows += 1
       out.firstId ??= r.id
       out.lastId = r.id
@@ -68,21 +70,28 @@ export function verifyChain(db, { maxId = Number.MAX_SAFE_INTEGER, expectTip } =
 
 /**
  * 校验归档导出的 JSONL 段（归档脚本在删除前读回刚写出的文件再验一遍）：每行内容哈希自洽、相邻行 prev_hash 衔接。
- * 第一行的 prev_hash 不做要求（它指向更早已归档或已锚定的部分），原样返回给调用方写进摘要。
+ * 第一行的 prev_hash 不做要求（它指向更早已归档或已锚定的部分），原样返回给调用方写进摘要。段内被锚点承认的断口由调用方传入 `anchorList`（导出时一并写进摘要）。
  */
-export function verifyJsonlSegment(file) {
+export function verifyJsonlSegment(file, anchorList = []) {
+  const anchors = new Map()
+  for (const a of anchorList) {
+    if (!anchors.has(a.at_row_id)) anchors.set(a.at_row_id, [])
+    anchors.get(a.at_row_id).push(a)
+  }
   const text = fs.readFileSync(file, 'utf8')
   const out = { ok: true, rows: 0, firstId: null, lastId: null, firstPrevHash: null, tipHash: null, brk: null }
   let prev = null
+  let prevId = null
   for (const line of text.split('\n')) {
     if (!line) continue
     let r
     try { r = JSON.parse(line) } catch { out.ok = false; out.brk = { id: null, kind: 'parse' }; return out }
     const fail = (kind) => { out.ok = false; out.brk = { id: r.id, kind }; return out }
     if (hashRow(r, r.prev_hash) !== r.row_hash) return fail('content')
-    if (prev !== null && r.prev_hash !== prev) return fail('link')
+    if (prev !== null && r.prev_hash !== prev && !anchorAccepts(anchors.get(r.id), r, prevId, prev)) return fail('link')
     if (prev === null) out.firstPrevHash = r.prev_hash
     prev = r.row_hash
+    prevId = r.id
     out.rows += 1
     out.firstId ??= r.id
     out.lastId = r.id

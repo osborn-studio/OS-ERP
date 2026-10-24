@@ -27,7 +27,10 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
 import Database from 'better-sqlite3'
+import { createRequire } from 'node:module'
 import { parseArgs, locateDatabases, die } from './lib/audit-chain-cli.mjs'
+
+const { anchorAccepts } = createRequire(import.meta.url)('../server/db/migrations/_audit_chain.cjs')
 
 const args = parseArgs(process.argv.slice(2), { values: ['--data-dir', '--industry', '--before', '--out', '--confirm', '--actor'], flags: [] })
 if (!args['data-dir'] && !process.env.GML_DATA_DIR) die('USAGE', '用法：audit-archive.mjs --data-dir <绝对路径> --before <YYYY-MM-DD> --out <目录> [--industry <行业>] [--confirm <口令>] [--actor <名字>]')
@@ -66,46 +69,77 @@ function plan(db) {
   const v = verifyChain(db, { maxId: seg.lastId })
   if (!v.ok) return { error: 'CHAIN_BROKEN', message: `待归档段链校验失败：id=${v.brk.id} 类型=${v.brk.kind}；拒绝归档（先查清篡改）`, brk: v.brk }
   const next = db.prepare('SELECT id, prev_hash FROM audit_logs WHERE id >= ? ORDER BY id LIMIT 1').get(seg.lastId + 1)
-  if (!next || next.prev_hash !== v.tipHash) return { error: 'BOUNDARY_MISMATCH', message: '边界行的 prev_hash 与段尾 row_hash 不衔接（请先运行 audit-verify-chain.mjs）' }
+  // 边界行与段尾要么直接衔接，要么在边界处有绑定"前驱 = 段尾"的锚点（段尾行刚好被隐私抹除改写过等合法情形）
+  const joined = next && (next.prev_hash === v.tipHash || anchorAccepts(
+    db.prepare('SELECT anchor_hash, prev_id, prev_row_hash FROM audit_chain_anchors WHERE at_row_id=?').all(next.id), next, seg.lastId, v.tipHash))
+  if (!joined) return { error: 'BOUNDARY_MISMATCH', message: '边界行的 prev_hash 与段尾 row_hash 不衔接且无对应锚点（请先运行 audit-verify-chain.mjs）' }
   const firstRow = db.prepare('SELECT row_hash, prev_hash FROM audit_logs WHERE id=?').get(seg.firstId)
-  return { count: seg.n, firstId: seg.firstId, lastId: seg.lastId, boundaryId: next.id, tipHash: v.tipHash, firstHash: firstRow.row_hash, firstPrevHash: firstRow.prev_hash }
+  return { count: seg.n, firstId: seg.firstId, lastId: seg.lastId, boundaryId: next.id, boundaryPrevHash: next.prev_hash, tipHash: v.tipHash, firstHash: firstRow.row_hash, firstPrevHash: firstRow.prev_hash }
 }
 
 const tokenOf = (code, p) => 'ARCHIVE-' + createHash('sha256').update(JSON.stringify([code, args.before, p.count, p.firstId, p.lastId, p.tipHash])).digest('hex').slice(0, 16).toUpperCase()
 
+/** fsync 一个目录（让新建文件的目录项落盘）；不支持的平台忽略 */
+function fsyncDir(dir) {
+  try {
+    const fd = fs.openSync(dir, 'r')
+    try { fs.fsyncSync(fd) } finally { fs.closeSync(fd) }
+  } catch { /* Windows 等不支持目录 fsync */ }
+}
+
+/** 导出 + 读回校验 + 落盘（文件与目录项都 fsync）；任何一步失败都删掉本次创建的文件再抛，不挡重试 */
 function exportSegment(db, code, p) {
   fs.mkdirSync(outDir, { recursive: true })
   const base = `audit-archive-${code}-${args.before}-${p.firstId}-${p.lastId}`
   const file = path.join(outDir, `${base}.jsonl`)
   const digestFile = path.join(outDir, `${base}.digest.json`)
   if (fs.existsSync(file) || fs.existsSync(digestFile)) throw Object.assign(new Error(`导出文件已存在：${file}（不覆盖）`), { code: 'OUT_EXISTS' })
-  const fd = fs.openSync(file, 'wx', 0o600)
-  const hash = createHash('sha256')
+  const owned = []
   try {
-    let cursor = 0
-    for (;;) {
-      const rows = db.prepare(`SELECT ${COLS} FROM audit_logs WHERE id > ? AND id <= ? ORDER BY id LIMIT 20000`).all(cursor, p.lastId)
-      if (!rows.length) break
-      const chunk = rows.map((r) => JSON.stringify(r) + '\n').join('')
-      hash.update(chunk, 'utf8')
-      fs.writeSync(fd, chunk)
-      cursor = rows[rows.length - 1].id
+    const fd = fs.openSync(file, 'wx', 0o600)
+    owned.push(file)
+    const hash = createHash('sha256')
+    try {
+      let cursor = 0
+      for (;;) {
+        const rows = db.prepare(`SELECT ${COLS} FROM audit_logs WHERE id > ? AND id <= ? ORDER BY id LIMIT 20000`).all(cursor, p.lastId)
+        if (!rows.length) break
+        const chunk = rows.map((r) => JSON.stringify(r) + '\n').join('')
+        hash.update(chunk, 'utf8')
+        fs.writeSync(fd, chunk)
+        cursor = rows[rows.length - 1].id
+      }
+      fs.fsyncSync(fd)
+    } finally {
+      fs.closeSync(fd)
     }
-    fs.fsyncSync(fd)
-  } finally {
-    fs.closeSync(fd)
+    // 段内被锚点承认的断口（保留清理 / 隐私抹除留下的）随摘要一起导出，读回校验和以后离线复核都要用
+    const anchors = db.prepare('SELECT kind, at_row_id, anchor_hash, prev_id, prev_row_hash, reason, created_at FROM audit_chain_anchors WHERE at_row_id BETWEEN ? AND ? ORDER BY id').all(p.firstId, p.lastId)
+    const back = verifyJsonlSegment(file, anchors)
+    if (!back.ok || back.rows !== p.count || back.firstId !== p.firstId || back.lastId !== p.lastId || back.tipHash !== p.tipHash) {
+      throw Object.assign(new Error(`导出文件读回校验失败：${JSON.stringify(back)}`), { code: 'EXPORT_VERIFY_FAILED' })
+    }
+    const digest = {
+      format: 'os-erp-audit-archive/1', industry: code, before: args.before, rows: p.count, first_id: p.firstId, last_id: p.lastId,
+      first_row_hash: p.firstHash, first_prev_hash: p.firstPrevHash, tip_row_hash: p.tipHash, boundary_id: p.boundaryId,
+      file: path.basename(file), file_sha256: hash.digest('hex'), anchors, created_by: actor
+    }
+    const dfd = fs.openSync(digestFile, 'wx', 0o600)
+    owned.push(digestFile)
+    try {
+      fs.writeSync(dfd, JSON.stringify(digest, null, 2) + '\n')
+      fs.fsyncSync(dfd)
+    } finally {
+      fs.closeSync(dfd)
+    }
+    // 删除一旦提交就不可逆：先让导出文件和它们的目录项（含刚创建的目录及其父目录）落盘
+    fsyncDir(outDir)
+    fsyncDir(path.dirname(outDir))
+    return { file, digestFile, digest }
+  } catch (e) {
+    for (const f of owned) fs.rmSync(f, { force: true })
+    throw e
   }
-  const back = verifyJsonlSegment(file)
-  if (!back.ok || back.rows !== p.count || back.firstId !== p.firstId || back.lastId !== p.lastId || back.tipHash !== p.tipHash) {
-    throw Object.assign(new Error(`导出文件读回校验失败：${JSON.stringify(back)}`), { code: 'EXPORT_VERIFY_FAILED', files: [file] })
-  }
-  const digest = {
-    format: 'os-erp-audit-archive/1', industry: code, before: args.before, rows: p.count, first_id: p.firstId, last_id: p.lastId,
-    first_row_hash: p.firstHash, first_prev_hash: p.firstPrevHash, tip_row_hash: p.tipHash, boundary_id: p.boundaryId,
-    file: path.basename(file), file_sha256: hash.digest('hex'), created_by: actor
-  }
-  fs.writeFileSync(digestFile, JSON.stringify(digest, null, 2) + '\n', { mode: 0o600, flag: 'wx' })
-  return { file, digestFile, digest }
 }
 
 const report = { mode: args.confirm ? 'execute' : 'dry-run', before: args.before, industries: {} }
@@ -149,8 +183,10 @@ if (args.confirm && !failed) {
           made = exportSegment(db, code, p)
           const removed = db.prepare('DELETE FROM audit_logs WHERE id <= ?').run(p.lastId).changes
           if (removed !== p.count) throw Object.assign(new Error(`删除行数 ${removed} 与计划 ${p.count} 不一致`), { code: 'DELETE_COUNT_MISMATCH' })
-          db.prepare('INSERT INTO audit_chain_anchors (kind, at_row_id, anchor_hash, reason) VALUES (?,?,?,?)')
-            .run('archive', p.boundaryId, p.tipHash, `archive before ${args.before}: ids ${p.firstId}..${p.lastId}`)
+          // 被归档行上的旧锚点已随摘要导出，库里不再有对应行；边界行成为表里第一行（前驱 = 无）
+          db.prepare('DELETE FROM audit_chain_anchors WHERE at_row_id <= ?').run(p.lastId)
+          db.prepare('INSERT INTO audit_chain_anchors (kind, at_row_id, anchor_hash, prev_id, prev_row_hash, reason) VALUES (?,?,?,NULL,NULL,?)')
+            .run('archive', p.boundaryId, p.boundaryPrevHash, `archive before ${args.before}: ids ${p.firstId}..${p.lastId}`)
           auditStrictRow(db, {
             userName: actor, action: 'AUDIT_ARCHIVE', module: 'audit', entity: 'audit_logs', entityId: code,
             detail: { before: args.before, rows: p.count, first_id: p.firstId, last_id: p.lastId, tip_row_hash: p.tipHash, file_sha256: made.digest.file_sha256, file: made.digest.file }
@@ -162,7 +198,7 @@ if (args.confirm && !failed) {
         report.industries[code] = { status: 'archived', ...done }
       } catch (e) {
         failed = true
-        for (const f of [made?.file, made?.digestFile, ...(e.files || [])]) if (f) fs.rmSync(f, { force: true })
+        for (const f of [made?.file, made?.digestFile]) if (f) fs.rmSync(f, { force: true }) // 事务回滚（导出之后的步骤失败）时一并删除导出文件
         report.industries[code] = { status: 'failed', error: `${e.code || 'ERROR'}: ${e.message}` }
       } finally {
         db.close()

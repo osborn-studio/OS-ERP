@@ -11,10 +11,10 @@
 ### 1. 数据模型（迁移 068）
 
 - `audit_logs` 增 `prev_hash TEXT`、`row_hash TEXT`。
-- `row_hash = sha256( JSON.stringify([id, created_at, user_id, action, entity, entity_id, detail, prev_hash]) )`：八个分量先转字符串（NULL 保持 `null`）再做 JSON 数组序列化；`prev_hash` = 前一行（按 id）的 `row_hash`，库里最早一行用 64 个 `0`（`GENESIS`）。唯一实现：`server/lib/audit-chain.cjs`（迁移、运行时写入、校验器共用）。
-- 规范化选择：JSON 数组自带分量边界，`action='a|b',entity='c'` 与 `action='a',entity='b|c'` 不会碰撞，NULL 与字符串 `"null"` 不同；转字符串是为了让“写入时的绑定值”和“读回的列值”落在同一输入上（SQLite 列亲和性会把 `'5'` 存成 5）。
-- `audit_chain_anchors(id, kind, at_row_id, anchor_hash, reason, created_at)`：合法断口登记（见 §3）。部分索引 `idx_audit_unchained ON audit_logs(id) WHERE row_hash IS NULL` 让 `verify()` 判断“有无未入链的行”不必扫全表（链健康时它是空的，不增加写放大）。
-- 回填：迁移内按 id 升序、keyset 分批（2 万行/批）重算，从第一条 `row_hash IS NULL` 的行起到表尾。`up()` 幂等；`verify()` = 两列在、锚点表在、索引在、没有未入链的行，所以裸 SQL 塞进去的孤儿行下次启动会被自愈接上（其后的行一并重算）。与 AB3 的 FTS 影子表及触发器互不依赖：迁移只加列、建表、回填 `UPDATE`；若 067 的 `AFTER UPDATE` 触发器已存在，回填只是更慢。
+- `row_hash = sha256( JSON.stringify([id, created_at, user_id, action, entity, entity_id, detail, prev_hash]) )`：八个分量先转字符串（NULL 保持 `null`）再做 JSON 数组序列化；`prev_hash` = 前一行（按 id）的 `row_hash`，库里最早一行用 64 个 `0`（`GENESIS`）。唯一实现：`server/db/migrations/_audit_chain.cjs`（迁移、运行时写入、校验器共用；放在迁移目录是因为升级演练/基准会整目录复制迁移，迁移不能依赖目录外的相对路径）。
+- 规范化选择：JSON 数组自带分量边界，`action='a|b',entity='c'` 与 `action='a',entity='b|c'` 不会碰撞，NULL 与字符串 `"null"` 不同；转字符串是为了让“写入时的绑定值”和“读回的列值”落在同一输入上。SQLite 列亲和性仍会改写个别值（`'005'` 存成 5），所以写入后**按读回的存储值再算一次**，不同则只改 `row_hash`（罕见路径；与校验器同一口径）。
+- `audit_chain_anchors(id, kind, at_row_id, anchor_hash, prev_id, prev_row_hash, reason, created_at)`：合法断口登记（见 §3）。部分索引 `idx_audit_unchained ON audit_logs(id) WHERE row_hash IS NULL` 让 `verify()` 判断“有无未入链的行”不必扫全表（链健康时它是空的，不增加写放大）。
+- 回填 = `adoptOrphans`：只接**最后一条已入链行之后**的行（首次迁移 = 整表，按 id 升序、keyset 分批 2 万行/批）。`up()` 幂等；`verify()` = 两列在、锚点表在、索引在、表尾没有待接链的行。裸 SQL 留在表尾的孤儿行下次启动被自愈接上（`insertAuditRow` 追加前也会先接上尾部孤儿）；**夹在已入链行中间的空 `row_hash` 不会被重算**——那是已建立的链被破坏，自愈若重算就等于把被改过的内容洗成合法哈希（Codex 审计 H2）。它继续被校验器报为 `unchained`。与 AB3 的 FTS 影子表及触发器互不依赖：迁移只加列、建表、回填 `UPDATE`；若 067 的 `AFTER UPDATE` 触发器已存在，回填只是更慢。
 
 ### 2. 写入与并发（`insertAuditRow` 仍是唯一 INSERT 点）
 
@@ -36,11 +36,11 @@
 
 | 动作 | 入口 | 登记 |
 |---|---|---|
-| 保留清理删行（`retention.mjs`）| `deleteAuditRowsAnchored` | 每个被删区间之后的第一条存活行：`(at_row_id=该行 id, anchor_hash=该行 prev_hash)` |
-| 归档删行（`audit-archive.mjs`）| 同一事务内删除并登记 | 边界行 ↔ 段尾 `row_hash`，`kind='archive'` |
-| 隐私抹除改 `detail`（`privacy-erase.mjs`，经 `applyPlan`）| `rehashAuditRow` | 重算该行 `row_hash`，并给下一行登记（它的 `prev_hash` 仍指向旧哈希）|
+| 保留清理删行（`retention.mjs`）| `deleteAuditRowsAnchored` | 每个被删区间之后的第一条存活行：`(at_row_id=该行 id, anchor_hash=该行 prev_hash, 前驱=区间前最近的存活行 / 无)` |
+| 归档删行（`audit-archive.mjs`）| 同一事务内删除并登记 | 边界行（成为表里第一行，前驱 = 无），`kind='archive'`；被归档行上的旧锚点随摘要导出后从库里删除 |
+| 隐私抹除改 `detail`（`privacy-erase.mjs`，经 `applyPlan`）| `rehashAuditRow` | 重算该行 `row_hash`，并给下一行登记（它的 `prev_hash` 仍指向旧哈希，前驱 = 本行新哈希）|
 
-校验器遇到 `prev_hash` 与前一行 `row_hash` 对不上时，仅当同 id 存在 `anchor_hash` 等于该行 `prev_hash` 的锚点才放行；行内容哈希永远要自洽。因此：删行必须留锚点，改内容必须走 `rehashAuditRow`，裸 `UPDATE`/`DELETE` 一律被报出第一个断点。
+锚点同时绑定两件事：该行的 `prev_hash`（`anchor_hash`）和**实际前驱行**（`prev_id` + `prev_row_hash`；表里没有前驱 ⇒ 两者为 NULL）。校验器遇到 `prev_hash` 与前一行 `row_hash` 对不上时，仅当该行上有锚点两者都对得上才放行；行内容哈希永远要自洽。只绑哈希的话，已有锚点会连带放过锚点旁边被额外删掉的行（Codex 审计 H1）。因此：删行必须留锚点，改内容必须走 `rehashAuditRow`（同一行被改写多次就追加多条锚点，各绑当时的新哈希），裸 `UPDATE`/`DELETE` 一律被报出第一个断点。
 
 ### 4. 校验：`scripts/audit-verify-chain.mjs --data-dir <dir> [--industry <行业>] [--expect-tip <hash>] [--json]`
 
@@ -50,7 +50,7 @@
 
 1. 待归档段 = 第一条 `created_at >= <before> 00:00:00` 之前的**id 前缀**（只有前缀被拿走，剩下的才仍是连续的链；时钟回拨造成的“id 靠前、时间更晚”的行会让前缀在那里停住，宁可少归档）。所有行都更早时**保留最后一行**，表永远不被清空（链尾不丢）。
 2. 先验证该段链完整，不通过 ⇒ 拒绝（退出 1，不动任何东西）：不把已被篡改的段“洗”成合法归档。
-3. 导出 JSONL（全部列 + 哈希）与 `.digest.json`（行数、首末 id、首行 `row_hash`/`prev_hash`、段尾 `row_hash`、JSONL 的 SHA-256、边界 id）；**读回刚写出的文件再验链**。
+3. 导出 JSONL（全部列 + 哈希）与 `.digest.json`（行数、首末 id、首行 `row_hash`/`prev_hash`、段尾 `row_hash`、JSONL 的 SHA-256、边界 id、段内锚点）；**读回刚写出的文件再验链**（段内被锚点承认的断口用摘要里的锚点判）。两个文件和导出目录（及其父目录）都 `fsync` 之后才提交删除——否则崩溃可能留下“库里已删、文件没落盘”（Codex 审计 H3）。导出过程中任何一步失败都删除本次创建的文件，不挡重试。边界行与段尾要么直接衔接，要么在边界处有绑定“前驱 = 段尾”的锚点。
 4. 同一 `IMMEDIATE` 事务内：锁内重算计划（必须与口令一致）→ 导出 → 删除 → 登记 `kind='archive'` 锚点 → 写 `AUDIT_ARCHIVE` 严格审计（只含计数与摘要）→ 对剩余链再验一遍。任一步失败整体回滚并删除已写出的导出文件。
 5. 确认机制：默认只演练，打印每个行业的计划与口令（`ARCHIVE-` + 摘要前 16 位，绑定行业、`--before`、行数、首末 id、段尾哈希）；`--confirm` 必须与执行时重算一致（演练后数据变了 ⇒ 口令失效）。多行业时口令为各行业口令的合并摘要。导出目录不得在数据目录内、不覆盖已有文件、文件权限 0600。
 6. 执行期间持写锁（单事务含导出与读回），其它写入等 `busy_timeout`；请在低峰执行，100 万行实测见 capacity-baseline “AB6”。
@@ -66,6 +66,6 @@
 
 ## 后果
 
-- 新增：迁移 068、`server/lib/audit-chain.cjs`、`server/lib/audit-chain-verify.js`、`scripts/audit-verify-chain.mjs`、`scripts/audit-archive.mjs`、`scripts/lib/audit-chain-cli.mjs`、`tests/audit-chain.test.mjs`。
+- 新增：迁移 068、`server/db/migrations/_audit_chain.cjs`、`server/lib/audit-chain-verify.js`、`scripts/audit-verify-chain.mjs`、`scripts/audit-archive.mjs`、`scripts/lib/audit-chain-cli.mjs`、`tests/audit-chain.test.mjs`。
 - 改动：`server/lib/audit-trail.js`（链式写入、两个受控改链入口）、`server/lib/admin-bootstrap.js`（改走唯一 INSERT 点）、`scripts/retention.mjs`（删行登记锚点）、`scripts/lib/privacy-common.mjs`（`applyPlan` 改写 audit_logs 后重算）。
 - 运维：docs/operations/audit-integrity.md。

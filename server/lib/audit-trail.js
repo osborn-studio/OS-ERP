@@ -8,7 +8,7 @@
  *     `SECURITY_AUDIT_UNAVAILABLE`（503），让包着它的业务事务一起回滚。
  *
  * 【哈希链（ADR-0049，迁移 068）】`audit_logs` 有 `prev_hash` / `row_hash` 两列时，`insertAuditRow` 在**同一条 INSERT** 里写入
- *   `row_hash = sha256(规范化(id, created_at, user_id, action, entity, entity_id, detail, prev_hash))`（见 audit-chain.cjs），
+ *   `row_hash = sha256(规范化(id, created_at, user_id, action, entity, entity_id, detail, prev_hash))`（见 db/migrations/_audit_chain.cjs），
  *   `prev_hash` 取前一行的 `row_hash`（库里没有前驱行 ⇒ 64 个 0）。并发：见 `chainedInsert` 的注释（写锁内读尾、读后立刻写）。
  *   本文件另给两个**受控改链**入口：`deleteAuditRowsAnchored`（保留清理 / 归档删行，登记锚点）与 `rehashAuditRow`（隐私抹除改 detail 后重算）。
  *
@@ -25,7 +25,7 @@ import { createRequire } from 'node:module'
 import { redactValue } from './redact.js'
 import { incCounter } from './process-counters.js'
 
-const { GENESIS, hashRow } = createRequire(import.meta.url)('./audit-chain.cjs')
+const { GENESIS, hashRow, adoptOrphans } = createRequire(import.meta.url)('../db/migrations/_audit_chain.cjs')
 export { GENESIS }
 
 export const SECURITY_AUDIT_UNAVAILABLE = 'SECURITY_AUDIT_UNAVAILABLE'
@@ -77,9 +77,11 @@ const hasChainColumns = (() => {
 
 const NEXT_SLOT = `SELECT COALESCE((SELECT seq FROM sqlite_sequence WHERE name='audit_logs'),0) + 1 AS id,
                           datetime('now','localtime') AS created_at,
+                          (SELECT id FROM audit_logs ORDER BY id DESC LIMIT 1) AS tail_id,
                           (SELECT row_hash FROM audit_logs ORDER BY id DESC LIMIT 1) AS tail_hash`
 const INSERT_CHAINED = `INSERT INTO audit_logs (id, user_id, user_name, action, module, entity, entity_id, detail, ip, created_at, prev_hash, row_hash)
        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`
+const READ_BACK = 'SELECT id, created_at, user_id, action, entity, entity_id, detail FROM audit_logs WHERE id=?'
 
 /**
  * 链式写入。并发口径（ADR-0049 §2）：
@@ -91,23 +93,35 @@ const INSERT_CHAINED = `INSERT INTO audit_logs (id, user_id, user_name, action, 
  *     所以不需要"先 INSERT 再 UPDATE 填哈希"：没有半截状态，也不会触发 audit_logs 上任何 AFTER UPDATE 触发器。
  *   · BEFORE INSERT 触发器用 RAISE(IGNORE) 吞掉写入（0 行）⇒ 原样返回 changes=0，由 `auditStrictRow` 判失败。
  */
-const stmtCache = new WeakMap() // db → { slot, insert }：每次写审计都 prepare 三条语句是写路径上最大的开销
+const stmtCache = new WeakMap() // db → 预编译语句：每次写审计都重新 prepare 是写路径上最大的开销
 function stmts(db) {
   let c = stmtCache.get(db)
-  if (!c) { c = { slot: db.prepare(NEXT_SLOT), insert: db.prepare(INSERT_CHAINED) }; stmtCache.set(db, c) }
+  if (!c) {
+    c = { slot: db.prepare(NEXT_SLOT), insert: db.prepare(INSERT_CHAINED), back: db.prepare(READ_BACK), fix: db.prepare('UPDATE audit_logs SET row_hash=? WHERE id=?') }
+    stmtCache.set(db, c)
+  }
   return c
 }
 
 function chainedInsert(db, row, options) {
-  const { slot: slotStmt, insert } = stmts(db)
+  const { slot: slotStmt, insert, back, fix } = stmts(db)
   const run = () => {
-    const slot = slotStmt.get()
+    let slot = slotStmt.get()
+    // 表尾有绕过本函数的裸 INSERT（row_hash 为空）：先把尾部孤儿接上链再追加，否则新行的 prev_hash 无处可指（审计 AB6）
+    if (slot.tail_id !== null && slot.tail_hash === null) { adoptOrphans(db); slot = slotStmt.get() }
     const v = bind(row, options)
     const stored = {
       id: slot.id, created_at: slot.created_at, user_id: v[0], action: v[2], entity: v[4], entity_id: v[5], detail: v[6]
     }
     const prev = slot.tail_hash ?? GENESIS
-    return insert.run(slot.id, v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], slot.created_at, prev, hashRow(stored, prev))
+    const rowHash = hashRow(stored, prev)
+    const info = insert.run(slot.id, v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], slot.created_at, prev, rowHash)
+    if (info.changes === 1) {
+      // 列亲和性会改写存入值（'005' → 5 之类）：以**读回的存储值**为准，与校验器同一口径；绝大多数行读回后哈希不变，这里不写
+      const exact = hashRow(back.get(slot.id), prev)
+      if (exact !== rowHash) fix.run(exact, slot.id)
+    }
+    return info
   }
   // 已在事务里：整个函数只有一条 INSERT 会写库，语句本身是原子的（失败不留半截），不需要再开 SAVEPOINT。
   if (db.inTransaction) return run()
@@ -139,12 +153,15 @@ export function deleteAuditRowsAnchored(db, where, params, { kind, reason } = {}
   // better-sqlite3 在 iterate() 期间不许执行别的语句：先收集锚点（数量 = 被删区间数，很小），遍历完再写
   const found = []
   let prevDeleted = false
-  for (const r of db.prepare(`SELECT id, prev_hash, (${where}) AS del FROM audit_logs ORDER BY id`).iterate(...params)) {
-    if (!r.del && prevDeleted && r.prev_hash) found.push([r.id, r.prev_hash])
-    prevDeleted = !!r.del
+  let survivor = null // 最近一条存活行 = 下一个锚点要绑定的前驱
+  for (const r of db.prepare(`SELECT id, prev_hash, row_hash, (${where}) AS del FROM audit_logs ORDER BY id`).iterate(...params)) {
+    if (r.del) { prevDeleted = true; continue }
+    if (prevDeleted && r.prev_hash) found.push([r.id, r.prev_hash, survivor?.id ?? null, survivor?.row_hash ?? null])
+    prevDeleted = false
+    survivor = r
   }
-  const anchor = db.prepare('INSERT INTO audit_chain_anchors (kind, at_row_id, anchor_hash, reason) VALUES (?,?,?,?)')
-  for (const [id, hash] of found) anchor.run(kind || 'delete', id, hash, reason ?? null)
+  const anchor = db.prepare('INSERT INTO audit_chain_anchors (kind, at_row_id, anchor_hash, prev_id, prev_row_hash, reason) VALUES (?,?,?,?,?,?)')
+  for (const [id, hash, pid, phash] of found) anchor.run(kind || 'delete', id, hash, pid, phash, reason ?? null)
   return db.prepare(`DELETE FROM audit_logs WHERE ${where}`).run(...params).changes
 }
 
@@ -160,9 +177,14 @@ export function rehashAuditRow(db, id, { kind = 'rewrite', reason } = {}) {
   const next = hashRow(r, r.prev_hash)
   if (next === r.row_hash) return false
   db.prepare('UPDATE audit_logs SET row_hash=? WHERE id=?').run(next, id)
+  // 下一行的 prev_hash 仍指向旧哈希：给它登记锚点，绑定"前驱 = 本行（新哈希）"。同一行被改写多次时每次追加一条（旧锚点绑的是旧哈希，不再匹配）
   const following = db.prepare('SELECT id, prev_hash FROM audit_logs WHERE id > ? ORDER BY id LIMIT 1').get(id)
-  if (following?.prev_hash === r.row_hash) {
-    db.prepare('INSERT INTO audit_chain_anchors (kind, at_row_id, anchor_hash, reason) VALUES (?,?,?,?)').run(kind, following.id, r.row_hash, reason ?? null)
+  if (following && following.prev_hash !== next) {
+    const dup = db.prepare('SELECT 1 FROM audit_chain_anchors WHERE at_row_id=? AND anchor_hash=? AND prev_id=? AND prev_row_hash=?').get(following.id, following.prev_hash, id, next)
+    if (!dup) {
+      db.prepare('INSERT INTO audit_chain_anchors (kind, at_row_id, anchor_hash, prev_id, prev_row_hash, reason) VALUES (?,?,?,?,?,?)')
+        .run(kind, following.id, following.prev_hash, id, next, reason ?? null)
+    }
   }
   return true
 }
