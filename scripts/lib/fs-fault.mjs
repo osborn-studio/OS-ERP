@@ -12,7 +12,9 @@
  *   注入点只许插在两个写步骤之间，不得改变被插桩代码的任何行为。
  * ============================================================================
  */
-import { runtimeMode } from '../../server/runtime.js'
+// 不引入 server/runtime.js：本库会随 evidence-log.mjs 进入最小发行包夹具（verify-release 的包根里没有 server/），
+// 判据只看环境变量本身——与 runtimeMode() 对 `test` 的判定一致（未设置 = 非 test ⇒ 拒绝）。
+const runtimeMode = (env) => String(env.GML_RUNTIME_MODE ?? '').trim().toLowerCase()
 
 export const FAULT_POINTS = Object.freeze({
   archive: ['archive.after-export-write', 'archive.after-export-fsync', 'archive.before-delete', 'archive.after-delete', 'archive.after-anchor'],
