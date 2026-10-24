@@ -47,6 +47,10 @@ jobs:
           set -euo pipefail
           npm ci --ignore-scripts --no-audit --no-fund
           npm rebuild better-sqlite3 esbuild --no-audit --no-fund
+      # Runtime-dependency audit gate (AC10): every high/critical advisory from `npm audit --omit=dev` must be listed in
+      # docs/security/audit-allowlist.json with reason and a future expiry; an expired or unlisted finding fails. Needs network.
+      - name: Dependency audit gate (runtime, allowlist with expiry)
+        run: node scripts/check-audit-allowlist.mjs
       # Notices are generated from package-lock.json plus the LICENSE/NOTICE files in the npm ci tree; drift fails.
       # Scope: runtime dependencies only. This checks that the file is current, not that licenses are legally cleared.
       - name: Third-party notices are current; runtime SBOM generates
