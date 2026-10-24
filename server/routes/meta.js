@@ -15,7 +15,7 @@
 
 import { Router } from 'express'
 import { getDb } from '../db/index.js'
-import { ok, wrap, fail, failFromError, paged, pageParams } from '../lib/http.js'
+import { ok, wrap, fail, failFromError, bizFail, paged, pageParams } from '../lib/http.js'
 import { requireAuth, requireRole, requirePerm, requireGlobalData, sessionToken } from '../middleware/auth.js'
 import { auditStrict } from '../middleware/audit.js'
 import {
@@ -26,6 +26,7 @@ import {
   CSV_HEADER,
   buildWhere,
   countCapped,
+  keywordUsesFts,
   exportChunks,
   orderOf,
   parseFilters,
@@ -361,7 +362,7 @@ function filtersOf(req, res) {
   try {
     return parseFilters(req.query || {})
   } catch (e) {
-    if (e instanceof AuditViewError) { fail(res, e.message, 400, 400); return null }
+    if (e instanceof AuditViewError) { bizFail(res, e); return null }
     throw e
   }
 }
@@ -378,7 +379,7 @@ r.get(
     const db = getDb()
     const { page, pageSize: ps } = pageParams(req)
     const pageSize = Math.min(ps, AUDIT_PAGE_MAX)
-    const { where, args } = buildWhere(filters)
+    const { where, args } = buildWhere(filters, { fts: keywordUsesFts(db, filters.keyword) })
     const offset = (page - 1) * pageSize
     // 总数是封顶估算，翻页深度同封顶：想看更早的行请加过滤条件或导出
     if (offset >= AUDIT_COUNT_CAP) return fail(res, `翻页超过 ${AUDIT_COUNT_CAP} 条上限，请加过滤条件缩小范围或使用导出`, 400, 400)
@@ -405,7 +406,7 @@ r.get(
     const filters = filtersOf(req, res)
     if (!filters) return
     const db = getDb()
-    const { where, args } = buildWhere(filters)
+    const { where, args } = buildWhere(filters, { fts: keywordUsesFts(db, filters.keyword) })
     const rows = db.prepare(`SELECT COUNT(*) c FROM (SELECT 1 FROM audit_logs ${where} LIMIT ?)`).get(...args, AUDIT_EXPORT_MAX_ROWS + 1).c
     const truncated = rows > AUDIT_EXPORT_MAX_ROWS
     // 快照上界：导出自己的审计行与导出期间的新行不进文件

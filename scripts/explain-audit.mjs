@@ -46,11 +46,16 @@ function auditStatementsFor() {
     ['entity', { entity: 'sales_orders', entity_id: '101' }, 'idx_audit_entity'],
     ['entity_only', { entity: 'sales_orders' }, null],
     ['module_keyword', { module: 'sales', keyword: 'ab' }, 'idx_audit_module_created'],
-    ['keyword', { keyword: 'ab' }, null]
+    ['keyword', { keyword: 'ab' }, null],
+    // AB3：≥3 字符的关键词在有 FTS5 的构建上走 audit_logs_fts（迁移 067）；*_nofts 是没有 FTS5 的构建上的 LIKE 回退（豁免见 ALLOW）
+    ['keyword_fts', { keyword: 'abc' }, null, { fts: true }],
+    ['module_keyword_fts', { module: 'sales', keyword: 'abc' }, 'idx_audit_module_created', { fts: true }],
+    ['keyword_nofts', { keyword: 'abc' }, null, { fts: false }],
+    ['module_action', { module: 'sales', action: 'CREATE' }, 'idx_audit_module_created']
   ]
   const out = []
-  for (const [name, f, expectIndex] of shapes) {
-    const { where, args } = buildWhere(f)
+  for (const [name, f, expectIndex, bw = {}] of shapes) {
+    const { where, args } = buildWhere(f, bw)
     const order = orderOf(f)
     const mirrors = 'server/routes/meta.js GET /audit-logs (server/lib/audit-view.js)'
     out.push({ id: `audit.list_${name}`, mirrors, bench: null, expectIndex, params: [...args, 50, 0], sql: `SELECT * FROM audit_logs ${where} ORDER BY ${order.sql} LIMIT ? OFFSET ?` })
@@ -247,9 +252,11 @@ export const ALLOW = [
   { statement: 'oc.orders_page', table: 'oc_orders', noSort: true, reason: PAGE_REASON },
   { statement: 'stock.txn_page', table: 'inventory_transactions', noSort: true, reason: PAGE_REASON },
   { statement: 'audit.list_all', table: 'audit_logs', noSort: true, reason: PAGE_REASON },
+  { statement: 'audit.count_keyword_nofts', table: 'audit_logs', reason: '没有 FTS5 的 SQLite 构建上迁移 067 是空操作，关键词回退到 LIKE \'%x%\' 子串匹配：无索引可用，LIMIT 10001 只在命中多时早停（AB3 回退路径，见 capacity-baseline）' },
+  { statement: 'audit.list_keyword_nofts', table: 'audit_logs', noSort: true, reason: '同 audit.count_keyword_nofts：无 FTS5 构建的 LIKE 回退；按 id 倒序取够一页即停，命中稀少时读量上界是整表' },
   { statement: 'audit.count_keyword', table: 'audit_logs', reason: '关键词是 LIKE \'%x%\' 子串匹配（action/entity/user_name），没有可用索引；LIMIT 10001 只在命中多时早停，命中稀少时仍读全表——已知残余，靠最少 2 字符与组合 module/user 过滤收敛' },
   { statement: 'audit.list_entity_only', table: 'audit_logs', noSort: true, reason: '仅按 entity 类型（几十种、每种命中很多行）：用 `+entity` 屏蔽 idx_audit_entity，避免对全部命中行临时排序；沿 rowid 倒扫凑够一页即停。命中稀少的类型会读到整表——已知残余（见 capacity-baseline AA6）' },
-  { statement: 'audit.list_keyword', table: 'audit_logs', noSort: true, reason: '同 audit.count_keyword：子串匹配无法建索引；按 id 倒序取够一页即停，命中稀少时读量上界是整表' },
+  { statement: 'audit.list_keyword', table: 'audit_logs', noSort: true, reason: '同 audit.count_keyword（2 字关键词 trigram 无法匹配，FTS 不适用）：子串匹配无法建索引；按 id 倒序取够一页即停，命中稀少时读量上界是整表' },
   { statement: 'dash.sales_unpaid', table: 'sales_orders', reason: AGG_REASON },
   { statement: 'dash.stock_total', table: 'inventory_stocks', reason: '整表聚合（SUM 全库存），没有谓词；索引只能做覆盖扫描，不改变量级；AA5 起由看板 30 s 缓存吸收重复读取' },
   { statement: 'rpt.stock_value', table: 'inventory_stocks', reason: '整表聚合库存金额，没有谓词' },
