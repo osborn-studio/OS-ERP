@@ -7,7 +7,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, rmSync, readFileSync, readdirSync, existsSync } from 'node:fs'
+import { mkdtempSync, rmSync, readFileSync, readdirSync, existsSync, symlinkSync, writeFileSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -109,7 +109,7 @@ test('database without audit_logs_fts: integrity-check reports absent (exit 0); 
   }
 })
 
-test('rebuild while another connection holds the write lock: waits (busy_timeout) rather than corrupting, and the probe sees the block', (t) => {
+test('rebuild while another connection holds the write lock: fails cleanly as busy after --busy-ms, index untouched, report says busy', (t) => {
   const { dir, db } = fixture(t, 100)
   db.close()
   const holder = new Database(path.join(dir, 'gml_cosmetic.db'))
@@ -121,4 +121,44 @@ test('rebuild while another connection holds the write lock: waits (busy_timeout
   const rep = reportOf(dir, path.join(dir, 'b.json'))
   assert.equal(rep.ok, false); assert.equal(rep.status, 'busy')
   assert.equal(run(['--data-dir', dir, '--industry', 'cosmetic', '--integrity-check', '--out', path.join(dir, 'c.json')], dir).status, 0, 'index untouched and consistent')
+})
+
+test('--out cannot overwrite the database or its sidecars, nor an existing file; a symlinked database and symlinked/nonexistent --out parents into repo data/ are refused before anything is opened', (t) => {
+  const { dir, db } = fixture(t, 5)
+  db.close()
+  const before = statSync(path.join(dir, 'gml_cosmetic.db')).size
+  const base = ['--data-dir', dir, '--industry', 'cosmetic', '--integrity-check']
+  for (const f of ['gml_cosmetic.db', 'gml_cosmetic.db-wal', 'gml_cosmetic.db-shm', 'gml_cosmetic.db-journal']) {
+    const r = run([...base, '--out', path.join(dir, f)], dir)
+    assert.equal(r.status, 2, f); assert.match(r.stderr, /OUT_/, f)
+  }
+  assert.equal(statSync(path.join(dir, 'gml_cosmetic.db')).size, before, 'database untouched')
+  assert.equal(new Database(path.join(dir, 'gml_cosmetic.db'), { readonly: true }).prepare('SELECT COUNT(*) c FROM audit_logs').get().c, 5)
+  writeFileSync(path.join(dir, 'exists.json'), 'keep')
+  assert.equal(run([...base, '--out', path.join(dir, 'exists.json')], dir).status, 2, 'never overwrites an existing file')
+  assert.equal(readFileSync(path.join(dir, 'exists.json'), 'utf8'), 'keep')
+  // 经符号链接进入仓库 data/ 的 --out（父目录不存在也要认）：拒绝，且不创建任何东西
+  const link = path.join(dir, 'link-to-repo-data')
+  symlinkSync(path.join(ROOT, 'data'), link)
+  for (const out of [path.join(link, 'r.json'), path.join(link, 'new-subdir', 'r.json')]) {
+    const r = run([...base, '--out', out], dir)
+    assert.equal(r.status, 2, out); assert.match(r.stderr, /DATA_DIRECTORY_IS_REPOSITORY/)
+  }
+  assert.equal(existsSync(path.join(ROOT, 'data', 'new-subdir')), false, 'nothing was created under the repository data/')
+  // 库文件本身是符号链接（可能指向仓库 data/）：拒绝
+  const { dir: dir2, db: db2 } = fixture(t, 1)
+  db2.close()
+  rmSync(path.join(dir2, 'gml_cosmetic.db')); rmSync(path.join(dir2, 'gml_cosmetic.db-wal'), { force: true }); rmSync(path.join(dir2, 'gml_cosmetic.db-shm'), { force: true })
+  symlinkSync(path.join(ROOT, 'data', 'gml_cosmetic.db'), path.join(dir2, 'gml_cosmetic.db'))
+  const sym = run(['--data-dir', dir2, '--industry', 'cosmetic', '--integrity-check'], dir2)
+  assert.equal(sym.status, 2); assert.match(sym.stderr, /DB_IS_SYMLINK|DB_ABSENT/, 'dangling link: never opened')
+  // 指向另一个真实库的符号链接：明确按符号链接拒绝
+  const { dir: dir3, db: db3 } = fixture(t, 1)
+  db3.close()
+  const { dir: dir4, db: db4 } = fixture(t, 1)
+  db4.close()
+  for (const f of ['gml_cosmetic.db', 'gml_cosmetic.db-wal', 'gml_cosmetic.db-shm']) rmSync(path.join(dir4, f), { force: true })
+  symlinkSync(path.join(dir3, 'gml_cosmetic.db'), path.join(dir4, 'gml_cosmetic.db'))
+  const real = run(['--data-dir', dir4, '--industry', 'cosmetic', '--integrity-check'], dir4)
+  assert.equal(real.status, 2); assert.match(real.stderr, /DB_IS_SYMLINK/)
 })

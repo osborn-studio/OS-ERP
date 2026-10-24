@@ -13,7 +13,7 @@
  *
  * 【用法】node scripts/audit-fts-maintain.mjs --data-dir <绝对路径> --industry <行业> (--optimize|--rebuild|--integrity-check) [--out <报告.json>] [--busy-ms <n>]
  *   · 必须显式 `--data-dir`（走 `requireExplicitDataDir()`，拒绝仓库 data/，symlink 也认）与 `--industry`；环境里的 `GML_DB` 被忽略。
- *   · 报告（JSON，0600）默认写到 `<data-dir>/audit-fts-maintain-<行业>-<动作>-<时间戳>.json`；`--out` 必须在仓库 data/ 之外。不含绝对路径。
+ *   · 报告（JSON，0600）默认写到 `<data-dir>/audit-fts-maintain-<行业>-<动作>-<时间戳>.json`；`--out` 必须是绝对路径，物理位置（解开符号链接，含尚不存在的子目录）在仓库 data/ 之外，不能是库文件或其 -wal / -shm / -journal，且不覆盖已有文件（退出 2）。行业库文件本身是符号链接则拒绝（退出 2）。报告不含绝对路径。
  *   · 退出码：0 成功；1 操作失败（corrupt / busy / absent+写操作 / 其它错误）；2 参数 / 环境错误。
  *   · `--busy-ms`（默认 5000，0..300000）：等写锁的上限；拿不到则 status=busy、退出 1，索引不被改动（事务未开始）。
  *
@@ -39,7 +39,25 @@ const SQL = {
   rebuild: `INSERT INTO ${FTS}(${FTS}) VALUES ('rebuild')`,
   'integrity-check': `INSERT INTO ${FTS}(${FTS}, rank) VALUES ('integrity-check', 1)`
 }
-const physical = (p) => { try { return fs.realpathSync(p) } catch { return path.resolve(p) } }
+/** 物理路径（解开符号链接）。路径不存在时：解析最近的已存在祖先，再接上缺失的尾部，所以"符号链接 + 尚不存在的子目录"也认得出来 */
+function canonical(p, depth = 0) {
+  if (depth > 32) throw Object.assign(new Error('符号链接层数过多'), { code: 'ELOOP' })
+  let cur = path.resolve(p)
+  const tail = []
+  for (;;) {
+    try { return path.join(fs.realpathSync(cur), ...tail.reverse()) } catch (e) {
+      if (e.code === 'EACCES') throw e
+      let target = null
+      try { target = fs.readlinkSync(cur) } catch { /* 不是（悬空的）符号链接 */ }
+      if (target !== null) return canonical(path.join(path.resolve(path.dirname(cur), target), ...tail.reverse()), depth + 1) // 悬空链接：跟着目标走
+      const up = path.dirname(cur)
+      if (up === cur) throw e
+      tail.push(path.basename(cur))
+      cur = up
+    }
+  }
+}
+const within = (dir, p) => p === dir || p.startsWith(dir + path.sep)
 
 const args = parseArgs(process.argv.slice(2), { values: ['--data-dir', '--industry', '--out', '--busy-ms'], flags: MODES.map((m) => `--${m}`) })
 const chosen = MODES.filter((m) => args[m])
@@ -58,13 +76,20 @@ const { targets } = await locateDatabases(args)
 if (!targets.length) die('DB_ABSENT', `行业库 ${args.industry} 在 --data-dir 下不存在（本脚本不创建库）`)
 const file = targets[0].file
 
+// 库文件本身不许是符号链接（它可能指回仓库 data/）；在打开任何连接之前拒绝
+if (fs.lstatSync(file).isSymbolicLink()) die('DB_IS_SYMLINK', '行业库文件是符号链接；请把真实库复制到隔离目录后再维护')
+const repoData = canonical(path.join(ROOT, 'data'))
+if (within(repoData, canonical(file))) die('DATA_DIRECTORY_IS_REPOSITORY', '行业库的物理路径在仓库 data/ 下')
+
 const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z')
-const outFile = args.out ? path.resolve(args.out) : path.join(path.dirname(file), `audit-fts-maintain-${args.industry}-${action}-${stamp}.json`)
 if (args.out && !path.isAbsolute(args.out)) die('USAGE', '--out 必须是绝对路径')
+const outFile = args.out ? path.resolve(args.out) : path.join(path.dirname(file), `audit-fts-maintain-${args.industry}-${action}-${stamp}.json`)
 {
-  const repoData = physical(path.join(ROOT, 'data'))
-  const outDir = physical(path.dirname(outFile))
-  if (outDir === repoData || outDir.startsWith(repoData + path.sep)) die('DATA_DIRECTORY_IS_REPOSITORY', '--out 不能写进仓库 data/')
+  const outReal = canonical(outFile)
+  if (within(repoData, outReal)) die('DATA_DIRECTORY_IS_REPOSITORY', '--out 不能写进仓库 data/（含经符号链接）')
+  const dbReal = canonical(file)
+  if ([dbReal, `${dbReal}-wal`, `${dbReal}-shm`, `${dbReal}-journal`].includes(outReal)) die('OUT_IS_DATABASE', '--out 不能是库文件或它的 -wal / -shm / -journal')
+  if (fs.existsSync(outFile)) die('OUT_EXISTS', '--out 已存在；本脚本不覆盖已有文件')
 }
 
 const exists = (db, type, name) => !!db.prepare('SELECT 1 FROM sqlite_master WHERE type=? AND name=?').get(type, name)
@@ -95,7 +120,6 @@ try {
     try {
       db.exec('BEGIN IMMEDIATE')
       try { db.exec(SQL[action]); db.exec('COMMIT') } catch (e) { try { db.exec('ROLLBACK') } catch { /* 没有打开的事务 */ } throw e }
-      report.ok = true
       report.status = 'ok'
     } catch (e) {
       report.status = isBusy(e) ? 'busy' : /CORRUPT|malformed|integrity/i.test(`${e.code} ${e.message}`) ? 'corrupt' : 'error'
@@ -104,9 +128,11 @@ try {
       report.elapsed_ms = Math.round((performance.now() - t0) * 10) / 10
       report.lock_probe = await probe.stop()
     }
+    report.ok = report.status === 'ok' // 只在探针也正常收尾之后才算成功（探针 stop 抛错 → 外层 catch → ok 保持 false）
     report.bytes_after = sizeOf(file)
   }
 } catch (e) {
+  report.ok = false
   report.status = isBusy(e) ? 'busy' : 'error'
   report.error = String(e.message).slice(0, 300)
 } finally {

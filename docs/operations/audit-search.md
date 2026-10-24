@@ -24,7 +24,7 @@ node scripts/audit-fts-maintain.mjs --data-dir /abs/path/to/data --industry cosm
 
 - 必须显式给 `--data-dir`（绝对路径）与 `--industry`。仓库 `data/` 被拒绝（退出 2）；环境里的 `GML_DB` 被忽略。脚本不创建库、不跑迁移、不建 FTS 表。
 - 退出码：0 成功；1 失败（`corrupt` / `busy` / `error`，或表不存在时的 `--optimize` / `--rebuild`）；2 参数 / 环境错误。表不存在时 `--integrity-check` 退出 0，报告 `status: "absent"`（无 FTS5 的构建本来就没有）。
-- 报告：默认写到 `<data-dir>/audit-fts-maintain-<行业>-<动作>-<时间戳>.json`（0600），`--out <绝对路径>` 另指（不能在仓库 `data/` 下）。字段：`status`、`rows`、`elapsed_ms`（BEGIN→COMMIT 墙钟，持写锁时间的粗上界）、`lock_probe`（另一线程用自己的连接反复 `BEGIN IMMEDIATE` 量出的写入者被挡时长：`max_blocked_ms` 近似上界、`max_busy_span_ms` 下界，见 `scripts/lib/lock-probe.mjs`）、`triggers_present`、`bytes_before` / `bytes_after`。报告不含绝对路径。
+- 报告：默认写到 `<data-dir>/audit-fts-maintain-<行业>-<动作>-<时间戳>.json`（0600），`--out <绝对路径>` 另指（物理位置不能在仓库 `data/` 下，含经符号链接；不能是库文件或其边车；不覆盖已有文件）。库文件本身是符号链接时拒绝。字段：`status`、`rows`、`elapsed_ms`（BEGIN→COMMIT 墙钟，持写锁时间的粗上界）、`lock_probe`（另一线程用自己的连接反复 `BEGIN IMMEDIATE` 量出的写入者被挡时长：`max_blocked_ms` 近似上界、`max_busy_span_ms` 下界，见 `scripts/lib/lock-probe.mjs`）、`triggers_present`、`bytes_before` / `bytes_after`。报告不含绝对路径。
 - 拿不到写锁（默认等 5 s，`--busy-ms` 可调）时 `status: "busy"`、退出 1，**索引不被改动**。
 
 ### 重建的操作建议
