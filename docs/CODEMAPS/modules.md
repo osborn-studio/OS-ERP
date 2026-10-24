@@ -742,6 +742,7 @@ MCP 按令牌的速率限制与日配额（ADR-0056 / AD9）
 | `dailyQuotaState` | fn | — | — | — |
 | `mcpRatePolicy` | fn | — | — | — |
 | `rateStoreFromEnv` | fn | — | — | — |
+| `recentLimitedByToken` | fn | — | — | — |
 
 ## `server/lib/member.js`
 
