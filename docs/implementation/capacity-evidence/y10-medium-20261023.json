@@ -1,0 +1,348 @@
+{
+  "schema_version": 1,
+  "scope_notice": "Local development host / synthetic data / single wall-clock run under whatever load the machine had (see host.loadavg_*). NOT a target-host (dmserver) result and NOT a capacity commitment.",
+  "source": {
+    "git_head": "51382cece397a8dd2997399249a169b35ff7be73",
+    "git_dirty": false,
+    "git_dirty_fingerprint": null,
+    "sqlite_version": "3.49.2",
+    "better_sqlite3": "11.10.0",
+    "node": "v22.22.1"
+  },
+  "generated_at": "2026-10-23T14:44:59.266Z",
+  "host": {
+    "platform": "darwin",
+    "arch": "arm64",
+    "cpus": 10,
+    "cpu_model": "Apple M4",
+    "total_mem_mb": 16384,
+    "node": "v22.22.1",
+    "loadavg_start": [
+      3.6,
+      5.04,
+      9.45
+    ],
+    "loadavg_end": [
+      5.77,
+      7.97,
+      9.7
+    ]
+  },
+  "steps": {
+    "generate": {
+      "ok": true,
+      "wall_ms": 205775,
+      "phase_ms": {
+        "migrate": 212,
+        "master": 169,
+        "purchase": 52513,
+        "sales": 94739,
+        "adjust": 6776,
+        "verify": 50442
+      }
+    },
+    "backup_plain": {
+      "ok": true,
+      "wall_ms": 1996,
+      "stamp": "20261023-144825",
+      "encrypted": false,
+      "freeze_ms": 579,
+      "bytes": 235454464,
+      "status": "ok"
+    },
+    "backup_encrypted": {
+      "ok": true,
+      "wall_ms": 2488,
+      "stamp": "20261023-144828",
+      "encrypted": true,
+      "freeze_ms": 634,
+      "bytes": 235454529,
+      "status": "ok"
+    },
+    "restore_drill_plain": {
+      "ok": true,
+      "wall_ms": 1625,
+      "timing_ms": {
+        "verify_ms": 546,
+        "migrate_ms": 103,
+        "server_ready_ms": 640,
+        "probe_ms": 242,
+        "total_ms": 1548,
+        "rto_ms": 1548
+      },
+      "probes": [
+        {
+          "name": "users",
+          "expected": 1,
+          "actual": 1,
+          "match": true
+        },
+        {
+          "name": "products",
+          "expected": 6667,
+          "actual": 6667,
+          "match": true
+        },
+        {
+          "name": "purchase_orders",
+          "expected": 12000,
+          "actual": 12000,
+          "match": true
+        },
+        {
+          "name": "receipts",
+          "expected": 0,
+          "actual": 0,
+          "match": true
+        },
+        {
+          "name": "ar_open_balance",
+          "expected": 0,
+          "actual": 0,
+          "match": true
+        }
+      ]
+    },
+    "restore_drill_encrypted": {
+      "ok": true,
+      "wall_ms": 1699,
+      "timing_ms": {
+        "verify_ms": 329,
+        "migrate_ms": 96,
+        "server_ready_ms": 639,
+        "probe_ms": 242,
+        "total_ms": 1632,
+        "rto_ms": 1632
+      },
+      "probes": [
+        {
+          "name": "users",
+          "expected": 1,
+          "actual": 1,
+          "match": true
+        },
+        {
+          "name": "products",
+          "expected": 6667,
+          "actual": 6667,
+          "match": true
+        },
+        {
+          "name": "purchase_orders",
+          "expected": 12000,
+          "actual": 12000,
+          "match": true
+        },
+        {
+          "name": "receipts",
+          "expected": 0,
+          "actual": 0,
+          "match": true
+        },
+        {
+          "name": "ar_open_balance",
+          "expected": 0,
+          "actual": 0,
+          "match": true
+        }
+      ]
+    },
+    "explain_audit": {
+      "ok": true,
+      "exit": 1,
+      "findings": true,
+      "wall_ms": 63,
+      "statements": 61,
+      "violations": 3,
+      "unused_allow": 0,
+      "violation_list": [
+        "dash.todo_counts: SCAN sk (product_skus, 20000 行)",
+        "dash.todo_counts: SCAN dealers (dealers, 750 行)",
+        "stock.below_safe: SCAN sk (product_skus, 20000 行)"
+      ]
+    },
+    "bench_prewarm": {
+      "ok": true,
+      "wall_ms": 25315
+    },
+    "bench_api": {
+      "ok": true,
+      "exit": 0,
+      "wall_ms": 25251,
+      "config": {
+        "runtime_mode": "test",
+        "concurrency": 4,
+        "iterations": 100,
+        "login_iterations": 10,
+        "industry": "cosmetic"
+      },
+      "totals": {
+        "requests": 910,
+        "errors": 0,
+        "error_rate": 0,
+        "wall_seconds": 18.259,
+        "throughput_rps": 49.838
+      },
+      "sqlite_busy_count": 0,
+      "endpoints": [
+        {
+          "name": "login",
+          "route": "/api/auth/login",
+          "requests": 10,
+          "errors": 0,
+          "p50": 874.449,
+          "p95": 1512.629,
+          "p99": 1512.629
+        },
+        {
+          "name": "dashboard_summary",
+          "route": "/api/dashboard/summary",
+          "requests": 100,
+          "errors": 0,
+          "p50": 143.305,
+          "p95": 198.546,
+          "p99": 227.438
+        },
+        {
+          "name": "purchase_order_list",
+          "route": "/api/purchase/orders",
+          "requests": 100,
+          "errors": 0,
+          "p50": 8.253,
+          "p95": 8.808,
+          "p99": 10.1
+        },
+        {
+          "name": "purchase_order_detail",
+          "route": "/api/purchase/orders/12008",
+          "requests": 100,
+          "errors": 0,
+          "p50": 1.183,
+          "p95": 1.633,
+          "p99": 2.225
+        },
+        {
+          "name": "stock_query",
+          "route": "/api/inventory/stocks",
+          "requests": 100,
+          "errors": 0,
+          "p50": 557.719,
+          "p95": 704.063,
+          "p99": 741.658
+        },
+        {
+          "name": "receivable_receipt_list",
+          "route": "/api/ar/receipts",
+          "requests": 100,
+          "errors": 0,
+          "p50": 1.209,
+          "p95": 2.42,
+          "p99": 2.946
+        },
+        {
+          "name": "report_operating",
+          "route": "/api/reports/operating?period=2026-10",
+          "requests": 100,
+          "errors": 0,
+          "p50": 28.394,
+          "p95": 33.846,
+          "p99": 37.425
+        },
+        {
+          "name": "meta_health",
+          "route": "/api/meta/health",
+          "requests": 100,
+          "errors": 0,
+          "p50": 0.385,
+          "p95": 0.7,
+          "p99": 1.107
+        },
+        {
+          "name": "order_center_overview",
+          "route": "/api/order-center/overview",
+          "requests": 100,
+          "errors": 0,
+          "p50": 2.423,
+          "p95": 3.481,
+          "p99": 5.23
+        },
+        {
+          "name": "notify_meta",
+          "route": "/api/notify/meta",
+          "requests": 100,
+          "errors": 0,
+          "p50": 0.677,
+          "p95": 1.195,
+          "p99": 1.434
+        }
+      ]
+    }
+  },
+  "ok": true,
+  "dataset": {
+    "config": {
+      "skus": 20000,
+      "txns_target": 150000,
+      "docs": 30000,
+      "seed": 20261023,
+      "anchor": "2026-10-01",
+      "runtime_mode": "production",
+      "industry": "cosmetic"
+    },
+    "plan": {
+      "po_count": 12000,
+      "so_count": 18000,
+      "lines_per_po": 8,
+      "lines_per_so": 3
+    },
+    "counts": {
+      "purchase_orders": 12000,
+      "receipts": 10774,
+      "partial": 1193,
+      "sales_orders": 18000,
+      "confirmed": 18000,
+      "delivered": 12607,
+      "cancelled": 858,
+      "adjustments": 28841
+    },
+    "table_counts": {
+      "products": 6667,
+      "product_skus": 20000,
+      "inventory_batches": 84428,
+      "inventory_stocks": 84736,
+      "inventory_transactions": 150000,
+      "purchase_orders": 12000,
+      "purchase_order_items": 95875,
+      "purchase_receipts": 10774,
+      "sales_quotes": 18000,
+      "sales_orders": 18000,
+      "sales_order_items": 51919,
+      "sales_deliveries": 12607,
+      "credit_ledger": 18858,
+      "doc_events": 170747
+    },
+    "db_bytes": 248606720,
+    "digest": "08e52c0b000b5ecc26deeeb95009b19e3e3f127bde4212890a81fec1781662e8",
+    "invariants_ok": true
+  },
+  "bench_dataset": {
+    "table_counts": {
+      "products": 6667,
+      "product_skus": 20000,
+      "inventory_stocks": 84745,
+      "inventory_transactions": 151054,
+      "purchase_orders": 12004,
+      "sales_orders": 18002,
+      "sales_deliveries": 12607,
+      "dealers": 750,
+      "credit_ledger": 0,
+      "doc_events": 114373
+    },
+    "db_bytes": 260730880,
+    "invariants_ok": false,
+    "failed_checks": [
+      "order_received_qty_equals_receipt_items: "
+    ],
+    "note": "bench copy = synthetic data + demo-seed overlay applied by the test-mode server boot; classification flipped to test on the copy only"
+  }
+}

@@ -18,13 +18,14 @@ import { localDate } from '../lib/dates.js'
 import { getDb } from '../db/index.js'
 import { ok, fail, wrap, pageParams, paged } from '../lib/http.js'
 import { requireAuth, requireRole, currentUser } from '../middleware/auth.js'
+import { boundStoreId } from '../lib/store-binding.js'
 import { audit } from '../middleware/audit.js'
 import { nextDocNo } from '../lib/docno.js'
 import { advanceStatus, tryTransition, nowText, logEvent, allowedActions } from '../lib/docflow.js'
 import { applyStockIn, applyStockOut, pickBatches } from '../lib/stock.js'
+import { REQUISITION_HQ_ROLES } from '../lib/hq-roles.js'
 
 const r = Router()
-const HQ = ['purchase', 'warehouse', 'sales', 'scm', 'admin', 'finance']
 
 const REQ_STATUS = {
   submitted: '待受理',
@@ -53,8 +54,9 @@ const SHIP_STATUS = {
 function storeCtx(req) {
   const db = getDb()
   const u = req.user || {}
-  if (!u.store_id) throw Object.assign(new Error('当前账号未绑定门店'), { status: 403 })
-  const store = db.prepare('SELECT * FROM stores WHERE id=?').get(u.store_id)
+  const storeId = boundStoreId(u)
+  if (storeId == null) throw Object.assign(new Error('当前账号未绑定门店'), { status: 403 })
+  const store = db.prepare('SELECT * FROM stores WHERE id=?').get(storeId)
   if (!store) throw Object.assign(new Error('门店不存在'), { status: 404 })
   const wh = db
     .prepare("SELECT * FROM warehouses WHERE store_id=? AND status='active' ORDER BY id LIMIT 1")
@@ -452,7 +454,7 @@ r.post(
 r.get(
   '/store/board',
   requireAuth,
-  requireRole(...HQ),
+  requireRole(...REQUISITION_HQ_ROLES),
   wrap((_req, res) => {
     const db = getDb()
     const byStore = db
@@ -481,7 +483,7 @@ r.get(
 r.get(
   '/store',
   requireAuth,
-  requireRole(...HQ),
+  requireRole(...REQUISITION_HQ_ROLES),
   wrap((req, res) => {
     const db = getDb()
     const { page, pageSize, offset } = pageParams(req)
@@ -536,7 +538,7 @@ r.get(
 r.get(
   '/store/:id',
   requireAuth,
-  requireRole(...HQ),
+  requireRole(...REQUISITION_HQ_ROLES),
   wrap((req, res) => {
     const db = getDb()
     const head = loadRequisition(db, Number(req.params.id))
@@ -549,7 +551,7 @@ r.get(
 r.post(
   '/store/:id/status',
   requireAuth,
-  requireRole(...HQ),
+  requireRole(...REQUISITION_HQ_ROLES),
   wrap((req, res) => {
     const db = getDb()
     const id = Number(req.params.id)
@@ -719,7 +721,7 @@ r.post(
 r.get(
   '/shipments',
   requireAuth,
-  requireRole(...HQ),
+  requireRole(...REQUISITION_HQ_ROLES),
   wrap((req, res) => {
     const db = getDb()
     const { page, pageSize, offset } = pageParams(req)
@@ -778,7 +780,7 @@ r.get(
 r.get(
   '/shipments/:id',
   requireAuth,
-  requireRole(...HQ),
+  requireRole(...REQUISITION_HQ_ROLES),
   wrap((req, res) => {
     const db = getDb()
     const head = loadShipment(db, Number(req.params.id))

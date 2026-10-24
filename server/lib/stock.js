@@ -1212,6 +1212,100 @@ export function costOf(db, { warehouseId, ownerOrgId = null, skuId, batchNo = ''
   }
 }
 
+// ---------------------------------------------------------------------------
+// 低于安全库存（Z3）：看板计数、预警列表、看板 Top N 共用一份口径。
+// 口径（与改写前逐字等价）：status='active' 且 safe_stock>0 的 SKU，跨仓现存量合计（无库存行按 0）< safe_stock。
+// 写法：product_skus 走 (status, safe_stock) 范围搜索；每个候选 SKU 的库存合计是一次覆盖索引
+// idx_stock_sku_qty(sku_id, qty_on_hand) 上的范围读（不回表）。曾试过「先按 sku_id 预聚合再 LEFT JOIN」：
+// SQLite 会为物化子查询建 AUTOMATIC INDEX，且在 2 万 SKU / 8.5 万库存行实测更慢，所以没有采用（数字见 capacity-baseline.md Z3 一节）。
+// 老写法是 LEFT JOIN inventory_stocks + GROUP BY sk.id，要建两棵临时 B 树。
+// ---------------------------------------------------------------------------
+// 组织范围（ADR-0038）叠加：子查询只累计范围内仓库的库存行；全局范围时谓词为 1=1，计划不变。
+const skuStockQty = (sc) => `COALESCE((SELECT SUM(st.qty_on_hand) FROM inventory_stocks st WHERE st.sku_id = sk.id AND ${sc.sql}),0)`
+
+export function countBelowSafe(db, orgScope = null) {
+  const sc = stockScopeSql(orgScope, 'st')
+  if (sc.empty) return 0
+  return db
+    .prepare(`SELECT COUNT(*) c FROM product_skus sk WHERE sk.status='active' AND sk.safe_stock>0 AND ${skuStockQty(sc)} < sk.safe_stock`)
+    .get(...sc.params).c
+}
+
+/**
+ * 缺口最大的前 limit 个 SKU；并列时按 sku id 升序，保证结果稳定（老写法并列顺序未定义）。
+ * `visibleOnly`（AA5，MCP 用）：受限范围下只列"范围内仓库至少有一行库存"的 SKU——否则范围外的令牌会看到
+ * 全部缺货 SKU 的主数据和 0 库存（既泄露清单又误报缺货）。全局范围不受影响（无库存行的缺货 SKU 照列）。
+ */
+export function listBelowSafe(db, limit = 50, orgScope = null, { visibleOnly = false } = {}) {
+  const sc = stockScopeSql(orgScope, 'st')
+  if (sc.empty) return []
+  const restricted = !!orgScope && orgScope.scope !== 'all'
+  const visible = visibleOnly && restricted ? ` AND EXISTS (SELECT 1 FROM inventory_stocks st WHERE st.sku_id = sk.id AND ${sc.sql})` : ''
+  return db
+    .prepare(
+      `SELECT x.sku_id, x.sku_code, x.sku_name, p.name AS product_name, x.safe_stock, x.q qty_on_hand, x.safe_stock - x.q shortage
+       FROM (SELECT sk.id AS sku_id, sk.product_id, sk.sku_code, sk.name AS sku_name, sk.safe_stock, ${skuStockQty(sc)} q
+               FROM product_skus sk WHERE sk.status='active' AND sk.safe_stock>0${visible}) x
+       JOIN products p ON p.id = x.product_id
+       WHERE x.q < x.safe_stock
+       ORDER BY shortage DESC, x.sku_id LIMIT ?`
+    )
+    .all(...sc.params, ...(visible ? sc.params : []), limit)
+}
+
+// ============================================================
+// 组织范围（ADR-0038）：库存按**仓库所属组织**（`warehouses.org_id`）收口
+// ============================================================
+
+/**
+ * 库存域 SQL 范围谓词（完整谓词，无前导 AND）。判据与 `purchaseScopeSql` / `salesScopeSql` 同源：
+ *   · 不传或 `all` ⇒ `1=1`（全库，admin / 全局范围 / lib 内部调用口径不变）；
+ *   · `dealer` / `none` / 空集合 ⇒ `1=0` 并置 `empty: true`（空范围不许变成全库）；
+ *   · 其余 ⇒ `<alias>.<column> IN (SELECT id FROM warehouses WHERE org_id IN (…))`；
+ *     仓库的 `org_id` 为 NULL 对受限范围不可见（宁可看不到，也不放行）。
+ * `alias` 给带表别名的查询用；`column` 缺省 `warehouse_id`（调拨单用 `from_warehouse_id` / `to_warehouse_id`，
+ * 仓库表自身用 `id`）。
+ */
+export function stockScopeSql(orgScope, alias = '', column = 'warehouse_id') {
+  if (!orgScope || orgScope.scope === 'all') return { sql: '1=1', params: [], empty: false }
+  const ids = Array.isArray(orgScope.orgIds) ? orgScope.orgIds.map(Number).filter(Number.isFinite) : []
+  if (orgScope.scope === 'dealer' || orgScope.scope === 'none' || !ids.length) return { sql: '1=0', params: [], empty: true }
+  const col = alias ? `${alias}.${column}` : column
+  return { sql: `${col} IN (SELECT id FROM warehouses WHERE org_id IN (${ids.map(() => '?').join(',')}))`, params: ids, empty: false }
+}
+
+/** 仓库是否在范围内（全局恒真；不存在 / org 为 NULL / 范围外 ⇒ false）。 */
+export function warehouseInScope(db, warehouseId, orgScope) {
+  if (!orgScope || orgScope.scope === 'all') return true
+  const sc = stockScopeSql(orgScope, 'w', 'id')
+  if (sc.empty || !Number.isFinite(Number(warehouseId))) return false
+  return !!db.prepare(`SELECT 1 FROM warehouses w WHERE w.id=? AND ${sc.sql}`).get(Number(warehouseId), ...sc.params)
+}
+
+/** 写路径的目标仓校验：范围外（含不存在、org 为 NULL）⇒ 403 `TARGET_OUT_OF_SCOPE`；全局范围恒通过。 */
+export function assertWarehouseInScope(db, warehouseId, orgScope) {
+  if (warehouseInScope(db, warehouseId, orgScope)) return
+  const e = new Error('所选仓库不在您的组织数据范围内')
+  e.status = 403
+  e.code = 'TARGET_OUT_OF_SCOPE'
+  throw e
+}
+
+/** 按仓取单据行并判范围：范围外与不存在同形 404（`DOC_NOT_FOUND`）。`table` / `column` 由调用方写死，不接受用户输入。 */
+export function assertStockDocInScope(db, table, id, orgScope, { column = 'warehouse_id', notFound = '单据不存在' } = {}) {
+  const sc = stockScopeSql(orgScope, 't', column)
+  const row = Number.isFinite(Number(id))
+    ? db.prepare(`SELECT t.* FROM ${table} t WHERE t.id=? AND ${sc.sql}`).get(Number(id), ...sc.params)
+    : null
+  if (!row) {
+    const e = new Error(notFound)
+    e.status = 404
+    e.code = 'DOC_NOT_FOUND'
+    throw e
+  }
+  return row
+}
+
 export default {
   applyStockIn,
   applyStockOut,
@@ -1233,5 +1327,11 @@ export default {
   clearParamCache,
   clearInvTypeCache,
   getStockRow,
+  countBelowSafe,
+  listBelowSafe,
+  stockScopeSql,
+  warehouseInScope,
+  assertWarehouseInScope,
+  assertStockDocInScope,
   DOC_TYPE_LABEL
 }

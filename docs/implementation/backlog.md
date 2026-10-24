@@ -57,11 +57,99 @@
 
 | 位置 | 缺口 | 建议 |
 |---|---|---|
-| `server/routes/pos.js` 19 条 | 只要求门店绑定（storeCtx），任何门店账号可做交班批准/驳回等 | 补 `requireStore` + 按动作权限码；交班审批需第二人 |
-| `server/routes/sales.js` 订单/发货/退货/统计读 | `scopeFilter` 只按经销商/门店绑定限制，内部 `data_scope=org` 账号可读其他组织 | 复用 ADR-0017 组织范围谓词 |
-| `server/routes/order-center.js` 16 条 | 同上，总览/客户树返回全局数据 | 同上 |
-| `server/routes/docflow.js` `POST /no-issue` | 任意登录账号可消耗真实单号 | 要求对应单据类型的创建权限 |
-| `server/routes/auth.js` `GET /orgs` | 返回整张组织表 | 限管理员或按范围裁剪 |
-| `server/routes/qimen.js` `POST /` | 缺 `app_key` 视为未认证放行（生产已 503 关闭） | 重新开放前强制认证 |
-| `server/routes/purchase-chain.js` 写路径 | `POST /payments`、`/settlements` 自动分配/来源选择不按组织范围 | 与 ADR-0020 对称收口 |
-| MCP `doc.query`/`doc.get` | 无按单据类型的查看权限点 | 产品决策后补权限点 |
+| `server/routes/pos.js` | 第七批已收口（ADR-0025）：31 条门店路由 requireStore + 按动作权限，跨店 404，交班批准/驳回需非发起人 | 前端 POS 按钮尚未按权限隐藏 |
+| `server/routes/sales.js` | 第七批已收口（ADR-0026）：订单按仓库或门店所属组织，发货/退货随订单；越权 404 | `quote.js`、MCP `sales.*` 工具、OMS 同步入口未按组织范围 |
+| `server/routes/order-center.js` | 第七批已收口（ADR-0027）：按客户归属组织 | `/api/docflow/events|history|trace` 对 OC/OCS 仍只要求内部角色 |
+| `server/routes/docflow.js` `POST /no-issue` | 第七批已收口（ADR-0028）：按单据类型创建权限 + 组织/仓库范围 | `docflow` 的 `/events`、`/overview`、`/history`、`/trace` 读接口仍无组织过滤 |
+| `server/routes/auth.js` `GET /orgs` | 第七批已收口（ADR-0028）：非管理员按范围裁剪 | — |
+| `server/routes/qimen.js` `POST /` | 第七批已收口（ADR-0028）：缺 app_key/签名 401，平台只能查绑定仓 | 签名秘密仍是公开演示常量；`/capabilities` 向任意登录用户列出各平台 app_key；生产仍 503 |
+| `server/routes/purchase-chain.js` 写路径 | 第七批已收口自动分配与来源选择（ADR-0028） | `/:id/:action`、`/requisitions/:id/convert`、`/payments/:id/review`、`/orders/:id/receive-check` 仍无单据范围判定；MCP `purchase.settlement.build`/`payment.create` 未传 orgScope |
+| MCP `doc.query`/`doc.get`/`doc.list_types` | 第七批已收口：40 类型全部映射查看权限（ADR-0011 补充） | RC/YQ/SH 的 HTTP 角色名/门店绑定门禁未在 MCP 复刻（记录为残留） |
+
+## 第八批后仍 open 的授权/运维残留
+
+| 位置 | 残留 | 来源 |
+|---|---|---|
+| `server/routes/purchase.js` `/orders/:id/status`、`/receive` | 无单据组织范围判定 | Y1 Codex 审计 |
+| `server/routes/oms.js` `GET /orders`、`/orders/:id` | 无组织过滤（生产 503） | Y4 Codex 审计 |
+| MCP `approval.approve` 以外的 MCP 历史读（`tools.js` 单据历史） | 未按 Y2 解析表过滤 | Y2 报告 |
+| 审批管理员（`system:approval:manage`）可见全部待办实例（只读，不能跨组织决定） | 产品决策 | Y12 |
+| Y10 发现：`dash.todo_counts`、`stock.below_safe` 在大库上对 `product_skus`/`dealers` 全表扫描；`GET /api/inventory/stocks` 随库存行线性变慢 | 需索引/分页改造 | Y10 |
+| 反向代理下 HSTS/Cookie Secure 需 `trust proxy` 开关，当前未提供 | 配置项待加 | Y11 |
+| roadmap 规模（10 万 SKU/100 万流水）未跑：开发机磁盘不足，需在 dmserver 复跑 `scripts/synth-pipeline.mjs` | 目标主机 | Y10 |
+
+## 第九批后仍 open 的残留
+
+| 位置 | 残留 | 来源 |
+|---|---|---|
+| MCP `order.trace_document`、`doc.query` | 仍以 `dealer_id` 判归属，可读他组织仓库中的订单 | Z2 Codex 审计 |
+| `server/routes/oms.js` 写路由（ship/complete/refund/stock-push） | 未按组织范围（生产 503） | Z2 |
+| `POST /api/approval/templates` | 受限管理员可把自己设为审批人从而看到他组织待办 | Z9 Codex 审计 |
+| `lib/qc.js` 处置调拨、MCP 库存工具、主数据仓库路由、采购收货/退货路由、门店 POS 库存 | 未接入 ADR-0038 仓库范围谓词 | Z1 |
+| `metrics.js` 的 below_safe 口径、`routes/ai.js`、`mcp/tools.js` 各自的低库存查询 | 未切到 `listBelowSafe` | Z3 |
+| 看板 `/dashboard/summary` p95 仍约 400 ms | 瓶颈不在本批索引 | Z3 |
+| 夜间容量工作流首跑可能因 Y10 记录的 3 处全表扫描变红（Z3 已消除，需实跑确认） | 托管 runner | Z10 |
+| `release-candidate` 的焦点/回归结果字段默认 `not run`，CI run id 需人工传入 | 流程 | Z5 |
+| 审计日志导出的 COUNT/LIKE 在大库上的耗时未测 | 性能 | Z7 |
+
+## 第十批后仍 open 的残留
+
+| 位置 | 残留 | 来源 |
+|---|---|---|
+| `GET /master/options`（`warehouses`/`warehouses_all`） | 仍向任意登录用户返回全部仓库 id/名称/编码 | AA4 Codex 审计 |
+| `GET /api/purchase/orders` 列表与详情、`/api/qc/overview`、`/api/qc/audit` | 只有权限门禁，无组织范围裁剪或聚合未按范围 | AA4 |
+| 看板 `/dashboard/summary` 缓存未命中 p95 约 400 ms（并发 4）；`trend`/`top`/`todos`/`inventory-dist` 未剖析未缓存 | 性能 | AA5 |
+| 审计日志关键词仍为子串匹配；仅日期区间或仅 action 过滤无索引；仅 entity 不带 entity_id 走 rowid 倒扫 | 性能 | AA6 |
+| `EVIDENCE.json` 的 `produced` 结果无签名，仅做一致性与包绑定校验 | 流程 | AA7 Codex 审计 |
+| 升级演练只在合成 medium 库、Mac mini 上测过；真正旧结构库需旧版本备份集 | 目标主机 | AA11 |
+| 夜间工作流 `rehearsal` 步骤与 AA8 新浏览器场景未在托管 runner 上实跑 | 托管 runner | AA8/AA11 |
+| `dmserver` 上的所有性能数字均未复测 | 目标主机 | 全批 |
+
+## 第十一批后仍 open 的残留
+
+| 位置 | 残留 | 来源 |
+|---|---|---|
+| MCP `purchase.list_orders`、`report.dashboard_kpi` | 采购单按"仓库或目标门店在范围内"放行，宽于 HTTP 的仅按仓库 | AB1 Codex 审计（高） |
+| `POST /api/demand/dealer/summary`、`GET /api/master/products(/:id)` 的 `stock_qty`、`/api/master/overview` 仓库计数 | 接受/汇总范围外仓库 | AB1 Codex 审计（中/低） |
+| `/api/docflow/*` 对未绑定门店、非总部角色、`data_scope=all` 的内部账号仍可读 RC/YQ/SH | 需产品决策统一 `HQ_ROLES`/`HQ` 名单 | AB7 Codex 审计（高，既有） |
+| 解析表中 PS/PSF/DR/OC/OCS/DS/RB 仍无绑定规则（MCP 由 `doc-perms` 兜底） | 范围 | AB7 |
+| `/dashboard/channel`、`/recent` 未剖析未缓存；`explain-audit` 未登记新的 `/top`、`/inventory-dist` 语句 | 性能守卫 | AB2 |
+| 审计 FTS：无 FTS5 的构建只做了模拟验证；FTS 维护（optimize/rebuild 锁）未测 | 性能 | AB3 |
+| 证据签名无时间戳/透明日志；托管 CI 无签名密钥，CI 产出的候选未签名 | 流程 | AB4 |
+| 哈希链锚点/链尾摘要未离机保存则对持写权限者无效；归档崩溃恢复未测 | 运维 | AB6 |
+| `capacity-summary.mjs` 对 large-ci 不显示 `partial`；大规模运行与夜间 `rehearsal`/`snapshot_upto`/`scale=large-ci` 均未在托管 runner 上实跑 | 托管 runner | AB5/AB9/AB11 |
+| `promtool` 未校验新告警规则；MCP 调用计数无端到端测试 | 监控 | AB10 |
+| GHSA-vfj7-8cjw-p6xm 是否已撤回需联网复核 | 依赖 | AB12 |
+| `dmserver` 上的所有性能数字均未复测 | 目标主机 | 全批 |
+
+## 第十二批后仍 open 的残留
+
+| 位置 | 残留 | 来源 |
+|---|---|---|
+| `/api/metrics`、`/metrics/values`、`/catalog` | 对受限角色仍返回全局 `stock_qty`/`purchase_amount*` | AC1 Codex 审计（高） |
+| MCP `report.dashboard_kpi`（`perms: []`）、`/dealer/summary` | 无采购查看权限仍能得到在途量 | AC1 Codex 审计（中） |
+| `boss` 角色不在 `hq-roles.js` 名单 | docflow 下不再可见 RC/YQ/SH；一行可加，需产品决定；开关可回退 | AC2 |
+| `dash.trend_*` 的 explain-audit 登记仍是人工镜像；`oms_orders.order_time` 无索引 | `/channel`、`/trend` 线上分支整表读取，需迁移 | AC4 |
+| `GML_AUDIT_FTS=0` 不等于无 FTS5 构建（表与触发器仍在） | 性能守卫 | AC5 |
+| 透明日志无法发现"删掉最新几行"或整文件替换 | 需离机副本 | AC6 |
+| 归档崩溃只测了 SIGKILL，未测真实掉电；伪造锚点与真实锚点不可区分 | 运维 | AC7 |
+| 夜间工作流（rehearsal / snapshot_upto / scale=large-ci / audit_fts）均未在托管 runner 上实跑：工作流文件尚未在 main | 待 PR #7 合入后手动触发 | AC8 |
+| `promtool check rules` 与新增 CI 步骤未在 runner 上跑过 | 托管 runner | AC9/AC5/AC10 |
+| `zod` 为未使用依赖，白名单到期 2026-12-15 前应移除（会改 SBOM/声明） | 依赖 | AC10 |
+| 新浏览器场景（审计 FTS 提示、看板时间戳）未执行 | Linux CI | AC11 |
+| `dmserver` 上的所有性能数字均未复测 | 目标主机 | 全批 |
+
+## 第十三批后仍 open 的残留
+
+| 位置 | 残留 | 来源 |
+|---|---|---|
+| `/api/metrics` 系列 | 仍只需 `system:metrics:view`，未按指标对应业务查看权限；受限角色对无范围语义指标只是标注而非隐藏，需产品决定 | AD1 Codex 审计（高） |
+| 角色矩阵 | 不含自定义角色、按账号 `data_scope` 覆盖与多角色并集 | AD2/AD11 |
+| `oms.js` `/stats`、`ai.js` 平台分析 | 仍用 `date(order_time)` 谓词，未用迁移 070 索引；应用若引入 `ANALYZE`，explain-audit 可能改判 | AD3 |
+| 离机锚点 | `--accept-new-anchors` 后桥接锚点与合法锚点不可区分；需操作日志自动对账 | AD5 Codex 审计 |
+| 故障注入 | 只模拟 abort/截断，未测真实掉电；加密备份只覆盖一个注入点；未在 Linux 上跑 | AD6 |
+| 夜间工作流、`capacity-smoke`、`candidate` job、promtool/no-FTS CI 步骤 | 均未在托管 runner 上实跑（工作流不在 main） | AD8/AD10 |
+| MCP 限速 | 各进程各自计数（多进程部署下放大 N 倍）；重启清零；滑动窗口为近似 | AD9 |
+| `candidate` job 的 `--ci-run=auto` 在同一提交无成功 CI 时为 null；推 `v*` 标签会同时触发其余 job | AD10 |
+| `boss` 进总部名单后 docflow 可见范围扩大 | 产品确认 | AD2 |
+| `dmserver` 上的所有性能数字均未复测 | 目标主机 | 全批 |

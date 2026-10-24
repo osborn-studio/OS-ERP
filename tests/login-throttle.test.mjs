@@ -54,10 +54,10 @@ function child(code, args = [], env = {}) {
   })
 }
 
-test('default limits apply in test mode and successful attempts also consume the budget', t => {
+test('default limits apply in test mode and unsettled reservations count (fail closed)', t => {
   const f = fixture(t)
   const limiter = f.open()
-  for (let n = 0; n < 10; n++) assert.deepEqual(limiter.consumeLoginAttempt(request), { allowed: true })
+  for (let n = 0; n < 10; n++) assert.equal(limiter.consumeLoginAttempt(request).allowed, true)
   rateLimited(() => limiter.consumeLoginAttempt(request), 300)
   assert.deepEqual(f.inspect(db => db.prepare('SELECT attempts FROM login_throttle_buckets ORDER BY attempts').all()),
     [{ attempts: 10 }, { attempts: 10 }])
@@ -248,4 +248,112 @@ test('route API maps missing data directory and invalid environment policy to 50
     assert.equal(result.code, 'LOGIN_THROTTLE_UNAVAILABLE')
     assert.equal(result.message.includes(f.dataDir), false)
   }
+})
+
+// ---- X7: account bucket counts failures only; IP bucket counts every attempt ----
+const attempt = (limiter, input, success) => {
+  const r = limiter.consumeLoginAttempt(input)
+  limiter.settleLoginAttempt(r.reservation, success)
+}
+const rows = f => f.inspect(db => db.prepare('SELECT attempts,pending FROM login_throttle_buckets ORDER BY attempts').all())
+
+test('X7 many successful logins never lock the account', t => {
+  const f = fixture(t, { ipLimit: 1000 })
+  const limiter = f.open()
+  for (let n = 0; n < 25; n++) attempt(limiter, request, true)
+  assert.equal(limiter.consumeLoginAttempt(request).allowed, true)
+})
+
+test('X7 account locks after the failure limit and the IP bucket counts successes too', t => {
+  const f = fixture(t, { ipLimit: 1000 })
+  const limiter = f.open()
+  for (let n = 0; n < 10; n++) attempt(limiter, request, false)
+  rateLimited(() => limiter.consumeLoginAttempt(request), 300)
+  const g = fixture(t, { ipLimit: 3, accountLimit: 100 })
+  const ip = g.open()
+  attempt(ip, { ...request, username: 'a' }, true); attempt(ip, { ...request, username: 'b' }, true); attempt(ip, { ...request, username: 'c' }, true)
+  rateLimited(() => ip.consumeLoginAttempt({ ...request, username: 'd' }))
+})
+
+test('X7 success clears settled failures of that account only', t => {
+  const f = fixture(t, { ipLimit: 1000, accountLimit: 3 })
+  const limiter = f.open()
+  const other = { ...request, username: 'other' }
+  attempt(limiter, request, false); attempt(limiter, request, false); attempt(limiter, other, false)
+  attempt(limiter, request, true)
+  attempt(limiter, request, false); attempt(limiter, request, false)
+  assert.equal(limiter.consumeLoginAttempt(request).allowed, true) // 2 failures after the clear, still under 3
+  // the other account kept its failure: 1 stored failure, so exactly two more reservations fit
+  assert.equal(limiter.consumeLoginAttempt(other).allowed, true); assert.equal(limiter.consumeLoginAttempt(other).allowed, true)
+  rateLimited(() => limiter.consumeLoginAttempt(other))
+})
+
+test('X7 a success cannot clear failures that settled after its own reservation', t => {
+  const f = fixture(t, { ipLimit: 1000, accountLimit: 3 })
+  const limiter = f.open()
+  const winner = limiter.consumeLoginAttempt(request)
+  const wrong = [limiter.consumeLoginAttempt(request), limiter.consumeLoginAttempt(request)]
+  wrong.forEach(w => limiter.settleLoginAttempt(w.reservation, false)) // 2 failures settle first
+  limiter.settleLoginAttempt(winner.reservation, true)                 // success settles last
+  assert.equal(limiter.consumeLoginAttempt(request).allowed, true)     // 2 failures still counted: 1 slot left
+  rateLimited(() => limiter.consumeLoginAttempt(request))
+})
+
+test('X7 a success clears only the failures settled before its reservation', t => {
+  const f = fixture(t, { ipLimit: 1000, accountLimit: 4 })
+  const limiter = f.open()
+  attempt(limiter, request, false); attempt(limiter, request, false)
+  const winner = limiter.consumeLoginAttempt(request) // sees 2 settled failures
+  attempt(limiter, request, false)                    // 3rd failure settles during the success's bcrypt
+  limiter.settleLoginAttempt(winner.reservation, true)
+  assert.deepEqual(rows(f).filter(r => r.attempts === 1), [{ attempts: 1, pending: 0 }].concat(rows(f).filter(r => r.attempts === 1).slice(1)))
+  assert.equal(limiter.consumeLoginAttempt(request).allowed, true)
+})
+
+test('X7 in-flight wrong-password reservations cannot be erased by an interleaved success', t => {
+  const f = fixture(t, { ipLimit: 1000, accountLimit: 3 })
+  const limiter = f.open()
+  const wrong = [limiter.consumeLoginAttempt(request), limiter.consumeLoginAttempt(request)] // reserved before bcrypt, unsettled
+  const winner = limiter.consumeLoginAttempt(request)   // third reservation, budget now full
+  rateLimited(() => limiter.consumeLoginAttempt(request))
+  limiter.settleLoginAttempt(winner.reservation, true)  // success arrives mid-burst
+  // the two in-flight wrong attempts are still counted: only 1 slot is left
+  assert.equal(limiter.consumeLoginAttempt(request).allowed, true)
+  rateLimited(() => limiter.consumeLoginAttempt(request))
+  for (const w of wrong) limiter.settleLoginAttempt(w.reservation, false)
+  rateLimited(() => limiter.consumeLoginAttempt(request)) // they became failures; still locked
+})
+
+test('X7 burst of reservations never exceeds the failure limit regardless of settle order', t => {
+  const f = fixture(t, { ipLimit: 1000, accountLimit: 4 })
+  const limiter = f.open()
+  const granted = []
+  for (let n = 0; n < 12; n++) { try { granted.push(limiter.consumeLoginAttempt(request)) } catch (e) { assert.equal(e.code, 'LOGIN_RATE_LIMITED') } }
+  assert.equal(granted.length, 4)
+  granted.reverse().forEach(r => limiter.settleLoginAttempt(r.reservation, false))
+  rateLimited(() => limiter.consumeLoginAttempt(request))
+})
+
+test('X7 a stale reservation cannot touch a newer window and settle never throws', t => {
+  const f = fixture(t, { ipLimit: 1000, accountLimit: 2, accountWindowMs: 5000 })
+  const limiter = f.open()
+  const old = limiter.consumeLoginAttempt(request)
+  f.advance(5000)
+  const fresh = limiter.consumeLoginAttempt(request) // new window, pending 1
+  assert.equal(limiter.settleLoginAttempt(old.reservation, true), true) // epoch mismatch: no-op
+  limiter.consumeLoginAttempt(request)
+  rateLimited(() => limiter.consumeLoginAttempt(request)) // fresh reservation still counted
+  assert.equal(limiter.settleLoginAttempt(null, true), false)
+  assert.equal(limiter.settleLoginAttempt({ key: 1, epoch: 'x' }, true), false)
+  limiter.close()
+  assert.equal(limiter.settleLoginAttempt(fresh.reservation, true), false)
+})
+
+test('X7 a database created before the pending column is upgraded in place', t => {
+  const f = fixture(t, { ipLimit: 1000, accountLimit: 2 })
+  f.open().close()
+  f.inspect(db => db.exec('ALTER TABLE login_throttle_buckets DROP COLUMN pending'))
+  const limiter = f.open()
+  attempt(limiter, request, false); attempt(limiter, request, false)
+  rateLimited(() => limiter.consumeLoginAttempt(request))
 })

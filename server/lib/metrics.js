@@ -35,6 +35,8 @@
 
 import { getDb } from '../db/index.js'
 import { stampDef, defStale } from '../db/migrations/_helpers.cjs'
+import { countBelowSafe, stockScopeSql } from './stock.js'
+import { purchaseOrderScopeSql } from './purchase.js'
 
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100
 const num = (v) => Number(v) || 0
@@ -44,6 +46,15 @@ const days = (p, dflt = 30) => {
   const n = Math.floor(Number(p?.days))
   return Number.isFinite(n) && n > 0 && n <= 3650 ? n : dflt
 }
+
+// AD1（ADR-0053）：范围参数。`compute(db, { days, orgScope })`；不传 orgScope = 全局（内部调用 / 看板口径不变）。
+// 库存类走 `stockScopeSql`（仓库所属组织），采购订单类走 `purchaseOrderScopeSql`（入库仓所属组织），判据各只有一份。
+// 带 `scopeAware: true` 的指标才会按范围收窄；其余指标没有组织归属可套（销售 / 线上 / 财务 / 订货 / 经销商 / 审批），
+// 对受限调用者仍是全局口径，由 `metricScopedFlags` 标 `scoped: false`，前端据此标注「全局口径」。
+const stockSc = (p, alias = 'st') => stockScopeSql(p?.orgScope, alias)
+const poSc = (p, alias = 'po') => purchaseOrderScopeSql(p?.orgScope, alias)
+/** 调用者是否受限（非全局范围）；不传 = 不受限 */
+export const isScopeRestricted = (orgScope) => !!orgScope && orgScope.scope !== 'all'
 
 /**
  * 指标字典。分组顺序即字典展示顺序。
@@ -204,8 +215,11 @@ export const METRICS = [
     exclusions: '不含在途（qty_in_transit）；不含已占用（那是可用量的事）',
     source: 'inventory_stocks',
     note: '实物层口径 —— 仓里真的有多少。跨批次汇总，不看批次明细',
-    compute: (db) =>
-      num(db.prepare(`SELECT COALESCE(SUM(qty_on_hand),0) v FROM inventory_stocks`).get().v)
+    scopeAware: true,
+    compute: (db, p) => {
+      const sc = stockSc(p)
+      return num(db.prepare(`SELECT COALESCE(SUM(st.qty_on_hand),0) v FROM inventory_stocks st WHERE ${sc.sql}`).get(...sc.params).v)
+    }
   },
   {
     key: 'available_qty',
@@ -217,10 +231,13 @@ export const METRICS = [
     exclusions: '不含在途（预计入库），也不含冻结 —— 本演示系统暂未启用冻结维度',
     source: 'inventory_stocks',
     note: '「现在能卖多少」。与库存数量的差就是被订单占用的部分',
-    compute: (db) =>
-      num(db.prepare(
-        `SELECT COALESCE(SUM(qty_on_hand - qty_reserved),0) v FROM inventory_stocks`
-      ).get().v)
+    scopeAware: true,
+    compute: (db, p) => {
+      const sc = stockSc(p)
+      return num(db.prepare(
+        `SELECT COALESCE(SUM(st.qty_on_hand - st.qty_reserved),0) v FROM inventory_stocks st WHERE ${sc.sql}`
+      ).get(...sc.params).v)
+    }
   },
   {
     key: 'stock_amount',
@@ -232,8 +249,11 @@ export const METRICS = [
     exclusions: '成本口径，不是售价口径；不含未入库的采购在途',
     source: 'inventory_stocks',
     note: '用表上的 cost_amount 列（写入时已按 cost_price 算好），不在这里现乘 —— 现乘会与流水里的余额口径打架',
-    compute: (db) =>
-      round2(num(db.prepare(`SELECT COALESCE(SUM(cost_amount),0) v FROM inventory_stocks`).get().v))
+    scopeAware: true,
+    compute: (db, p) => {
+      const sc = stockSc(p)
+      return round2(num(db.prepare(`SELECT COALESCE(SUM(st.cost_amount),0) v FROM inventory_stocks st WHERE ${sc.sql}`).get(...sc.params).v))
+    }
   },
   {
     key: 'turnover_days',
@@ -245,14 +265,16 @@ export const METRICS = [
     exclusions: '出库只取 direction=out 的流水；仓库调拨不在指标内单独剔除（演示系统不做调拨剔除）',
     source: 'inventory_stocks, inventory_transactions',
     note: '按数量算而不是按金额 —— 演示数据里同一 SKU 的单价跨度大，按金额算会被高价品带偏',
+    scopeAware: true,
     compute: (db, p) => {
       const d = days(p, 30)
+      const sc = stockSc(p, 'it')
       const out = num(db.prepare(
-        `SELECT COALESCE(SUM(qty),0) v FROM inventory_transactions
-          WHERE direction='out' AND biz_date >= date('now','localtime','-' || ? || ' days')`
-      ).get(d).v)
+        `SELECT COALESCE(SUM(it.qty),0) v FROM inventory_transactions it
+          WHERE it.direction='out' AND it.biz_date >= date('now','localtime','-' || ? || ' days') AND ${sc.sql}`
+      ).get(d, ...sc.params).v)
       if (out <= 0) return 0 // 无出库 → 周转天数无意义，返回 0 而不是 Infinity
-      const stock = METRIC_BY_KEY.stock_qty.compute(db)
+      const stock = METRIC_BY_KEY.stock_qty.compute(db, p)
       return round2(stock / (out / d))
     }
   },
@@ -263,20 +285,12 @@ export const METRICS = [
     category: '风险',
     unit: '个',
     formula: 'COUNT(SKU WHERE 该 SKU 库存合计 < 安全库存)',
-    exclusions: '安全库存为 0 或空的 SKU 不参与（未设基准就没有「低于」可言）',
+    exclusions: '安全库存为 0 或空的 SKU、非 active 状态的 SKU 不参与（未设基准就没有「低于」可言；停用品不需要补货）',
     source: 'product_skus, inventory_stocks',
     note: '按 SKU 跨仓汇总后再比，不是逐仓比 —— 逐仓比会把「A 仓缺但 B 仓有」也算成缺货',
-    compute: (db) =>
-      num(db.prepare(
-        `SELECT COUNT(*) v FROM (
-           SELECT s.id, COALESCE(SUM(st.qty_on_hand),0) q, s.safe_stock
-             FROM product_skus s
-             LEFT JOIN inventory_stocks st ON st.sku_id = s.id
-            WHERE COALESCE(s.safe_stock,0) > 0
-            GROUP BY s.id
-           HAVING q < s.safe_stock
-         )`
-      ).get().v)
+    // AA5：与看板、预警页、AI、MCP 同一口径（lib/stock.js countBelowSafe）；口径多了 status='active'（停用 SKU 不再计入）
+    scopeAware: true,
+    compute: (db, p) => num(countBelowSafe(db, p?.orgScope))
   },
   {
     key: 'expiring_qty',
@@ -288,13 +302,15 @@ export const METRICS = [
     exclusions: '无到期日（expire_date 为空）的批次不计；已过期的**计入**（更该被看见）',
     source: 'inventory_stocks',
     note: '默认 90 天。过期批次故意不剔除 —— 剔除会把最该处理的货从预警里藏起来',
+    scopeAware: true,
     compute: (db, p) => {
       const d = days(p, 90)
+      const sc = stockSc(p)
       return num(db.prepare(
-        `SELECT COALESCE(SUM(qty_on_hand),0) v FROM inventory_stocks
-          WHERE expire_date IS NOT NULL AND expire_date <> ''
-            AND expire_date <= date('now','localtime','+' || ? || ' days')`
-      ).get(d).v)
+        `SELECT COALESCE(SUM(st.qty_on_hand),0) v FROM inventory_stocks st
+          WHERE st.expire_date IS NOT NULL AND st.expire_date <> ''
+            AND st.expire_date <= date('now','localtime','+' || ? || ' days') AND ${sc.sql}`
+      ).get(d, ...sc.params).v)
     }
   },
 
@@ -310,10 +326,13 @@ export const METRICS = [
     source: 'purchase_orders',
     note: '草稿计入是有意的：采购金额看的是「已经谈定的量」，草稿也占用了采购意图。' +
       '要看「已生效」请用 purchase_amount_effective',
-    compute: (db) =>
-      round2(num(db.prepare(
-        `SELECT COALESCE(SUM(total_amount),0) v FROM purchase_orders WHERE status <> 'cancelled'`
-      ).get().v))
+    scopeAware: true,
+    compute: (db, p) => {
+      const sc = poSc(p)
+      return round2(num(db.prepare(
+        `SELECT COALESCE(SUM(po.total_amount),0) v FROM purchase_orders po WHERE po.status <> 'cancelled' AND ${sc.sql}`
+      ).get(...sc.params).v))
+    }
   },
   {
     key: 'purchase_amount_effective',
@@ -325,10 +344,13 @@ export const METRICS = [
     exclusions: '排除 status IN (draft, cancelled)',
     source: 'purchase_orders',
     note: '与 purchase_amount 只差一个 draft —— 两个口径都留着，是为了让「草稿占多少」可以被量化',
-    compute: (db) =>
-      round2(num(db.prepare(
-        `SELECT COALESCE(SUM(total_amount),0) v FROM purchase_orders WHERE status NOT IN ('draft','cancelled')`
-      ).get().v))
+    scopeAware: true,
+    compute: (db, p) => {
+      const sc = poSc(p)
+      return round2(num(db.prepare(
+        `SELECT COALESCE(SUM(po.total_amount),0) v FROM purchase_orders po WHERE po.status NOT IN ('draft','cancelled') AND ${sc.sql}`
+      ).get(...sc.params).v))
+    }
   },
   {
     key: 'payable_open',
@@ -457,12 +479,14 @@ export const METRICS = [
     source: 'purchase_orders',
     note: '关闭标记是**只进不退**的推导结果。比率低不代表流程有问题，只代表在途多。' +
       '与「订单关闭率」（status=closed）是两个口径，别混用',
-    compute: (db) => {
-      const all = num(db.prepare(`SELECT COUNT(*) v FROM purchase_orders WHERE status <> 'cancelled'`).get().v)
+    scopeAware: true,
+    compute: (db, p) => {
+      const sc = poSc(p)
+      const all = num(db.prepare(`SELECT COUNT(*) v FROM purchase_orders po WHERE po.status <> 'cancelled' AND ${sc.sql}`).get(...sc.params).v)
       const done = num(db.prepare(
-        `SELECT COUNT(*) v FROM purchase_orders WHERE status <> 'cancelled'
-            AND close_arrival=1 AND close_inbound=1 AND close_invoice=1 AND close_payment=1`
-      ).get().v)
+        `SELECT COUNT(*) v FROM purchase_orders po WHERE po.status <> 'cancelled'
+            AND po.close_arrival=1 AND po.close_inbound=1 AND po.close_invoice=1 AND po.close_payment=1 AND ${sc.sql}`
+      ).get(...sc.params).v)
       return all > 0 ? round2((done / all) * 100) : 0
     }
   }
@@ -487,14 +511,14 @@ export function metricDefinitions() {
 }
 
 /** 取指标值。keys 不传则算全部；返回 { key: value } */
-export function metricValues(db = getDb(), { keys = null, days: d = 30 } = {}) {
+export function metricValues(db = getDb(), { keys = null, days: d = 30, orgScope = null } = {}) {
   const want = Array.isArray(keys) && keys.length ? keys : METRICS.map((m) => m.key)
   const out = {}
   for (const k of want) {
     const m = METRIC_BY_KEY[k]
     if (!m) continue
     try {
-      out[k] = m.compute(db, { days: d })
+      out[k] = m.compute(db, { days: d, orgScope })
     } catch (e) {
       // 某条算不出来不该把整页拖垮 —— 但也不能假装它是 0
       out[k] = { error: e.message }
@@ -503,11 +527,26 @@ export function metricValues(db = getDb(), { keys = null, days: d = 30 } = {}) {
   return out
 }
 
-/** 定义 + 当前值（字典页主接口） */
-export function metricCatalog(db = getDb(), { days: d = 30, withValues = true } = {}) {
-  const values = withValues ? metricValues(db, { days: d }) : {}
+/**
+ * 每个指标是否「按调用者范围算」：受限调用者下，`scopeAware` 指标为 true，没有组织归属的全局指标为 false
+ * （值仍是全局口径，前端标「全局口径」）；全局调用者一律 true。keys 不传 = 全部。
+ */
+export function metricScopedFlags(orgScope = null, keys = null) {
+  const restricted = isScopeRestricted(orgScope)
+  const want = Array.isArray(keys) && keys.length ? keys : METRICS.map((m) => m.key)
+  const out = {}
+  for (const k of want) if (METRIC_BY_KEY[k]) out[k] = !restricted || METRIC_BY_KEY[k].scopeAware === true
+  return out
+}
+
+/** 定义 + 当前值（字典页主接口）；每项带 `scoped`（见 metricScopedFlags） */
+export function metricCatalog(db = getDb(), { days: d = 30, withValues = true, orgScope = null } = {}) {
+  const values = withValues ? metricValues(db, { days: d, orgScope }) : {}
+  const scoped = metricScopedFlags(orgScope)
+  const defs = Object.fromEntries(metricDefinitions().map((x) => [x.key, x]))
   return METRICS.map((m) => ({
-    ...metricDefinitions().find((x) => x.key === m.key),
+    ...defs[m.key],
+    scoped: scoped[m.key],
     value: values[m.key] ?? null
   }))
 }
@@ -554,8 +593,8 @@ export function metricDefsStale(db = getDb()) {
 }
 
 /** 分组后的字典（前端分组渲染用） */
-export function metricGroups(db = getDb(), { days: d = 30, withValues = true } = {}) {
-  const list = metricCatalog(db, { days: d, withValues })
+export function metricGroups(db = getDb(), { days: d = 30, withValues = true, orgScope = null } = {}) {
+  const list = metricCatalog(db, { days: d, withValues, orgScope })
   const order = []
   const map = new Map()
   for (const m of list) {
@@ -569,6 +608,6 @@ export function metricGroups(db = getDb(), { days: d = 30, withValues = true } =
 }
 
 export default {
-  METRICS, METRIC_BY_KEY, metricDefinitions, metricValues, metricCatalog,
+  METRICS, METRIC_BY_KEY, metricDefinitions, metricValues, metricCatalog, metricScopedFlags, isScopeRestricted,
   syncMetricDefs, metricDefsStale, metricGroups
 }

@@ -1,0 +1,4 @@
+{
+  "note": "Time-boxed exemptions for npm audit --omit=dev --audit-level=high (scripts/check-audit-allowlist.mjs). Each entry needs advisory, reason, expires (YYYY-MM-DD, future, at most 180 days). An exemption is not a fix.",
+  "allow": []
+}

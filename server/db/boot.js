@@ -95,6 +95,7 @@ import { ensureReportConfigTrail } from '../lib/report-config-audit.js'
 // 有人手工停用了某个平台，重启一次不该把它又打开）。
 import { ensureImPlatforms } from '../lib/im-sync.js'
 import { ensureDemoTokens } from '../mcp/tokens.js'
+import { ensureDemoQimenSecret } from '../lib/qimen-auth.js'
 import { endSeedClock } from './seed-clock.js'
 import { requireDemoRuntime } from '../runtime.js'
 import '../lib/approval.js'
@@ -219,6 +220,12 @@ export function bootIndustry(code, { force = false, log } = {}) {
       if (tokens.length) {
         say(`「${label}」已签发 MCP Agent Token（凭据不写日志）`)
         for (const t of tokens) say(`        ${t.name}   权限 ${t.scopes}（凭据不写日志）`)
+      }
+      // 奇门演示平台的按安装随机密钥（AB8，ADR-0033 补充）：没有就生成，已有不动；明文不写日志、不进仓库。
+      // 提示只给 app_key 前 4 位与密钥末 4 位；要联调请用签发工具拿一个自己看得见的密钥。
+      const qimen = ensureDemoQimenSecret(getDb())
+      if (qimen.created) {
+        say(`「${label}」奇门演示平台（app_key ${qimen.app_key_prefix}…）已生成按安装随机密钥 qsk_****${qimen.secret_last4}；联调请运行 node scripts/qimen-issue-key.mjs --industry ${code} --platform ${qimen.platform_id} --rotate`)
       }
       return { industry: code, label, seeded: true, rebuilt: needSeed, tokens: tokens.length, dbPath: dbPathFor(code) }
     } finally {

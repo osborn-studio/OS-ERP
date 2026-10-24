@@ -38,7 +38,7 @@ const bundled = await build({
   ` }
 })
 const browser = await chromium.launch({
-  executablePath: required('GML_CHROMIUM_EXECUTABLE'), chromiumSandbox: true, headless: true,
+  executablePath: required('GML_CHROMIUM_EXECUTABLE'), chromiumSandbox: process.env.GML_CHROMIUM_SANDBOX !== '0', headless: true,
   env: { ...process.env, ...(process.env.GML_BROWSER_LD_LIBRARY_PATH ? { LD_LIBRARY_PATH: process.env.GML_BROWSER_LD_LIBRARY_PATH } : {}) }
 })
 const results = []
@@ -174,7 +174,7 @@ try {
   })
   await context.close()
   results.push(...await runSessionSwitchChecks(browser, base))
-  const report = { suite: 'frontend-session-browser', transport: 'deterministic intercepted fixtures; actual React/client/App business pages', browser: browser.version(), sandbox: true, passed: results.length, results }
+  const report = { suite: 'frontend-session-browser', transport: 'deterministic intercepted fixtures; actual React/client/App business pages', browser: browser.version(), sandbox: process.env.GML_CHROMIUM_SANDBOX !== '0', passed: results.length, results }
   if (process.env.GML_BROWSER_EVIDENCE) await writeFile(process.env.GML_BROWSER_EVIDENCE, JSON.stringify(report, null, 2) + '\n', { flag: 'wx' })
   console.log(JSON.stringify(report))
 } finally { await browser.close() }

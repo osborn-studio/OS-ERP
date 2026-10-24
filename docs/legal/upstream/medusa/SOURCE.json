@@ -1,0 +1,135 @@
+{
+  "repo": "medusajs/medusa",
+  "tag": "v2.21.2",
+  "commit": "020565398e436a2bc65777a3b1ad347b4735d6df",
+  "tag_published_at": "2026-09-28T10:08:32Z",
+  "selection_rule": "latest non-draft, non-prerelease GitHub release whose published_at is on or before 2026-10-15",
+  "fetched_at": "2026-10-23T12:15:14Z",
+  "license_spdx_as_declared": "MIT (LICENSE text excludes Enterprise Edition materials, which ENTERPRISE-LICENSE.md governs; GitHub API reports NOASSERTION)",
+  "license_files": [
+    {
+      "file": "LICENSE",
+      "bytes": 1402,
+      "sha256": "cf67cc556c17e0b00dc0c74a3d71db8dec9aae98af747a2503803a640fba9bb5"
+    },
+    {
+      "file": "ENTERPRISE-LICENSE.md",
+      "bytes": 5975,
+      "sha256": "2e0b6e1a06fc2fbc9d4f6bb57cf61ea707bb470711f8c068acc42b85fd30b5d4"
+    }
+  ],
+  "files_referenced": [
+    {
+      "path": "packages/modules/promotion/src/utils/compute-actions/buy-get.ts",
+      "referenced_by": [
+        "reusable/promotion/promotion-engine.js header 2a (buy-get.ts:645)",
+        "reusable/README.md"
+      ],
+      "fetch_status": "ok",
+      "bytes": 21356,
+      "sha256": "cc14a8298562ea839a886e1c97cc10993dfe29117864f882910a0e63af8afe8b",
+      "git_blob_sha": "6f30e84f93aa75e0d88d947ccef4fde67c34f5fc",
+      "similarity": [
+        {
+          "local": "reusable/promotion/promotion-engine.js",
+          "tokensA": 1364,
+          "tokensB": 2170,
+          "unigramJaccard": 0.2982,
+          "shingleSize": 5,
+          "shinglesA": 1216,
+          "shinglesB": 1786,
+          "sharedShingles": 5,
+          "localInUpstream": 0.0041,
+          "upstreamInLocal": 0.0028
+        },
+        {
+          "local": "server/lib/promotion.js",
+          "tokensA": 4510,
+          "tokensB": 2170,
+          "unigramJaccard": 0.2519,
+          "shingleSize": 5,
+          "shinglesA": 3717,
+          "shinglesB": 1786,
+          "sharedShingles": 7,
+          "localInUpstream": 0.0019,
+          "upstreamInLocal": 0.0039
+        }
+      ]
+    },
+    {
+      "path": "packages/modules/promotion/src/utils/compute-actions/line-items.ts",
+      "referenced_by": [
+        "reusable/promotion/promotion-engine.js header 2b (line-items.ts:127-174) and section 4 (line-items.ts:90-109)",
+        "reusable/README.md"
+      ],
+      "fetch_status": "ok",
+      "bytes": 6948,
+      "sha256": "859d9c6f499fc3176dcfa184e5d4681e7ac9f49b709a656855758ca0675f3786",
+      "git_blob_sha": "b27d3e7dbe0812691702bd261795eef42622a7d6",
+      "similarity": [
+        {
+          "local": "reusable/promotion/promotion-engine.js",
+          "tokensA": 1364,
+          "tokensB": 819,
+          "unigramJaccard": 0.3115,
+          "shingleSize": 5,
+          "shinglesA": 1216,
+          "shinglesB": 732,
+          "sharedShingles": 4,
+          "localInUpstream": 0.0033,
+          "upstreamInLocal": 0.0055
+        },
+        {
+          "local": "server/lib/promotion.js",
+          "tokensA": 4510,
+          "tokensB": 819,
+          "unigramJaccard": 0.2396,
+          "shingleSize": 5,
+          "shinglesA": 3717,
+          "shinglesB": 732,
+          "sharedShingles": 6,
+          "localInUpstream": 0.0016,
+          "upstreamInLocal": 0.0082
+        }
+      ]
+    },
+    {
+      "path": "packages/modules/promotion/src/services/promotion-module.ts",
+      "referenced_by": [
+        "reusable/promotion/promotion-engine.js header 2c and section 6 (promotion-module.ts:336-372)",
+        "reusable/README.md"
+      ],
+      "fetch_status": "ok",
+      "bytes": 63076,
+      "sha256": "dd7d08020c6ee941471f8530c3c07d91a2355afb9af5499aba7c62fff20bc7e9",
+      "git_blob_sha": "749f277ea84e524de969cca91593cf910da5b719",
+      "similarity": [
+        {
+          "local": "reusable/promotion/promotion-engine.js",
+          "tokensA": 1364,
+          "tokensB": 6742,
+          "unigramJaccard": 0.323,
+          "shingleSize": 5,
+          "shinglesA": 1216,
+          "shinglesB": 4564,
+          "sharedShingles": 0,
+          "localInUpstream": 0,
+          "upstreamInLocal": 0
+        },
+        {
+          "local": "server/lib/promotion.js",
+          "tokensA": 4510,
+          "tokensB": 6742,
+          "unigramJaccard": 0.307,
+          "shingleSize": 5,
+          "shinglesA": 3717,
+          "shinglesB": 4564,
+          "sharedShingles": 1,
+          "localInUpstream": 0.0003,
+          "upstreamInLocal": 0.0002
+        }
+      ]
+    }
+  ],
+  "failures": []
+}

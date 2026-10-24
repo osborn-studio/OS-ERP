@@ -17,7 +17,7 @@
 //
 // ── 为什么自己写 ZIP / OOXML，而不是加一个 xlsx 库 ──────────────────────────
 // 1. 本项目运行时依赖是**冻结**的（bcryptjs / better-sqlite3 / cors / dayjs /
-//    express / jsonwebtoken / nanoid / zod）。xlsx / exceljs / jszip 任何一个
+//    express / jsonwebtoken / nanoid）。xlsx / exceljs / jszip 任何一个
 //    都会带进一条新的供应链（含传递依赖），为"导出一张表"付这个代价不划算。
 // 2. 报表导出只需要 OOXML 里极小的一块子集：静态值、列宽、多工作表。
 //    不需要公式、样式、图表、共享字符串、冻结窗格 —— 用不到的解析器就是

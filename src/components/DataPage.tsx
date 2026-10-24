@@ -45,6 +45,10 @@ export type FieldDef = {
   /** 表单中隐藏 */
   tableOnly?: boolean
   span?: 1 | 2
+  /** 表单中按当前表单值条件显示；不显示的字段仍留在 body 里，由页面的 preparePayload 决定是否发送。 */
+  showWhen?: (form: any) => boolean
+  /** select 空选项的文案（默认「请选择」）。 */
+  emptyLabel?: string
 }
 
 export function FilterBar({ children, onReset }: { children: ReactNode; onReset?: () => void }) {
@@ -172,7 +176,9 @@ export default function DataPage({
   hideHeader = false,
   onExtraChange,
   preparePayload,
-  noCard = false
+  formNotice,
+  noCard = false,
+  emptyScopeText
 }: {
   title: string
   desc?: string
@@ -191,9 +197,13 @@ export default function DataPage({
   onExtraChange?: (p: { keyword: string; filters: Record<string, any>; reload: () => void; total: number }) => void
   /** Optional page-specific request contract. Other pages retain their existing field serialization. */
   preparePayload?: (body: Record<string, any>, context: { isEditing: boolean }) => Record<string, any>
+  /** Optional page-specific notice rendered above the form fields. */
+  formNotice?: (form: any, context: { isEditing: boolean }) => ReactNode
   noCard?: boolean
+  /** AC11：列表按账号数据范围裁剪后为空（且没有任何过滤 / 关键字、请求未失败）时显示的说明；不传则只显示表格自带的“暂无数据”。 */
+  emptyScopeText?: string
 }) {
-  const { list, total, loading, page, pageSize, filters: f, setFilters, setPage, reload, summary } = useList(path, initParams)
+  const { list, total, loading, error: listError, page, pageSize, filters: f, setFilters, setPage, reload, summary } = useList(path, initParams)
   const [open, setOpen] = useState(false)
   const [form, setForm] = useState<any>({})
   const [saving, setSaving] = useState(false)
@@ -369,6 +379,12 @@ export default function DataPage({
 
       {summaryRender?.(summary)}
 
+      {/* AC11：范围内本来就没有数据 ≠ 过滤后没有结果；有过滤 / 关键字 / 请求失败时不显示，避免把别的原因画成“范围为空” */}
+      {emptyScopeText && !loading && !listError && list.length === 0 && !keyword && Object.values(f || {}).every((v) => v === '' || v === null || v === undefined) && (
+        <div role="status" data-testid="empty-scope-hint" className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[13px] text-amber-800">
+          {emptyScopeText}
+        </div>
+      )}
       <Card pad={false}>
         <Table
           columns={
@@ -425,9 +441,10 @@ export default function DataPage({
           </>
         }
       >
+        {formNotice?.(form, { isEditing: !!form.id })}
         <div className="grid grid-cols-2 gap-x-4 gap-y-3">
           {fields
-            .filter((fd) => !fd.tableOnly)
+            .filter((fd) => !fd.tableOnly && (!fd.showWhen || fd.showWhen(form)))
             .map((fd) => (
               <div key={fd.key} className={fd.span === 2 ? 'col-span-2' : ''}>
                 <Field label={fd.label} required={fd.required} hint={fd.hint}>
@@ -435,7 +452,7 @@ export default function DataPage({
                     <div className="input bg-slate-50 text-slate-500 flex items-center">{form[fd.key] ?? '—'}</div>
                   ) : fd.type === 'select' ? (
                     <select className="input" value={form[fd.key] ?? ''} onChange={(e) => setForm({ ...form, [fd.key]: e.target.value })}>
-                      <option value="">请选择</option>
+                      <option value="">{fd.emptyLabel ?? '请选择'}</option>
                       {(fd.options || []).map((o) => (
                         <option key={String(o.value)} value={o.value}>
                           {o.label}

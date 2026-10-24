@@ -232,6 +232,8 @@ export const MENUS: MenuItem[] = [
       { key: 'users', label: '用户与权限', path: '/system/users' },
       // 角色与权限：用户页管"谁是这个角色"，这一页管"这个角色能做什么"
       { key: 'roles', label: '角色与权限', path: '/system/roles' },
+      // 只读矩阵：各角色在各类单据上的可见度 + 我自己的范围与绑定（AD11）；与上一项的区别是它不改权限
+      { key: 'role-matrix', label: '角色与数据范围', path: '/system/role-matrix' },
       { key: 'kernel', label: '单据内核（状态机）', path: '/system/doc-kernel' },
       { key: 'codeno', label: '编码规则', path: '/system/code-rules' },
       { key: 'approval', label: '审批中心', path: '/system/approval' },
@@ -242,9 +244,12 @@ export const MENUS: MenuItem[] = [
       { key: 'notify', label: '消息推送', path: '/system/notify' },
       { key: 'imSync', label: '钉钉/飞书同步', path: '/system/im-sync' },
       { key: 'dict', label: '枚举字典', path: '/system/dict' },
-      { key: 'ai', label: 'AI 查询日志', path: '/system/ai-logs' }
+      { key: 'ai', label: 'AI 查询日志', path: '/system/ai-logs' },
+      { key: 'auditLogs', label: '审计日志', path: '/system/audit-logs' }
     ]
-  }
+  },
+  // 我的数据范围：不写 roles = 每个登录用户可见（Z6）。只描述调用者自己，所以不需要权限点。
+  { key: 'my-scope', label: '我的数据范围', icon: ShieldCheck, path: '/system/my-scope' }
 ]
 
 function canSee(roles: string[] | undefined, role: string) {
