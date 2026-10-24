@@ -60,6 +60,7 @@ scrape_configs:
 | `os_erp_disk_free_bytes` | gauge | 数据卷可用字节；未知 -1 |
 | `os_erp_login_throttle_rejections_total{reason}` | counter | `rate_limited` / `unavailable` |
 | `os_erp_audit_strict_write_failures_total{reason}` | counter | `insert_error` / `no_row` / `outside_tx` / `mcp_call_log` |
+| `os_erp_audit_fts_fallback_total{reason}` | counter | 审计检索选了 FTS 路径、执行时索引表已被 `--disable` 删掉，本次改走 LIKE 重跑一次（`query` = 列表 / 导出起始；`export_batch` = 导出中途批次）。正常为 0；`--disable` 期间出现个位数属预期，持续增长说明有人反复开关索引 |
 | `os_erp_security_audit_unavailable_total` | counter | 因安全审计写不进去而回滚的业务变更次数 |
 | `os_erp_write_calls_total`、`_retries_total`、`_retry_exhausted_total`、`_non_retryable_errors_total` | counter | 写事务重试统计（ADR-0035） |
 | `os_erp_csp_violation_reports_total` | counter | **恒 0：未采集**（CSP 为 Report-Only 且没有报告端点，ADR-0036）；不要据此告警 |

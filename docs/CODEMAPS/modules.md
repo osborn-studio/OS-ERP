@@ -3,7 +3,7 @@
 <!-- generated -->
 <!-- 由 `node scripts/gen-codemap.mjs` 生成，勿手改；CI 校验不漂移 -->
 
-共 88 个模块。“路由”只列在处理器区域内直接引用该函数的路由（路由超过 5 条时按路由文件汇总，明细见 [routes.md](routes.md)）；“MCP 工具”来自 `server/mcp/tools.js` 的 40 个工具；“被模块调用”是其它 lib/mcp 模块里的跨文件引用。“—”表示静态扫描没找到调用方，不等于死代码。
+共 89 个模块。“路由”只列在处理器区域内直接引用该函数的路由（路由超过 5 条时按路由文件汇总，明细见 [routes.md](routes.md)）；“MCP 工具”来自 `server/mcp/tools.js` 的 40 个工具；“被模块调用”是其它 lib/mcp 模块里的跨文件引用。“—”表示静态扫描没找到调用方，不等于死代码。
 
 ## 扫描边界（必读）
 
@@ -264,9 +264,10 @@
 | `KEYWORD_FTS_MIN_CHARS` | const | — | — | — |
 | `KEYWORD_MIN_CHARS` | const | — | — | — |
 | `assertKeyword` | fn | — | — | — |
-| `buildWhere` | fn | GET /api/meta/audit-logs<br>GET /api/meta/audit-logs/export.csv | — | — |
+| `auditQueryPlan` | fn | GET /api/meta/audit-logs<br>GET /api/meta/audit-logs/export.csv | — | — |
+| `buildWhere` | fn | — | — | — |
 | `countCapped` | fn | GET /api/meta/audit-logs | — | — |
-| `countSql` | fn | — | — | — |
+| `countSql` | fn | GET /api/meta/audit-logs/export.csv | — | — |
 | `csvCell` | fn | — | — | — |
 | `csvLine` | fn | — | — | — |
 | `exportChunks` | fn | GET /api/meta/audit-logs/export.csv | — | — |
@@ -275,7 +276,8 @@
 | `ftsEnvDisabled` | fn | — | — | — |
 | `ftsPhrase` | fn | — | — | — |
 | `ftsState` | fn | GET /api/meta/audit-logs | — | — |
-| `keywordUsesFts` | fn | GET /api/meta/audit-logs<br>GET /api/meta/audit-logs/export.csv | — | — |
+| `isFtsMissingError` | fn | — | — | — |
+| `keywordUsesFts` | fn | — | — | — |
 | `orderOf` | fn | GET /api/meta/audit-logs<br>GET /api/meta/audit-logs/export.csv | — | — |
 | `parseFilters` | fn | GET /api/meta/audit-logs<br>GET /api/meta/audit-logs/export.csv | — | — |
 | `redactDetail` | fn | — | — | — |
@@ -1087,7 +1089,7 @@ OMS /stats 与 AI 平台分析的 SQL 唯一来源（AE3，ADR-0044 补充 4）
 | `MCP_RESULT_CODES` | const | — | — | — |
 | `counterSnapshot` | fn | GET /api/meta/metrics | — | — |
 | `histogramSnapshot` | fn | GET /api/meta/metrics | — | — |
-| `incCounter` | fn | — | — | lib/audit-trail.js, lib/db-ttl-cache.js, lib/login-throttle.js, lib/mcp-rate-limit.js, mcp/server.js |
+| `incCounter` | fn | — | — | lib/audit-trail.js, lib/audit-view.js, lib/db-ttl-cache.js, lib/login-throttle.js, lib/mcp-rate-limit.js, mcp/server.js |
 | `incMcpToolCall` | fn | — | — | mcp/server.js |
 | `mcpCodeTotal` | fn | — | — | — |
 | `observeHistogram` | fn | — | — | lib/audit-trail.js |
@@ -1587,6 +1589,14 @@ OMS /stats 与 AI 平台分析的 SQL 唯一来源（AE3，ADR-0044 补充 4）
 | `boundStoreId` | fn | 39 条：metrics.js×3, pos.js×31, requisitions.js×5 | — | lib/approval.js, lib/docflow.js |
 | `isExternalSubject` | fn | GET /api/metrics<br>GET /api/metrics/values<br>GET /api/metrics/catalog | — | lib/approval.js, lib/docflow.js |
 | `storeBindingExempt` | fn | GET /api/metrics<br>GET /api/metrics/values<br>GET /api/metrics/catalog | — | lib/approval.js, lib/docflow.js |
+
+## `server/lib/test-pause.js`
+
+仅测试模式的"暂停点"：写标记文件并同步等放行文件（AF4，ADR-0054 补充 2）
+
+| 导出 | 类型 | 路由 | MCP 工具 | 被模块调用 |
+|---|---|---|---|---|
+| `testPause` | fn | — | — | lib/audit-view.js |
 
 ## `server/lib/transfer.js`
 
