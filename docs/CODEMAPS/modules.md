@@ -3,7 +3,7 @@
 <!-- generated -->
 <!-- 由 `node scripts/gen-codemap.mjs` 生成，勿手改；CI 校验不漂移 -->
 
-共 81 个模块。“路由”只列在处理器区域内直接引用该函数的路由（路由超过 5 条时按路由文件汇总，明细见 [routes.md](routes.md)）；“MCP 工具”来自 `server/mcp/tools.js` 的 40 个工具；“被模块调用”是其它 lib/mcp 模块里的跨文件引用。“—”表示静态扫描没找到调用方，不等于死代码。
+共 82 个模块。“路由”只列在处理器区域内直接引用该函数的路由（路由超过 5 条时按路由文件汇总，明细见 [routes.md](routes.md)）；“MCP 工具”来自 `server/mcp/tools.js` 的 40 个工具；“被模块调用”是其它 lib/mcp 模块里的跨文件引用。“—”表示静态扫描没找到调用方，不等于死代码。
 
 ## 扫描边界（必读）
 
@@ -527,7 +527,7 @@ BOM 服务层（模块 10B · 一个 BOM + 三类执行单）
 | `createPermOf` | fn | POST /api/docflow/no-issue | — | — |
 | `dispatchTransition` | fn | POST /api/docflow/transition | doc.transition, purchase.advance_invoice, purchase.advance_payment, purchase.advance_requisition, purchase.advance_settlement | mcp/tools.js |
 | `docEventScope` | fn | GET /api/docflow/overview<br>GET /api/docflow/history/:docType/:id<br>GET /api/docflow/trace<br>GET /api/docflow/events | — | — |
-| `docInScope` | fn | GET /api/docflow/history/:docType/:id | doc.get, order.trace_document | mcp/tools.js |
+| `docInScope` | fn | POST /api/docflow/transition<br>GET /api/docflow/history/:docType/:id | doc.get, order.trace_document | mcp/tools.js |
 | `docScopeOf` | fn | GET /api/docflow/overview | doc.query | mcp/tools.js |
 | `effectOwnerOf` | fn | POST /api/docflow/transition | — | lib/approval.js |
 | `explainLifecycle` | fn | GET /api/docflow/types/:code/lifecycle<br>GET /api/purchase/chain/flow | — | — |
@@ -574,6 +574,17 @@ BOM 服务层（模块 10B · 一个 BOM + 三类执行单）
 | `needsReview` | fn | — | — | — |
 | `reviewFunds` | fn | POST /api/ar/receipts/:id/review<br>POST /api/purchase/payments/:id/review | — | — |
 | `reviewOf` | fn | GET /api/ar/receipts/:id<br>GET /api/purchase/payments/:id | — | — |
+
+## `server/lib/hq-roles.js`
+
+总部角色名单（唯一来源，ADR-0051）
+
+| 导出 | 类型 | 路由 | MCP 工具 | 被模块调用 |
+|---|---|---|---|---|
+| `HQ_ROLES` | const | — | — | — |
+| `POS_HQ_ROLES` | const | — | — | — |
+| `REQUISITION_HQ_ROLES` | const | — | — | — |
+| `isHqRole` | fn | — | — | lib/docflow.js |
 
 ## `server/lib/http.js`
 
@@ -1424,7 +1435,7 @@ Prometheus 文本指标渲染 + 抓取令牌校验（ADR-0045）
 | `logSettingChange` | fn | — | — | — |
 | `meta` | fn | — | — | — |
 | `normalizeSettingValue` | fn | — | — | — |
-| `readSetting` | fn | GET /api/invoices/meta<br>GET /api/meta/audit-logs | — | 15 个：lib/accounting.js, lib/annual.js, lib/approval.js, lib/closing.js, lib/credit.js, lib/funds-review.js … |
+| `readSetting` | fn | 7 条：docflow.js×5, invoice.js×1, meta.js×1 | — | 15 个：lib/accounting.js, lib/annual.js, lib/approval.js, lib/closing.js, lib/credit.js, lib/funds-review.js … |
 | `replaySettings` | fn | — | — | — |
 | `resetSetting` | fn | POST /api/meta/settings/reset | — | — |
 | `settingDef` | fn | — | — | — |

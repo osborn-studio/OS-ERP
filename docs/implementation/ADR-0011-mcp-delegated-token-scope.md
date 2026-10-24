@@ -192,6 +192,8 @@
 
 **已知残余（Codex 审计 high，非本次引入、HTTP 侧）**：`/api/docflow/*` 的上下文不设 `strictBinding`，所以"未绑门店、`data_scope=all`、非总部角色名"的内部自定义角色账号仍可经 docflow 读 RC / YQ / SH 的留痕——门店路由会拒它、总部路由因角色名拒它，但 docflow 只看数据范围。要在 HTTP 侧收紧必须先复刻总部角色名闸（`HQ_ROLES` / `HQ` 两份名单并不相同），会改变 finance 等总部角色现有的可见性，需单独的产品决定，登记到 backlog，不在 AB7 范围。
 
+**状态更新（ADR-0051，AC2）**：上述高危残余已关闭——`/api/docflow/*` 默认严格绑定，总部角色名单收敛到 `server/lib/hq-roles.js`，由危险设置键 `docflow_strict_store_binding` 控制（关 = 回退）。
+
 **HTTP 行为变化（需知悉）**：`/api/docflow/{events,overview,history,trace}` 对"绑了门店的非 admin 账号 + `data_scope=all`"不再放行别家门店的 RC / YQ / SH 单据与留痕；此前该组合在注册表层面等同全局范围。未绑门店的总部角色不受影响。
 
 **仍无绑定规则的类型（残余）**：PS / PSF 的 `store` 构建器已按 `ctx.user.store_id` 在受限范围内收窄，但全局范围下尚未带 `binding` 标记（读工具仍由 Y6 的 `rowInBinding` 挡住）；DR（经销商）、OC / OCS（订货主体）、DS / RB（无自视图）未并入注册表绑定。后续如要把它们并入，沿用同一个 `binding` 字段与 `strictBinding` 约定。

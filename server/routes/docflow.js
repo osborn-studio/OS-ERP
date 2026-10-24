@@ -44,18 +44,25 @@ import {
   docEventScope,
   docScopeOf,
   docInScope,
+  DOC_SCOPE_RESOLVERS,
   explainLifecycle,
   createPermOf
 } from '../lib/docflow.js'
 import { listDocNoRules, previewDocNo, nextDocNoAuto, nextDocNoByRule } from '../lib/docno.js'
 import { audit } from '../middleware/audit.js'
+import { readSetting } from '../lib/settings.js'
 // 领域库在求值期把各自的范围谓词登记到 doc-scope-registry；本路由依赖它们，显式 import 保证一定已登记（ADR-0032）。
 import '../lib/purchase.js'
 import '../lib/sales-order.js'
 import '../lib/order-center.js'
 
 /** 读接口的范围上下文：req.orgScope 由 attachOrgScope 挂上；缺失 ⇒ 失败关闭（按无范围算）。 */
-const scopeCtx = (req) => ({ db: getDb(), user: req.user, orgScope: req.orgScope || { scope: 'none', orgIds: [] } })
+const scopeCtx = (req) => {
+  const db = getDb()
+  // ADR-0051：默认严格门店绑定（未绑门店的非总部账号读不到 RC / YQ / SH），总部角色豁免；设置键 docflow_strict_store_binding=0 回退
+  const strict = readSetting(db, 'docflow_strict_store_binding') === true
+  return { db, user: req.user, orgScope: req.orgScope || { scope: 'none', orgIds: [] }, strictBinding: strict, hqExempt: strict }
+}
 
 const r = Router()
 
@@ -231,6 +238,9 @@ r.post(
       const owner = effectOwnerOf(type.code)
       const access = owner && owner.canAccess ? owner.canAccess(db, req, row) : assertCanRead(req, row)
       if (!access.ok) return fail(res, access.message, access.status)
+      // ADR-0051（Codex 审计）：带门店绑定的类型（RC / YQ / SH）在驱动前也过绑定闸，否则对未绑门店的非总部账号，
+      // 错误响应（409 的 docNo 等）会泄露其不可见单据；与读接口同一份 docInScope，范围外与不存在同形 404
+      if (row && DOC_SCOPE_RESOLVERS[type.code]?.binding && !docInScope(scopeCtx(req), type.code, row.id)) return fail(res, '记录不存在', 404)
 
       // ② 外部主体不得驱动内部单据域
       if (INTERNAL_MODULES.has(type.module) && isExternalUser(req)) {
