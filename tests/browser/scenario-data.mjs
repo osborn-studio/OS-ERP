@@ -182,3 +182,14 @@ export async function fetchAuditCsv(base, token, query) {
   const text = await res.text()
   return { status: res.status, headers: res.headers, ...(res.status === 200 ? csvRecords(text) : { header: null, records: [] }) }
 }
+
+/**
+ * AB9：按权限点挑选一个非 admin 角色（来自服务端 roles-permissions，不写死角色名）。
+ * `lacking` 里的权限点该角色一个都没有；`having` 里的该角色全有；找不到返回 null。
+ */
+export async function pickRole(api, adminToken, { lacking = [], having = [] } = {}) {
+  const roles = okData(await api('/api/auth/roles-permissions', { token: adminToken }), 'roles-permissions')
+  const hit = roles.find((r) => r.code !== 'admin' && !r.permissions.includes('*')
+    && lacking.every((p) => !r.permissions.includes(p)) && having.every((p) => r.permissions.includes(p)))
+  return hit ? hit.code : null
+}
