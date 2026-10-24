@@ -133,10 +133,10 @@ test('scenarios stay Linux/loopback-only, honour the sandbox switch, and the two
 
 test('AG10 inactive-role-notice asserts banner, dismissal, my-scope text and restores the role', () => {
   const src = read('tests/browser/inactive-role-notice.mjs')
-  for (const needle of ["'ROLE_INACTIVE_NOTICE'", 'role-inactive-banner', 'role-inactive-banner-dismiss', 'my-scope-inactive-codes', 'my-scope-active-note', 'data.explanations', "status='active'", 'GML_TEST_DATA_DIR', 'roles_effective']) {
+  for (const needle of ["'ROLE_INACTIVE_NOTICE'", 'role-inactive-banner', 'role-inactive-banner-dismiss', 'my-scope-inactive-codes', 'my-scope-active-note', 'data.explanations', 'originalStatus', 'GML_TEST_DATA_DIR', 'roles_effective']) {
     assert.ok(src.includes(needle), `inactive-role-notice must assert ${needle}`)
   }
-  assert.match(src, /finally \{[\s\S]*status='active'/, 'the role must be restored even when the scenario fails')
+  assert.match(src, /finally \{[\s\S]*run\(originalStatus\)/, 'the role must be restored even when the scenario fails')
   assert.match(driver, /GML_TEST_DATA_DIR: dataDir/, 'the driver hands scenarios only the throwaway data dir')
   assert.ok(driver.includes("'inactive-role-notice'"))
 })

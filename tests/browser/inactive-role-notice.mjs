@@ -19,9 +19,10 @@ import { apiLogin, createAccount, launchBrowser, loopbackBase, makeApi, okData, 
 
 const base = loopbackBase()
 const api = makeApi(base)
-const browser = await launchBrowser()
 const db = new Database(path.join(required('GML_TEST_DATA_DIR'), 'gml_cosmetic.db'))
 db.pragma('busy_timeout = 5000')
+const originalStatus = db.prepare("SELECT status FROM roles WHERE code='purchase'").get()?.status || 'active'
+let browser
 const pages = []
 const results = []
 const step = async (name, fn) => { await fn(); results.push(name); console.log(`PASS ${name}`) }
@@ -38,6 +39,7 @@ async function openPage(actor) {
 }
 
 try {
+  browser = await launchBrowser()
   const admin = (await apiLogin(api, 'admin', '12345')).token
   const actor = await createAccount(api, admin, 'ag10', 'sales', { data_scope: 'all' })
   db.prepare('INSERT OR IGNORE INTO user_roles (user_id, role_code) VALUES (?, ?)').run(actor.id, 'purchase')
@@ -90,6 +92,7 @@ try {
   await screenshotPages('inactive-role-notice', pages)
   throw error
 } finally {
-  try { db.prepare("UPDATE roles SET status='active' WHERE code='purchase'").run() } finally { db.close() }
-  await browser.close()
+  try { db.prepare("UPDATE roles SET status=? WHERE code='purchase'").run(originalStatus) } finally {
+    try { db.close() } finally { await browser?.close() }
+  }
 }

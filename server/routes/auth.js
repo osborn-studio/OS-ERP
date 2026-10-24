@@ -309,7 +309,7 @@ function describeMyScope(db, user) {
   const dealerId = eff.dealerId ?? row?.dealer_id ?? null
   const dealer = dealerId ? db.prepare('SELECT id, name FROM dealers WHERE id=?').get(dealerId) || null : null
 
-  const source = isAdmin ? 'admin' : eff.scope === 'none' ? 'no_org' : userScope ? 'user' : primaryActive ? 'role_default' : 'role_inactive'
+  const source = isAdmin ? 'admin' : !userScope && !primaryActive ? 'role_inactive' : eff.scope === 'none' ? 'no_org' : userScope ? 'user' : 'role_default'
 
   const inScope = { all: false, count: null, names: [], truncated: false }
   if (isAdmin || (eff.scope === 'all' && !eff.orgIds)) inScope.all = true
@@ -337,15 +337,17 @@ function describeMyScope(db, user) {
     if (dealer && role === 'dealer') ex.push(`经销商账号：只看绑定经销商「${dealer.name}」自己的数据。按组织划分的内部页面（采购链等）对你不可用。`)
     else if (dealer) ex.push(`账号绑定了经销商「${dealer.name}」，但你不是经销商角色：销售、订货中心等按组织划分的接口对"仅本经销商"范围的内部账号返回空，绑定本身不会让你看到该经销商的订单。`)
     else ex.push('数据范围为「仅本经销商」，但账号未绑定经销商，因此看不到任何数据。请联系管理员绑定经销商。')
+  } else if (source === 'role_inactive') {
+    ex.push('主角色已停用且账号没有单独设置的数据范围，按"空范围不等于全库"的原则，数据范围为空（按组织划分的列表会是空的，返回 200 与空列表）。请联系管理员恢复角色，或为账号单独设置数据范围。')
   } else {
     if (role === 'store' || role === 'dealer') ex.push('账号没有所属组织；门店 / 经销商角色按绑定的门店或经销商访问自己的数据，不依赖所属组织。按组织划分的内部页面对你为空或不可用。')
     else ex.push('账号没有关联所属组织，按"空范围不等于全库"的原则，组织范围型列表会是空的（返回 200 与空列表，不是报错）。请联系管理员为你设置所属组织，或调整数据范围。')
   }
   // 谁贡献了哪个要素：数据范围的角色默认只来自主角色；附加角色只贡献功能权限
-  ex.push(rolesEffective.length ? `你当前的生效角色：${rolesEffective.map(nameOf).join('、')}。本说明只按这些启用中的角色生成。` : '你当前没有生效角色：被授予的角色均已停用，因此没有任何功能权限。')
-  if (rolesInactive.length) {
+  if (!isAdmin || rolesEffective.length) ex.push(rolesEffective.length ? `你当前的生效角色：${rolesEffective.map(nameOf).join('、')}。本说明只按这些启用中的角色生成。` : '你当前没有生效角色：被授予的角色均已停用，因此没有任何功能权限。')
+  if (!isAdmin && rolesInactive.length) {
     ex.push(`已停用的角色（其权限与默认范围不再生效）：${rolesInactive.map(nameOf).join('、')}。`)
-    if (rolesInactive.includes(role)) ex.push(`你的主角色「${nameOf(role)}」已停用：它的默认数据范围不再计入，数据范围只看管理员为账号单独设置的值（若有），否则取最窄的「仅本人」。`)
+    if (rolesInactive.includes(role)) ex.push(`你的主角色「${nameOf(role)}」已停用：它的默认数据范围不再计入，数据范围只看管理员为账号单独设置的值（若有），没有则为空范围。`)
   }
   if (!isAdmin && source === 'role_default') ex.push(`数据范围的角色默认来自主角色「${nameOf(role)}」。`)
   const secondary = rolesEffective.filter((c) => c !== role)

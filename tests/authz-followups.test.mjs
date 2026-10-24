@@ -485,9 +485,35 @@ test('AG10: my-scope explanations come from active roles only; inactive primary 
     const active = resolveOrgScope(db, { uid: lone.id, role: 'purchase' })
     setStatus('purchase', 'inactive')
     assert.equal(active.scope, purchaseDefault)
-    assert.equal(inactive.scope, 'self', 'inactive primary role: fall back to the narrowest scope, never widen')
+    assert.equal(inactive.scope, 'none', 'inactive primary role: fail closed to the empty scope, never widen')
+    assert.deepEqual(inactive.orgIds, [])
     const d = await scopeOf(lone.token)
-    assert.equal(d.data_scope_effective, 'self')
+    assert.equal(d.data_scope_effective, 'none')
+    assert.equal(d.data_scope_source, 'role_inactive')
+    assert.equal(db.prepare('SELECT data_scope FROM users WHERE id=?').get(lone.id).data_scope, '')
+    // an account-level scope set by the admin still applies
+    db.prepare('UPDATE users SET data_scope=? WHERE id=?').run('org', lone.id)
+    assert.equal(resolveOrgScope(db, { uid: lone.id, role: 'purchase' }).scope, 'org')
+    db.prepare("UPDATE users SET data_scope='' WHERE id=?").run(lone.id)
+  })
+
+  await t.test('a dealer-default primary role never widens to the org scope when deactivated (fail closed)', async () => {
+    const { resolveOrgScope } = await import('../server/middleware/auth.js')
+    const dealerId = Number(db.prepare("INSERT INTO dealers (code,name) VALUES ('AG10-D','ag10-dealer')").run().lastInsertRowid)
+    const org = db.prepare('SELECT id FROM orgs WHERE id<>0 ORDER BY id LIMIT 1').get().id
+    const dl = await f.account('ag10_dealer', 'dealer', { dealer_id: dealerId, org_id: org })
+    assert.equal(resolveOrgScope(db, { uid: dl.id, role: 'dealer' }).scope, 'dealer')
+    setStatus('dealer', 'inactive')
+    const off = resolveOrgScope(db, { uid: dl.id, role: 'dealer' })
+    setStatus('dealer', 'active')
+    assert.equal(off.scope, 'none')
+    assert.deepEqual(off.orgIds, [])
+  })
+
+  await t.test('admin explanations never claim lost access', async () => {
+    const d = await scopeOf(f.admin)
+    assert.equal(d.data_scope_effective, 'all')
+    assert.equal(line(d, /没有任何功能权限|已停用/).length, 0)
   })
 
   await t.test('account without inactive roles: no inactive line, no notice', async () => {
