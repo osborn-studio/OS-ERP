@@ -19,6 +19,7 @@ import { ok, fail, wrap, pageParams, paged } from '../lib/http.js'
 import { requireAuth, requirePerm, requireGlobalData } from '../middleware/auth.js'
 import { DOC_TYPE_LABEL, listBelowSafe } from '../lib/stock.js'
 import { metricDefinitions } from '../lib/metrics.js'
+import { aiPlatformAnalysisStmt } from '../lib/oms-sql.js'
 import { versionInfo } from '../version.js'
 
 const r = Router()
@@ -144,12 +145,8 @@ r.post(
              WHERE so.status NOT IN ('cancelled','draft') AND so.order_date >= ${from} GROUP BY so.channel`
           )
           .all()
-        const online = db
-          .prepare(
-            `SELECT pf.name AS platform_name, COUNT(o.id) orders, COALESCE(SUM(o.pay_amount),0) amount FROM oms_orders o
-             JOIN platforms pf ON pf.id=o.platform_id WHERE date(o.order_time) >= ${from} GROUP BY pf.id ORDER BY amount DESC`
-          )
-          .all()
+        const onlineStmt = aiPlatformAnalysisStmt(days)
+        const online = db.prepare(onlineStmt.sql).all(...onlineStmt.params)
         result = { offline, online }
         break
       }

@@ -23,6 +23,7 @@ import { nextDocNo } from '../lib/docno.js'
 import { advanceStatus, tryTransition, nowText, logEvent } from '../lib/docflow.js'
 import { publicPlatform } from '../lib/qimen-auth.js'
 import { applyStockOut, pickBatches, releaseStock, reserveStock, reserveForDoc, planShipment, releaseForDoc, assertWarehouseInScope, stockScopeSql } from '../lib/stock.js'
+import { omsStatsByPlatformStmt, omsStatsTrendStmt, omsStatsTotalStmt, omsStatsTopSkusStmt } from '../lib/oms-sql.js'
 import { assertSalesTargetInScope, SalesOrderError, omsPlatformScopeSql, omsOrderScopeSql } from '../lib/sales-order.js'
 
 const r = Router()
@@ -693,39 +694,12 @@ r.get(
     const ps = omsPlatformScopeSql(scopeOf(req), 'pf')
     const os = omsOrderScopeSql(scopeOf(req), 'o')
     const os0 = omsOrderScopeSql(scopeOf(req), 'oms_orders')
-    const from = `date('now','localtime','-${days} day')`
-    const byPlatform = db
-      .prepare(
-        `SELECT pf.name AS platform_name, pf.code, COUNT(o.id) orders,
-                COALESCE(SUM(CASE WHEN o.status NOT IN ('refunded','closed') THEN o.pay_amount ELSE 0 END),0) gmv,
-                COALESCE(SUM(CASE WHEN o.status='pending' THEN 1 ELSE 0 END),0) pending,
-                COALESCE(SUM(CASE WHEN o.status='refunded' THEN o.pay_amount ELSE 0 END),0) refund_amount
-         FROM platforms pf LEFT JOIN oms_orders o ON o.platform_id=pf.id AND date(o.order_time) >= ${from}
-         WHERE ${ps.sql} GROUP BY pf.id ORDER BY gmv DESC`
-      )
-      .all(...ps.params)
-    const trend = db
-      .prepare(
-        `SELECT date(order_time) AS date, COUNT(*) orders, COALESCE(SUM(pay_amount),0) amount
-         FROM oms_orders WHERE date(order_time) >= ${from} AND ${os0.sql} GROUP BY date(order_time) ORDER BY date`
-      )
-      .all(...os0.params)
-    const total = db
-      .prepare(
-        `SELECT COUNT(*) orders, COALESCE(SUM(pay_amount),0) gmv,
-                COALESCE(AVG(pay_amount),0) avg_amount,
-                COALESCE(SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END),0) pending,
-                COALESCE(SUM(CASE WHEN status='refunded' THEN 1 ELSE 0 END),0) refunded
-         FROM oms_orders WHERE date(order_time) >= ${from} AND ${os0.sql}`
-      )
-      .get(...os0.params)
-    const topSkus = db
-      .prepare(
-        `SELECT i.title, SUM(i.qty) qty, SUM(i.amount) amount FROM oms_order_items i
-         JOIN oms_orders o ON o.id=i.oms_order_id WHERE date(o.order_time) >= ${from} AND ${os.sql}
-         GROUP BY i.title ORDER BY amount DESC LIMIT 10`
-      )
-      .all(...os.params)
+    // AE3：SQL 在 lib/oms-sql.js（order_time 区间谓词 + date() 复核，ADR-0044 补充 4）；范围谓词原样传入
+    const run = (st, mode) => db.prepare(st.sql)[mode](...st.params)
+    const byPlatform = run(omsStatsByPlatformStmt(days, ps), 'all')
+    const trend = run(omsStatsTrendStmt(days, os0), 'all')
+    const total = run(omsStatsTotalStmt(days, os0), 'get')
+    const topSkus = run(omsStatsTopSkusStmt(days, os), 'all')
     return ok(res, { byPlatform, trend, total, topSkus })
   })
 )
