@@ -18,7 +18,7 @@ import bcrypt from 'bcryptjs'
 import { getDb, getDbFor, INDUSTRIES, DEFAULT_INDUSTRY, normalizeIndustry } from '../db/index.js'
 import { ok, fail, bizFail, wrap, pageParams, paged, failFromError } from '../lib/http.js'
 import { issueSessionCookies, clearSessionCookies, sessionTransport, crossSiteBrowserRequest } from '../middleware/session-transport.js'
-import { signToken, JWT_SECRET, requireAuth, requireRole, ROLES, userPermissions, resolveOrgScope, permContext } from '../middleware/auth.js'
+import { signToken, JWT_SECRET, requireAuth, requireRole, ROLES, userPermissions, resolveOrgScope, permContext, roleInactiveNotice } from '../middleware/auth.js'
 import { audit } from '../middleware/audit.js'
 import { createAccount, updateAccount, changePassword, logoutAll, replaceRolePermissions } from '../lib/account-security.js'
 import { consumeLoginAttempt } from '../lib/login-throttle.js'
@@ -80,6 +80,9 @@ r.post(
           industry: code,
           industryName: INDUSTRIES[code].name
         },
+        // AF10：停用角色的披露。登录**不**因此拒绝（不新增 4xx）：账号本身仍有效，只是权限变少；
+        // 拒绝会让管理员停用一个角色就把持有它的人整号锁在门外（连看提示、改密码都做不到），而权限门本来就逐请求拒绝。
+        ...roleInactiveNotice(db, user.id, user.role),
         expiresIn: '12h'
       })
     } finally { attempt.settle(succeeded) }
@@ -112,6 +115,7 @@ r.get(
       roleName: ROLES[u.role] || u.role,
       org,
       permissions: userPermissions(db, u.id, u.role),
+      ...roleInactiveNotice(db, u.id, u.role),
       orgScope: {
         scope: scope.scope,
         orgId: scope.orgId,
@@ -348,7 +352,8 @@ function describeMyScope(db, user) {
     org_ids_in_scope: inScope,
     store,
     dealer,
-    explanations: ex
+    explanations: ex,
+    ...roleInactiveNotice(db, user.uid, role)
   }
 }
 
