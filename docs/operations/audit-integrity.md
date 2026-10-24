@@ -262,7 +262,7 @@ node scripts/verify-release.mjs --log=/abs/repo/docs/release/EVIDENCE-LOG.jsonl 
 **复核时怎么选钥。** 意图按自己记录的 `key_id` 在集合里找**那一把**来验，不会把集合里的钥逐把试：
 - `key_id` 在集合里 ⇒ 用它验；验不过 ⇒ `intent-signature-invalid`（包括 `key_id` 被改成另一把受信公钥的情形）。
 - 明确给了 `--intent-pubkey` 而 `key_id` 不在集合里 ⇒ `intent-key-unknown`，`rewrite`，退出 1（无论是否带 `--require-signed-intents`）：要么公钥没带全，要么这把钥已被你从集合里撤掉。**撤销**一把泄露的旧钥 = 把它的公钥从集合里拿掉；它签过的意图随即全部判 `intent-key-unknown`，需要对照操作记录后重做基线。
-- 没给 `--intent-pubkey`、`--offbox` 模式回落用 `--pubkey` 当意图公钥时，`key_id` 对不上不算 `intent-key-unknown`（那把公钥本来是锚点签名钥，不是意图钥），沿用 AE5：默认跳过，`--require-signed-intents` 下 `intent-signature-unverifiable`。所以带意图签名时总是显式给 `--intent-pubkey`。
+- 没给 `--intent-pubkey`、`--offbox` 模式回落用 `--pubkey` 当意图公钥时，`key_id` 对不上不算 `intent-key-unknown`（那把公钥本来是锚点签名钥，不是意图钥），沿用 AE5：默认跳过，`--require-signed-intents` 下 `intent-signature-unverifiable`。所以带意图签名时**总是显式给 `--intent-pubkey` 并带 `--require-signed-intents`**：回落口径下写库者清空或改掉 `key_id` 能让一条签名无效的意图在不带 `--require-signed-intents` 时通过（效果等同于直接写一条无签名意图）。公钥目录里的符号链接会被拒绝；保管目录必须放在 0700 的自有路径下，`--rotate` 也拒绝本身是符号链接的路径。
 
 **过渡规则（旧意图没有 key_id）。** 本变更之前写的签名意图没有可靠的 `key_id` 概念（AE5 已写 `key_id`，但更早或被手工清空的行可能为空；`key_id` 不在被签内容里，库的写入者能把它清掉）。规则：带签名、`key_id` 为空的意图，对集合里的**每一把**试，任何一把验过就通过；都不过 ⇒ `intent-signature-invalid`。风险：被撤销前的泄露旧钥仍在集合里时，攻击者可以清空 `key_id` 让它走这条路径——所以撤销泄露的钥必须把公钥拿出集合，而不是只靠 `key_id`。
 

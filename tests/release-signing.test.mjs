@@ -625,4 +625,23 @@ test('AG5 loadPublicKeySet: files and directories, *.pub.pem only, deduplicated 
   writeFileSync(path.join(rsaDir, 'r.pub.pem'), rsa.publicKey.export({ type: 'spki', format: 'pem' }))
   assert.throws(() => loadPublicKeySet([rsaDir]), /Ed25519/)
   assert.throws(() => loadPublicKeySet([path.join(base, 'nope')]), /Cannot read/)
+  // 目录里的符号链接（指向受信目录之外的“公钥”）被拒绝（Codex AG5-M1）
+  const linkDir = path.join(base, 'links')
+  mkdirSync(linkDir)
+  symlinkSync(a.public_key, path.join(linkDir, 'elsewhere.pub.pem'))
+  assert.throws(() => loadPublicKeySet([linkDir]), /symbolic link/)
+  // 但显式传入的文件参数可以是链接（操作者自己选的）
+  assert.equal(loadPublicKeySet([path.join(linkDir, 'elsewhere.pub.pem')]).length, 1)
+})
+
+test('AG5 keygen --rotate refuses a custody path that is itself a symlink (Codex AG5-M3)', (t) => {
+  const base = tempDir(t, 'os-erp-rotate-sym-')
+  const real = path.join(base, 'keys')
+  assert.equal(keygen(real, ['--purpose', 'anchor-intent']).status, 0)
+  const link = path.join(base, 'alias')
+  symlinkSync(real, link)
+  const r = keygen(link, ['--purpose', 'anchor-intent', '--rotate'])
+  assert.notEqual(r.status, 0)
+  assert.match(r.stderr, /symbolic link/)
+  assert.equal(readdirSync(real).length, 2)
 })

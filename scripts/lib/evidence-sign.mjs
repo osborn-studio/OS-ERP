@@ -116,7 +116,10 @@ export function loadPublicKeySet(paths) {
     let st
     try { st = fs.statSync(p) } catch (error) { throw new Error(`Cannot read public key ${p} (${error.code || error.message})`) }
     if (!st.isDirectory()) { add(p); continue }
-    const files = fs.readdirSync(p).filter((n) => n.endsWith('.pub.pem')).sort().map((n) => path.join(p, n)).filter((f) => fs.statSync(f).isFile())
+    const names = fs.readdirSync(p).filter((n) => n.endsWith('.pub.pem')).sort()
+    // 目录里的符号链接一律拒绝（Codex AG5-M1）：链接目标在受信目录之外，等于把信任交给链接目标所在的位置；显式传入的文件参数不受此限
+    for (const n of names) if (fs.lstatSync(path.join(p, n)).isSymbolicLink()) throw new Error(`${path.join(p, n)} is a symbolic link; key directories must contain regular *.pub.pem files only`)
+    const files = names.map((n) => path.join(p, n)).filter((f) => fs.statSync(f).isFile())
     if (!files.length) throw new Error(`${p} contains no *.pub.pem files`)
     for (const f of files) add(f)
   }

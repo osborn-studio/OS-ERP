@@ -21,7 +21,6 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { generateKeyPairSync } from 'node:crypto'
 import { assertOutsideRepository, loadPublicKey, publicKeyId } from './lib/evidence-sign.mjs'
-import { writeExclusive } from './lib/safe-path.mjs'
 
 const PURPOSES = {
   release: { name: 'release-sign', note: 'Keep the private key off the repository and off shared storage; distribute only the public key (out of band).' },
@@ -51,6 +50,7 @@ function main() {
   let retained = []
   if (rotate) {
     if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) throw new Error(`--rotate needs the existing custody directory; ${dir} does not exist or is not a directory (create the first pair without --rotate)`)
+    if (fs.lstatSync(dir).isSymbolicLink()) throw new Error(`${dir} is a symbolic link; pass the real custody directory to --rotate`)
     assertOutsideRepository(fs.realpathSync(dir), '--out (after resolving)')
     if (process.platform !== 'win32' && (fs.statSync(dir).mode & 0o022) !== 0) throw new Error(`${dir} is writable by group/others; refusing to rotate keys in it (chmod 700)`)
     const own = new RegExp(`^${spec.name}(?:-[0-9a-f]{16})?\\.pub\\.pem$`)
@@ -68,11 +68,11 @@ function main() {
     const stem = rotate ? `${spec.name}-${publicKeyId(publicKey).slice(0, 16)}` : spec.name // 轮换出的新文件名带指纹，永远不会与旧文件同名
     const privFile = path.join(dir, `${stem}.key.pem`)
     const pubFile = path.join(dir, `${stem}.pub.pem`)
-    writeExclusive(privFile, privateKey.export({ type: 'pkcs8', format: 'pem' }))
-    created.push(privFile)
+    // 先独占创建（成功后立刻登记）再写内容：写到一半失败（如磁盘满）时，残留的半截文件也会被清理；EEXIST 时不会登记，也就不会误删别人的文件（Codex AG5-M3）
+    const make = (file, data, mode) => { const fd = fs.openSync(file, 'wx', mode); created.push(file); try { fs.writeSync(fd, data) } finally { fs.closeSync(fd) } }
+    make(privFile, privateKey.export({ type: 'pkcs8', format: 'pem' }), 0o600)
     fs.chmodSync(privFile, 0o600)
-    fs.writeFileSync(pubFile, publicKey.export({ type: 'spki', format: 'pem' }), { flag: 'wx', mode: 0o644 })
-    created.push(pubFile)
+    make(pubFile, publicKey.export({ type: 'spki', format: 'pem' }), 0o644)
     console.log(JSON.stringify({ purpose, private_key: privFile, public_key: pubFile, key_id: publicKeyId(publicKey), ...(rotate ? { rotated: true, retained_public_keys: retained } : {}), note: spec.note }, null, 2))
   } catch (error) {
     for (const f of created) fs.rmSync(f, { force: true }) // 只删本次调用自己创建的文件
