@@ -104,6 +104,25 @@ export function loadPublicKey(file) {
   return key
 }
 
+/**
+ * 公钥集合（AG5，ADR-0055 补充 3）：每个参数是一个公钥 PEM 文件，或一个目录（只取其中的 `*.pub.pem` 普通文件，不递归）。
+ * 按 key_id 去重；空集合、没有 `*.pub.pem` 的目录、含私钥 / 非 Ed25519 的文件一律抛错（宁可拒绝也不静默少一把钥）。
+ */
+export function loadPublicKeySet(paths) {
+  if (!Array.isArray(paths) || !paths.length) throw new Error('at least one public key (file or directory) is required')
+  const keys = new Map()
+  const add = (file) => { const k = loadPublicKey(file); keys.set(publicKeyId(k), k) }
+  for (const p of paths) {
+    let st
+    try { st = fs.statSync(p) } catch (error) { throw new Error(`Cannot read public key ${p} (${error.code || error.message})`) }
+    if (!st.isDirectory()) { add(p); continue }
+    const files = fs.readdirSync(p).filter((n) => n.endsWith('.pub.pem')).sort().map((n) => path.join(p, n)).filter((f) => fs.statSync(f).isFile())
+    if (!files.length) throw new Error(`${p} contains no *.pub.pem files`)
+    for (const f of files) add(f)
+  }
+  return [...keys.values()]
+}
+
 /** 给证据加上 signature 元数据并签名；返回 {evidence, sigBase64}。调用方必须写出 evidence 且原样保存。 */
 export function signEvidence(base, privateKey) {
   const evidence = { ...base, signature: { algorithm: SIGNATURE_ALGORITHM, canonicalization: CANONICALIZATION, key_id: publicKeyId(createPublicKey(privateKey)), sig_file: SIG_FILE } }

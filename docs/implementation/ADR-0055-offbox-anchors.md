@@ -107,3 +107,20 @@ Codex 审计（gpt-6.1-sol，只读，防御性审查，针对 AF5 提交）：
 - 低：ADR 补充对签名验证提示的描述不准（`--offbox` 的 `--pubkey` 兼作意图公钥；提示只在有锚点被对账时出现）⇒ 已更正。
 - 审计确认：“印证行已归档”路径在三个受支持流程（归档 / 保留清理 / 隐私抹除）下对库内锚点确实不可达，删除它不产生对合法流程的误拒；keygen 的路径拒绝与独占创建对支持的用途没有发现绕过。
 - 未验证：审计沙箱的 Node ABI 与 `better-sqlite3` 不匹配，审计方没有跑测试，结论来自读码与内存库试验；测试结果以本仓库实跑为准。
+
+## 补充 3（AG5）：意图 / 锚点签名密钥轮换与多密钥校验
+
+状态：开发实现，尚非产品上线验收｜相关：roadmap-v12 AG5、`docs/operations/audit-integrity.md` §8c
+
+### 决定
+1. **`key_id` 沿用完整 SHA-256 指纹（64 位十六进制）**。AE5 起 `audit_anchor_intents.key_id` 与锚点 `signature.key_id` 就是公钥 SPKI DER 的 sha256 全长，已有测试与已写入的数据都按这个长度；截成 16 位会让已有行对不上，并把选钥建立在 64 位前缀上。16 位前缀只用于**文件名**（`anchor-intent-<前 16 位>.*.pem`）和人读输出。
+2. **公钥集合**。`audit-verify-chain` 的 `--pubkey`、`--intent-pubkey` 可重复，参数可以是目录（只取其中 `*.pub.pem` 普通文件，不递归）；`loadPublicKeySet` 按 key_id 去重，空集合 / 没有公钥的目录 / 私钥内容 / 非 Ed25519 一律是用法错误（退出 2）。输出 JSON 多一个 `intent_keys`（各钥 key_id 前 16 位）。
+3. **按 key_id 选钥，不逐把试**。意图：`key_id` 在集合里 ⇒ 用那一把验（失败 `intent-signature-invalid`）；明确给了 `--intent-pubkey` 而 `key_id` 不在集合 ⇒ **`intent-key-unknown`**（rewrite，与是否 `--require-signed-intents` 无关）。这改变了 AE5/AF5 的口径：原先公钥对不上只在 `--require-signed-intents` 下失败（`intent-signature-unverifiable`）。回落用的 `--pubkey`（`--offbox` 模式没给 `--intent-pubkey`）仍沿用旧口径，因为那把钥原本是锚点签名钥。离机锚点：按 `signature.key_id` 从 `--pubkey` 集合里选，集合里没有 ⇒ `OFFBOX-INVALID`。
+4. **过渡规则**：带签名而 `key_id` 为空的意图（早于记录 key_id 的数据，或被写库者清空）对集合里每一把试，任何一把通过即可；都不过 ⇒ `intent-signature-invalid`。**结束条件**：库里不再有 `signature` 非空而 `key_id` 为空的需对账意图，且复核方用 `--require-intent-key-id` 跑通一轮之后，把该开关写进日常命令；此后这类意图是 `intent-key-id-missing`。
+5. **`release-keygen --rotate`**：`--out` 必须是已存在、含本用途旧公钥（都能解析）、非组 / 其他可写、不在仓库内的保管目录；新建 `<名>-<key_id 前 16 位>.key.pem` / `.pub.pem`（`wx` 独占，私钥 0600），旧文件不动；输出 `rotated: true` 与 `retained_public_keys`。不带 `--rotate` 的行为不变（非空目录照旧拒绝）；`--rotate` 重复或带值是用法错误。
+6. **`offbox-anchor`**：锚点的签名元数据早已内嵌 `key_id`（签名覆盖它，改不了）；现在输出里打印其前 16 位，用轮换后的新私钥出锚点即可。运维手册 §8c 写了完整轮换步骤、选钥口径、撤销、过渡规则与结束条件。
+
+### 诚实边界
+- `key_id` 不在被签内容里（签名输入沿用 `格式标识:intent_hash`，改动会使已有意图全部失效）：它是选钥提示而非信任来源。写库者能清空 `key_id` 走过渡路径，所以被撤销（泄露）的旧钥必须从公钥集合里拿掉，且过渡结束后用 `--require-intent-key-id`。
+- 公钥集合本身须带外保管；随库或随锚点放的公钥没有意义。
+- 没有为意图增加撤销时间戳：撤销 = 从集合里移除，旧钥签过的意图随之整体不可验，需要重做基线。

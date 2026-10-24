@@ -244,7 +244,28 @@ node scripts/verify-release.mjs --log=/abs/repo/docs/release/EVIDENCE-LOG.jsonl 
 - **意图密钥保管（AF5）**：
   - 生成：`node scripts/release-keygen.mjs --out <仓库外的新目录> --purpose anchor-intent` → `anchor-intent.key.pem`（0600，O_EXCL）+ `anchor-intent.pub.pem`。拒绝规则与发行密钥完全相同：相对路径、仓库或任何 git 工作树内（含经符号链接）、已存在且非空的目录、未知 / 重复 / 缺值的 `--purpose` 都会失败且不留文件；私钥内容永不打印。
   - 放哪：私钥只放在**执行清理 / 归档 / 抹除的操作机**上（`GML_ANCHOR_INTENT_KEY` 指向它），**不要放在业务主机上**——能写业务主机的攻击者拿到私钥就能给伪造的意图签名，签名就只剩装饰；不要提交进仓库、不要放共享存储、不要与发行私钥共用同一把。公钥带外交给复核方，与离机锚点公钥分开记录。
-  - 轮换 / 丢失：换新密钥后，旧意图的 `key_id` 与新公钥不符，`--require-signed-intents` 会判 `intent-signature-unverifiable`；复核旧基线时用对应的旧公钥，所以**旧公钥要保留**。私钥丢失 ⇒ 生成新密钥并做一份新的离机锚点 / 备份作为新基线。
+  - 轮换 / 丢失：轮换流程、公钥集合与按 `key_id` 选钥见 §8c（AG5）；旧意图用旧公钥验，所以**旧公钥要保留**在集合里。私钥丢失 ⇒ 生成新密钥并做一份新的离机锚点 / 备份作为新基线。
   - 诚实边界：意图签名只证明“持有意图私钥的机器签过这条意图”，不证明操作本身合理；私钥与业务主机同时被攻破不在防护范围。
 - 升级前（迁移 072 之前）产生、且发生在某份离机锚点之后的锚点没有意图：这份旧锚点会判 `anchor-without-intent`。处理：核对操作记录后，做一份新的离机锚点，以后用新锚点复核。
 - 范围：`--offbox` 与 `--against-backup`（AF5）共用同一套对账：基线（离机锚点 / 备份清单）链尾范围内新增的锚点（含已被归档搬出库的，见上）要对账，链尾之后追加区间里的新锚点是正常增长。`verifyChain` 自身对锚点的承认规则不变。
+
+### 8c. 意图 / 锚点签名密钥轮换（AG5，ADR-0055 补充 3）
+
+**key_id 是什么。** 签名者公钥 SPKI DER 的 SHA-256（64 位十六进制）。`audit_anchor_intents.key_id` 在意图被签名时一并写入；离机锚点的签名元数据 `signature.key_id` 同理（`offbox-anchor` 还会打印它的前 16 位）。`release-keygen` 轮换出的文件名带前 16 位：`anchor-intent-<前 16 位>.key.pem` / `.pub.pem`，方便对照。
+
+**轮换步骤（意图密钥；发行 / 锚点密钥同理，换 `--purpose`）。**
+1. 在保管目录（第一次 `release-keygen --out <仓库外的新目录> --purpose anchor-intent` 建的那个，0700）里：`node scripts/release-keygen.mjs --out <该目录> --purpose anchor-intent --rotate`。要求目录已存在、里面已有本用途的公钥、不是对组 / 其他可写、不在仓库或任何 git 工作树内；新建一对带指纹的文件，**旧私钥与旧公钥原样保留，私钥永不覆盖**；输出列出保留的公钥 key_id。
+2. 操作机把 `GML_ANCHOR_INTENT_KEY` 改指新私钥（`anchor-intent-<指纹>.key.pem`）。此后新写的意图记录新的 `key_id`。确认旧私钥不再被任何脚本使用后，由操作者决定销毁或离线封存；不要把旧私钥留在业务主机上。
+3. 把新公钥带外交给复核方，**加进**他们的公钥集合（不要替换旧的）。复核命令把集合整体交给 `--intent-pubkey`：可以重复给（`--intent-pubkey a.pub.pem --intent-pubkey b.pub.pem`），也可以直接给保管目录的拷贝（只读取其中的 `*.pub.pem`，不递归，私钥与其他文件被忽略；目录里没有公钥、或某个 `*.pub.pem` 其实是私钥 / 不是 Ed25519 都是用法错误，退出 2）。离机锚点公钥 `--pubkey` 同样可重复 / 给目录，按锚点的 `signature.key_id` 选钥，集合里没有签名者 ⇒ `OFFBOX-INVALID`。
+4. 轮换之后做一份新的离机锚点（`offbox-anchor --key <新私钥>`）并用新集合复核一遍，确认退出码 0。
+
+**复核时怎么选钥。** 意图按自己记录的 `key_id` 在集合里找**那一把**来验，不会把集合里的钥逐把试：
+- `key_id` 在集合里 ⇒ 用它验；验不过 ⇒ `intent-signature-invalid`（包括 `key_id` 被改成另一把受信公钥的情形）。
+- 明确给了 `--intent-pubkey` 而 `key_id` 不在集合里 ⇒ `intent-key-unknown`，`rewrite`，退出 1（无论是否带 `--require-signed-intents`）：要么公钥没带全，要么这把钥已被你从集合里撤掉。**撤销**一把泄露的旧钥 = 把它的公钥从集合里拿掉；它签过的意图随即全部判 `intent-key-unknown`，需要对照操作记录后重做基线。
+- 没给 `--intent-pubkey`、`--offbox` 模式回落用 `--pubkey` 当意图公钥时，`key_id` 对不上不算 `intent-key-unknown`（那把公钥本来是锚点签名钥，不是意图钥），沿用 AE5：默认跳过，`--require-signed-intents` 下 `intent-signature-unverifiable`。所以带意图签名时总是显式给 `--intent-pubkey`。
+
+**过渡规则（旧意图没有 key_id）。** 本变更之前写的签名意图没有可靠的 `key_id` 概念（AE5 已写 `key_id`，但更早或被手工清空的行可能为空；`key_id` 不在被签内容里，库的写入者能把它清掉）。规则：带签名、`key_id` 为空的意图，对集合里的**每一把**试，任何一把验过就通过；都不过 ⇒ `intent-signature-invalid`。风险：被撤销前的泄露旧钥仍在集合里时，攻击者可以清空 `key_id` 让它走这条路径——所以撤销泄露的钥必须把公钥拿出集合，而不是只靠 `key_id`。
+
+**结束条件。** 当同时满足：(a) 库里所有带签名的意图都有 `key_id`（`SELECT COUNT(*) FROM audit_anchor_intents WHERE signature IS NOT NULL AND (key_id IS NULL OR key_id='')` 为 0，或这些行都已经落在最新离机锚点 / 备份的基线之前、不再需要对账），且 (b) 复核方已用 `--require-intent-key-id` 完整跑通一轮每日复核——之后把 `--require-intent-key-id` 写进日常命令。从此没有 `key_id` 的签名意图一律 `intent-key-id-missing`（`rewrite`），过渡规则不再适用。
+
+**限制。** 签名不覆盖 `key_id`（沿用 AE5 的签名输入 `格式标识:intent_hash`，改签名输入会让所有已有意图失效）；它只是选钥提示，不是信任来源。信任来源只有复核方带外保管的公钥集合。

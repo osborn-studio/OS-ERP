@@ -7,7 +7,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn, spawnSync } from 'node:child_process'
-import { createHash } from 'node:crypto'
+import { createHash, createPublicKey } from 'node:crypto'
 import { mkdtempSync, rmSync, readFileSync, writeFileSync, readdirSync, copyFileSync, mkdirSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -1174,10 +1174,10 @@ test('AF5 --against-backup: a legitimate archive after the backup passes through
   assert.equal(ab(v).intents_checked, 1)
   const signed = w.verify(['--require-signed-intents', '--intent-pubkey', k.pub])
   assert.equal(signed.status, 0, signed.stdout)
-  // 另一把公钥：签名密钥对不上 ⇒ 要求签名时失败
+  // 另一把公钥：明确给的意图公钥集合里没有签名者的 key_id ⇒ intent-key-unknown（AG5；AE5 时是 unverifiable，且只在要求签名时才失败）
   const other = ae5Keys(t)
   const wrongKey = w.verify(['--require-signed-intents', '--intent-pubkey', other.pub])
-  assert.deepEqual([wrongKey.status, ab(wrongKey).kind], [1, 'intent-signature-unverifiable'])
+  assert.deepEqual([wrongKey.status, ab(wrongKey).kind], [1, 'intent-key-unknown'])
   // 篡改签名
   const it = w.db.prepare('SELECT * FROM audit_anchor_intents').get()
   w.db.prepare('UPDATE audit_anchor_intents SET signature=? WHERE id=?').run(it.signature.slice(0, 80) + 'AAAAAA==', it.id)
@@ -1373,5 +1373,122 @@ test('AF5 a planted digest carrying an unrelated anchor does not make a legitima
   const r = w.verify()
   assert.equal(r.status, 0, r.stdout)
   assert.equal(ab(r).anchors_added_in_range, 1, 'only the real archive anchor')
+  w.db.close()
+})
+
+
+// ============================================================================
+// AG5（ADR-0055 补充 3）：意图签名密钥轮换——公钥集合（多次 --intent-pubkey / 目录）、按 key_id 选钥、未知 key_id、过渡规则（无 key_id 的旧意图）
+// ============================================================================
+/** 一把初始密钥 + 一次 --rotate：同一保管目录里有两对 anchor-intent 密钥（A = 旧，B = 新） */
+function ag5Keys(t) {
+  const base = tmp(t, 'os-ag5-keys-')
+  const dir = path.join(base, 'keys')
+  const a = cli(KEYGEN, ['--out', dir, '--purpose', 'anchor-intent'], base)
+  assert.equal(a.status, 0, a.stderr)
+  const b = cli(KEYGEN, ['--out', dir, '--purpose', 'anchor-intent', '--rotate'], base)
+  assert.equal(b.status, 0, b.stderr)
+  const A = JSON.parse(a.stdout)
+  const B = JSON.parse(b.stdout)
+  return { dir, A: { priv: A.private_key, pub: A.public_key, id: A.key_id }, B: { priv: B.private_key, pub: B.public_key, id: B.key_id } }
+}
+const pubs = (...files) => files.flatMap((f) => ['--intent-pubkey', f])
+
+test('AG5 an intent signed with the rotated key records that key\'s key_id and verifies against a key set given as repeated flags or as a directory, in any order', (t) => {
+  const w = ae5World(t)
+  const ks = ag5Keys(t)
+  assert.equal(w.archive({ GML_ANCHOR_INTENT_KEY: ks.B.priv }).status, 0)
+  const it = w.db.prepare('SELECT * FROM audit_anchor_intents').get()
+  assert.equal(it.key_id, ks.B.id, 'key_id is the fingerprint of the signing public key')
+  assert.equal(it.key_id, createHash('sha256').update(createPublicKey(readFileSync(ks.B.pub)).export({ type: 'spki', format: 'der' })).digest('hex'))
+  for (const set of [pubs(ks.A.pub, ks.B.pub), pubs(ks.B.pub, ks.A.pub), pubs(ks.dir), pubs(ks.B.pub)]) {
+    const v = w.verify(['--require-signed-intents', ...set])
+    assert.equal(v.status, 0, v.stdout)
+  }
+  w.db.close()
+})
+
+test('AG5 an intent whose key_id is not in the supplied key set is intent-key-unknown (rewrite), with or without --require-signed-intents', (t) => {
+  const w = ae5World(t)
+  const ks = ag5Keys(t)
+  assert.equal(w.archive({ GML_ANCHOR_INTENT_KEY: ks.B.priv }).status, 0)
+  for (const extra of [[], ['--require-signed-intents']]) {
+    const v = w.verify([...extra, ...pubs(ks.A.pub)])
+    assert.deepEqual([v.status, off(v).status, off(v).kind], [1, 'rewrite', 'intent-key-unknown'])
+    assert.match(off(v).intent_problems[0].message, new RegExp(ks.B.id.slice(0, 16)))
+  }
+  // 不是 64 位十六进制的 key_id 也只是“未知”
+  w.db.prepare('UPDATE audit_anchor_intents SET key_id=?').run('zz')
+  assert.equal(off(w.verify(pubs(ks.A.pub, ks.B.pub))).kind, 'intent-key-unknown')
+  w.db.close()
+})
+
+test('AG5 the key is selected by key_id, not by trying every key: a key_id spoofed to another trusted key fails verification', (t) => {
+  const w = ae5World(t)
+  const ks = ag5Keys(t)
+  assert.equal(w.archive({ GML_ANCHOR_INTENT_KEY: ks.B.priv }).status, 0)
+  w.db.prepare('UPDATE audit_anchor_intents SET key_id=?').run(ks.A.id)
+  const v = w.verify(pubs(ks.A.pub, ks.B.pub))
+  assert.deepEqual([v.status, off(v).kind], [1, 'intent-signature-invalid'])
+  w.db.close()
+})
+
+test('AG5 transition rule: an intent without key_id (written before rotation support) verifies against any supplied key; --require-intent-key-id ends the transition', (t) => {
+  const w = ae5World(t)
+  const ks = ag5Keys(t)
+  assert.equal(w.archive({ GML_ANCHOR_INTENT_KEY: ks.A.priv }).status, 0)
+  w.db.prepare('UPDATE audit_anchor_intents SET key_id=NULL').run()
+  let v = w.verify(['--require-signed-intents', ...pubs(ks.B.pub, ks.A.pub)])
+  assert.equal(v.status, 0, v.stdout)
+  // 集合里没有签名者 ⇒ 签名不对
+  v = w.verify(pubs(ks.B.pub))
+  assert.deepEqual([v.status, off(v).kind], [1, 'intent-signature-invalid'])
+  // 过渡结束：不再接受没有 key_id 的签名意图
+  v = w.verify(['--require-intent-key-id', ...pubs(ks.A.pub)])
+  assert.deepEqual([v.status, off(v).kind], [1, 'intent-key-id-missing'])
+  // 一个带 key_id 的意图不受影响
+  w.db.prepare('UPDATE audit_anchor_intents SET key_id=?').run(ks.A.id)
+  assert.equal(w.verify(['--require-intent-key-id', ...pubs(ks.A.pub)]).status, 0)
+  w.db.close()
+})
+
+test('AG5 without an explicit --intent-pubkey the offbox --pubkey is only an implicit fallback: a signed intent from another key keeps the AE5 behaviour (skipped, or unverifiable under --require-signed-intents)', (t) => {
+  const w = ae5World(t)
+  const ks = ag5Keys(t)
+  assert.equal(w.archive({ GML_ANCHOR_INTENT_KEY: ks.B.priv }).status, 0)
+  assert.equal(w.verify().status, 0)
+  const v = w.verify(['--require-signed-intents'])
+  assert.deepEqual([v.status, off(v).kind], [1, 'intent-signature-unverifiable'])
+  w.db.close()
+})
+
+test('AG5 --against-backup takes the same key set; an unknown key_id is intent-key-unknown there too', (t) => {
+  const w = af5World(t)
+  const ks = ag5Keys(t)
+  assert.equal(w.archive({ GML_ANCHOR_INTENT_KEY: ks.B.priv }).status, 0)
+  const ok = w.verify(['--require-signed-intents', ...pubs(ks.dir)])
+  assert.equal(ok.status, 0, ok.stdout)
+  const bad = w.verify(pubs(ks.A.pub))
+  assert.deepEqual([bad.status, ab(bad).kind], [1, 'intent-key-unknown'])
+  w.db.close()
+})
+
+test('AG5 a key directory only contributes *.pub.pem files; empty directories, private keys named *.pub.pem and missing paths are usage errors', (t) => {
+  const w = ae5World(t)
+  const ks = ag5Keys(t)
+  assert.equal(w.archive({ GML_ANCHOR_INTENT_KEY: ks.B.priv }).status, 0)
+  // 保管目录里还躺着私钥与别的文件：只读 *.pub.pem
+  writeFileSync(path.join(ks.dir, 'notes.txt'), 'not a key')
+  assert.equal(w.verify(pubs(ks.dir)).status, 0)
+  const empty = tmp(t, 'os-ag5-empty-')
+  const e = w.verify(pubs(empty))
+  assert.equal(e.status, 2, e.stdout)
+  assert.match(e.stderr, /\.pub\.pem/)
+  const sneaky = tmp(t, 'os-ag5-sneaky-')
+  copyFileSync(ks.B.priv, path.join(sneaky, 'x.pub.pem'))
+  const s = w.verify(pubs(sneaky))
+  assert.equal(s.status, 2)
+  assert.match(s.stderr, /private key/)
+  assert.equal(w.verify(pubs(path.join(empty, 'nope'))).status, 2)
   w.db.close()
 })

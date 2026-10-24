@@ -23,6 +23,9 @@
  *     且意图被 RETENTION_PURGE / AUDIT_ARCHIVE / PRIVACY_ERASE 审计行印证，否则判 `rewrite`（anchor-without-intent / intent-hash-mismatch / intent-uncorroborated / …）。
  *     AF5（ADR-0055 补充 2）：`--accept-new-anchors` 已无效果（打印提示后忽略）：它原先唯一能放行的“印证行已被归档”路径经证明不可达（归档在同一事务里删除
      被印证的范围内锚点），保留它只会给伪造的“意图 + 已归档行”留一个开关。
+ *     AG5（ADR-0055 补充 3）：`--pubkey` / `--intent-pubkey` 可重复，参数也可以是目录（取其中的 `*.pub.pem`）——轮换后的公钥集合；离机锚点按其签名元数据的 key_id 选 `--pubkey`，
+ *     意图按记录的 key_id 选 `--intent-pubkey`（明确给了集合而 key_id 不在其中 ⇒ `intent-key-unknown` ⇒ rewrite）。没有 key_id 的旧签名意图按过渡规则对集合里每把试；
+ *     `--require-intent-key-id` 结束过渡（此类意图判 `intent-key-id-missing`）。见 docs/operations/audit-integrity.md §8c。
  *     `--require-signed-intents`：意图必须带可验证的签名（公钥取 `--intent-pubkey`，缺省同 `--pubkey`；签名密钥见 `GML_ANCHOR_INTENT_KEY`，生成见 `release-keygen --purpose anchor-intent`）。
  *   退出码：0 全部 OK；1 有断点（或库未迁移到 068、`--against-backup` 非 ok）；2 参数 / 环境错误。
  * 【边界】不改库、不创建缺失的行业库；不覆盖 user_name / module / ip 三列（规格如此，见 ADR-0049「限制」）。
@@ -32,12 +35,12 @@ import path from 'node:path'
 import Database from 'better-sqlite3'
 import { parseArgs, locateDatabases, die } from './lib/audit-chain-cli.mjs'
 
-const args = parseArgs(process.argv.slice(2), { values: ['--data-dir', '--industry', '--expect-tip', '--against-backup', '--archive-dir', '--offbox', '--pubkey', '--intent-pubkey'], flags: ['--json', '--strict-anchors', '--accept-new-anchors', '--require-signed-intents'] })
+const args = parseArgs(process.argv.slice(2), { values: ['--data-dir', '--industry', '--expect-tip', '--against-backup', '--archive-dir', '--offbox'], multi: ['--pubkey', '--intent-pubkey'], flags: ['--json', '--strict-anchors', '--accept-new-anchors', '--require-signed-intents', '--require-intent-key-id'] })
 if (!args['data-dir'] && !process.env.GML_DATA_DIR) die('USAGE', '用法：audit-verify-chain.mjs --data-dir <绝对路径> [--industry <行业>] [--expect-tip <hash>] [--json]')
 if (args['expect-tip'] && !/^[0-9a-f]{64}$/.test(args['expect-tip'])) die('USAGE', '--expect-tip 必须是 64 位小写十六进制')
 if (args['expect-tip'] && !args.industry) die('USAGE', '--expect-tip 只对单个行业有意义，请同时给 --industry')
 
-if ((args['require-signed-intents'] || args['intent-pubkey']) && !args.offbox && !args['against-backup']) die('USAGE', '--require-signed-intents / --intent-pubkey 只与 --offbox 或 --against-backup 一起使用')
+if ((args['require-signed-intents'] || args['require-intent-key-id'] || args['intent-pubkey']) && !args.offbox && !args['against-backup']) die('USAGE', '--require-signed-intents / --require-intent-key-id / --intent-pubkey 只与 --offbox 或 --against-backup 一起使用')
 if (args['require-signed-intents'] && !args['intent-pubkey'] && !args.pubkey) die('USAGE', '--require-signed-intents 需要公钥：--against-backup 模式下请给 --intent-pubkey（带外获得的意图签名公钥）')
 // AF5：--accept-new-anchors 唯一能放行的“印证行已被归档”路径不可达，已删除；旧脚本里的开关不再报错，但明确告知它不起作用（对账只会更严）
 if (args['accept-new-anchors']) console.error('提示：--accept-new-anchors 已无效（AF5，ADR-0055 补充 2）：没有意图 / 没有被审计行印证的锚点一律判 rewrite；请改为在操作之后立刻做一份新的离机锚点。')
@@ -47,7 +50,7 @@ if ((args['archive-dir'] || args['strict-anchors']) && !args['against-backup'] &
 const { verifyChain, chainColumnsPresent } = await import('../server/lib/audit-chain-verify.js')
 const { loadBackupManifest, compareLiveToBackup, openArchiveIndex, archiveEvidence, archivedAnchorsSince, archivedRowLookup } = await import('../server/lib/audit-anchor-manifest.js')
 const { loadBackupKey } = await import('../server/lib/backup-crypto.js')
-const { loadPublicKey } = await import('./lib/evidence-sign.mjs')
+const { loadPublicKeySet, publicKeyId } = await import('./lib/evidence-sign.mjs')
 const { loadAnchor, asManifest } = await import('./lib/offbox-anchor.mjs')
 const { verifyAnchorIntents } = await import('../server/lib/audit-anchor-intent.js')
 
@@ -84,9 +87,9 @@ function reconcileInRange(db, code, cmp, base, notes) {
   cmp.anchors_added_in_range = inRange.length
   if (archived.length) cmp.archived_anchors_in_range = archived.length
   if (!inRange.length) return
-  const iv = verifyAnchorIntents(db, inRange, { publicKey: intentPublicKey, requireSigned: !!args['require-signed-intents'], minAuditRowId: lastId, archivedRow: ev.needed ? archivedRowLookup(ev.chain, index) : null })
+  const iv = verifyAnchorIntents(db, inRange, { publicKeys: intentKeys, explicitKeys: !!args['intent-pubkey'], requireSigned: !!args['require-signed-intents'], requireKeyId: !!args['require-intent-key-id'], minAuditRowId: lastId, archivedRow: ev.needed ? archivedRowLookup(ev.chain, index) : null })
   cmp.intents_checked = iv.checked
-  if (!intentPublicKey) cmp.notes = [...(notes || []), '意图签名未验证：没有给公钥（--intent-pubkey）；未签名的意图只能挡住只改了锚点表的伪造']
+  if (!intentKeys.length) cmp.notes = [...(notes || []), '意图签名未验证：没有给公钥（--intent-pubkey）；未签名的意图只能挡住只改了锚点表的伪造']
   if (iv.ok) return
   cmp.status = 'rewrite'
   cmp.kind = iv.problems[0].kind
@@ -98,7 +101,7 @@ function reconcileInRange(db, code, cmp, base, notes) {
 let offbox = null
 if (args.offbox) {
   let loaded
-  try { loaded = loadAnchor(path.resolve(args.offbox), loadPublicKey(path.resolve(args.pubkey))) } catch (e) { loaded = { ok: false, reason: e.message } }
+  try { loaded = loadAnchor(path.resolve(args.offbox), loadPublicKeySet(args.pubkey.map((p) => path.resolve(p)))) } catch (e) { loaded = { ok: false, reason: e.message } }
   if (!loaded.ok) {
     if (args.json) console.log(JSON.stringify({ ok: false, offbox: { status: 'invalid', message: loaded.reason } }, null, 2))
     else console.log(`OFFBOX-INVALID ${loaded.reason}`)
@@ -107,9 +110,10 @@ if (args.offbox) {
   offbox = loaded
 }
 
-let intentPublicKey = null
+// 意图公钥集合（AG5）：明确给的 --intent-pubkey（可多次 / 目录）；没给时 --offbox 模式回落到 --pubkey 的集合（此时 key_id 对不上不算 key-unknown，沿用 AE5 口径）
+let intentKeys = []
 if (args.offbox || args['intent-pubkey']) {
-  try { intentPublicKey = loadPublicKey(path.resolve(args['intent-pubkey'] || args.pubkey)) } catch (e) { die('USAGE', e.message) }
+  try { intentKeys = loadPublicKeySet((args['intent-pubkey'] || args.pubkey).map((p) => path.resolve(p))) } catch (e) { die('USAGE', e.message) }
 }
 
 // 备份清单先读（它决定行业）；清单读不出来 / 与备份对不上就是失败，不是通过
@@ -130,7 +134,7 @@ if (args['against-backup']) {
 }
 
 const { targets, absent } = await locateDatabases(args)
-const report = { ok: true, industries: {}, ...(offbox ? { offbox: { file: path.resolve(args.offbox), created_at: offbox.anchor.created_at, key_id: offbox.key_id } } : {}) }
+const report = { ok: true, industries: {}, ...(offbox ? { offbox: { file: path.resolve(args.offbox), created_at: offbox.anchor.created_at, key_id: offbox.key_id } } : {}), ...(intentKeys.length ? { intent_keys: intentKeys.map((k) => publicKeyId(k).slice(0, 16)) } : {}) }
 for (const code of absent) {
   report.industries[code] = { status: 'absent' }
   if (offbox?.anchor.audit[code]?.status === 'chain') { report.ok = false; report.industries[code].status = 'absent'; report.industries[code].offbox = { status: 'missing', message: '锚点记录该行业有审计链，但现在没有该行业库（库被删除 / 换了数据目录？）' } }

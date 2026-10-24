@@ -16,17 +16,21 @@ export function die(code, message, status = 2) {
   process.exit(status)
 }
 
-/** 解析 `--name value` 与布尔开关；未知参数退出 2 */
-export function parseArgs(argv, { values = [], flags = [] }) {
+/** 解析 `--name value`、可重复的 `--name value`（`multi`，结果是数组）与布尔开关；未知参数退出 2 */
+export function parseArgs(argv, { values = [], flags = [], multi = [] }) {
   const out = {}
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (flags.includes(a)) out[a.slice(2)] = true
-    else if (values.includes(a)) {
+    else if (multi.includes(a)) { // 可重复的 `--name value`：收集成数组（AG5：公钥集合）
+      const v = argv[++i]
+      if (v === undefined || v.startsWith('--')) die('USAGE', `${a} 需要一个值`)
+      ;(out[a.slice(2)] ??= []).push(v)
+    } else if (values.includes(a)) {
       const v = argv[++i]
       if (v === undefined || v.startsWith('--')) die('USAGE', `${a} 需要一个值`)
       out[a.slice(2)] = v
-    } else die('USAGE', `未知参数：${a}（可用：${[...values, ...flags].join('、')}）`)
+    } else die('USAGE', `未知参数：${a}（可用：${[...values, ...multi, ...flags].join('、')}）`)
   }
   return out
 }
