@@ -106,10 +106,10 @@
 | `auth.js:220` | GET | `/api/auth/org-tree` | AUTH_ONLY | requireAuth | — | dealers, orgs | roles, users |
 | `auth.js:262` | GET | `/api/auth/permissions` | AUTH_ONLY | requireAuth | — | permissions | users |
 | `auth.js:274` | GET | `/api/auth/my-permissions` | AUTH_ONLY | requireAuth | — | — | orgs, permissions, role_permissions, roles, user_roles, users |
-| `auth.js:361` | GET | `/api/auth/my-scope` | AUTH_ONLY | requireAuth | — | dealers, orgs, roles, stores, users | role_permissions, user_roles |
-| `auth.js:368` | GET | `/api/auth/roles-permissions` | GATED | requireAuth → requireRole | — | role_permissions, roles | users |
-| `auth.js:384` | PUT | `/api/auth/roles/:code/permissions` | GATED | requireAuth → requireRole | lib/account-security.js: replaceRolePermissions | — | audit_logs, permissions, role_permissions, roles, user_roles, users |
-| `auth.js:397` | GET | `/api/auth/orgs` | AUTH_ONLY | requireAuth | — | dealers, orgs | roles, users |
+| `auth.js:377` | GET | `/api/auth/my-scope` | AUTH_ONLY | requireAuth | — | dealers, orgs, roles, stores, users | role_permissions, user_roles |
+| `auth.js:384` | GET | `/api/auth/roles-permissions` | GATED | requireAuth → requireRole | — | role_permissions, roles | users |
+| `auth.js:400` | PUT | `/api/auth/roles/:code/permissions` | GATED | requireAuth → requireRole | lib/account-security.js: replaceRolePermissions | — | audit_logs, permissions, role_permissions, roles, user_roles, users |
+| `auth.js:413` | GET | `/api/auth/orgs` | AUTH_ONLY | requireAuth | — | dealers, orgs | roles, users |
 
 ## server/routes/costing.js
 

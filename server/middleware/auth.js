@@ -620,8 +620,14 @@ export function resolveOrgScope(db, user) {
   if (row?.is_super || u.role === 'admin') return { scope: 'all', orgIds: null, orgId: row?.org_id ?? null }
 
   // 用户级 data_scope 优先，其次角色默认
-  const roleScope = db.prepare('SELECT data_scope FROM roles WHERE code=?').get(u.role)?.data_scope
-  const scope = row?.data_scope && row.data_scope !== '' ? row.data_scope : roleScope || 'self'
+  // AG10（ADR-0051 补充 4）：停用的主角色不再提供默认范围，且**失败即收紧**：账号没有单独设置范围时落到空范围('none')，
+  // 不落到 'self'（'self' 按所属组织过滤，可能比原先的 'dealer' 默认更宽）。库里没有该角色行时保持原行为。
+  const roleRow = db.prepare('SELECT data_scope, status FROM roles WHERE code=?').get(u.role)
+  const primaryOff = !!roleRow && roleRow.status !== 'active'
+  const userScoped = !!(row?.data_scope && row.data_scope !== '')
+  if (primaryOff && !userScoped) return { scope: 'none', orgIds: [], orgId: null }
+  const roleScope = primaryOff ? undefined : roleRow?.data_scope
+  const scope = userScoped ? row.data_scope : roleScope || 'self'
   const orgId = row?.org_id ?? u.org_id ?? null
 
   if (scope === 'all') return { scope, orgIds: null, orgId }

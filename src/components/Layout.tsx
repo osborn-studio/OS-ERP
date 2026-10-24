@@ -301,6 +301,10 @@ export default function Layout() {
   const [openKeys, setOpenKeys] = useState<string[]>(['dashboard'])
   const [userMenu, setUserMenu] = useState(false)
   const [drawer, setDrawer] = useState(false)
+  // AG10：登录后的停用角色提示（服务端 notice_code）；按停用角色集合记住关闭，集合变化会重新出现
+  const inactiveKey = Array.isArray(user?.roles_inactive) ? user.roles_inactive.join(',') : ''
+  const [dismissedNotice, setDismissedNotice] = useState('')
+  const showRoleNotice = user?.notice_code === 'ROLE_INACTIVE_NOTICE' && !!user?.notice_message && dismissedNotice !== inactiveKey
 
   useEffect(() => {
     const hit = MENUS.find((m) => m.children?.some((c) => loc.pathname.startsWith(c.path)))
@@ -480,6 +484,15 @@ export default function Layout() {
         </header>
 
         <main className="flex-1 overflow-y-auto p-3 lg:p-4">
+          {showRoleNotice && (
+            <div role="status" data-testid="role-inactive-banner" className="mb-3 flex items-start gap-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[13px] text-amber-800">
+              <div className="flex-1">
+                <span data-testid="role-inactive-banner-text">{user.notice_message}</span>
+                <NavLink to="/system/my-scope" className="underline ml-2">查看我的数据范围</NavLink>
+              </div>
+              <button type="button" className="underline shrink-0" data-testid="role-inactive-banner-dismiss" onClick={() => setDismissedNotice(inactiveKey)}>关闭提示</button>
+            </div>
+          )}
           <CapabilityStatus />
           <Outlet />
           {changingPassword && <ChangePasswordDialog onClose={() => setChangingPassword(false)} />}
