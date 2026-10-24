@@ -334,6 +334,8 @@ export const TABLES = [
   // 待确认单（`mcp_confirmations`）与调用日志（`mcp_call_logs`）同属运行痕迹，
   // 重建后没有保留价值（`audit_logs` / `ai_query_logs` 早就在这份清单里，口径一致）。
   'mcp_idempotency', 'mcp_confirmations', 'mcp_call_logs',
+  // AE9：MCP 限速桶（GML_MCP_RATE_STORE=db 时的窗口计数）。没有跨重建的保留价值，随运行痕迹一起清。
+  'mcp_rate_buckets',
   // ---- IM（钉钉/飞书）同步痕迹（批次 T）----
   // 与 `mcp_idempotency` 同一类：三张映射表里存的是**外部 id → 本地自增 id**（`org_id` /
   // `gml_user_id` / `approval_id`）。重建会把这些本地 id 全部重排，于是上一代的映射会

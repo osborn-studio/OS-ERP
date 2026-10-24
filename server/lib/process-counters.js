@@ -27,6 +27,10 @@ export const COUNTER_DEFS = Object.freeze({
     help: 'Dashboard summary TTL cache lookups by result (hit: served from cache; miss: recomputed). Not counted when the cache is disabled (GML_DASHBOARD_CACHE_MS=0).',
     labelName: 'result', values: ['hit', 'miss']
   },
+  mcp_rate_store_failures_total: {
+    help: 'MCP rate-limit db store failures by reason (write_failed: a call was refused fail-closed with store_unavailable; purge_failed: background purge of expired buckets failed). Only moves when GML_MCP_RATE_STORE=db.',
+    labelName: 'reason', values: ['write_failed', 'purge_failed']
+  },
   security_audit_unavailable_total: {
     help: 'Times a business change was refused with 503 SECURITY_AUDIT_UNAVAILABLE because its security audit row could not be written.',
     labelName: null, values: []

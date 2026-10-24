@@ -3,7 +3,7 @@
 <!-- generated -->
 <!-- 由 `node scripts/gen-codemap.mjs` 生成，勿手改；CI 校验不漂移 -->
 
-共 199 张表、67 个迁移。“建于”= schema.sql / 迁移编号 / 运行时建表的文件；“改于”= ALTER、addColumn（无后缀）、建索引（·idx）、触发器（·trg）、DROP（·drop）所在迁移编号。“触达”= 该文件的 SQL 文本里出现这张表（server/db/ 下的种子与启动文件不计）。
+共 200 张表、68 个迁移。“建于”= schema.sql / 迁移编号 / 运行时建表的文件；“改于”= ALTER、addColumn（无后缀）、建索引（·idx）、触发器（·trg）、DROP（·drop）所在迁移编号。“触达”= 该文件的 SQL 文本里出现这张表（server/db/ 下的种子与启动文件不计）。
 
 ## 扫描边界（必读）
 
@@ -62,6 +62,7 @@
 | `doc_states` | 008 | 008·idx | lib/docflow.js, mcp/catalog.js, mcp/tools.js | routes/docflow.js, routes/order-center.js |
 | `doc_transition_policy` | 027 | — | lib/approval.js, lib/docflow.js | — |
 | `doc_types` | 008 | — | lib/approval.js, lib/docflow.js, lib/docno.js, lib/order-center.js, lib/role-matrix.js, mcp/catalog.js, mcp/tools.js | routes/approval.js, routes/docflow.js, routes/purchase-chain.js |
+| `if` | 073 | — | — | — |
 | `im_approval_map` | 040 | 040·idx | lib/im-sync.js | routes/im.js |
 | `im_dept_map` | 040 | 040·idx | lib/im-sync.js | routes/im.js |
 | `im_platform_cfg` | 040 | — | lib/im-sync.js | — |
@@ -285,3 +286,4 @@
 | 069 | `069_qimen_clear_demo_secret.cjs` | 清除库内公开奇门演示签名常量并记录事实 | — | — |
 | 070 | `070_oms_order_time_index.cjs` | 线上订单下单时间索引（oms_orders.order_time） | — | — |
 | 071 | `071_audit_fts_optional.cjs` | 审计日志 FTS5 索引可选化（设置 audit_fts_enabled） | — | — |
+| 073 | `073_mcp_rate_buckets.cjs` | MCP 限速桶表（mcp_rate_buckets，db 存储模式） | if | — |

@@ -701,7 +701,7 @@ HTTP 响应与错误归一：`ok` / `fail` / `wrap` 的**唯一实现**（统一
 | 导出 | 类型 | 路由 | MCP 工具 | 被模块调用 |
 |---|---|---|---|---|
 | `logFormat` | fn | — | — | — |
-| `logger` | const | — | — | lib/profile.js, lib/tx.js, mcp/server.js |
+| `logger` | const | — | — | lib/mcp-rate-limit.js, lib/profile.js, lib/tx.js, mcp/server.js |
 | `requestLogger` | fn | — | — | — |
 
 ## `server/lib/login-throttle.js`
@@ -723,6 +723,7 @@ MCP 按令牌的速率限制与日配额（ADR-0056 / AD9）
 | `DEFAULT_MCP_RATE` | const | — | — | — |
 | `createMcpRateLimiter` | fn | — | — | mcp/server.js |
 | `dailyQuotaState` | fn | — | — | — |
+| `rateStoreFromEnv` | fn | — | — | — |
 
 ## `server/lib/member.js`
 
@@ -1053,7 +1054,7 @@ Prometheus 文本指标渲染 + 抓取令牌校验（ADR-0045）
 | `MCP_RESULT_CODES` | const | — | — | — |
 | `counterSnapshot` | fn | GET /api/meta/metrics | — | — |
 | `histogramSnapshot` | fn | GET /api/meta/metrics | — | — |
-| `incCounter` | fn | — | — | lib/audit-trail.js, lib/db-ttl-cache.js, lib/login-throttle.js, mcp/server.js |
+| `incCounter` | fn | — | — | lib/audit-trail.js, lib/db-ttl-cache.js, lib/login-throttle.js, lib/mcp-rate-limit.js, mcp/server.js |
 | `incMcpToolCall` | fn | — | — | mcp/server.js |
 | `observeHistogram` | fn | — | — | lib/audit-trail.js |
 | `registerMcpTools` | fn | — | — | mcp/server.js |
@@ -1588,7 +1589,7 @@ Prometheus 文本指标渲染 + 抓取令牌校验（ADR-0045）
 | `backoffMs` | fn | — | — | — |
 | `isBusyError` | fn | — | — | — |
 | `resetWriteRetryStats` | fn | — | — | — |
-| `withWriteRetry` | fn | 8 条：ar.js×2, inventory.js×3, purchase.js×3 | — | — |
+| `withWriteRetry` | fn | 8 条：ar.js×2, inventory.js×3, purchase.js×3 | — | lib/mcp-rate-limit.js |
 | `writeRetryMaxFromEnv` | fn | — | — | — |
 | `writeRetryStats` | fn | GET /api/meta/metrics | — | — |
 
@@ -1693,6 +1694,8 @@ MCP 服务端：以标准 MCP（2026-07-28 无状态版）暴露系统业务能�
 | 导出 | 类型 | 路由 | MCP 工具 | 被模块调用 |
 |---|---|---|---|---|
 | `CACHE_DENIED` | const | — | — | — |
+| `mcpRateStore` | const | — | — | — |
+| `purgeMcpRateBuckets` | fn | — | — | — |
 | `redactArgs` | fn | — | — | — |
 
 ## `server/mcp/tokens.js`

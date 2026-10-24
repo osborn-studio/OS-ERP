@@ -37,3 +37,21 @@ MCP 令牌除了"近 1 小时调用数"这一条粗粒度上限（`agent_tokens.
 | P2 | 429 响应同时带顶层 `error` 字符串与 `result`，违反 JSON-RPC | 已修：去掉顶层 `error`，业务码在 `detail.code`；集成测试断言无 `error` 成员 |
 | P2 | 审计写失败时读路径不推进日配额计数，可超配额（仅受 RPM 约束） | 已修：进程内影子计数取较大值；单元测试 |
 | — | 未发现令牌伪造 / 键基数 / `/api/mcp` 挂载绕过；元数据方法（`tools/list` 等）有意不限；本地日期滚动判据与审计时间戳一致；AB10 指标节流抽取前后 10000 次决策与 `Retry-After` 一致 | — |
+
+## 补充（AE9，roadmap-v10）：限速桶可存到数据库（`GML_MCP_RATE_STORE=db`）
+
+**问题。** 原决定「速率桶在进程内存」意味着多进程部署各算各的（N 个进程 ≈ N 倍额度），重启也清零。
+
+**决定。**
+- 新开关 `GML_MCP_RATE_STORE=memory|db`，默认 `memory`（路径、行为、性能均不变）；其它取值启动即抛 `MCP_RATE_STORE_INVALID`（拼错不能悄悄退回"各进程各算各的"）。
+- `db` 模式用迁移 073 的表 `mcp_rate_buckets(token_key, window_start, kind, count)`，主键 `(token_key, window_start, kind)`，`kind ∈ {all, write}`，另有 `idx_mcp_rate_buckets_window(window_start)` 供范围清理。`token_key` 与内存模式同一个键（`<行业库>|<令牌 id>`）。表已登记在 `seed.js` 的 `TABLES`（整库重建清桶）。
+- **原子性**：一次申请 = 一个 `withWriteRetry`（`BEGIN IMMEDIATE`）事务：读当前 / 上一窗口计数 → 与内存模式同一条滑动窗口判定（`prev·(1-f)+cur+1 > limit`）→ 通过才 `INSERT … ON CONFLICT DO UPDATE SET count=count+1`（总额度与写额度同事务，要么都记要么都不记）。写锁串行化各进程，所以不会超发；被拒的调用事务里没有写语句。`tests/mcp-rate-store-db.test.mjs` 起 4 个进程各打 50 次、额度 100，断言合计恰好放行 100。
+- **fail closed**：任何存储错误（BUSY 重试用尽、表缺失、触发器/磁盘错误、缺少库句柄）⇒ 拒绝本次调用：429 `MCP_RATE_LIMITED`，`detail.reason='store_unavailable'`，`Retry-After: 5`，计数器 `mcp_rate_store_failures_total{reason="write_failed"}` +1（同时在 `os_erp_mcp_tool_calls_total{code="MCP_RATE_LIMITED"}` 里可见）。`detail.reason` 的集合扩为 `rpm | write_rpm | daily_quota | unavailable | store_unavailable`；`unavailable` 仍表示令牌 id 非法 / 内存桶满 / 日配额状态不可用。
+- **清理**：过期桶只由后台定时器清理，请求路径从不删除。服务里此前没有周期性定时器，所以在 `server/index.js` 新注册一个（仅 `db` 模式，`setInterval` 60 s、`unref()`，遍历磁盘上已存在的行业库，调用 `purge(db)`）。清理线 = 当前窗口起点 − 2 个窗口（比上一窗口还早一整个窗口），所以进程间时钟偏差在 ±1 窗口内不会误删仍在用的桶；分块（每块 5000 行、最多 20 块）、每块一个短事务；失败只记日志与 `purge_failed` 计数、永不抛。
+- **告警**：`OsErpMcpRateStoreUnavailable`（`os-erp-ab10.yml`，critical，5 分钟内有 `write_failed` 即触发，不设 `for`——fail closed 期间调用全部被拒）。
+- **开销**：见 capacity-baseline「AE9」：单进程 `consume()` 中位多约 13 µs、p95 约 38 µs（read / write 相近）。代价主要是每次放行持一次 SQLite 写锁，与业务写入争用——故默认不开。
+
+**不变 / 边界。** 日配额仍读 `mcp_call_logs`（本就跨进程共享、持久），进程内影子计数仍是每进程一份；`agent_tokens.rate_limit` 不变；桶数无上限（行数 ≤ 令牌数 × 2 窗口 × 2 kind，由清理兜底）；`memory` 模式不碰这张表。不做：Redis 等外部存储、按 IP 限速。
+
+**验证。** `tests/mcp-rate-store-db.test.mjs`（12 例）：迁移 up 幂等 / verify 与 up 一致且能发现漂移；seed 与计数器登记；env 取值；db 模式与内存模式语义一致（读写额度、被拒写不耗读额度、行业隔离、被拒不写行）、窗口边界无突发；"重启"与两个连接共享；存储失败 fail closed + 计数、写型第二行失败整体回滚（无半记账）；清理边界；两个**服务进程**共用一个数据目录共享额度、重启 A 后仍限流、把表改名后 fail closed 并计数；4 进程竞速恰好放行 `rpm` 次；定时器仅 `db` 模式注册且 `unref`、请求路径无 `purge` 调用。
+
