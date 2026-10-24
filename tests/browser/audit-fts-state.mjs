@@ -5,8 +5,9 @@
  * 连真实 test 模式服务 + 真实前端构建，页面是 /system/audit-logs：
  *   · 管理员：列表接口 200 且带 fts 对象（setting_enabled / index_present / env_disabled / active）；页面状态卡的 data-state 等于
  *     场景自己按这四个字段推导的结论（on / off / env / drift），data-setting / data-index 与接口逐项一致，维护提示含 audit-fts-maintain.mjs；
- *   · 把设置 audit_fts_enabled 改为关（危险键，带理由）：接口 fts.setting_enabled=false，重载页面后 data-state=off 且文案说明走 LIKE；
- *     改回开后接口与页面一致恢复（无论断言成败，finally 都把设置还原为开）；
+ *   · 把设置 audit_fts_enabled 改为关（危险键，带理由）：接口 fts.setting_enabled=false 而 active 仍随索引表在不在走（改设置本身不动索引）；
+ *     页面 data-state 为 converging_off（索引表还在）或 off（无索引），文案如实说明；改回开后接口与页面一致恢复。
+ *     开场先记下设置原值，finally 无论断言成败都还原为原值并校验还原结果；
  *   · 无权限账号（role=purchase）：列表 403，页面是阻断提示，页面上没有状态卡。
  * 账号密码随机，不打印；外部请求一律拦截并计数，必须为 0。
  * 浏览器部分只在 Linux 托管 CI 运行，未执行前不得称"浏览器场景已通过"。
@@ -23,8 +24,8 @@ const results = []
 let externalRequests = 0
 const step = async (name, fn) => { await fn(); results.push(name); console.log(`PASS ${name}`) }
 const isAuditList = (r) => new URL(r.url()).pathname === '/api/meta/audit-logs'
-// 场景自己的推导（与页面实现无关）：设置关 > 环境强制 > 索引表缺失 > 开启
-const expectedState = (f) => (!f.setting_enabled ? 'off' : f.env_disabled ? 'env' : !f.index_present ? 'drift' : 'on')
+// 场景自己的推导（与页面实现无关）：环境强制 > 设置关（索引还在 = 待收敛）> 索引表缺失 > 开启
+const expectedState = (f) => (f.env_disabled ? 'env' : !f.setting_enabled ? (f.index_present ? 'converging_off' : 'off') : !f.index_present ? 'drift' : 'on')
 
 async function openAudit(actor) {
   const ctx = await browser.newContext()
@@ -43,8 +44,11 @@ async function openAudit(actor) {
 const ftsOf = async (token) => okData(await api('/api/meta/audit-logs?page=1&pageSize=1', { token })).fts
 
 let adminToken
+let originalSetting = null
+let restoreFailed = false
 try {
   adminToken = (await apiLogin(api, 'admin', '12345')).token
+  originalSetting = (await ftsOf(adminToken)).setting_enabled ? '1' : '0'
 
   await step('admin: the list carries fts and the page state card agrees with it field by field', async () => {
     const fts = await ftsOf(adminToken)
@@ -66,21 +70,20 @@ try {
     assert.equal((await put('0')).status, 200)
     const off = await ftsOf(adminToken)
     assert.equal(off.setting_enabled, false)
-    assert.equal(off.active, false)
+    assert.equal(off.active, off.index_present && !off.env_disabled, 'active follows the query predicate, not the setting')
     const { page, errors } = await openAudit({ username: 'admin', password: '12345' })
     await page.goto(new URL('/system/audit-logs', base).href)
     const card = page.getByTestId('audit-fts-state')
     await card.waitFor()
-    assert.equal(await card.getAttribute('data-state'), 'off')
+    assert.equal(await card.getAttribute('data-state'), expectedState(off))
     assert.equal(await card.getAttribute('data-setting'), '0')
-    assert.match(await page.getByTestId('audit-fts-state-text').innerText(), /LIKE/)
-    assert.match(await page.getByTestId('audit-fts-maintain-hint').innerText(), /--enable/)
+    assert.match(await page.getByTestId('audit-fts-state-text').innerText(), off.env_disabled ? /GML_AUDIT_FTS/ : off.index_present ? /索引表还在/ : /LIKE/)
+    assert.match(await page.getByTestId('audit-fts-maintain-hint').innerText(), off.env_disabled ? /环境变量/ : off.index_present ? /--disable/ : /--enable/)
     assert.equal((await put('1')).status, 200)
     const on = await ftsOf(adminToken)
     assert.equal(on.setting_enabled, true)
     await page.reload()
-    await page.getByTestId('audit-fts-state').waitFor()
-    assert.equal(await page.getByTestId('audit-fts-state').getAttribute('data-state'), expectedState(on))
+    await page.waitForFunction((want) => document.querySelector('[data-testid="audit-fts-state"]')?.getAttribute('data-state') === want, expectedState(on))
     assert.deepEqual(errors, [])
   })
 
@@ -103,7 +106,12 @@ try {
   await screenshotPages('audit-fts-state', pages)
   throw error
 } finally {
-  // 无论成败都把设置还原为开（默认值），避免影响后续场景
-  if (adminToken) await api('/api/meta/settings', { token: adminToken, method: 'PUT', body: { key: 'audit_fts_enabled', value: '1', reason: 'browser scenario audit-fts-state restore' } }).catch(() => {})
+  // 无论成败都还原为开场记下的原值，并校验还原结果（API 失败不会抛错，必须看状态码）
+  if (adminToken && originalSetting !== null) {
+    const r = await api('/api/meta/settings', { token: adminToken, method: 'PUT', body: { key: 'audit_fts_enabled', value: originalSetting, reason: 'browser scenario audit-fts-state restore' } }).catch(() => null)
+    restoreFailed = !r || r.status !== 200
+    if (restoreFailed) console.error('audit-fts-state: failed to restore audit_fts_enabled')
+  }
   await browser.close()
 }
+if (restoreFailed) process.exitCode = 1

@@ -45,6 +45,8 @@ async function openMetrics(actor, rewrite) {
   await page.goto(new URL('/system/metrics', base).href)
   const res = await settled
   await page.getByRole('heading', { name: '数据口径字典' }).waitFor()
+  // 响应到达不等于已渲染：等指标表出现（数据已进组件）再读槽位，避免读到加载中的初值
+  await page.locator('table').first().waitFor()
   await page.getByTestId('metrics-hidden-slot').waitFor({ state: 'attached' })
   return { page, errors, status: res.status() }
 }

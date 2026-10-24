@@ -5,8 +5,8 @@
  * 连真实 test 模式服务 + 真实前端构建，页面是 /system/mcp 的"人工确认与审计"标签：
  *   · 管理员：GET /api/mcp/limits 为 200；页面读数卡（mcp-limits）的 rpm / write-rpm / daily-quota / limited 与接口逐项一致；
  *   · 把日配额设为 1（危险键，带理由）并用一枚只读令牌调用 org.tree 两次：第一次 200，第二次 HTTP 429（MCP_RATE_LIMITED）；
- *     接口的 rate_limited_total 恰好 +1、daily_quota=1；点"刷新记录"后页面读数与接口一致（计数 +1、配额 1）。
- *     finally 把日配额还原为 0，并吊销该令牌；
+ *     接口的 rate_limited_total 恰好 +1、daily_quota=1；在已打开的页面上点"刷新记录"后读数与接口一致（计数 +1、配额 1；刷新前仍是旧读数）。
+ *     开场记下日配额原值，finally 还原原值并吊销该令牌，且校验还原结果；
  *   · 无权限账号（role=purchase）：接口 403，页面上没有读数卡。
  * 令牌明文与账号密码都不打印；外部请求一律拦截并计数，必须为 0。
  * 浏览器部分只在 Linux 托管 CI 运行，未执行前不得称"浏览器场景已通过"。
@@ -60,20 +60,24 @@ const mcpCall = async (plain) => {
 
 let adminToken
 let tokenId = null
+let originalQuota = null
+let cleanupFailed = false
 try {
   adminToken = (await apiLogin(api, 'admin', '12345')).token
+  originalQuota = (await limitsOf(adminToken)).daily_quota
+
+  // 同一个页面贯穿两步：第二步靠"刷新记录"取新读数，证明刷新路径真的重新取了限速读数
+  const admin = await openMcp({ username: 'admin', password: '12345' })
 
   await step('admin: the readout card equals GET /api/mcp/limits field by field', async () => {
     const limits = await limitsOf(adminToken)
     for (const k of ['rpm', 'write_rpm', 'daily_quota', 'rate_limited_total']) assert.ok(Number.isInteger(limits[k]) && limits[k] >= 0, `limits.${k}`)
     assert.ok(limits.rpm >= 1 && limits.write_rpm >= 1)
-    const { page, errors } = await openMcp({ username: 'admin', password: '12345' })
-    await page.getByTestId('mcp-limits').waitFor()
-    assert.deepEqual(await readout(page), { rpm: limits.rpm, write_rpm: limits.write_rpm, daily_quota: limits.daily_quota, rate_limited_total: limits.rate_limited_total })
-    assert.deepEqual(errors, [])
+    await admin.page.getByTestId('mcp-limits').waitFor()
+    assert.deepEqual(await readout(admin.page), { rpm: limits.rpm, write_rpm: limits.write_rpm, daily_quota: limits.daily_quota, rate_limited_total: limits.rate_limited_total })
   })
 
-  await step('a real 429 (daily quota 1, second call) moves the counter by exactly one and the refreshed page shows quota and count', async () => {
+  await step('a real 429 (daily quota 1, second call) moves the counter by exactly one; clicking refresh on the open page shows quota and count', async () => {
     const before = await limitsOf(adminToken)
     assert.equal((await putQuota(adminToken, '1')).status, 200)
     const created = okData(await api('/api/mcp/tokens', { token: adminToken, body: { name: `ae11-limits-${randomSuffix()}`, scopes: 'read' } }))
@@ -83,11 +87,13 @@ try {
     const after = await limitsOf(adminToken)
     assert.equal(after.daily_quota, 1)
     assert.equal(after.rate_limited_total, before.rate_limited_total + 1)
-    const { page, errors } = await openMcp({ username: 'admin', password: '12345' })
-    await page.getByTestId('mcp-limits').waitFor()
-    assert.deepEqual(await readout(page), { rpm: after.rpm, write_rpm: after.write_rpm, daily_quota: 1, rate_limited_total: after.rate_limited_total })
-    assert.equal(JSON.stringify(await page.getByTestId('mcp-limits').innerText()).includes(created.token), false, 'the readout never shows token material')
-    assert.deepEqual(errors, [])
+    // 刷新前页面仍是旧读数
+    assert.equal((await readout(admin.page)).daily_quota, before.daily_quota)
+    await admin.page.getByRole('button', { name: '刷新记录' }).click()
+    await admin.page.waitForFunction((n) => document.querySelector('[data-testid="mcp-limits"]')?.getAttribute('data-limited') === String(n), after.rate_limited_total)
+    assert.deepEqual(await readout(admin.page), { rpm: after.rpm, write_rpm: after.write_rpm, daily_quota: 1, rate_limited_total: after.rate_limited_total })
+    assert.equal((await admin.page.getByTestId('mcp-limits').innerText()).includes(created.token), false, 'the readout never shows token material')
+    assert.deepEqual(admin.errors, [])
   })
 
   await step('non-admin: the limits endpoint is 403 and the page has no readout card', async () => {
@@ -105,9 +111,17 @@ try {
   await screenshotPages('mcp-token-limits', pages)
   throw error
 } finally {
+  // 还原开场记下的日配额原值并吊销本场景签发的令牌；API 失败不会抛错，必须看状态码
   if (adminToken) {
-    await putQuota(adminToken, '0').catch(() => {})
-    if (tokenId != null) await api(`/api/mcp/tokens/${tokenId}`, { token: adminToken, method: 'DELETE' }).catch(() => {})
+    if (originalQuota !== null) {
+      const r = await putQuota(adminToken, String(originalQuota)).catch(() => null)
+      if (!r || r.status !== 200) { cleanupFailed = true; console.error('mcp-token-limits: failed to restore mcp_token_daily_quota') }
+    }
+    if (tokenId != null) {
+      const r = await api(`/api/mcp/tokens/${tokenId}`, { token: adminToken, method: 'DELETE' }).catch(() => null)
+      if (!r || r.status !== 200) { cleanupFailed = true; console.error('mcp-token-limits: failed to revoke the scenario token') }
+    }
   }
   await browser.close()
 }
+if (cleanupFailed) process.exitCode = 1

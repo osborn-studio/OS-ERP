@@ -115,9 +115,9 @@ test('GET /api/meta/audit-logs carries fts state: setting, index presence and th
   assert.deepEqual(Object.keys(on).sort(), ['active', 'env_disabled', 'index_present', 'setting_enabled'])
   assert.equal(on.setting_enabled, true)
   assert.equal(on.env_disabled, false)
-  assert.equal(on.active, on.setting_enabled && on.index_present && !on.env_disabled)
+  assert.equal(on.active, on.index_present && !on.env_disabled, 'active follows the query predicate (index present, no env switch)')
   f.db.prepare("INSERT INTO settings (key, value, updated_at) VALUES ('audit_fts_enabled','0',datetime('now','localtime')) ON CONFLICT(key) DO UPDATE SET value='0'").run()
   const off = (await f.get('/api/meta/audit-logs?page=1&pageSize=1', admin)).body.data.fts
   assert.equal(off.setting_enabled, false)
-  assert.equal(off.active, false)
+  assert.equal(off.active, off.index_present, 'changing the setting alone does not touch the index, so queries can still use it until maintenance converges')
 })

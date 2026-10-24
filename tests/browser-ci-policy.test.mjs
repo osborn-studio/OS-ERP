@@ -209,9 +209,9 @@ test('AE11 scenarios are registered, assert real outcomes, restore what they cha
   const declared = driver.match(/const SCENARIOS = \[([^\]]+)\]/)[1].split(',').map((x) => x.trim().replace(/'/g, ''))
   for (const need of ['audit-fts-state', 'mcp-token-limits', 'metrics-hidden-note']) assert.ok(declared.includes(need), `${need} must be registered in SCENARIOS`)
   const needles = {
-    'audit-fts-state': ['audit-fts-state', 'audit-fts-maintain-hint', 'data-setting', 'data-index', "'off'", 'expectedState', 'audit_fts_enabled', '.status(), 403', 'count(), 0', 'externalRequests', 'finally', "value: '1'"],
-    'mcp-token-limits': ['/api/mcp/limits', 'mcp-limits', 'rate_limited_total', 'before.rate_limited_total + 1', 'mcpCall', ', 429)', 'mcp_token_daily_quota', "putQuota(adminToken, '0')", 'DELETE', 'status, 403', 'count(), 0', 'externalRequests', 'includes(created.token), false'],
-    'metrics-hidden-note': ['metrics-hidden-slot', 'metrics-hidden-note', 'hidden_count', 'page.route', 'route.fulfill', '3 个指标', 'externalRequests']
+    'audit-fts-state': ['audit-fts-state', 'audit-fts-maintain-hint', 'data-setting', 'data-index', "'off'", 'expectedState', "'converging_off'", 'originalSetting', 'restoreFailed', 'audit_fts_enabled', '.status(), 403', 'count(), 0', 'externalRequests', 'finally'],
+    'mcp-token-limits': ['/api/mcp/limits', 'mcp-limits', 'rate_limited_total', 'before.rate_limited_total + 1', 'mcpCall', ', 429)', 'mcp_token_daily_quota', 'originalQuota', 'cleanupFailed', '刷新记录', 'DELETE', 'status, 403', 'count(), 0', 'externalRequests', 'includes(created.token), false'],
+    'metrics-hidden-note': ['metrics-hidden-slot', 'metrics-hidden-note', 'hidden_count', 'locator(\'table\').first().waitFor()', 'ctx.route', 'route.fulfill', '3 个指标', 'externalRequests']
   }
   for (const [f, list] of Object.entries(needles)) {
     const src = read(`tests/browser/${f}.mjs`)
