@@ -36,6 +36,7 @@ import { getDb } from '../db/index.js'
 // 界面上「流转时间」与「单据时间」对不上，跨零点时甚至差一天。
 import { localNow } from './dates.js'
 import { docScopeBuilder } from './doc-scope-registry.js'
+import { boundStoreId, storeBindingExempt } from './store-binding.js'
 
 export class DocFlowError extends Error {
   constructor(message, { code = 'DOC_FLOW_ERROR', httpStatus = 400, detail = null } = {}) {
@@ -125,9 +126,9 @@ export const DOC_SCOPE_RESOLVERS = Object.freeze({
   // POS / 门店（门店归属组织；账号绑了门店则只限该门店，ADR-0025）
   PS: { builder: 'store', table: 'pos_orders', cols: ['store_id'] },
   PSF: { builder: 'store', table: 'pos_shifts', cols: ['store_id'] },
-  RC: { builder: 'store', table: 'pos_daily_closes', cols: ['store_id'] },
-  YQ: { builder: 'store', table: 'store_requisitions', cols: ['store_id'] },
-  SH: { builder: 'store', table: 'store_shipments', cols: ['store_id'] },
+  RC: { builder: 'store', table: 'pos_daily_closes', cols: ['store_id'], binding: 'store' },
+  YQ: { builder: 'store', table: 'store_requisitions', cols: ['store_id'], binding: 'store' },
+  SH: { builder: 'store', table: 'store_shipments', cols: ['store_id'], binding: 'store' },
   // 经销商往来（经销商档案 dealers.org_id）
   DR: { builder: 'dealer', table: 'dealer_requisitions', cols: ['dealer_id'] },
   DS: { builder: 'dealer', table: 'dealer_statements', cols: ['dealer_id'] },
@@ -168,8 +169,8 @@ const GENERIC_BUILDERS = {
   store: (ids, spec, ctx) => {
     const base = `t.${spec.cols[0]} IN (SELECT id FROM stores WHERE org_id IN (${ids.map(() => '?').join(',')}))`
     // 绑了门店的内部账号（自定义角色）只限本店，与 POS 路由的门店绑定一致（ADR-0025）
-    const bound = ctx.user && ctx.user.store_id != null ? Number(ctx.user.store_id) : null
-    return bound != null && Number.isFinite(bound)
+    const bound = boundStoreId(ctx.user)
+    return bound != null
       ? { sql: `(${base} AND t.${spec.cols[0]} = ?)`, params: [...ids, bound] }
       : { sql: base, params: ids }
   },
@@ -183,8 +184,18 @@ const GENERIC_BUILDERS = {
  * 未登记的类型：全局范围可见（admin 不被工程缺口挡住），受限范围不可见（失败关闭）。
  */
 export function docScopeOf(ctx, docType) {
-  if (ctx && ctx.orgScope && ctx.orgScope.scope === 'all') return { all: true }
   const spec = typeof docType === 'string' && Object.prototype.hasOwnProperty.call(DOC_SCOPE_RESOLVERS, docType) ? DOC_SCOPE_RESOLVERS[docType] : null
+  // AB7：带 `binding: 'store'` 的类型（RC / YQ / SH）在任何数据范围（含 all）下都先过门店绑定闸
+  if (spec && spec.binding === 'store' && ctx && ctx.user && !storeBindingExempt(ctx.user)) {
+    const sid = boundStoreId(ctx.user)
+    if (sid == null) {
+      // 未绑门店：HTTP 路由按角色名放行总部角色（保持）；严格模式（MCP）一律不可见
+      if (ctx.strictBinding) return null
+    } else if (ctx.orgScope && ctx.orgScope.scope === 'all') {
+      return { sql: `t.${spec.cols[0]} = ?`, params: [sid] }
+    }
+  }
+  if (ctx && ctx.orgScope && ctx.orgScope.scope === 'all') return { all: true }
   if (!spec || spec.builder === 'global') return null
   const orgScope = ctx ? ctx.orgScope : null
   const full = { ...ctx, orgScope }
@@ -205,14 +216,22 @@ export function docScopeOf(ctx, docType) {
  * 没有任何可见类型 ⇒ `1=0`。事件的 doc_id 为 NULL 或指向已不存在的单据，对受限范围不可见。
  */
 export function docEventScope(ctx, alias = 'e') {
-  if (ctx && ctx.orgScope && ctx.orgScope.scope === 'all') return { all: true, sql: '1=1', params: [] }
+  const allScope = !!(ctx && ctx.orgScope && ctx.orgScope.scope === 'all')
   const parts = []
   const params = []
+  const narrowed = [] // 全局范围下被绑定收窄的类型（只有 allScope 用到）
   for (const [code, spec] of Object.entries(DOC_SCOPE_RESOLVERS)) {
     const p = docScopeOf(ctx, code)
+    if (allScope && !(p && p.all)) narrowed.push(code)
     if (!p || p.all) continue
     parts.push(`(${alias}.doc_type=? AND ${alias}.doc_id IN (SELECT t.id FROM ${spec.table} t WHERE ${p.sql}))`)
     params.push(code, ...p.params)
+  }
+  // 全局范围且没有任何类型被绑定收窄 ⇒ 原来的无过滤；有收窄（AB7：绑了门店的非 admin 账号）⇒ 其余类型整类放行
+  if (allScope && !narrowed.length) return { all: true, sql: '1=1', params: [] }
+  if (allScope) {
+    parts.push(`(${alias}.doc_type NOT IN (${narrowed.map(() => '?').join(',')}))`)
+    params.push(...narrowed)
   }
   return parts.length ? { all: false, sql: `(${parts.join(' OR ')})`, params } : { all: false, sql: '1=0', params: [] }
 }

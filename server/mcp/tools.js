@@ -492,8 +492,9 @@ function docTypeOrThrow(db, code) {
  * 令牌范围 ∩ 所有者当前范围（`ctx.scope`）+ 所有者的 store_id（`store` 型解析器用）；无主令牌 user=null。
  */
 function docScopeCtx(db, ctx) {
-  const user = ctx.ownerUserId != null ? db.prepare('SELECT id, store_id, dealer_id FROM users WHERE id=?').get(Number(ctx.ownerUserId)) : null
-  return { db, user, orgScope: ctx.scope || { scope: 'all', orgIds: null } }
+  const user = ctx.ownerUserId != null ? db.prepare('SELECT id, role, store_id, dealer_id FROM users WHERE id=?').get(Number(ctx.ownerUserId)) : null
+  // AB7：strictBinding ⇒ 带 `binding` 的类型（RC / YQ / SH）对未绑门店的非 admin 所有者不可见（不复刻 HTTP 的角色名放行）
+  return { db, user, orgScope: ctx.scope || { scope: 'all', orgIds: null }, strictBinding: true }
 }
 
 /**
@@ -2191,8 +2192,7 @@ export const TOOLS = [
       // ADR-0039：范围判据是 docflow 的 DOC_SCOPE_RESOLVERS（与 /api/docflow/history 同一份），不再按列名推断归属
       // （此前 dealer_id 推断会让持有某经销商范围的令牌读到仅归他组织仓 / 门店的单据及其留痕）；
       // 门店 / 经销商 / 订货主体绑定（Y6）仍叠加。留痕只在单据通过范围判定后才读。
-      const scopeUser = ctx.ownerUserId != null ? db.prepare('SELECT id, store_id, dealer_id FROM users WHERE id=?').get(Number(ctx.ownerUserId)) : null
-      const inScope = docInScope({ db, user: scopeUser, orgScope: ctx.scope || { scope: 'all', orgIds: null } }, type.code, row.id)
+      const inScope = docInScope(docScopeCtx(db, ctx), type.code, row.id) // AB7：与 doc.query / order.trace_document 同一个范围上下文
       if (!inScope || !rowInBinding(db, ctx, type, row)) {
         const err = new Error(`${type.name}不存在（doc_type=${type.code}）`)
         err.code = 'NOT_FOUND'
