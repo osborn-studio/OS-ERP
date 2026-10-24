@@ -121,6 +121,8 @@
 <a class="toc-l3" data-depth="3" href="#62-后台会话传输与安全响应头gml_session_transport--gml_csp_modeadr-0036">6.2 后台会话传输与安全响应头（GML_SESSION_TRANSPORT / GML_CSP_MODE，ADR-0036）</a>
 <a class="toc-l3" data-depth="3" href="#63-监控令牌抓取节流看板缓存与分段计时gml_metrics_token--gml_metrics_token_next--gml_metrics_ip_limit--gml_metrics_ip_window_ms--gml_dashboard_cache_ms--gml_profile">6.3 监控令牌、抓取节流、看板缓存与分段计时（GML_METRICS_TOKEN / GML_METRICS_TOKEN_NEXT / GML_METRICS_IP_LIMIT / GML_METRICS_IP_WINDOW_MS / GML_DASHBOARD_CACHE_MS / GML_PROFILE）</a>
 <a class="toc-l3" data-depth="3" href="#64-审计日志关键词检索开关gml_audit_ftsadr-0030">6.4 审计日志关键词检索开关（GML_AUDIT_FTS，ADR-0030）</a>
+<a class="toc-l3" data-depth="3" href="#65-mcp-令牌速率限制gml_mcp_token_rpm--gml_mcp_write_rpmadr-0056">6.5 MCP 令牌速率限制（GML_MCP_TOKEN_RPM / GML_MCP_WRITE_RPM，ADR-0056）</a>
+<a class="toc-l3" data-depth="3" href="#66-测试专用变量生产与交付实例不要设置">6.6 测试专用变量：生产与交付实例不要设置</a>
 <a class="toc-l2" data-depth="2" href="#七-备份校验与恢复演练">七 备份、校验与恢复演练</a>
 <a class="toc-l3" data-depth="3" href="#71-日常校验备份">7.1 日常校验备份</a>
 <a class="toc-l3" data-depth="3" href="#72-恢复演练">7.2 恢复演练</a>
@@ -218,6 +220,8 @@ node scripts/local-manage.mjs doctor --instance=$INSTANCE</code></pre>
 <tr><td><code>GML_RELEASE_SIGN_KEY</code>（可选，只在<strong>构建发行候选包的机器</strong>上设置）</td><td>Ed25519 私钥 PEM 的<strong>绝对路径</strong>（不是密钥内容），<code>release-candidate.mjs</code> 用它给 <code>EVIDENCE.json</code> 签名；不是运行中服务的配置，服务实例上不要设置，也不要把私钥放进实例目录或仓库。见操作手册第三十五章</td></tr>
 <tr><td><code>GML_DASHBOARD_CACHE_MS</code>、<code>GML_PROFILE</code>（可选）</td><td>经营看板缓存时长与分段计时日志，见 6.3</td></tr>
 <tr><td><code>GML_AUDIT_FTS</code>（可选）</td><td>恰为 <code>0</code> 时审计日志关键词检索强制走 <code>LIKE</code>（止血开关），见 6.4 与操作手册第三十八章</td></tr>
+<tr><td><code>GML_MCP_TOKEN_RPM</code>、<code>GML_MCP_WRITE_RPM</code>（可选）</td><td>每个 MCP 令牌每 60 秒的总调用额度与写工具额度，见 6.5 与操作手册第四十七章</td></tr>
+<tr><td><code>GML_TEST_*</code>、<code>OS_ERP_SSH</code>、<code>OS_ERP_SCP</code>、<code>OS_ERP_GH</code></td><td><strong>测试专用，生产与交付实例不要设置</strong>，见 6.6</td></tr>
 <tr><td>直接部署 / Docker</td><td>必须自行设置强随机 <code>GML_JWT_SECRET</code>；缺失或公开值时服务拒绝启动</td></tr></tbody></table></div>
 <p>上表可选环境变量在启动时放在 <code>node scripts/local-manage.mjs start</code> 前面（会传给服务）。敏感值不要写进手册、聊天或工单。</p>
 <h3 id="55-迁移与健康核对">5.5 迁移与健康核对</h3>
@@ -258,6 +262,18 @@ node scripts/local-manage.mjs start</code></pre>
 <h3 id="64-审计日志关键词检索开关gml_audit_ftsadr-0030">6.4 审计日志关键词检索开关（GML_AUDIT_FTS，ADR-0030）</h3>
 <div class="table-wrap"><table><thead><tr><th>变量</th><th>缺省</th><th>取值与行为</th></tr></thead><tbody><tr><td><code>GML_AUDIT_FTS</code></td><td>未设置（正常使用 FTS）</td><td>只有值<strong>恰好是字符串 <code>0</code></strong> 才关闭：审计日志关键词检索一律走 <code>LIKE</code>；其他取值（未设置、空串、<code>1</code>、<code>false</code>）都不关闭。服务每次查询时读取，但已运行的进程拿不到事后改的环境，所以改值后<strong>重启服务</strong>。只影响查询路径：迁移 067 照常建表和触发器，写入照常维护索引，维护脚本 <code>audit-fts-maintain.mjs</code> 不读取它。用途是怀疑全文索引出问题时的止血，以及测试</td></tr></tbody></table></div>
 <p>没有这个变量时 FTS 是否可用由迁移 067 决定：数据库构建不带 FTS5（或不支持 trigram）时，迁移是空操作，检索自动走 <code>LIKE</code>，功能正确。变量设置方式同 5.4 的其他变量（放在 <code>node scripts/local-manage.mjs start</code> 前面）。索引检查、重建和止血流程见操作手册第三十八章。</p>
+<h3 id="65-mcp-令牌速率限制gml_mcp_token_rpm--gml_mcp_write_rpmadr-0056">6.5 MCP 令牌速率限制（GML_MCP_TOKEN_RPM / GML_MCP_WRITE_RPM，ADR-0056）</h3>
+<p>只对启用了 MCP 的实例有意义；<strong>生产模式下 MCP 整体关闭</strong>（<code>/mcp</code>、<code>/api/mcp</code> 返回 503 <code>FEATURE_DISABLED</code>），此时这两个变量没有作用。设置方式同 5.4 的其他变量（放在 <code>node scripts/local-manage.mjs start</code> 前面），启动时读定，改值需重启服务。</p>
+<div class="table-wrap"><table><thead><tr><th>变量</th><th>缺省</th><th>取值与行为</th></tr></thead><tbody><tr><td><code>GML_MCP_TOKEN_RPM</code></td><td><code>600</code></td><td>每个 MCP 令牌每 60 秒滑动窗口内允许的全部工具调用与 <code>resources/read</code> 次数，整数 1 至 1000000。不是纯数字或超出范围的值回落到缺省，不报错、服务照常启动</td></tr>
+<tr><td><code>GML_MCP_WRITE_RPM</code></td><td><code>60</code></td><td>其中 <code>level: write</code> 工具的每令牌每 60 秒额度，范围与回落规则相同。写调用同时计入总额度</td></tr></tbody></table></div>
+<p>超限返回 HTTP 429、<code>Retry-After</code> 和业务码 <code>MCP_RATE_LIMITED</code>；计数在进程内存里，重启清零、多进程各自计数。另有可选的每令牌每日配额，不是环境变量而是设置键 <code>mcp_token_daily_quota</code>（<code>/system/settings</code> →&quot;运维&quot;，危险配置，缺省 0 = 关闭）。429 的响应结构、排查和告警见操作手册第四十七章。这些缺省值不是按真实 Agent 流量标定的，没有在目标主机上实测。</p>
+<h3 id="66-测试专用变量生产与交付实例不要设置">6.6 测试专用变量：生产与交付实例不要设置</h3>
+<p>下面的变量只给开发和 CI 的测试用。<strong>不要写进 <code>.env</code>、compose 的 <code>environment</code> 或服务启动命令</strong>；设了不会让生产更安全，只会触发拒绝或让测试夹具改变行为。</p>
+<div class="table-wrap"><table><thead><tr><th>变量</th><th>谁读</th><th>在非测试模式设置会怎样</th></tr></thead><tbody><tr><td><code>GML_TEST_FS_FAULT</code>、<code>GML_TEST_FS_FAULT_MODE</code></td><td><code>audit-archive.mjs</code>、<code>db-backup.mjs</code>、<code>release-candidate.mjs --log</code>（经 <code>scripts/lib/fs-fault.mjs</code>）</td><td>在写入序列的相邻两步之间注入失败或 <code>abort</code>。只在 <code>GML_RUNTIME_MODE=test</code> 下可用；其他模式下只要设置了就在做任何写入之前以 <code>FS_FAULT_FORBIDDEN</code> 失败（<code>audit-archive</code>、<code>db-backup</code> 退出 2，<code>release-candidate --log</code> 在构建前失败）；点名拼错报 <code>FS_FAULT_UNKNOWN</code></td></tr>
+<tr><td><code>GML_TEST_ARCHIVE_PAUSE_AFTER_EXPORT</code></td><td><code>audit-archive.mjs</code></td><td>在导出 fsync 之后、删除之前暂停，供测试杀进程。只允许在 <code>GML_RUNTIME_MODE=test</code> 下取值 <code>1</code>，否则以 <code>PAUSE_HOOK_FORBIDDEN</code> 退出 2</td></tr>
+<tr><td><code>GML_TEST_INDUSTRIES</code>、<code>GML_TEST_STARTUP_MS</code>、<code>GML_TEST_BASE_URL</code></td><td>回归 / 浏览器 / 库存类型闸测试脚本（<code>regress-all.mjs</code>、<code>regress-isolated.mjs</code>、<code>test-inv-type-gate.mjs</code>、<code>browser-ci.mjs</code>、<code>tests/browser/*</code>）</td><td>服务进程不读取；只改变测试脚本的行业清单、启动等待时间和目标地址</td></tr>
+<tr><td><code>OS_ERP_SSH</code>、<code>OS_ERP_SCP</code>、<code>OS_ERP_GH</code></td><td><code>offbox-anchor.mjs</code>（前两个）、<code>release-candidate.mjs</code> / <code>verify-release.mjs</code>（<code>OS_ERP_GH</code>）</td><td>用测试替身替换 <code>ssh</code> / <code>scp</code> / <code>gh</code>。只设 <code>OS_ERP_SSH</code> 而不设 <code>OS_ERP_SCP</code> 时 <code>offbox-anchor</code> 拒绝；设了 <code>OS_ERP_GH</code> 时候选证据会记录 <code>gh_override: true</code>，<code>verify-release</code> 给出警告</td></tr></tbody></table></div>
+<p><code>GML_RUNTIME_MODE</code> 本身决定运行模式（第三章），不属于上面这类&quot;可选注入&quot;，生产模式不要改成 <code>test</code>。</p>
 <h2 id="七-备份校验与恢复演练">七 备份、校验与恢复演练</h2>
 <p>有两套备份工具，用途不同：</p>
 <div class="table-wrap"><table><thead><tr><th>工具</th><th>产物</th><th>校验</th><th>适用</th></tr></thead><tbody><tr><td><code>scripts/db-backup.mjs</code></td><td><code>$GML_DATA_DIR/backups/</code> 下每库快照 + <code>backup-report-&lt;stamp&gt;.json</code></td><td>强制：integrity_check、foreign_key_check、表数与迁移数、只读打开 COUNT，通过后才裁剪旧备份</td><td><strong>生产的日常备份</strong>，也是恢复演练的输入</td></tr>
