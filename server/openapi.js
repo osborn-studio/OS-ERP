@@ -1069,6 +1069,7 @@ export function buildOpenApi() {
     // 说明：MCP 业务端点本身走 POST /mcp（JSON-RPC 2.0，非 REST），不在这里登记；
     // 这里登记的是**管理面**的 REST 接口。数据全部由内核三张表推导，页面不写死名单。
     '/api/mcp/catalog': { get: { tags: ['AI 与 MCP'], summary: '**AI 能力目录**：全部单据类型 × 状态机 × 可推进边（含高危标注）× 工具清单 × 安全边界。由 `doc_types`/`doc_states`/`doc_actions` 实时推导', responses: { 200: jsonResp(null), 403: jsonResp(null) } } },
+    '/api/mcp/limits': { get: { tags: ['AI 与 MCP'], summary: 'MCP 限速读数（需 system.mcp.manage，只读）：rpm / write_rpm / window_seconds / daily_quota（0=关闭）/ rate_limited_total（本进程自启动以来的 429 次数，重启归零）/ counter_scope=process。不含令牌信息（AE11）', responses: { 200: jsonResp(null), 403: jsonResp(null) } } },
     '/api/mcp/tools': { get: { tags: ['AI 与 MCP'], summary: 'MCP 工具清单（名称 / 级别 / 用途），供令牌白名单勾选', responses: { 200: jsonResp(null) } } },
     '/api/mcp/tokens': {
       get: { tags: ['AI 与 MCP'], summary: 'Agent Token 列表（需 system.mcp.manage）。每行带 `effective_status`（active / revoked / expired / owner_missing / owner_inactive / revoked_by_owner_change）与 `effective_reason`、`revoked_reason`、`revoked_at`、所有者信息；`status` 是行历史，`effective_status` 是现状（ADR-0015）', responses: { 200: jsonResp(null), 403: jsonResp(null) } },

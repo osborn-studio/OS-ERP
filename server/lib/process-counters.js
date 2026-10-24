@@ -67,6 +67,13 @@ export function incMcpToolCall(tool, code) {
   m.set(c, (m.get(c) || 0) + 1)
 }
 
+/** 某结果码在所有工具上的累计次数（进程内、重启归零）；只读，供管理端展示 */
+export function mcpCodeTotal(code) {
+  let n = 0
+  for (const m of mcpCalls.values()) n += m.get(code) || 0
+  return n
+}
+
 /** 直方图登记：桶边界固定（秒），不由输入决定 */
 export const HISTOGRAM_DEFS = Object.freeze({
   audit_write_duration_seconds: {

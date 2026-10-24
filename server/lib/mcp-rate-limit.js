@@ -19,7 +19,7 @@
  * ============================================================================
  */
 import { createBucketStore, envInt } from './metrics-throttle.js'
-import { SETTING_RULES, normalizeSettingValue, castSettingValue } from './settings.js'
+import { SETTING_RULES, normalizeSettingValue, castSettingValue, readSetting } from './settings.js'
 
 export const DEFAULT_MCP_RATE = Object.freeze({ rpm: 600, writeRpm: 60, windowMs: 60000, maxBuckets: 10000 })
 const MAX_RATE = 1_000_000
@@ -54,13 +54,18 @@ function makeWindow(limit, now, maxBuckets) {
   }
 }
 
-export function createMcpRateLimiter({ env = process.env, now = Date.now, ...override } = {}) {
-  const policy = {
+/** 速率策略（环境变量 + 默认值）。限流器与管理端只读展示共用这一处，页面显示的数字就是限流器实际用的数字。 */
+export function mcpRatePolicy(env = process.env, override = {}) {
+  return {
     rpm: override.rpm ?? envInt(env.GML_MCP_TOKEN_RPM, 1, MAX_RATE, DEFAULT_MCP_RATE.rpm),
     writeRpm: override.writeRpm ?? envInt(env.GML_MCP_WRITE_RPM, 1, MAX_RATE, DEFAULT_MCP_RATE.writeRpm),
     windowMs: DEFAULT_MCP_RATE.windowMs,
     maxBuckets: override.maxBuckets ?? DEFAULT_MCP_RATE.maxBuckets
   }
+}
+
+export function createMcpRateLimiter({ env = process.env, now = Date.now, ...override } = {}) {
+  const policy = mcpRatePolicy(env, override)
   const all = makeWindow(policy.rpm, now, policy.maxBuckets)
   const writes = makeWindow(policy.writeRpm, now, policy.maxBuckets)
   const shadow = createBucketStore({ maxBuckets: policy.maxBuckets, now })
@@ -102,6 +107,12 @@ export function createMcpRateLimiter({ env = process.env, now = Date.now, ...ove
   }
 }
 
+/** 已配置的日配额（0 = 关闭）。只读展示用：读失败按 0 显示不影响限流（限流自己走 `dailyQuotaState`，读失败 fail closed）。 */
+export function dailyQuotaConfigured(db) {
+  const n = Number(readSetting(db, 'mcp_token_daily_quota'))
+  return Number.isFinite(n) && n >= 0 ? n : 0
+}
+
 /** 本地午夜距现在的秒数（≥1） */
 function secondsToLocalMidnight(d = new Date()) {
   const next = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1)
@@ -133,4 +144,4 @@ export function dailyQuotaState(db, tokenId, { now = () => new Date() } = {}) {
   }
 }
 
-export default { createMcpRateLimiter, dailyQuotaState, DEFAULT_MCP_RATE }
+export default { createMcpRateLimiter, mcpRatePolicy, dailyQuotaConfigured, dailyQuotaState, DEFAULT_MCP_RATE }

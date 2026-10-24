@@ -17,6 +17,7 @@
  * ============================================================================
  */
 import { redactValue, redactText } from './redact.js'
+import { readSetting } from './settings.js'
 
 export const AUDIT_EXPORT_MAX_ROWS = 50000
 export const AUDIT_PAGE_MAX = 200
@@ -87,6 +88,19 @@ export function parseFilters(query = {}) {
   }
   if (f.from && f.to && f.from > f.to) throw new AuditViewError('from 不能晚于 to')
   return f
+}
+
+/**
+ * FTS 状态读数（AE11，只读）：设置值 `audit_fts_enabled`、库里索引表是否存在、环境开关是否强制关闭，以及合起来"关键词检索是否可能走索引"。
+ * 注意 `active` 只表示**能**走索引；是否真走还取决于关键词长度与命中数（见 `keywordUsesFts`）。设置值与索引表不一致 = 待运维收敛。
+ */
+export function ftsState(db) {
+  let setting = true
+  try { setting = Boolean(readSetting(db, 'audit_fts_enabled')) } catch { /* 读不到按默认开启展示 */ }
+  let present = false
+  try { present = !!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(FTS_TABLE) } catch { /* 无表 */ }
+  const envOff = ftsEnvDisabled()
+  return { setting_enabled: setting, index_present: present, env_disabled: envOff, active: setting && present && !envOff && ftsOverride !== false }
 }
 
 /**
