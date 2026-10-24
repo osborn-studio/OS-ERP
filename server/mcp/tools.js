@@ -492,7 +492,7 @@ function docTypeOrThrow(db, code) {
  * 令牌范围 ∩ 所有者当前范围（`ctx.scope`）+ 所有者的 store_id（`store` 型解析器用）；无主令牌 user=null。
  */
 function docScopeCtx(db, ctx) {
-  const user = ctx.ownerUserId != null ? db.prepare('SELECT id, role, store_id, dealer_id FROM users WHERE id=?').get(Number(ctx.ownerUserId)) : null
+  const user = ctx.ownerUserId != null ? db.prepare('SELECT id, role, is_super, store_id, dealer_id FROM users WHERE id=?').get(Number(ctx.ownerUserId)) : null
   // AB7：strictBinding ⇒ 带 `binding` 的类型（RC / YQ / SH）对未绑门店的非 admin 所有者不可见（不复刻 HTTP 的角色名放行）
   return { db, user, orgScope: ctx.scope || { scope: 'all', orgIds: null }, strictBinding: true }
 }

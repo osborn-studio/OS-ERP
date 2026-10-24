@@ -171,7 +171,11 @@ ok('DOC_VIEW_PERMS 的绑定声明合法且归属列真实存在（Y6）', badBi
 const resolverBind = ['RC', 'YQ', 'SH'].filter((c) => DOC_SCOPE_RESOLVERS[c]?.binding !== 'store')
 ok('RC / YQ / SH 在 DOC_SCOPE_RESOLVERS 声明 binding: store（AB7，与 HTTP 同一判据 store-binding.js）', resolverBind.length === 0, resolverBind.join(' / '))
 const bindDrift = Object.entries(DOC_SCOPE_RESOLVERS).filter(([c, sp]) => sp.binding === 'store' && DOC_VIEW_PERMS[c]?.binding !== 'store').map(([c]) => c)
-ok('注册表声明门店绑定的类型在 DOC_VIEW_PERMS 里也是门店绑定（两处不漂移）', bindDrift.length === 0, bindDrift.join(' / '))
+// 反向：DOC_VIEW_PERMS 的门店绑定类型里，注册表尚未声明的只允许是登记过的残余（PS / PSF，ADR-0011 AB7 补充"仍无绑定规则的类型"）
+const AB7_RESIDUAL = new Set(['PS', 'PSF'])
+const bindUndeclared = Object.entries(DOC_VIEW_PERMS).filter(([c, e]) => e.binding === 'store' && DOC_SCOPE_RESOLVERS[c]?.binding !== 'store' && !AB7_RESIDUAL.has(c)).map(([c]) => c)
+bindDrift.push(...bindUndeclared)
+ok('门店绑定类型在注册表与 DOC_VIEW_PERMS 两处一致（除登记的残余 PS / PSF；两处不漂移）', bindDrift.length === 0, bindDrift.join(' / '))
 ok('读工具的范围上下文启用 strictBinding（docScopeCtx，AB7）', /strictBinding:\s*true/.test((await import('node:fs')).readFileSync(new URL('../server/mcp/tools.js', import.meta.url), 'utf8')), 'docScopeCtx 没有 strictBinding')
 
 // ---------------------------------------------------------------- ③ 覆盖结论

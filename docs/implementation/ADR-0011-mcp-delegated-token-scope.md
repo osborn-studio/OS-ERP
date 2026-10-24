@@ -188,6 +188,10 @@
 3. **未绑门店 = 严格模式**：HTTP 对未绑门店的总部角色按**角色名**放行（`HQ_ROLES` / `HQ`），MCP 仍不复刻角色名（见 Y6 "有意比 HTTP 严"）。注册表上下文带 `strictBinding: true`（仅 MCP 的 `docScopeCtx` 设置）时，未绑门店的非 admin 所有者在这三类上**整类不可见**（`docScopeOf` 返回 null，`docInScope` 为 false）；`/api/docflow/*` 不设该标志，行为不变（除第 2 点的"已绑门店 + 全局范围"收窄）。
 4. **与 Y6 的关系**：`doc-perms.js` 的类型级 `TOKEN_OWNER_BINDING_REQUIRED` 与 `rowInBinding` 保留（错误码与 `doc.list_types` 隐藏仍由它负责），注册表是第二道、且是 `/api/docflow` 也共用的一道；`check-mcp-coverage` 校验两处声明不漂移。
 
+**豁免口径**：`storeBindingExempt` = `role==='admin'` 或 `users.is_super`，与 `doc-perms.js` 的 `isSuper` 豁免同口径（Codex 审计 medium：此前注册表只认 admin，会把非 admin 超管所有者新挡掉）。
+
+**已知残余（Codex 审计 high，非本次引入、HTTP 侧）**：`/api/docflow/*` 的上下文不设 `strictBinding`，所以"未绑门店、`data_scope=all`、非总部角色名"的内部自定义角色账号仍可经 docflow 读 RC / YQ / SH 的留痕——门店路由会拒它、总部路由因角色名拒它，但 docflow 只看数据范围。要在 HTTP 侧收紧必须先复刻总部角色名闸（`HQ_ROLES` / `HQ` 两份名单并不相同），会改变 finance 等总部角色现有的可见性，需单独的产品决定，登记到 backlog，不在 AB7 范围。
+
 **HTTP 行为变化（需知悉）**：`/api/docflow/{events,overview,history,trace}` 对"绑了门店的非 admin 账号 + `data_scope=all`"不再放行别家门店的 RC / YQ / SH 单据与留痕；此前该组合在注册表层面等同全局范围。未绑门店的总部角色不受影响。
 
 **仍无绑定规则的类型（残余）**：PS / PSF 的 `store` 构建器已按 `ctx.user.store_id` 在受限范围内收窄，但全局范围下尚未带 `binding` 标记（读工具仍由 Y6 的 `rowInBinding` 挡住）；DR（经销商）、OC / OCS（订货主体）、DS / RB（无自视图）未并入注册表绑定。后续如要把它们并入，沿用同一个 `binding` 字段与 `strictBinding` 约定。

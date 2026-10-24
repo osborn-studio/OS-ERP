@@ -538,6 +538,7 @@ test('AB7 RC/YQ/SH binding rules live in DOC_SCOPE_RESOLVERS and use the shared 
   assert.equal(sb.boundStoreId(null), null)
   assert.equal(sb.storeBindingExempt({ role: 'admin' }), true)
   assert.equal(sb.storeBindingExempt({ role: 'finance' }), false)
+  assert.equal(sb.storeBindingExempt({ role: 'finance', is_super: 1 }), true, 'is_super matches the doc-perms isSuper exemption')
 
   const admin = (await api('/api/auth/login', { body: { username: 'admin', password: '12345', industry: 'cosmetic' } })).body.data.token
   const r = (await api('/api/auth/users', { token: admin, body: { username: 'ab7_owner', name: 'ab7', role: 'warehouse', password: secret(), data_scope: 'all' } })).body
@@ -581,6 +582,7 @@ test('AB7 RC/YQ/SH binding rules live in DOC_SCOPE_RESOLVERS and use the shared 
       assert.equal(docInScope(ctxOf(unbound, { strictBinding: true }), c, p.own.id), false, `${c} unbound strict`)
       assert.equal(docScopeOf(ctxOf(unbound, { strictBinding: true }), c), null, `${c} unbound strict: type invisible`)
       assert.equal(docInScope(ctxOf({ ...unbound, role: 'admin' }, { strictBinding: true }), c, p.own.id), true, `${c} admin strict`)
+      assert.equal(docInScope(ctxOf({ ...unbound, is_super: 1 }, { strictBinding: true }), c, p.own.id), true, `${c} is_super strict`)
     }
   })
 

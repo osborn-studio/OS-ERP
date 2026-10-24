@@ -19,7 +19,7 @@ export function boundStoreId(user) {
   return Number.isInteger(n) && n > 0 ? n : null
 }
 
-/** 不受门店绑定约束的账号：admin（HTTP requireStore 对 admin 放行）。 */
+/** 不受门店绑定约束的账号：admin（HTTP requireStore 对 admin 放行）与超管（`is_super`，与 MCP doc-perms 的 isSuper 豁免同口径）。 */
 export function storeBindingExempt(user) {
-  return !!user && user.role === 'admin'
+  return !!user && (user.role === 'admin' || user.is_super === 1 || user.is_super === true)
 }
