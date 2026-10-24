@@ -354,6 +354,7 @@ group('auth.js', 'public', '登录页要先选行业，行业列表只含名称/
 group('meta.js', 'public', '健康检查：匿名只返回 status/版本/构建 SHA/时间；ops 详情在处理器内按 admin/is_super 门控（可选鉴权，ADR-0029）', [['GET', '/health']])
 group('meta.js', 'public', '运维指标：路由中间件 metricsAuth（守卫按名字识别不到）= ?format=prometheus 且 GML_METRICS_TOKEN Bearer 匹配（SHA-256 + timingSafeEqual，令牌只对该格式有效，ADR-0045）则放行，否则 requireAuth；处理器内再要求 isOpsAdmin（admin 角色或 is_super）或令牌通道，否则 403（ADR-0029）。无凭据/错令牌 401，不匿名可读', [['GET', '/metrics']])
 group('meta.js', 'public', '字典（角色名/经销商等级/仓库类型），前端登录前即需渲染；不含业务数据', [['GET', '/dict']])
+group('meta.js', 'self', '角色 x 单据类型可见度矩阵（AD11）：只含角色名 / 单据类型名 / 五档可见度，不含权限点码与任何用户 / 组织 / 门店名；`me` 只描述调用者自己', [['GET', '/role-matrix']])
 group('mall.js', 'public', '商城匿名浏览/登录入口；会话路由另有 requireMall（mall-session）', [['POST', '/login'], ['GET', '/home'], ['GET', '/products'], ['GET', '/products/:skuId']])
 group('promo.js', 'public', '商城活动墙：只返回"任何人都能参与"的自动促销（见处理器内 SQL 条件）', [['GET', '/shop/promotions']])
 group('qimen.js', 'public', '奇门网关模拟承接方：由 body.app_key + 签名 verifySign 在处理器内自鉴权；ADR-0028 起 app_key / 签名必填，ADR-0033 起签名为平台独立密钥 HMAC-SHA256 + 5 分钟时间窗 + nonce 防重放，缺失、未知平台、未签发密钥、错签名、过期或重放一律 401；生产运行时由 capabilities 关闭（503）', [['POST', '/']])

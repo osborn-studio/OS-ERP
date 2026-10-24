@@ -61,7 +61,7 @@
 | `doc_no_rules` | 009 | 009·idx | lib/docno.js | routes/docflow.js |
 | `doc_states` | 008 | 008·idx | lib/docflow.js, mcp/catalog.js, mcp/tools.js | routes/docflow.js, routes/order-center.js |
 | `doc_transition_policy` | 027 | — | lib/approval.js, lib/docflow.js | — |
-| `doc_types` | 008 | — | lib/approval.js, lib/docflow.js, lib/docno.js, lib/order-center.js, mcp/catalog.js, mcp/tools.js | routes/approval.js, routes/docflow.js, routes/purchase-chain.js |
+| `doc_types` | 008 | — | lib/approval.js, lib/docflow.js, lib/docno.js, lib/order-center.js, lib/role-matrix.js, mcp/catalog.js, mcp/tools.js | routes/approval.js, routes/docflow.js, routes/purchase-chain.js |
 | `im_approval_map` | 040 | 040·idx | lib/im-sync.js | routes/im.js |
 | `im_dept_map` | 040 | 040·idx | lib/im-sync.js | routes/im.js |
 | `im_platform_cfg` | 040 | — | lib/im-sync.js | — |
@@ -175,8 +175,8 @@
 | `report_config_audit_log` | 039 | 039·idx | lib/report-config-audit.js | — |
 | `report_defs` | 034 | — | lib/report-config-audit.js, lib/report.js | — |
 | `report_lines` | 034 | 034·idx | lib/report-config-audit.js, lib/report.js | — |
-| `role_permissions` | 005 | — | lib/account-security.js, middleware/auth.js | routes/auth.js |
-| `roles` | 005 | — | lib/account-security.js, lib/admin-bootstrap.js, lib/approval.js, middleware/auth.js | routes/approval.js, routes/auth.js |
+| `role_permissions` | 005 | — | lib/account-security.js, lib/role-matrix.js, middleware/auth.js | routes/auth.js |
+| `roles` | 005 | — | lib/account-security.js, lib/admin-bootstrap.js, lib/approval.js, lib/role-matrix.js, middleware/auth.js | routes/approval.js, routes/auth.js |
 | `sales_deliveries` | schema.sql | — | lib/accounting.js, lib/docflow.js, lib/invoice.js, lib/report.js, lib/returns.js, lib/sales-order.js | routes/invoice.js, routes/oms.js, routes/sales.js |
 | `sales_delivery_items` | schema.sql | — | lib/invoice.js, lib/report.js, lib/returns.js | routes/oms.js, routes/sales.js |
 | `sales_invoice_items` | 021 | 021·idx | lib/invoice.js | — |
@@ -205,7 +205,7 @@
 | `suppliers` | schema.sql | 005 | lib/accounting.js, lib/approval.js, lib/costing.js, lib/dashboard-sql.js, lib/purchase.js, lib/qc.js, lib/qc2.js, mcp/tools.js | routes/ai.js, routes/dashboard.js, routes/inventory.js, routes/master.js, routes/outsourcing.js, routes/purchase-chain.js, routes/purchase.js |
 | `user_orgs` | 005 | 005·idx | lib/account-security.js, lib/admin-bootstrap.js | — |
 | `user_roles` | 005 | 005·idx | lib/account-security.js, lib/admin-bootstrap.js, lib/approval.js, middleware/auth.js | — |
-| `users` | schema.sql | 005, 050 | lib/account-security.js, lib/admin-bootstrap.js, lib/approval.js, lib/im-sync.js, lib/qc2.js, mcp/delegation.js, mcp/doc-perms.js, mcp/tokens.js, mcp/tools.js, middleware/auth.js | routes/approval.js, routes/auth.js, routes/im.js, routes/sales.js |
+| `users` | schema.sql | 005, 050 | lib/account-security.js, lib/admin-bootstrap.js, lib/approval.js, lib/im-sync.js, lib/qc2.js, lib/role-matrix.js, mcp/delegation.js, mcp/doc-perms.js, mcp/tokens.js, mcp/tools.js, middleware/auth.js | routes/approval.js, routes/auth.js, routes/im.js, routes/sales.js |
 | `voucher_entries` | 032 | 032·idx, 041·idx | lib/accounting.js, lib/annual.js, lib/closing.js, lib/report.js | — |
 | `voucher_template_entries` | 032 | 032·idx | lib/accounting.js | — |
 | `voucher_templates` | 032 | — | lib/accounting.js | — |
