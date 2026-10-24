@@ -19,7 +19,7 @@
  * ============================================================================
  */
 import { createBucketStore, envInt } from './metrics-throttle.js'
-import { readSetting } from './settings.js'
+import { SETTING_RULES, normalizeSettingValue, castSettingValue } from './settings.js'
 
 export const DEFAULT_MCP_RATE = Object.freeze({ rpm: 600, writeRpm: 60, windowMs: 60000, maxBuckets: 10000 })
 const MAX_RATE = 1_000_000
@@ -63,22 +63,41 @@ export function createMcpRateLimiter({ env = process.env, now = Date.now, ...ove
   }
   const all = makeWindow(policy.rpm, now, policy.maxBuckets)
   const writes = makeWindow(policy.writeRpm, now, policy.maxBuckets)
+  const shadow = createBucketStore({ maxBuckets: policy.maxBuckets, now })
   const deny = (reason, win) => ({ allowed: false, reason, retryAfter: win.retryAfter() })
   return {
     policy,
     /** 一次工具调用的额度申请。→ { allowed: true } | { allowed: false, reason: 'rpm'|'write_rpm'|'unavailable', retryAfter } */
-    consume(tokenId, level) {
-      if (!Number.isSafeInteger(tokenId) || tokenId <= 0) return deny('unavailable', all)
-      const a = all.open(tokenId)
+    consume(tokenId, level, scope = '') {
+      if (!Number.isSafeInteger(tokenId) || tokenId <= 0 || typeof scope !== 'string' || scope.length > 64) return deny('unavailable', all)
+      const key = `${scope}|${tokenId}` // 令牌 id 在各行业库里各自从 1 起编，必须带库标识，否则不同行业的同号令牌共用一个桶
+      const a = all.open(key)
       if (a.full) return deny('unavailable', all)
       const isWrite = level === 'write'
-      const w = isWrite ? writes.open(tokenId) : null
+      const w = isWrite ? writes.open(key) : null
       if (w?.full) return deny('unavailable', writes)
       if (all.exceeded(a.bucket)) return deny('rpm', all)
       if (w && writes.exceeded(w.bucket)) return deny('write_rpm', writes)
       all.record(a.bucket)
       if (w) writes.record(w.bucket)
       return { allowed: true }
+    },
+    /**
+     * 日配额判定（含进程内影子计数）。审计行是权威计数，但"尽力写"的读路径审计写失败时不会推进它——
+     * 影子计数记录本进程**已放行**的次数，取两者较大值，审计写失败时配额仍然生效。影子按本地日滚动，桶表同样有上限、满则拒。
+     */
+    daily(db, tokenId, scope = '') {
+      const q = dailyQuotaState(db, tokenId)
+      if (!q.allowed || !(q.quota > 0)) return q
+      const t = now()
+      const d = new Date(t)
+      const midnight = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1).getTime()
+      const o = shadow.open(`${scope}|${tokenId}`, () => ({ n: 0, expires: midnight }))
+      if (o.full) return { allowed: false, reason: 'unavailable', quota: q.quota, used: q.used, retryAfter: 60 }
+      const used = Math.max(q.used ?? 0, o.bucket.n)
+      if (used >= q.quota) return { allowed: false, reason: 'daily_quota', quota: q.quota, used, retryAfter: secondsToLocalMidnight(d) }
+      o.bucket.n = used + 1
+      return { ...q, used }
     }
   }
 }
@@ -94,8 +113,16 @@ function secondsToLocalMidnight(d = new Date()) {
  * 配额为 0 = 关闭（不查审计表）。统计口径：`mcp_call_logs` 中该令牌**本地今日**的行数（被速率限制直接拒绝的调用不写审计行，不占配额）。
  */
 export function dailyQuotaState(db, tokenId, { now = () => new Date() } = {}) {
+  // 严格读设置：库出错 ⇒ fail closed（`readSetting` 会吞错回落默认值 0，等于把已开启的配额静默关掉）
   let quota = 0
-  try { quota = Number(readSetting(db, 'mcp_token_daily_quota')) || 0 } catch { quota = 0 }
+  try {
+    const row = db.prepare('SELECT value FROM settings WHERE key=?').get('mcp_token_daily_quota')
+    const def = SETTING_RULES.mcp_token_daily_quota
+    quota = Number(castSettingValue(def, normalizeSettingValue(def, row ? row.value : def.default)))
+    if (!Number.isFinite(quota) || quota < 0) throw new Error('bad quota')
+  } catch {
+    return { allowed: false, reason: 'unavailable', quota: null, used: null, retryAfter: 60 }
+  }
   if (quota <= 0) return { allowed: true, quota: 0 }
   try {
     const used = db.prepare("SELECT COUNT(*) c FROM mcp_call_logs WHERE token_id=? AND created_at >= date('now','localtime')").get(tokenId).c

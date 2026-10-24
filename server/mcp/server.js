@@ -40,7 +40,7 @@ import { versionInfo } from '../version.js'
 import { logger } from '../lib/logger.js'
 import { incCounter, incMcpToolCall, registerMcpTools } from '../lib/process-counters.js'
 import { bizFail } from '../lib/http.js'
-import { createMcpRateLimiter, dailyQuotaState } from '../lib/mcp-rate-limit.js'
+import { createMcpRateLimiter } from '../lib/mcp-rate-limit.js'
 
 const r = Router()
 
@@ -151,19 +151,22 @@ function rateLimited(res, id, tool, d) {
   const cap = { status: 429, body: null }
   bizFail({ status(s) { cap.status = s; return this }, json(b) { cap.body = b; return this } }, err)
   res.set('Retry-After', String(retryAfter))
+  // JSON-RPC 要求 `error` 与 `result` 二选一，所以这里**不带**顶层 `error` 字符串：业务码在 `detail.code`（bizFail 约定）与 result 文本里。
+  const { error: _code, ...biz } = cap.body
   return res.status(cap.status).json({
     jsonrpc: '2.0',
     id,
-    ...cap.body,
+    ...biz,
     result: { content: [{ type: 'text', text: JSON.stringify({ error: 'MCP_RATE_LIMITED', message: cap.body.message, detail: cap.body.detail }, null, 2) }], isError: true }
   })
 }
 
 /** 速率 + 日配额的一次判定；通过返回 null，否则返回拒绝详情 */
 function mcpBudget(db, tokenId, level) {
-  const rate = mcpLimiter.consume(tokenId, level)
+  const scope = getCurrentIndustry() ?? '' // 令牌 id 在各行业库里各自编号，限流键必须带库标识
+  const rate = mcpLimiter.consume(tokenId, level, scope)
   if (!rate.allowed) return rate
-  const q = dailyQuotaState(db, tokenId)
+  const q = mcpLimiter.daily(db, tokenId, scope)
   return q.allowed ? null : q
 }
 

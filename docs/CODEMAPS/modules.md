@@ -717,7 +717,7 @@ MCP 按令牌的速率限制与日配额（ADR-0056 / AD9）
 |---|---|---|---|---|
 | `DEFAULT_MCP_RATE` | const | — | — | — |
 | `createMcpRateLimiter` | fn | — | — | mcp/server.js |
-| `dailyQuotaState` | fn | — | — | mcp/server.js |
+| `dailyQuotaState` | fn | — | — | — |
 
 ## `server/lib/member.js`
 
@@ -1468,17 +1468,17 @@ Prometheus 文本指标渲染 + 抓取令牌校验（ADR-0045）
 | `SETTING_ACTIONS` | const | — | — | — |
 | `SETTING_GROUPS` | const | — | — | — |
 | `SETTING_KEYS` | const | — | — | — |
-| `SETTING_RULES` | const | — | — | lib/pos2.js |
+| `SETTING_RULES` | const | — | — | lib/mcp-rate-limit.js, lib/pos2.js |
 | `SettingError` | class | — | — | — |
 | `auditSettingTrail` | fn | GET /api/meta/settings/audit/check | — | lib/report.js |
-| `castSettingValue` | fn | — | — | — |
+| `castSettingValue` | fn | — | — | lib/mcp-rate-limit.js |
 | `ensureSettings` | fn | GET /api/meta/settings<br>PUT /api/meta/settings<br>POST /api/meta/settings/reset<br>GET /api/meta/settings/audit/check | — | — |
 | `listSettingAudit` | fn | GET /api/meta/settings/audit | — | — |
 | `listSettings` | fn | GET /api/meta/settings | — | — |
 | `logSettingChange` | fn | — | — | — |
 | `meta` | fn | — | — | — |
-| `normalizeSettingValue` | fn | — | — | — |
-| `readSetting` | fn | 7 条：docflow.js×5, invoice.js×1, meta.js×1 | — | 16 个：lib/accounting.js, lib/annual.js, lib/approval.js, lib/closing.js, lib/credit.js, lib/funds-review.js … |
+| `normalizeSettingValue` | fn | — | — | lib/mcp-rate-limit.js |
+| `readSetting` | fn | 7 条：docflow.js×5, invoice.js×1, meta.js×1 | — | 15 个：lib/accounting.js, lib/annual.js, lib/approval.js, lib/closing.js, lib/credit.js, lib/funds-review.js … |
 | `replaySettings` | fn | — | — | — |
 | `resetSetting` | fn | POST /api/meta/settings/reset | — | — |
 | `settingDef` | fn | — | — | — |

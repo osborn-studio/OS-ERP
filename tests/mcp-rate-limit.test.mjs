@@ -205,7 +205,8 @@ test('integration: read limit -> 429 MCP_RATE_LIMITED, JSON-RPC envelope kept, c
   assert.ok(Number(over.headers.get('retry-after')) >= 1)
   assert.equal(over.body.jsonrpc, '2.0')
   assert.equal(over.body.success, false)
-  assert.equal(over.body.error, 'MCP_RATE_LIMITED')
+  assert.equal('error' in over.body, false, 'JSON-RPC: result and error are mutually exclusive, so no top-level error member')
+  assert.equal(over.body.detail.code, 'MCP_RATE_LIMITED')
   assert.equal(over.body.result?.isError, true, 'tool-style envelope so MCP clients surface it to the model')
   assert.equal(errCode(over), 'MCP_RATE_LIMITED')
   assert.equal((await f.call('org.tree', {}, b)).status, 200, 'token b is unaffected by token a')
@@ -224,7 +225,7 @@ test('integration: write limit refuses with zero writes, read budget unaffected,
   assert.equal(mid.idem, before.idem + 2)
   const over = await f.call('inventory.stock_in', stockIn(fx, 3), tok)
   assert.equal(over.status, 429)
-  assert.equal(over.body.error, 'MCP_RATE_LIMITED')
+  assert.equal(over.body.detail.code, 'MCP_RATE_LIMITED')
   assert.deepEqual(rows(f.db), mid, 'a refused write changes no business row and no idempotency row')
   // 读不受写限额影响
   const read = await f.call('org.tree', {}, tok)
@@ -254,7 +255,7 @@ test('integration: daily quota (off by default), per token, rollover by local da
   f.db.prepare("INSERT INTO settings (key, value, updated_at) VALUES ('mcp_token_daily_quota','3',datetime('now','localtime')) ON CONFLICT(key) DO UPDATE SET value='3'").run()
   const over = await f.call('org.tree', {}, a)
   assert.equal(over.status, 429)
-  assert.equal(over.body.error, 'MCP_RATE_LIMITED')
+  assert.equal(over.body.detail.code, 'MCP_RATE_LIMITED')
   assert.equal(over.body.detail?.reason, 'daily_quota')
   assert.ok(Number(over.headers.get('retry-after')) >= 1)
   assert.equal((await f.call('org.tree', {}, b)).status, 200)
@@ -282,5 +283,37 @@ test('dailyQuotaState: off when 0, counts only today for the token, fails closed
   const broken = dailyQuotaState(db, 1)
   assert.equal(broken.allowed, false)
   assert.equal(broken.reason, 'unavailable')
+  db.close()
+})
+
+test('buckets are namespaced by industry database: same numeric token id in two industries does not share a budget', () => {
+  const l = createMcpRateLimiter({ env: { GML_MCP_TOKEN_RPM: '2' }, now: () => 1 })
+  assert.equal(l.consume(1, 'read', 'cosmetic').allowed, true)
+  assert.equal(l.consume(1, 'read', 'cosmetic').allowed, true)
+  assert.equal(l.consume(1, 'read', 'cosmetic').allowed, false)
+  assert.equal(l.consume(1, 'read', 'food').allowed, true)
+})
+
+test('dailyQuotaState fails closed when the settings read itself fails (readSetting would swallow it and turn the quota off)', () => {
+  const db = new Database(':memory:')
+  db.exec('CREATE TABLE mcp_call_logs (id INTEGER PRIMARY KEY, token_id INTEGER, created_at TEXT NOT NULL DEFAULT (datetime(\'now\',\'localtime\')))')
+  const s = dailyQuotaState(db, 1) // 没有 settings 表
+  assert.equal(s.allowed, false)
+  assert.equal(s.reason, 'unavailable')
+  db.close()
+})
+
+test('limiter.daily keeps a process-local shadow count so a quota still holds when audit rows cannot be written', () => {
+  const db = new Database(':memory:')
+  db.exec(`CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT);
+           CREATE TABLE mcp_call_logs (id INTEGER PRIMARY KEY, token_id INTEGER, created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')));
+           INSERT INTO settings (key,value) VALUES ('mcp_token_daily_quota','2')`)
+  const l = createMcpRateLimiter({ env: {} })
+  assert.equal(l.daily(db, 1, 'cosmetic').allowed, true)
+  assert.equal(l.daily(db, 1, 'cosmetic').allowed, true)
+  const third = l.daily(db, 1, 'cosmetic') // 审计表始终为空（模拟审计写失败）
+  assert.equal(third.allowed, false)
+  assert.equal(third.reason, 'daily_quota')
+  assert.equal(l.daily(db, 2, 'cosmetic').allowed, true, 'other tokens keep their own shadow')
   db.close()
 })

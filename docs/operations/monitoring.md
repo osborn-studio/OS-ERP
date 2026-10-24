@@ -22,7 +22,7 @@ curl -sS -H "Authorization: Bearer $GML_METRICS_TOKEN" 'http://127.0.0.1:3000/ap
 
 **抓取节流（AB10）**：`/api/meta/metrics` 按来源 IP（`req.ip`，受 `GML_TRUST_PROXY` 约束）限速，独立于登录节流的桶，在鉴权之前计数（猜令牌同样受限）。默认每 IP 每 60 s 120 次，可用 `GML_METRICS_IP_LIMIT`（1..100000）与 `GML_METRICS_IP_WINDOW_MS`（1000..86400000）调整，非法值回退默认。超限返回 429，`error=METRICS_RATE_LIMITED` 并带 `Retry-After`。进程内计数，重启清零。
 
-**MCP 速率限制与日配额（AD9，ADR-0056）**：每个 MCP 令牌（按验签后的令牌 id 计，与 IP 无关）有两个 60 秒滑动窗口额度：`GML_MCP_TOKEN_RPM`（全部工具调用与 `resources/read`，默认 600）与 `GML_MCP_WRITE_RPM`（`level: write` 工具，默认 60；写调用同时计入总额度）。取值范围 1..1000000，非法值回退默认。超限返回 HTTP 429、`Retry-After`、业务码 `MCP_RATE_LIMITED`（响应仍带 JSON-RPC 外壳与 `result.isError`），并计入 `os_erp_mcp_tool_calls_total{code="MCP_RATE_LIMITED"}`；被限流的调用不写 `mcp_call_logs`。可选日配额：设置键 `mcp_token_daily_quota`（系统设置 > 运维，危险键，改动须写理由；默认 0 = 关闭），按令牌统计本地当日的调用审计行，过本地午夜归零，超出同样返回 429（`detail.reason=daily_quota`）。限流桶在进程内存（重启清零、多进程各自计数），桶数上限 10000，满了且无可清理项时拒绝新桶（fail closed）。告警见 `OsErpMcpRateLimited`。
+**MCP 速率限制与日配额（AD9，ADR-0056）**：每个 MCP 令牌（按验签后的令牌 id 计，与 IP 无关）有两个 60 秒滑动窗口额度：`GML_MCP_TOKEN_RPM`（全部工具调用与 `resources/read`，默认 600）与 `GML_MCP_WRITE_RPM`（`level: write` 工具，默认 60；写调用同时计入总额度）。取值范围 1..1000000，非法值回退默认。超限返回 HTTP 429、`Retry-After`、业务码 `MCP_RATE_LIMITED`（在 `detail.code`；响应仍带 JSON-RPC 外壳与 `result.isError`，无顶层 `error`），并计入 `os_erp_mcp_tool_calls_total{code="MCP_RATE_LIMITED"}`；被限流的调用不写 `mcp_call_logs`。可选日配额：设置键 `mcp_token_daily_quota`（系统设置 > 运维，危险键，改动须写理由；默认 0 = 关闭），按令牌统计本地当日的调用审计行，过本地午夜归零，超出同样返回 429（`detail.reason=daily_quota`）。限流桶在进程内存（重启清零、多进程各自计数），桶数上限 10000，满了且无可清理项时拒绝新桶（fail closed）。告警见 `OsErpMcpRateLimited`。
 
 ## 2. Prometheus 抓取配置
 
