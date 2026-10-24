@@ -109,7 +109,7 @@ test('GET /api/mcp/limits/tokens: db mode lists per-token recent ceiling hits to
   const d = r.body.data
   assert.equal(d.store, 'db')
   assert.equal(d.window_seconds, 60)
-  assert.deepEqual(Object.keys(d).sort(), ['store', 'tokens', 'window_seconds'])
+  assert.deepEqual(Object.keys(d).sort(), ['store', 'tokens', 'truncated', 'window_seconds'])
   const byName = Object.fromEntries(d.tokens.map((x) => [x.name, x]))
   assert.deepEqual(Object.keys(byName['tok-busy']).sort(), ['id', 'name', 'rate_limited_recent'])
   assert.ok(byName['tok-busy'].rate_limited_recent >= 1)
@@ -135,5 +135,5 @@ test('GET /api/mcp/limits/tokens: memory mode (default) returns an empty list', 
   for (let i = 0; i < 3; i++) await f.mcpCall(tok.token)
   const r = await f.get('/api/mcp/limits/tokens', admin)
   assert.equal(r.status, 200)
-  assert.deepEqual(r.body.data, { store: 'memory', window_seconds: 60, tokens: [] })
+  assert.deepEqual(r.body.data, { store: 'memory', window_seconds: 60, truncated: false, tokens: [] })
 })

@@ -89,14 +89,22 @@ r.get(
   wrap((_req, res) => {
     const p = mcpRatePolicy()
     const base = { store: p.store, window_seconds: Math.round(p.windowMs / 1000) }
-    if (p.store !== 'db') return ok(res, { ...base, tokens: [] })
+    if (p.store !== 'db') return ok(res, { ...base, truncated: false, tokens: [] })
     const db = getDb()
     const hits = recentLimitedByToken(db, { scope: getCurrentIndustry() ?? '', policy: p })
-    const rows = db.prepare("SELECT id, name, status FROM agent_tokens ORDER BY id LIMIT 500").all()
-    const tokens = rows
-      .filter((t) => t.status === 'active' || hits.has(t.id))
+    const CAP = 500
+    // 先按资格筛再限量：触顶的令牌（含已吊销的）一定在内，其余取在用令牌；超出上限时 truncated=true，页面据此提示
+    const hitIds = [...hits.keys()]
+    const hitRows = hitIds.length ? db.prepare(`SELECT id, name FROM agent_tokens WHERE id IN (${hitIds.map(() => '?').join(',')})`).all(...hitIds) : []
+    const active = db.prepare("SELECT id, name FROM agent_tokens WHERE status='active' ORDER BY id LIMIT ?").all(CAP + 1)
+    const seen = new Set(hitRows.map((t) => t.id))
+    const merged = [...hitRows, ...active.filter((t) => !seen.has(t.id))]
+    const truncated = merged.length > CAP
+    const tokens = merged
+      .slice(0, CAP)
       .map((t) => ({ id: t.id, name: t.name, rate_limited_recent: hits.get(t.id) ?? 0 }))
-    return ok(res, { ...base, tokens })
+      .sort((a, b) => b.rate_limited_recent - a.rate_limited_recent || a.id - b.id)
+    return ok(res, { ...base, truncated, tokens })
   })
 )
 

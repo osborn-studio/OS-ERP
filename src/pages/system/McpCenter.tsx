@@ -361,7 +361,7 @@ function McpLimitsCard({ nonce }: { nonce: number }) {
   )
 }
 
-type McpTokenLimits = { store: 'memory' | 'db'; window_seconds: number; tokens: { id: number; name: string; rate_limited_recent: number }[] }
+type McpTokenLimits = { store: 'memory' | 'db'; truncated?: boolean; window_seconds: number; tokens: { id: number; name: string; rate_limited_recent: number }[] }
 
 /**
  * 每令牌近期限流（AF11，只读，仅 system.mcp.manage）。数字来自 `GET /api/mcp/limits/tokens`，只在 `db` 速率存储模式有数据。
@@ -376,6 +376,7 @@ function McpTokenLimitsBlock({ nonce }: { nonce: number }) {
   const hit = data.tokens.filter((t) => t.rate_limited_recent > 0)
   return (
     <div data-testid="mcp-token-429" data-store="db" data-hit={hit.length} className="mt-3">
+      {data.truncated && <div className="text-[12px] text-amber-700 mb-1" data-testid="mcp-token-429-truncated">令牌过多，仅列出前 500 张，触顶令牌优先。</div>}
       <div className="text-[12px] text-slate-500 mb-1">当前与上一个 {data.window_seconds} 秒窗口内触及上限的令牌（按窗口计，非 429 精确次数）</div>
       {hit.length === 0
         ? <div className="text-[12px] text-emerald-700" data-testid="mcp-token-429-empty">没有令牌触顶</div>
