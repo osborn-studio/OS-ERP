@@ -224,8 +224,11 @@ test('AE1: metrics_global_for_restricted hides scope-less metrics from restricte
     db.prepare('UPDATE users SET data_scope=?, store_id=? WHERE id=?').run('all', store.id, B.id)
     const tok = await f.login(B.username, B.password)
     const v = okData(await api(`/api/metrics/values?keys=${ALL}`, { token: tok }))
-    // AF2：绑定主体账号对销售 / OMS / 订货中心指标 fail-closed（不是内部组织口径）；门店绑定账号另得本店 POS
+    // AF2：绑定主体账号对销售 / OMS / 订货中心 / 存货 / 采购订单指标 fail-closed（不是内部组织口径）；门店绑定账号另得本店 POS
+    // Codex AF2 高项：存货 / 采购订单类也对绑定主体失败关闭（此前 data_scope=all 的绑定账号拿全局库存 / 采购数）
     const legacyAware = SCOPE_AWARE.filter((k) => !METRIC_BY_KEY[k].bound)
+    assert.deepEqual(legacyAware, [], 'every scope-aware metric declares how bound subjects are handled')
+    for (const k of ['stock_qty', 'stock_amount', 'purchase_amount']) assert.ok(!(k in v.values), `${k} must not reach a bound subject`)
     assert.deepEqual(Object.keys(v.values).sort(), [...legacyAware, 'pos_sales'].sort())
     assert.equal(v.hidden_count, METRICS.length - legacyAware.length - 1)
     const D = await f.account('ae1_bound_dealer', 'warehouse', { data_scope: 'all' })
@@ -401,5 +404,21 @@ test('AF2: restricted callers get values computed over their scope (sales / OMS 
     db.prepare('UPDATE users SET data_scope=?, store_id=? WHERE id=?').run('all', stA.id, W.id)
     const w = await vals(await f.login(W.username, W.password))
     assert.ok(!('oc_order_amount' in w.values) && 'pos_sales' in w.values)
+  })
+
+  await t.test('order-centre read path never creates a customer profile; a bound subject without one reads 0', async () => {
+    const free = db.prepare("SELECT id FROM stores WHERE id NOT IN (SELECT source_id FROM oc_customers WHERE source_type='store') ORDER BY id LIMIT 1").get()
+    // 种子里每家门店都可能已有档案：删掉一家的订货档案以构造"有门店绑定、无订货档案"（该门店此前没有订货单）
+    const target = free || db.prepare("SELECT s.id FROM stores s JOIN oc_customers c ON c.source_type='store' AND c.source_id=s.id WHERE NOT EXISTS (SELECT 1 FROM oc_orders o WHERE o.customer_id=c.id) AND s.id NOT IN (?,?) ORDER BY s.id LIMIT 1").get(stA.id, stB.id)
+    assert.ok(target, 'fixture: a store without order-centre profile / orders')
+    db.prepare("DELETE FROM oc_addresses WHERE customer_id IN (SELECT id FROM oc_customers WHERE source_type='store' AND source_id=?)").run(target.id)
+    db.prepare("DELETE FROM oc_customers WHERE source_type='store' AND source_id=?").run(target.id)
+    const X = await f.account('af2_store_noprofile', 'warehouse', { data_scope: 'all' })
+    db.prepare("UPDATE users SET role='store', data_scope='all', store_id=?, org_id=NULL WHERE id=?").run(target.id, X.id)
+    const before = one('SELECT COUNT(*) v FROM oc_customers')
+    const x = await vals(await f.login(X.username, X.password))
+    assert.equal(x.values.oc_order_amount, 0)
+    assert.equal(x.values.oc_fill_rate, 0)
+    assert.equal(one('SELECT COUNT(*) v FROM oc_customers'), before, 'a metrics read must not provision a customer')
   })
 })

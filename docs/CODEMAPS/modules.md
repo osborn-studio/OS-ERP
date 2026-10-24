@@ -954,6 +954,7 @@ OMS /stats 与 AI 平台分析的 SQL 唯一来源（AE3，ADR-0044 补充 4）
 | `pickWarehouse` | fn | POST /api/order-center/quote | — | — |
 | `quoteItems` | fn | POST /api/order-center/quote | — | — |
 | `selfCustomerId` | fn | 6 条：order-center.js×6 | — | — |
+| `selfCustomerIdReadOnly` | fn | — | — | lib/metrics.js |
 | `settleStatement` | fn | POST /api/order-center/statements/:id/settle | — | — |
 | `statementBalance` | fn | — | — | — |
 | `transitionOrder` | fn | POST /api/order-center/orders/:id/:action | — | — |

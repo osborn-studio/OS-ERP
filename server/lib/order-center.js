@@ -1407,6 +1407,18 @@ export function overview(db, { customerIds = null, scopeFor = null } = {}) {
   }
 }
 
+
+/**
+ * `selfCustomerId` 的只读版（AF2 / 指标读路径用）：外部订货主体已有订货档案则返回其 id，没有则 null，
+ * **不**建档（`ensureCustomer` 会插入客户与地址，读接口不应有写副作用）。判据（role / dealer_id / store_id）与 `selfCustomerId` 同一份。
+ */
+export function selfCustomerIdReadOnly(db, user = {}) {
+  const key = user.role === 'dealer' && user.dealer_id ? ['dealer', user.dealer_id]
+    : user.role === 'store' && user.store_id ? ['store', user.store_id] : null
+  if (!key) return null
+  const row = db.prepare('SELECT id FROM oc_customers WHERE source_type=? AND source_id=?').get(...key)
+  return row ? row.id : null
+}
 /**
  * 订货方自身绑定：经销商账号只能看到自己的单，门店店长只能看到本店的单。
  * 返回 customerId，null 表示不限（总部角色）。

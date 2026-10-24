@@ -39,7 +39,7 @@ import { countBelowSafe, stockScopeSql } from './stock.js'
 import { purchaseOrderScopeSql, PO_READ_PERMS } from './purchase.js'
 import { readSetting } from './settings.js'
 import { salesScopeSql, omsOrderScopeSql } from './sales-order.js'
-import { ocScope } from './order-center.js'
+import { ocScope, selfCustomerIdReadOnly } from './order-center.js'
 import { boundStoreId, isExternalSubject } from './store-binding.js'
 
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100
@@ -55,8 +55,9 @@ const days = (p, dflt = 30) => {
 // 库存类走 `stockScopeSql`（仓库所属组织），采购订单类走 `purchaseOrderScopeSql`（入库仓所属组织），判据各只有一份。
 // 带 `scopeAware: true` 的指标才会按范围收窄；其余指标没有组织归属可套（销售 / 线上 / 财务 / 订货 / 经销商 / 审批），
 // 对受限调用者仍是全局口径，由 `metricScopedFlags` 标 `scoped: false`，前端据此标注「全局口径」。
-const stockSc = (p, alias = 'st') => stockScopeSql(p?.orgScope, alias)
-const poSc = (p, alias = 'po') => purchaseOrderScopeSql(p?.orgScope, alias)
+// 绑定主体（门店 / 经销商账号）对库存 / 采购订单类同样失败关闭（Codex AF2 高项：此前 data_scope=all 的绑定账号会拿全局数）
+const stockSc = (p, alias = 'st') => stockScopeSql(p?.subjectBound ? { scope: 'none' } : p?.orgScope, alias)
+const poSc = (p, alias = 'po') => purchaseOrderScopeSql(p?.subjectBound ? { scope: 'none' } : p?.orgScope, alias)
 /** 调用者是否受限（非全局范围）；不传 = 不受限 */
 export const isScopeRestricted = (orgScope) => !!orgScope && orgScope.scope !== 'all'
 
@@ -90,12 +91,14 @@ const ocSc = (db, p, column = 'o.customer_id') => {
   if (!p?.subjectBound && !isScopeRestricted(p?.orgScope)) return ALL_SQL
   // 绑定主体里只有外部订货主体有"自己的客户"；其余（如绑了门店的内部角色）不能借 data_scope=all 读全量
   if (p?.subjectBound && !isExternalSubject(p.user)) return NONE_SQL
-  try {
-    const sc = ocScope(db, { user: p?.user || {}, orgScope: p?.orgScope }, column)
-    return { sql: sc.sql, params: sc.params, empty: sc.empty }
-  } catch {
-    return NONE_SQL // 订货主体未绑定档案等 ⇒ 失败关闭
+  if (p?.subjectBound) {
+    // 只读查本人客户档案：没有档案就是空范围（不能因为读指标而建档，也不能借 data_scope=all 回落到全量）
+    const self = selfCustomerIdReadOnly(db, p.user)
+    return self ? { sql: `${column} = ?`, params: [self], empty: false } : NONE_SQL
   }
+  // 非绑定的受限内部账号：只看组织范围（user 置空，ocScope 不会走 selfCustomerId 的建档路径）
+  const sc = ocScope(db, { user: {}, orgScope: p?.orgScope }, column)
+  return { sql: sc.sql, params: sc.params, empty: sc.empty }
 }
 
 /** 绑定主体（subjectBound）能否看到该指标。未声明 `bound` 的既有指标行为不变（恒真）。 */
@@ -307,6 +310,7 @@ export const METRICS = [
     source: 'inventory_stocks',
     note: '实物层口径 —— 仓里真的有多少。跨批次汇总，不看批次明细',
     scopeAware: true,
+    bound: 'deny',
     compute: (db, p) => {
       const sc = stockSc(p)
       return num(db.prepare(`SELECT COALESCE(SUM(st.qty_on_hand),0) v FROM inventory_stocks st WHERE ${sc.sql}`).get(...sc.params).v)
@@ -324,6 +328,7 @@ export const METRICS = [
     source: 'inventory_stocks',
     note: '「现在能卖多少」。与库存数量的差就是被订单占用的部分',
     scopeAware: true,
+    bound: 'deny',
     compute: (db, p) => {
       const sc = stockSc(p)
       return num(db.prepare(
@@ -343,6 +348,7 @@ export const METRICS = [
     source: 'inventory_stocks',
     note: '用表上的 cost_amount 列（写入时已按 cost_price 算好），不在这里现乘 —— 现乘会与流水里的余额口径打架',
     scopeAware: true,
+    bound: 'deny',
     compute: (db, p) => {
       const sc = stockSc(p)
       return round2(num(db.prepare(`SELECT COALESCE(SUM(st.cost_amount),0) v FROM inventory_stocks st WHERE ${sc.sql}`).get(...sc.params).v))
@@ -360,6 +366,7 @@ export const METRICS = [
     source: 'inventory_stocks, inventory_transactions',
     note: '按数量算而不是按金额 —— 演示数据里同一 SKU 的单价跨度大，按金额算会被高价品带偏',
     scopeAware: true,
+    bound: 'deny',
     compute: (db, p) => {
       const d = days(p, 30)
       const sc = stockSc(p, 'it')
@@ -385,7 +392,8 @@ export const METRICS = [
     note: '按 SKU 跨仓汇总后再比，不是逐仓比 —— 逐仓比会把「A 仓缺但 B 仓有」也算成缺货',
     // AA5：与看板、预警页、AI、MCP 同一口径（lib/stock.js countBelowSafe）；口径多了 status='active'（停用 SKU 不再计入）
     scopeAware: true,
-    compute: (db, p) => num(countBelowSafe(db, p?.orgScope))
+    bound: 'deny',
+    compute: (db, p) => num(countBelowSafe(db, p?.subjectBound ? { scope: 'none' } : p?.orgScope))
   },
   {
     key: 'expiring_qty',
@@ -399,6 +407,7 @@ export const METRICS = [
     source: 'inventory_stocks',
     note: '默认 90 天。过期批次故意不剔除 —— 剔除会把最该处理的货从预警里藏起来',
     scopeAware: true,
+    bound: 'deny',
     compute: (db, p) => {
       const d = days(p, 90)
       const sc = stockSc(p)
@@ -424,6 +433,7 @@ export const METRICS = [
     note: '草稿计入是有意的：采购金额看的是「已经谈定的量」，草稿也占用了采购意图。' +
       '要看「已生效」请用 purchase_amount_effective',
     scopeAware: true,
+    bound: 'deny',
     compute: (db, p) => {
       const sc = poSc(p)
       return round2(num(db.prepare(
@@ -443,6 +453,7 @@ export const METRICS = [
     source: 'purchase_orders',
     note: '与 purchase_amount 只差一个 draft —— 两个口径都留着，是为了让「草稿占多少」可以被量化',
     scopeAware: true,
+    bound: 'deny',
     compute: (db, p) => {
       const sc = poSc(p)
       return round2(num(db.prepare(
@@ -598,6 +609,7 @@ export const METRICS = [
     note: '关闭标记是**只进不退**的推导结果。比率低不代表流程有问题，只代表在途多。' +
       '与「订单关闭率」（status=closed）是两个口径，别混用',
     scopeAware: true,
+    bound: 'deny',
     compute: (db, p) => {
       const sc = poSc(p)
       const all = num(db.prepare(`SELECT COUNT(*) v FROM purchase_orders po WHERE po.status <> 'cancelled' AND ${sc.sql}`).get(...sc.params).v)

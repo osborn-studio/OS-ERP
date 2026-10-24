@@ -69,12 +69,12 @@
 - `compute(db, p)` 的 `p` 增加 `user` 与 `subjectBound`；`metricValues` / `metricCatalog` / `metricGroups` / `metricVisibility` 透传，路由传 `req.user` 与既有 `subjectBoundOf(req)`。内部调用（看板、`orgScope` 为空）口径不变：全局恒 `1=1`。
 - **全局调用者不变**：`orgScope` 为 `all` / 空且非绑定主体时谓词为 `1=1`，值与改动前逐字相同（测试对 admin 与未绑定的 `data_scope=all` 账号逐项对 SQL）。
 - **空范围失败关闭**：无组织 / `none` / `dealer` / 空 `orgIds` ⇒ `1=0` ⇒ 0，绝不回落到全局数。
-- **绑定主体即使 `data_scope=all` 也不拿全局数**（沿用 AE1 Codex 高项的思路）。新增指标字段 `bound` 与判据 `boundAllows(m, user)`（可见性只有这一处）：`deny` 对绑定主体不可见，compute 兜底也是空范围；`self-customer` 仅 `role=dealer|store` 的外部订货主体可见且只算自己的客户，订货主体档案缺失时 `selfCustomerId` 抛错被接成空范围；`own-store` 仅绑定了门店的账号可见且只算本店。未声明 `bound` 的既有指标（存货 / 采购订单类）行为不变。
+- **绑定主体即使 `data_scope=all` 也不拿全局数**（沿用 AE1 Codex 高项的思路）。新增指标字段 `bound` 与判据 `boundAllows(m, user)`（可见性只有这一处）：`deny` 对绑定主体不可见，compute 兜底也是空范围；`self-customer` 仅 `role=dealer|store` 的外部订货主体可见且只算自己的客户，订货主体档案缺失时 `selfCustomerId` 抛错被接成空范围；`own-store` 仅绑定了门店的账号可见且只算本店。每条 `scopeAware` 指标现在都显式声明 `bound`（测试断言无遗漏）。
 
 ### 契约变化
 
 - 受限范围账号（持有对应业务权限）默认多收到 12 条指标，值为其范围内的数；`hidden_count` 相应减少。`scoped` 对这些指标为 `true`。
-- 绑定了门店 / 经销商的账号：销售 / 线上不可见（此前在 `hide` 下也不可见，`label` 下是全局数）；`label` 下这些指标现在同样对绑定主体不可见（`bound` 在两种模式下都生效，因为全局数对绑定主体不可接受）。
+- 绑定了门店 / 经销商的账号：存货 / 采购订单类（9 条）不再可见（此前 `data_scope=all` 的绑定账号会拿到全局库存 / 采购数，标 `scoped:true`）；销售 / 线上不可见（此前在 `hide` 下也不可见，`label` 下是全局数）；`label` 下这些指标现在同样对绑定主体不可见（`bound` 在两种模式下都生效，因为全局数对绑定主体不可接受）。
 - `metric_defs` 指纹与 `gen:api` 产物不变（`scopeAware` / `bound` / `perms` 不进定义视图）。
 
 ### 测试
@@ -83,6 +83,15 @@
 
 ### 仍 open / 边界
 
-- 存货 / 采购订单类（AD1）对绑定主体仍按其 `orgScope` 计算（未声明 `bound`），沿用 AE1 的保留边界，未在此处改动。
+- 存货 / 采购订单类（AD1）对绑定主体的保留边界已在本补充内收口（见下 Codex 高项）：9 条一律 `bound: 'deny'`，compute 兜底为空范围。
 - POS 的非绑定受限口径是指标侧的最小定义（门店所属组织），POS 路由本身无组织谓词；若将来 POS 读路由补组织谓词，应改为复用它。
 - 未做浏览器验证；校验在 Mac mini Node 22 上，不等于 Linux / 目标平台验收。
+
+### Codex 审计（AF2）
+
+`codex exec -m gpt-6.1-sol --sandbox read-only`，静态审查，对象为 AF2 提交。发现与处理：
+
+- **高** 存货 / 采购订单类指标未声明 `bound`，绑定主体（`data_scope=all`）在默认 `hide` 下仍能拿到全公司库存 / 采购数并带 `scoped:true`（AE1 保留边界，AF2 之前即存在）：**已修**。9 条指标 `bound: 'deny'`，`stockSc` / `poSc` / `below_safe` 对 `subjectBound` 取空范围；测试断言所有 `scopeAware` 指标都声明 `bound`，且绑定门店账号拿不到 `stock_qty` / `stock_amount` / `purchase_amount`。副作用：门店账号不再在指标页看到库存数（此前看到的是全局数，不是本店数）；如需本店库存口径应另开一条 `own-store` 的库存指标，不在本次范围。
+- **中** 订货中心指标读路径经 `ocScope → selfCustomerId → ensureCustomer`，绑定主体缺订货档案时会在 GET 里建档（active 客户 + 默认地址，且两条 INSERT 无事务）：**已修**。新增 `selfCustomerIdReadOnly`（`order-center.js`，判据与 `selfCustomerId` 同一份），指标侧只读查询，无档案 ⇒ 空范围 ⇒ 0；非绑定的受限内部账号向 `ocScope` 传空 `user`，不会走建档路径。测试断言读完后 `oc_customers` 行数不变。
+- 其余：销售 / OMS / 订货中心谓词与路由一致（退货率的"有来源订单 / 无单退货"两支均覆盖），派生指标（客单价 / 连带率 / 退货率）正确透传 `p`，`keys` 过滤 / 空 `allow` / `/catalog` 无绕过，参数顺序无误，空 / `none` / `dealer` 范围失败关闭：未发现问题。
+- `label` 模式下，持有业务权限的受限账号（含绑定主体）仍可取得 `payable_open` / `approval_pending` / `credit_usage` / `over_credit_dealers` 的全局数并带 `scoped:false`：这是 `label` 的既定语义（ADR-0057 原文），非回归，未改。
