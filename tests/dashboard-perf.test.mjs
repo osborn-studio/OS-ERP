@@ -32,6 +32,8 @@ import { cachedForDb, invalidateForDb, cacheTtlMs, cacheKeyCount } from '../serv
 const ROOT = fileURLToPath(new URL('../', import.meta.url))
 const SCHEMA = readFileSync(new URL('../server/db/schema.sql', import.meta.url), 'utf8')
 
+const strip = ({ value, hit }) => ({ value, hit })
+
 function fixture(t) {
   const db = new Database(':memory:')
   t.after(() => db.close())
@@ -202,6 +204,7 @@ async function server(t, extraEnv = {}, { dir: sharedDir } = {}) {
   const db = new Database(path.join(dir, 'gml_cosmetic.db'))
   t.after(() => db.close())
   return {
+    base,
     api: (r) => call(r), post: (r, b) => call(r, { method: 'POST', body: JSON.stringify(b) }), db, output: () => output, dir,
     apiAs: (tok, r) => callAs(tok, r), token,
     /** 建一个受限（按组织）账号并登录；返回 token */
@@ -252,20 +255,20 @@ test('db-ttl-cache: hit inside TTL; invalidated by own writes, other-connection 
   let calls = 0
   const compute = (d) => () => { calls++; return d.prepare('SELECT SUM(v) s FROM t').get().s }
 
-  assert.deepEqual(cachedForDb(a, compute(a), opts), { value: 1, hit: false })
-  assert.deepEqual(cachedForDb(a, compute(a), opts), { value: 1, hit: true })
+  assert.deepEqual(strip(cachedForDb(a, compute(a), opts)), { value: 1, hit: false })
+  assert.deepEqual(strip(cachedForDb(a, compute(a), opts)), { value: 1, hit: true })
   assert.equal(calls, 1)
   // 另一个连接的缓存互不串（同表名、不同库）
   b.prepare('UPDATE t SET v=50').run()
-  assert.deepEqual(cachedForDb(b, compute(b), opts), { value: 50, hit: false })
-  assert.deepEqual(cachedForDb(a, compute(a), opts), { value: 1, hit: true })
+  assert.deepEqual(strip(cachedForDb(b, compute(b), opts)), { value: 50, hit: false })
+  assert.deepEqual(strip(cachedForDb(a, compute(a), opts)), { value: 1, hit: true })
   // 本连接写入 → 立即失效
   a.prepare('INSERT INTO t VALUES (2)').run()
-  assert.deepEqual(cachedForDb(a, compute(a), opts), { value: 3, hit: false })
+  assert.deepEqual(strip(cachedForDb(a, compute(a), opts)), { value: 3, hit: false })
   assert.equal(cachedForDb(a, compute(a), opts).hit, true)
   // 其它连接（等价于其它进程）提交 → 立即失效
   other.prepare('INSERT INTO t VALUES (4)').run()
-  assert.deepEqual(cachedForDb(a, compute(a), opts), { value: 7, hit: false })
+  assert.deepEqual(strip(cachedForDb(a, compute(a), opts)), { value: 7, hit: false })
   // 回滚的写入也失效（超集，不会漏）
   a.exec('BEGIN'); a.prepare('INSERT INTO t VALUES (100)').run(); a.exec('ROLLBACK')
   assert.equal(cachedForDb(a, compute(a), opts).hit, false)
@@ -366,8 +369,8 @@ test('AB2 db-ttl-cache: keyed entries are independent, any write drops all keys,
   a.exec('CREATE TABLE t (v INTEGER); INSERT INTO t VALUES (1)')
   let n = 0
   const run = (key, d = a) => cachedForDb(d, () => { n++; return `${key}:${d.prepare('SELECT SUM(v) s FROM t').get().s}` }, { ttlMs: 30000, key })
-  assert.deepEqual(run('trend:30'), { value: 'trend:30:1', hit: false })
-  assert.deepEqual(run('trend:7'), { value: 'trend:7:1', hit: false }, 'a different key is its own entry')
+  assert.deepEqual(strip(run('trend:30')), { value: 'trend:30:1', hit: false })
+  assert.deepEqual(strip(run('trend:7')), { value: 'trend:7:1', hit: false }, 'a different key is its own entry')
   assert.equal(run('trend:30').hit, true)
   assert.equal(run('trend:7').hit, true)
   assert.equal(n, 2)
@@ -376,8 +379,8 @@ test('AB2 db-ttl-cache: keyed entries are independent, any write drops all keys,
   assert.equal(cachedForDb(a, () => 'y', { ttlMs: 30000 }).value, 'x')
   // 其它连接写入 → 所有键一起失效
   other.prepare('INSERT INTO t VALUES (5)').run()
-  assert.deepEqual(run('trend:30'), { value: 'trend:30:6', hit: false })
-  assert.deepEqual(run('trend:7'), { value: 'trend:7:6', hit: false })
+  assert.deepEqual(strip(run('trend:30')), { value: 'trend:30:6', hit: false })
+  assert.deepEqual(strip(run('trend:7')), { value: 'trend:7:6', hit: false })
   // 显式失效清空全部键
   invalidateForDb(a)
   assert.equal(run('trend:30').hit, false)
@@ -605,4 +608,66 @@ test('AB2 /top and /inventory-dist rewrites return the same rows as the original
   const names = dist.byWarehouse.map((w) => w.warehouse_name)
   assert.ok(names.indexOf('ab2 空仓1') < names.indexOf('ab2 空仓2'), 'ties are ordered by warehouse id (deterministic)')
   assert.ok(dist.byCategory.some((c) => c.category_name === '未分类') && dist.byCategory.some((c) => c.category_name === 'AB2品类'))
+})
+
+// ============================ AC11：缓存时间戳（cached_at / cache_ttl_ms / X-Dashboard-Cache）============================
+
+test('AC11 db-ttl-cache reports when the value was computed: a hit keeps the original stamp, a miss gets a new one', (t) => {
+  const db = new Database(':memory:')
+  t.after(() => db.close())
+  db.exec('CREATE TABLE t (v INTEGER)')
+  let clock = 5000
+  const opts = { ttlMs: 30000, now: () => clock }
+  const first = cachedForDb(db, () => 1, opts)
+  assert.equal(first.at, 5000)
+  clock = 9000
+  const hit = cachedForDb(db, () => 2, opts)
+  assert.equal(hit.hit, true)
+  assert.equal(hit.at, 5000, 'a hit reports the compute time, not the read time')
+  clock = 5000 + 30001
+  const miss = cachedForDb(db, () => 3, opts)
+  assert.equal(miss.hit, false)
+  assert.equal(miss.at, clock)
+  // 缓存关闭：每次都是现算，戳是现在
+  clock = 70000
+  assert.equal(cachedForDb(db, () => 4, { ttlMs: 0, now: () => clock }).at, 70000)
+})
+
+test('AC11 the five cached dashboard endpoints carry cached_at + cache_ttl_ms + X-Dashboard-Cache; channel/recent stay unstamped; a write restamps', { timeout: 300000 }, async (t) => {
+  const f = await server(t)
+  const raw = async (route) => {
+    const res = await fetch(new URL(route, f.base), { headers: { authorization: `Bearer ${f.token}` } })
+    return { status: res.status, cache: res.headers.get('x-dashboard-cache'), body: await res.json() }
+  }
+  for (const route of ['summary', 'trend', 'top', 'todos', 'inventory-dist']) {
+    const a = await raw(`/api/dashboard/${route}`)
+    assert.equal(a.status, 200, route)
+    assert.equal(a.cache, 'miss', route)
+    assert.match(a.body.cached_at, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/, route)
+    assert.equal(a.body.cache_ttl_ms, 30000, route)
+    const b = await raw(`/api/dashboard/${route}`)
+    assert.equal(b.cache, 'hit', route)
+    assert.equal(b.body.cached_at, a.body.cached_at, `${route}: a hit keeps the original stamp`)
+  }
+  for (const route of ['channel', 'recent']) {
+    const r = await raw(`/api/dashboard/${route}`)
+    assert.equal(r.status, 200, route)
+    assert.equal('cached_at' in r.body, false, `${route} is not cached, so it carries no stamp`)
+    assert.equal(r.cache, null, route)
+  }
+  const before = (await raw('/api/dashboard/summary')).body.cached_at
+  await delay(20)
+  const row = f.db.prepare('SELECT id FROM inventory_stocks ORDER BY id LIMIT 1').get()
+  f.db.prepare('UPDATE inventory_stocks SET qty_on_hand = qty_on_hand + 1 WHERE id=?').run(row.id)
+  const after = await raw('/api/dashboard/summary')
+  assert.equal(after.cache, 'miss')
+  assert.ok(Date.parse(after.body.cached_at) > Date.parse(before), 'after a write the stamp moves forward')
+})
+
+test('AC11 GML_DASHBOARD_CACHE_MS=0 reports cache_ttl_ms 0 so the page can say "not cached"', { timeout: 300000 }, async (t) => {
+  const f = await server(t, { GML_DASHBOARD_CACHE_MS: '0' })
+  const res = await fetch(new URL('/api/dashboard/summary', f.base), { headers: { authorization: `Bearer ${f.token}` } })
+  const body = await res.json()
+  assert.equal(body.cache_ttl_ms, 0)
+  assert.match(body.cached_at, /^\d{4}-/)
 })

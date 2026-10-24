@@ -41,12 +41,12 @@ function versionKey(db, s) {
 }
 
 /**
- * 取缓存或计算；`compute` 抛错时不缓存。返回 `{ value, hit }`。
+ * 取缓存或计算；`compute` 抛错时不缓存。返回 `{ value, hit, at }`（`at` = 这份结果的计算时刻，毫秒；命中时是当初写入的时刻，不是本次读取的时刻——AC11 的看板“数据截至”戳用它）。
  * `key`：同一连接上互不相同的结果（如 `trend:30`、`top:7`）用不同的键；失效判据（②③④）对所有键一视同仁。
  * 键必须只由请求里与调用者无关的参数构成（路由已要求全局数据范围）；依赖调用者范围的结果不得使用本缓存。
  */
 export function cachedForDb(db, compute, { ttlMs = cacheTtlMs(), now = Date.now, key = DEFAULT_KEY } = {}) {
-  if (!(ttlMs > 0)) return { value: compute(), hit: false }
+  if (!(ttlMs > 0)) return { value: compute(), hit: false, at: now() }
   const s = slot(db)
   const ver = versionKey(db, s)
   const t = now()
@@ -54,7 +54,7 @@ export function cachedForDb(db, compute, { ttlMs = cacheTtlMs(), now = Date.now,
   if (hitEntry && hitEntry.key === ver && t - hitEntry.at <= ttlMs) {
     s.entries.delete(key); s.entries.set(key, hitEntry) // 标记为最近使用
     incCounter('dashboard_cache_total', 'hit')
-    return { value: hitEntry.value, hit: true }
+    return { value: hitEntry.value, hit: true, at: hitEntry.at }
   }
   incCounter('dashboard_cache_total', 'miss')
   s.entries.delete(key)
@@ -65,7 +65,7 @@ export function cachedForDb(db, compute, { ttlMs = cacheTtlMs(), now = Date.now,
     s.entries.set(key, { key: ver, at: t, value })
     while (s.entries.size > MAX_KEYS) s.entries.delete(s.entries.keys().next().value)
   }
-  return { value, hit: false }
+  return { value, hit: false, at: t }
 }
 
 /** 显式失效（测试 / 运维钩子）：清空该连接上的全部键；不传 db 无效，因为缓存按连接隔离。 */

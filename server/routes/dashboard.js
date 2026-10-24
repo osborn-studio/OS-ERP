@@ -8,6 +8,8 @@
  *   不是新编的，原文保留在下面。人工完善时补三件事：
  *   这块解决什么问题 / 为什么这样设计 / 改它要注意什么。
  *
+ * 【AC11】五个缓存接口的响应顶层带 `cached_at` / `cache_ttl_ms`，响应头带 `X-Dashboard-Cache`（见 okCached）。
+ *
  * 【AB2（ADR-0044 补充）】summary / trend / top / todos / inventory-dist 都经 `cachedRead`：`GML_PROFILE=1` 分块计时 + 30 s 进程内缓存
  *   （键 = 接口名 + 规范化后的 days；任何写入、跨零点、TTL 到期都失效，见 lib/db-ttl-cache.js）。channel / recent 未缓存（未剖析，也不在本批范围）。
  *
@@ -22,7 +24,7 @@ import { ok, wrap } from '../lib/http.js'
 import { requireAuth, requireInternal, requireGlobalData } from '../middleware/auth.js'
 import { countBelowSafe, listBelowSafe } from '../lib/stock.js'
 import { createProfiler } from '../lib/profile.js'
-import { cachedForDb } from '../lib/db-ttl-cache.js'
+import { cachedForDb, cacheTtlMs } from '../lib/db-ttl-cache.js'
 
 const r = Router()
 r.use(requireAuth, requireInternal('总部经营看板'), requireGlobalData('总部经营看板'))
@@ -36,9 +38,19 @@ r.use(requireAuth, requireInternal('总部经营看板'), requireGlobalData('总
 function cachedRead(label, key, compute) {
   const db = getDb()
   const prof = createProfiler(label)
-  const { value, hit } = prof.time('cache_or_compute', () => cachedForDb(db, () => compute(db, prof), { key }))
-  prof.done({ cache: hit ? 'hit' : 'miss' })
-  return value
+  const r = prof.time('cache_or_compute', () => cachedForDb(db, () => compute(db, prof), { key }))
+  prof.done({ cache: r.hit ? 'hit' : 'miss' })
+  return r
+}
+
+/**
+ * AC11：缓存接口的响应带“这份数据是什么时候算的”——顶层 `cached_at`（ISO，命中时是当初计算的时刻）、`cache_ttl_ms`（0 = 缓存关闭，每次现算），
+ * 命中与否放在响应头 `X-Dashboard-Cache`（不进响应体：缓存命中与现算的响应体必须逐字相同，见 tests/dashboard-perf.test.mjs）。
+ * 加在 `data` 之外的顶层字段，数组形态的 `data`（trend）不受影响；旧前端忽略这两个字段。
+ */
+function okCached(res, { value, hit, at }) {
+  res.set('X-Dashboard-Cache', hit ? 'hit' : 'miss')
+  return ok(res, value, { cached_at: new Date(at).toISOString(), cache_ttl_ms: cacheTtlMs() })
 }
 
 r.get(
@@ -48,9 +60,9 @@ r.get(
     const db = getDb()
     const prof = createProfiler('dashboard.summary') // GML_PROFILE=1 才记录；只写日志，不进响应
     // AA5：汇总只由库内容与当前日期决定（本路由要求全局数据范围，与调用者无关）→ 30 s 内且库无任何写入时直接复用（见 lib/db-ttl-cache.js）
-    const { value, hit } = prof.time('cache_or_compute', () => cachedForDb(db, () => computeSummary(db, prof)))
-    prof.done({ cache: hit ? 'hit' : 'miss' })
-    return ok(res, value)
+    const r = prof.time('cache_or_compute', () => cachedForDb(db, () => computeSummary(db, prof)))
+    prof.done({ cache: r.hit ? 'hit' : 'miss' })
+    return okCached(res, r)
   })
 )
 
@@ -110,7 +122,7 @@ r.get(
   requireAuth,
   wrap((req, res) => {
     const days = Number(req.query.days || 30)
-    return ok(res, cachedRead('dashboard.trend', `trend:${days}`, (db, prof) => computeTrend(db, prof, days)))
+    return okCached(res, cachedRead('dashboard.trend', `trend:${days}`, (db, prof) => computeTrend(db, prof, days)))
   })
 )
 
@@ -188,7 +200,7 @@ r.get(
 r.get(
   '/todos',
   requireAuth,
-  wrap((_req, res) => ok(res, cachedRead('dashboard.todos', 'todos', computeTodos)))
+  wrap((_req, res) => okCached(res, cachedRead('dashboard.todos', 'todos', computeTodos)))
 )
 
 function computeTodos(db, prof) {
@@ -233,7 +245,7 @@ r.get(
   requireAuth,
   wrap((req, res) => {
     const days = Number(req.query.days || 30)
-    return ok(res, cachedRead('dashboard.top', `top:${days}`, (db, prof) => computeTop(db, prof, days)))
+    return okCached(res, cachedRead('dashboard.top', `top:${days}`, (db, prof) => computeTop(db, prof, days)))
   })
 )
 
@@ -319,7 +331,7 @@ r.get(
 r.get(
   '/inventory-dist',
   requireAuth,
-  wrap((_req, res) => ok(res, cachedRead('dashboard.inventory-dist', 'inventory-dist', computeInventoryDist)))
+  wrap((_req, res) => okCached(res, cachedRead('dashboard.inventory-dist', 'inventory-dist', computeInventoryDist)))
 )
 
 // AB2：原写法对库存宽表（medium 库 8.5 万行）整表扫两遍——byWarehouse 对每个仓 LEFT JOIN 回表，byCategory 每行再三次主键回查。
