@@ -533,8 +533,8 @@ Mac mini，`--profile large-ci --skus 5000 --txns 50000 --docs 5000 --batch-txns
 
 ### 仍未覆盖
 - `dmserver` 上用生产规模副本复跑；large 规模未跑；机器空闲时的数字未取（本轮全程高负载）。
-- `/dashboard/channel`、`/dashboard/recent` 未剖析、未缓存。
-- `explain-audit` 未登记 `/top`、`/inventory-dist` 的新语句（不在本工作流文件范围）；`explain-audit`（对本合成 medium 库、只读）：87 条既有语句，**0 违规**，裸 SCAN 21（豁免 20、小表 1），索引全扫 5——这个结果不覆盖新语句。
+- `/dashboard/channel`、`/dashboard/recent` 未剖析、未缓存（**AC4 已补**，见下节）。
+- `explain-audit` 未登记 `/top`、`/inventory-dist` 的新语句（**AC4 已登记**，见下节）；`explain-audit`（对本合成 medium 库、只读）：87 条既有语句，**0 违规**，裸 SCAN 21（豁免 20、小表 1），索引全扫 5——这个结果不覆盖新语句。
 
 ## AB5 真正旧结构库上的 059–066 逐迁移耗时（**Mac mini / 合成 medium / 非目标主机 / 单次墙钟 / 整机高负载**）
 
@@ -600,3 +600,42 @@ gh run view <run-id> --log-failed
 | `bench-api` 写 p95（ms）/ 完整性检查 | 待填 |
 | 升级演练逐迁移耗时（仅 rehearsal=true） | 待填 |
 | 失败 / 异常 | 待填 |
+
+## AC4 看板 `/channel`、`/recent` 剖析与 explain-audit 登记（**Mac mini / 合成 medium 库 / 非目标主机 / 整机高负载**）
+
+> **范围声明与负载（务必连同数字一起读）**：Mac mini；合成 `medium` 库（`synth-data.mjs --skus 20000 --docs 30000 --txns 150000`，种子 20261023，在隔离临时目录生成，用完删除；生成耗时 356 s，库 250 MB）。压测用**副本**：分类标记改 `test`、跑一次 `bootAll`（演示种子叠加，同 AB2 口径），并**额外灌入 5 个平台与 2 万条 `oms_orders`**（时间分布在最近 120 天、状态五种轮换）——合成生成器不产生 OMS 单，不灌的话 `/channel` 的线上分支是空表，测不出任何东西。**测量时整机负载很高（`uptime` 1 分钟平均负载 27–35，多个工作流同时在跑测试）**，绝对数字抖动大、只看量级；3 轮"缓存关 / 缓存开"交错，表里给 3 轮中位数。**不是 `dmserver` 结果、不是容量承诺、不是验收证据。**
+
+### 逐块计时
+两种口径：(a) 直接在副本库上对 SQL 计时（只读连接，21 次取中位数，负载约 31）；(b) 服务进程 `GML_PROFILE=1`、缓存关、100 次请求的块耗时中位数（负载约 30）。
+
+| 块 | (a) SQL 直测 ms | (b) 服务内块 ms | 计划 |
+|---|---|---|---|
+| `channel.offline` | 3.83 | 5.47 | `SEARCH sales_orders USING INDEX idx_so_order_date` + 临时 B 树分组 |
+| `channel.online`（2 万 OMS 单）| 11.93 | 4.76 | **`SCAN o`**（`date(order_time)` 套函数，无索引可用）+ 临时 B 树分组 |
+| `recent.salesOrders` / `purchaseOrders` / `omsOrders` / `transactions` | 0.04 / 0.02 / 0.01 / 0.02 | 0.03 / 0.02 / 0.02 / 0.02 | 全部 `SCAN` 沿 rowid 倒序取 8 行即停，无排序临时表 |
+| `/channel` 整个处理器 | — | 10.8 | |
+
+(a) 与 (b) 的 `online` 差异（11.9 vs 4.8）是负载抖动，不是改动：两边是同一条 SQL。**没有任何块 ≥ 50 ms。**
+
+### 决定与理由
+- **`/channel` 缓存**（键 `channel:<days>`，与 AB2 同一套 `cachedRead`）：单次不到 15 ms，但线上分支是对 `oms_orders` 的**整表读取，随订单量线性增长**（2 万行 ≈ 5–12 ms，外推 20 万行会越过 50 ms 线——这是外推，没有测）；响应只由库内容、日期与 `days` 决定，路由器已要求全局数据范围，缓存范围安全。缓存把重复请求挪出请求路径，不改查询。
+- **`/recent` 不缓存**：四条查询合计 < 0.2 ms，缓存的收益小于每次读取的版本校验；"最新动态"任何写入都使缓存失效，命中率天然低。仍接入 `createProfiler`（`cache=off`），以便生产数据量下回看。
+
+### HTTP 延迟（并发 4，每接口 100 次 + 1 次预热，ms；3 轮中位数，括号内为 3 轮原始值）
+| 接口 | 缓存关 p50 | 缓存关 p95 | 缓存开 p50 | 缓存开 p95 |
+|---|---|---|---|---|
+| `/dashboard/channel` | 73.8 (73.8/97.5/39.9) | 200.6 (200.6/284.1/79.7) | 2.7 (2.3/2.7/7.1) | 16.5 (16.5/8.6/61.9) |
+| `/dashboard/recent`（两档代码路径相同，差异是噪声）| 5.1 (6.7/5.1/3.9) | 26.4 (26.4/29.7/9.8) | 4.5 (4.4/6.4/4.5) | 29.9 (15.8/66.4/29.9) |
+
+读法：`/channel` 缓存关的 p50 远大于块耗时（~11 ms）是并发 4 在单线程 Node 上排队加整机高负载；缓存开后命中路径 p50 ≈ 3 ms。`/recent` 本来就快，不缓存是对的。0 个错误（全部 200）。"前"（batch-eleven）与"缓存关"同一条 SQL，所以没有单独跑前后对比。
+
+### explain-audit 登记
+`scripts/explain-audit.mjs` 新增 11 条语句，SQL 文本**直接取自** `server/lib/dashboard-sql.js`（路由执行的同一份，不是抄写；`tests/dashboard-perf.test.mjs` 断言登记文本与模块导出逐字相同、路由里不再内联）：`dash.top_products` / `top_brands` / `top_dealers` / `top_stores`（`expectIndex: idx_so_order_date`）、`dash.inventory_dist_agg`、`dash.channel_offline`（`expectIndex: idx_so_order_date`）、`dash.channel_online`、`dash.recent_sales` / `recent_purchase` / `recent_oms` / `recent_txn`。计划：`/top` 两条为 `SEARCH so USING INDEX idx_so_order_date` → `SEARCH i USING INDEX idx_soi_order`（CROSS JOIN 写法确实固定了顺序；变异——改回普通 JOIN——使计划变成 `SCAN i` 并报红）；`inventory_dist_agg` 是 `SCAN st USING INDEX idx_stock_wh_sku`（索引全扫，一遍）；`recent_*` 四条豁免（按主键倒序取页，`noSort`）；`channel_online` 豁免（整表读取，理由与"根治需新迁移"写在 ALLOW 里）。
+
+- 在**纯合成 medium 库**上（不含演示种子）：110 条语句，**0 违规**，裸 SCAN 28（豁免 27、小表 1），索引全扫 6。
+- 在压测副本（含演示种子叠加）上：1 条违规 `oc.overview_credit_used`（`oc_customers` 752 行 ≥ 阈值 200，裸 SCAN）。**与本工作流无关**：同一副本上 `batch-eleven` 源码（99 条语句）同样报这一条；原因是演示种子把该表灌到阈值之上。未处理，列入未验证 / 后续。
+
+### 仍未覆盖
+- `dmserver` 上用生产规模副本复跑；large 规模未跑；机器空闲时的数字未取。
+- `dash.trend_*` 的 explain-audit 登记仍是人工镜像（只有 sales / purchase 两条，没有 `trend.online`，其 `date(order_time)` 同样整表读取 `oms_orders`）；本工作流只登记新增语句。
+- `oms_orders.order_time` 没有可用索引（`/channel` 线上分支与 `/trend` 线上分支共同的残余），根治需要新迁移，不在本工作流范围。

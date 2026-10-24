@@ -9,7 +9,10 @@
  *   这块解决什么问题 / 为什么这样设计 / 改它要注意什么。
  *
  * 【AB2（ADR-0044 补充）】summary / trend / top / todos / inventory-dist 都经 `cachedRead`：`GML_PROFILE=1` 分块计时 + 30 s 进程内缓存
- *   （键 = 接口名 + 规范化后的 days；任何写入、跨零点、TTL 到期都失效，见 lib/db-ttl-cache.js）。channel / recent 未缓存（未剖析，也不在本批范围）。
+ *   （键 = 接口名 + 规范化后的 days；任何写入、跨零点、TTL 到期都失效，见 lib/db-ttl-cache.js）。
+ *
+ * 【AC4（ADR-0044 补充 2）】channel 同样经 `cachedRead`（键 `channel:<days>`）；recent 只剖析不缓存（四条查询合计 < 0.2 ms，理由见处理器注释）。
+ *   /top、/inventory-dist、/channel、/recent 的 SQL 文本在 `lib/dashboard-sql.js`（路由与 `scripts/explain-audit.mjs` 共用同一份）。
  *
  * 【通用硬规矩】判据只有一处（不要在第二个地方再抄一遍条件）；
  *   改完跑 `node scripts/regress-all.mjs`（3 轮）与相关 `test-*.mjs`。
@@ -23,6 +26,7 @@ import { requireAuth, requireInternal, requireGlobalData } from '../middleware/a
 import { countBelowSafe, listBelowSafe } from '../lib/stock.js'
 import { createProfiler } from '../lib/profile.js'
 import { cachedForDb } from '../lib/db-ttl-cache.js'
+import { topProductsSql, topBrandsSql, topDealersSql, topStoresSql, INVENTORY_DIST_AGG_SQL, channelOfflineSql, channelOnlineSql, RECENT_SQL } from '../lib/dashboard-sql.js'
 
 const r = Router()
 r.use(requireAuth, requireInternal('总部经营看板'), requireGlobalData('总部经营看板'))
@@ -161,29 +165,23 @@ r.get(
   '/channel',
   requireAuth,
   wrap((req, res) => {
-    const db = getDb()
     const days = Number(req.query.days || 90)
-    const from = `date('now','localtime','-${days} day')`
-    const offline = db
-      .prepare(
-        `SELECT channel, COUNT(*) orders, COALESCE(SUM(receivable_amount),0) amount FROM sales_orders
-         WHERE status NOT IN ('cancelled','draft') AND order_date >= ${from} AND channel <> 'platform' GROUP BY channel`
-      )
-      .all()
-    const online = db
-      .prepare(
-        `SELECT COALESCE(pf.name,'未知平台') AS platform_name, COUNT(o.id) orders, COALESCE(SUM(o.pay_amount),0) amount
-         FROM oms_orders o LEFT JOIN platforms pf ON pf.id=o.platform_id
-         WHERE date(o.order_time) >= ${from} AND o.status NOT IN ('refunded','closed') GROUP BY pf.id`
-      )
-      .all()
-    const labels = { dealer: '经销商分销', store: '门店零售', online: '自营商城', platform: '平台电商', live: '直播电商' }
-    return ok(res, {
-      offline: offline.map((x) => ({ name: labels[x.channel] || x.channel, ...x })),
-      online
-    })
+    return ok(res, cachedRead('dashboard.channel', `channel:${days}`, (db, prof) => computeChannel(db, prof, days)))
   })
 )
+
+// AC4：与 trend / top 同形——响应只由库内容、当前日期与规范化后的 days 决定（路由器第一行已要求全局数据范围），键 = channel:<days>。
+// 剖析（合成 medium 库，2 万 OMS 单）：offline ≈ 4 ms（idx_so_order_date）、online ≈ 12 ms（`date(order_time)` 无法用索引，随 OMS 订单量线性增长）→ 都 < 50 ms，
+// 但 online 是 explain-audit 里登记的已知整表扫描，缓存把它挪出重复请求路径。
+function computeChannel(db, prof, days) {
+  const offline = prof.time('offline', () => db.prepare(channelOfflineSql(days)).all())
+  const online = prof.time('online', () => db.prepare(channelOnlineSql(days)).all())
+  const labels = { dealer: '经销商分销', store: '门店零售', online: '自营商城', platform: '平台电商', live: '直播电商' }
+  return {
+    offline: offline.map((x) => ({ name: labels[x.channel] || x.channel, ...x })),
+    online
+  }
+}
 
 r.get(
   '/todos',
@@ -238,44 +236,13 @@ r.get(
 )
 
 // AB2：原写法 `FROM sales_order_items i JOIN sales_orders so …` 让 SQLite 先全表扫明细（5 万行）再按主键回查订单、最后才过滤日期；
-// `CROSS JOIN` 固定连接顺序为"先按 idx_so_order_date 取窗口内订单，再按 idx_soi_order 取其明细"。结果集相同（tests/dashboard-perf.test.mjs 逐行比对），
+// 显式 CROSS 连接（SQL 见 lib/dashboard-sql.js）固定连接顺序为"先按 idx_so_order_date 取窗口内订单，再按 idx_soi_order 取其明细"。结果集相同（tests/dashboard-perf.test.mjs 逐行比对），
 // 合成 medium 库上 products 约 55 → 21 ms、brands 约 29 → 12 ms（同进程同时测，负载下中位数）。
 function computeTop(db, prof, days) {
-  const from = `date('now','localtime','-${days} day')`
-  const products = prof.time('products', () => db
-    .prepare(
-      `SELECT p.name AS product_name, b.name AS brand_name, SUM(i.qty) qty, SUM(i.amount) amount
-       FROM sales_orders so CROSS JOIN sales_order_items i ON i.order_id=so.id
-       JOIN product_skus sk ON sk.id=i.sku_id JOIN products p ON p.id=sk.product_id LEFT JOIN brands b ON b.id=p.brand_id
-       WHERE so.status NOT IN ('cancelled','draft') AND so.order_date >= ${from}
-       GROUP BY p.id ORDER BY amount DESC LIMIT 10`
-    )
-    .all())
-  const brands = prof.time('brands', () => db
-    .prepare(
-      `SELECT COALESCE(b.name,'未标品牌') AS brand_name, SUM(i.qty) qty, SUM(i.amount) amount
-       FROM sales_orders so CROSS JOIN sales_order_items i ON i.order_id=so.id
-       JOIN product_skus sk ON sk.id=i.sku_id JOIN products p ON p.id=sk.product_id LEFT JOIN brands b ON b.id=p.brand_id
-       WHERE so.status NOT IN ('cancelled','draft') AND so.order_date >= ${from}
-       GROUP BY b.id ORDER BY amount DESC LIMIT 10`
-    )
-    .all())
-  const dealers = prof.time('dealers', () => db
-    .prepare(
-      `SELECT d.name, d.level, COUNT(so.id) orders, COALESCE(SUM(so.receivable_amount),0) amount
-       FROM sales_orders so JOIN dealers d ON d.id=so.dealer_id
-       WHERE so.status NOT IN ('cancelled','draft') AND so.order_date >= ${from}
-       GROUP BY d.id ORDER BY amount DESC LIMIT 10`
-    )
-    .all())
-  const stores = prof.time('stores', () => db
-    .prepare(
-      `SELECT s.name, s.region, COUNT(so.id) orders, COALESCE(SUM(so.receivable_amount),0) amount
-       FROM sales_orders so JOIN stores s ON s.id=so.store_id
-       WHERE so.status NOT IN ('cancelled','draft') AND so.order_date >= ${from}
-       GROUP BY s.id ORDER BY amount DESC LIMIT 10`
-    )
-    .all())
+  const products = prof.time('products', () => db.prepare(topProductsSql(days)).all())
+  const brands = prof.time('brands', () => db.prepare(topBrandsSql(days)).all())
+  const dealers = prof.time('dealers', () => db.prepare(topDealersSql(days)).all())
+  const stores = prof.time('stores', () => db.prepare(topStoresSql(days)).all())
   return { products, brands, dealers, stores }
 }
 
@@ -285,34 +252,14 @@ r.get(
   requireAuth,
   wrap((_req, res) => {
     const db = getDb()
-    const salesOrders = db
-      .prepare(
-        `SELECT so.doc_no, so.order_date, so.channel, so.status, so.receivable_amount,
-                COALESCE(d.name, s.name, so.receiver, '线上买家') AS customer_name
-         FROM sales_orders so LEFT JOIN dealers d ON d.id=so.dealer_id LEFT JOIN stores s ON s.id=so.store_id
-         ORDER BY so.id DESC LIMIT 8`
-      )
-      .all()
-    const purchaseOrders = db
-      .prepare(
-        `SELECT po.doc_no, po.order_date, po.status, po.total_amount, sup.name AS supplier_name
-         FROM purchase_orders po JOIN suppliers sup ON sup.id=po.supplier_id ORDER BY po.id DESC LIMIT 8`
-      )
-      .all()
-    const omsOrders = db
-      .prepare(
-        `SELECT o.platform_order_no, o.order_time, o.status, o.pay_amount, pf.name AS platform_name, o.buyer_nick
-         FROM oms_orders o JOIN platforms pf ON pf.id=o.platform_id ORDER BY o.id DESC LIMIT 8`
-      )
-      .all()
-    const transactions = db
-      .prepare(
-        `SELECT t.biz_date, t.doc_type, t.doc_no, t.direction, t.qty, sk.name AS sku_name, w.name AS warehouse_name
-         FROM inventory_transactions t JOIN product_skus sk ON sk.id=t.sku_id JOIN warehouses w ON w.id=t.warehouse_id
-         ORDER BY t.id DESC LIMIT 8`
-      )
-      .all()
-    return ok(res, { salesOrders, purchaseOrders, omsOrders, transactions })
+    const prof = createProfiler('dashboard.recent')
+    // AC4：四条"按主键倒序取最新 8 条"，合成 medium 库上合计 < 0.2 ms（见 capacity-baseline AC4）——不缓存：
+    // 缓存的收益（省 < 0.2 ms）小于每次读取 `total_changes()` + `data_version` 的版本校验成本，且这是"最新动态"，任何写入都会使缓存失效，命中率天然低。
+    // 仍接入剖析（cache=off），以便生产数据量下回看；若块耗时 ≥ 50 ms 再按 cachedRead 推广。
+    const out = {}
+    for (const [k, sql] of Object.entries(RECENT_SQL)) out[k] = prof.time(k, () => db.prepare(sql).all())
+    prof.done({ cache: 'off' })
+    return ok(res, out)
   })
 )
 
@@ -328,14 +275,7 @@ r.get(
 //   · 品类合计只含 SKU / 商品能匹配上的行（原写法是内连接），品类缺失或指向不存在的品类 → '未分类'。
 // 浮点求和顺序与原写法不同（先分组再相加），最后一位可能不同；tests/dashboard-perf.test.mjs 逐行比对（4 位小数）。
 function computeInventoryDist(db, prof) {
-  const groups = prof.time('stockAgg', () => db
-    .prepare(
-      `SELECT st.warehouse_id AS wid, p.category_id AS cid, (p.id IS NOT NULL) AS matched,
-              SUM(st.qty_on_hand) AS qty, SUM(st.qty_on_hand*st.cost_price) AS amount
-       FROM inventory_stocks st LEFT JOIN product_skus sk ON sk.id=st.sku_id LEFT JOIN products p ON p.id=sk.product_id
-       GROUP BY st.warehouse_id, p.category_id, (p.id IS NOT NULL)`
-    )
-    .all())
+  const groups = prof.time('stockAgg', () => db.prepare(INVENTORY_DIST_AGG_SQL).all())
   return prof.time('assemble', () => {
     const byWh = new Map()
     const byCat = new Map()
