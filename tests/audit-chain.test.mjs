@@ -241,7 +241,7 @@ test('tail orphans are adopted by the next insertAuditRow; a NULL row_hash in th
 import { createRequire } from 'node:module'
 function await_import() { return createRequire(import.meta.url)(path.join(MIGRATIONS_DIR, '068_audit_hash_chain.cjs')) }
 
-test('verify() is consistent with up(): missing anchors table or index makes it false and up() repairs it', (t) => {
+test('verify() is consistent with up(): missing anchors table or a tail orphan makes it false and up() repairs it', (t) => {
   const db = mkDb(tmp(t))
   const mig = await_import()
   assert.equal(mig.verify(db), true)
@@ -249,10 +249,12 @@ test('verify() is consistent with up(): missing anchors table or index makes it 
   assert.equal(mig.verify(db), false)
   mig.up(db)
   assert.equal(mig.verify(db), true)
-  db.exec('DROP INDEX idx_audit_unchained')
+  db.exec("INSERT INTO audit_logs (user_name, action) VALUES ('raw','RAW')") // 表尾孤儿
   assert.equal(mig.verify(db), false)
   mig.up(db)
   assert.equal(mig.verify(db), true)
+  assert.deepEqual(db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='audit_logs' AND name NOT LIKE 'sqlite_%' ORDER BY name").all().map((r) => r.name),
+    ['idx_audit_entity', 'idx_audit_module_created', 'idx_audit_user_created'], 'migration 068 adds no index on audit_logs')
 })
 
 test('insertAuditRow still works on a pre-068 audit_logs (plain INSERT, no chain columns)', () => {

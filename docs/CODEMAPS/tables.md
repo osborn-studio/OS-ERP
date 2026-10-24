@@ -28,7 +28,7 @@
 | `assembly_order_items` | schema.sql | — | — | routes/inventory.js |
 | `assembly_orders` | schema.sql | — | lib/docflow.js | routes/inventory.js, routes/master.js |
 | `audit_chain_anchors` | 068 | 068·idx | lib/audit-chain-verify.js, lib/audit-trail.js | — |
-| `audit_logs` | schema.sql | 068·idx | lib/audit-chain-verify.js, lib/audit-trail.js, lib/audit-view.js | routes/auth.js, routes/meta.js |
+| `audit_logs` | schema.sql | 068 | lib/audit-chain-verify.js, lib/audit-trail.js, lib/audit-view.js | routes/auth.js, routes/meta.js |
 | `biz_flow_steps` | 008 | — | lib/order-center.js | routes/docflow.js, routes/order-center.js, routes/purchase-chain.js |
 | `biz_flows` | 008 | — | lib/order-center.js | routes/docflow.js, routes/order-center.js, routes/purchase-chain.js |
 | `bom_items` | 023 | 023·idx | lib/bom.js | — |

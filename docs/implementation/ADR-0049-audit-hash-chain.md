@@ -13,8 +13,8 @@
 - `audit_logs` 增 `prev_hash TEXT`、`row_hash TEXT`。
 - `row_hash = sha256( JSON.stringify([id, created_at, user_id, action, entity, entity_id, detail, prev_hash]) )`：八个分量先转字符串（NULL 保持 `null`）再做 JSON 数组序列化；`prev_hash` = 前一行（按 id）的 `row_hash`，库里最早一行用 64 个 `0`（`GENESIS`）。唯一实现：`server/db/migrations/_audit_chain.cjs`（迁移、运行时写入、校验器共用；放在迁移目录是因为升级演练/基准会整目录复制迁移，迁移不能依赖目录外的相对路径）。
 - 规范化选择：JSON 数组自带分量边界，`action='a|b',entity='c'` 与 `action='a',entity='b|c'` 不会碰撞，NULL 与字符串 `"null"` 不同；转字符串是为了让“写入时的绑定值”和“读回的列值”落在同一输入上。SQLite 列亲和性仍会改写个别值（`'005'` 存成 5），所以写入后**按读回的存储值再算一次**，不同则只改 `row_hash`（罕见路径；与校验器同一口径）。
-- `audit_chain_anchors(id, kind, at_row_id, anchor_hash, prev_id, prev_row_hash, reason, created_at)`：合法断口登记（见 §3）。部分索引 `idx_audit_unchained ON audit_logs(id) WHERE row_hash IS NULL` 让 `verify()` 判断“有无未入链的行”不必扫全表（链健康时它是空的，不增加写放大）。
-- 回填 = `adoptOrphans`：只接**最后一条已入链行之后**的行（首次迁移 = 整表，按 id 升序、keyset 分批 2 万行/批）。`up()` 幂等；`verify()` = 两列在、锚点表在、索引在、表尾没有待接链的行。裸 SQL 留在表尾的孤儿行下次启动被自愈接上（`insertAuditRow` 追加前也会先接上尾部孤儿）；**夹在已入链行中间的空 `row_hash` 不会被重算**——那是已建立的链被破坏，自愈若重算就等于把被改过的内容洗成合法哈希（Codex 审计 H2）。它继续被校验器报为 `unchained`。与 AB3 的 FTS 影子表及触发器互不依赖：迁移只加列、建表、回填 `UPDATE`；若 067 的 `AFTER UPDATE` 触发器已存在，回填只是更慢。
+- `audit_chain_anchors(id, kind, at_row_id, anchor_hash, prev_id, prev_row_hash, reason, created_at)`：合法断口登记（见 §3）。迁移不在 `audit_logs` 上建任何索引（判断“表尾有无待接链的行”只需主键倒序取第一条已入链行，不增加写放大，也不动 AA6 的三棵索引）。
+- 回填 = `adoptOrphans`：只接**最后一条已入链行之后**的行（首次迁移 = 整表，按 id 升序、keyset 分批 2 万行/批）。`up()` 幂等；`verify()` = 两列在、锚点表在、表尾没有待接链的行。裸 SQL 留在表尾的孤儿行下次启动被自愈接上（`insertAuditRow` 追加前也会先接上尾部孤儿）；**夹在已入链行中间的空 `row_hash` 不会被重算**——那是已建立的链被破坏，自愈若重算就等于把被改过的内容洗成合法哈希（Codex 审计 H2）。它继续被校验器报为 `unchained`。与 AB3 的 FTS 影子表及触发器互不依赖：迁移只加列、建表、回填 `UPDATE`；若 067 的 `AFTER UPDATE` 触发器已存在，回填只是更慢。
 
 ### 2. 写入与并发（`insertAuditRow` 仍是唯一 INSERT 点）
 
