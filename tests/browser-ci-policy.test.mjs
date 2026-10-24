@@ -191,6 +191,20 @@ test('AC11 scenarios assert the hint modes, the disabled/blocked query, the serv
   assert.ok(auditPage.includes('audit-fts-hint') && auditPage.includes('audit-action-hint') && auditPage.includes('KEYWORD_HINTS'))
 })
 
+test('AD11 role-matrix scenario asserts the highlighted column, server-equal cells, the external-role none cell and zero external requests', () => {
+  const src = read('tests/browser/role-matrix.mjs')
+  for (const needle of ["'/api/meta/role-matrix'", 'thead th[data-current="true"]', 'data-access', 'data.cells.warehouse', 'data.cells.store.PO, \'none\'', "col.cells.VOUCHER, 'full'", 'role-matrix-me-store', 'role-matrix-filter', 'status, 200', 'externalRequests, 0', 'blockedbyclient', 'screenshotPages']) {
+    assert.ok(src.includes(needle), `role-matrix must assert ${needle}`)
+  }
+  assert.match(src, /from '\.\/lib\.mjs'/, 'uses the shared loopback/Linux helpers')
+  assert.doesNotMatch(src, /https?:\/\/(?!127\.0\.0\.1|localhost)/, 'must not hard-code external origins')
+  assert.doesNotMatch(src, /console\.log\([^)]*(password|token)/i, 'must not print credentials')
+  // 页面侧的钩子必须存在
+  const page = read('src/pages/system/RoleMatrix.tsx')
+  for (const hook of ['role-matrix-page', 'role-matrix-table', 'role-matrix-me-store', 'role-matrix-filter', 'role-matrix-legend', 'data-access', 'data-current']) assert.ok(page.includes(hook), `RoleMatrix.tsx must expose ${hook}`)
+  assert.ok(read('src/App.tsx').includes('/system/role-matrix'))
+})
+
 test('driver gives every scenario a 5 minute kill timer and runs them in registration order (AA8 + AB9 included)', () => {
   assert.match(driver, /SCENARIO_TIMEOUT_MS = 5 \* 60 \* 1000/)
   assert.match(driver, /for \(const name of SCENARIOS\)/)

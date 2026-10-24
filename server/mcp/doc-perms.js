@@ -116,7 +116,7 @@ function ownerCtx(db, ctx) {
  * 经销商 / 门店身份的所有者即使被授予了查看权限点，也不能经 MCP 读这些类型。
  * 在 `INTERNAL_MODULES` 之外追加 oms / dealer：对应 HTTP 路由（oms.js / dealers.js / dms.js）整体 `requireInternal`。
  */
-const HQ_ONLY_MODULES = new Set([...INTERNAL_MODULES, 'oms', 'dealer'])
+export const HQ_ONLY_MODULES = new Set([...INTERNAL_MODULES, 'oms', 'dealer'])
 
 /** 所有者是外部主体（经销商 / 门店）且该单据类型只对内部开放 */
 function externalOwnerBlocked(db, ctx, type) {

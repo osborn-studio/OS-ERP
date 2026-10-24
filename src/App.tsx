@@ -90,6 +90,7 @@ import ReportConfig from './pages/finance/ReportConfig'
 import Statements from './pages/dealers/Statements'
 import Users from './pages/system/Users'
 import MyScope from './pages/system/MyScope'
+import RoleMatrix from './pages/system/RoleMatrix'
 import Dict from './pages/system/Dict'
 import AiLogs from './pages/system/AiLogs'
 import AuditLogs from './pages/system/AuditLogs'
@@ -259,6 +260,7 @@ export default function App() {
         <Route path="/pos/hq/orders" element={<PosOrders />} />
         <Route path="/system/users" element={<Users />} />
         <Route path="/system/my-scope" element={<MyScope />} />
+        <Route path="/system/role-matrix" element={<RoleMatrix />} />
         <Route path="/system/roles" element={<Roles />} />
         <Route path="/system/dict" element={<Dict />} />
         <Route path="/system/ai-logs" element={<AiLogs />} />

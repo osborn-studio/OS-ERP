@@ -3,7 +3,7 @@
 <!-- generated -->
 <!-- 由 `node scripts/gen-codemap.mjs` 生成，勿手改；CI 校验不漂移 -->
 
-共 84 个模块。“路由”只列在处理器区域内直接引用该函数的路由（路由超过 5 条时按路由文件汇总，明细见 [routes.md](routes.md)）；“MCP 工具”来自 `server/mcp/tools.js` 的 40 个工具；“被模块调用”是其它 lib/mcp 模块里的跨文件引用。“—”表示静态扫描没找到调用方，不等于死代码。
+共 85 个模块。“路由”只列在处理器区域内直接引用该函数的路由（路由超过 5 条时按路由文件汇总，明细见 [routes.md](routes.md)）；“MCP 工具”来自 `server/mcp/tools.js` 的 40 个工具；“被模块调用”是其它 lib/mcp 模块里的跨文件引用。“—”表示静态扫描没找到调用方，不等于死代码。
 
 ## 扫描边界（必读）
 
@@ -548,7 +548,7 @@ BOM 服务层（模块 10B · 一个 BOM + 三类执行单）
 | 导出 | 类型 | 路由 | MCP 工具 | 被模块调用 |
 |---|---|---|---|---|
 | `DOC_CREATE_PERMS` | const | — | — | — |
-| `DOC_SCOPE_RESOLVERS` | const | — | — | lib/approval.js |
+| `DOC_SCOPE_RESOLVERS` | const | — | — | lib/approval.js, lib/role-matrix.js |
 | `DocFlowError` | class | — | purchase.build_settlement, purchase.convert_requisition, purchase.create_invoice, purchase.create_order, purchase.create_payment, purchase.create_requisition, purchase.create_return, purchase.receive_order | lib/purchase.js, mcp/tools.js |
 | `advanceStatus` | fn | 25 条：demand.js×2, inventory.js×7, oms.js×3, outsourcing.js×1, pos.js×1, purchase.js×3, requisitions.js×3, sales.js×5 | — | lib/pos2.js, lib/returns.js, lib/sales-order.js |
 | `allowedActions` | fn | PUT /api/dealers/rebates/:id<br>POST /api/demand/dealer/requisitions/:id/status<br>GET /api/docflow/actions<br>POST /api/requisitions/store/shipments/:id/receive<br>POST /api/requisitions/shipments/:id/ship | — | lib/order-center.js, lib/purchase.js |
@@ -615,7 +615,7 @@ BOM 服务层（模块 10B · 一个 BOM + 三类执行单）
 | `HQ_ROLES` | const | — | — | — |
 | `POS_HQ_ROLES` | const | — | — | — |
 | `REQUISITION_HQ_ROLES` | const | — | — | — |
-| `isHqRole` | fn | — | — | lib/docflow.js |
+| `isHqRole` | fn | — | — | lib/docflow.js, lib/role-matrix.js |
 
 ## `server/lib/http.js`
 
@@ -629,11 +629,11 @@ HTTP 响应与错误归一：`ok` / `fail` / `wrap` 的**唯一实现**（统一
 | `failFromError` | fn | 170 条：accounting.js×18, auth.js×1, dms.js×17, mall.js×3, meta.js×2, pos.js×3, promo.js×40, purchase-chain.js×33, purchase.js×10, refund.js×4, report.js×39 | — | — |
 | `hidesInternals` | fn | — | — | — |
 | `newIncidentId` | fn | — | — | — |
-| `ok` | fn | 572 条：accounting.js×17, ai.js×4, approval.js×13, ar.js×23, auth.js×15, costing.js×11, credit.js×13, dashboard.js×7, dealers.js×15, demand.js×13, dms.js×13, docflow.js×15, im.js×8, inv-txn-types.js×2, inventory.js×23, invoice.js×14, mall.js×16, manufacture.js×26, master.js×15, meta.js×9, metrics.js×6, notify.js×8, oms.js×12, order-center.js×21, outsourcing.js×9, pos.js×39, pricing.js×8, promo.js×35, purchase-chain.js×33, purchase.js×12, qc.js×9, qc2.js×19, qimen.js×2, quote.js×10, refund.js×8, report.js×38, requisitions.js×14, sales.js×13, warehouses.js×4 | — | lib/crud.js |
+| `ok` | fn | 573 条：accounting.js×17, ai.js×4, approval.js×13, ar.js×23, auth.js×15, costing.js×11, credit.js×13, dashboard.js×7, dealers.js×15, demand.js×13, dms.js×13, docflow.js×15, im.js×8, inv-txn-types.js×2, inventory.js×23, invoice.js×14, mall.js×16, manufacture.js×26, master.js×15, meta.js×10, metrics.js×6, notify.js×8, oms.js×12, order-center.js×21, outsourcing.js×9, pos.js×39, pricing.js×8, promo.js×35, purchase-chain.js×33, purchase.js×12, qc.js×9, qc2.js×19, qimen.js×2, quote.js×10, refund.js×8, report.js×38, requisitions.js×14, sales.js×13, warehouses.js×4 | — | lib/crud.js |
 | `pageParams` | fn | 66 条：accounting.js×1, ai.js×1, approval.js×2, auth.js×2, costing.js×1, credit.js×1, dealers.js×3, demand.js×2, dms.js×4, docflow.js×1, im.js×2, inv-txn-types.js×1, inventory.js×8, manufacture.js×4, master.js×2, meta.js×1, notify.js×1, oms.js×2, order-center.js×3, outsourcing.js×3, pricing.js×1, promo.js×5, purchase.js×3, qc.js×1, qc2.js×3, quote.js×1, refund.js×1, requisitions.js×2, sales.js×3, warehouses.js×1 | — | lib/crud.js |
 | `paged` | fn | 59 条：accounting.js×1, ai.js×1, auth.js×2, costing.js×1, dealers.js×3, demand.js×2, dms.js×4, im.js×2, inv-txn-types.js×1, inventory.js×8, manufacture.js×4, master.js×2, meta.js×1, oms.js×2, order-center.js×3, outsourcing.js×3, pricing.js×1, promo.js×5, purchase.js×3, qc.js×1, qc2.js×3, requisitions.js×2, sales.js×3, warehouses.js×1 | — | lib/crud.js |
 | `statusOf` | fn | — | — | — |
-| `wrap` | fn | 629 条：accounting.js×18, ai.js×5, approval.js×13, ar.js×23, auth.js×16, costing.js×12, credit.js×13, dashboard.js×7, dealers.js×18, demand.js×15, dms.js×17, docflow.js×15, im.js×10, inv-txn-types.js×4, inventory.js×31, invoice.js×14, mall.js×16, manufacture.js×30, master.js×17, meta.js×11, metrics.js×6, notify.js×8, oms.js×14, order-center.js×24, outsourcing.js×12, pos.js×39, pricing.js×9, promo.js×40, purchase-chain.js×33, purchase.js×15, qc.js×10, qc2.js×22, qimen.js×3, quote.js×10, refund.js×8, report.js×39, requisitions.js×16, sales.js×16 | — | lib/crud.js |
+| `wrap` | fn | 630 条：accounting.js×18, ai.js×5, approval.js×13, ar.js×23, auth.js×16, costing.js×12, credit.js×13, dashboard.js×7, dealers.js×18, demand.js×15, dms.js×17, docflow.js×15, im.js×10, inv-txn-types.js×4, inventory.js×31, invoice.js×14, mall.js×16, manufacture.js×30, master.js×17, meta.js×12, metrics.js×6, notify.js×8, oms.js×14, order-center.js×24, outsourcing.js×12, pos.js×39, pricing.js×9, promo.js×40, purchase-chain.js×33, purchase.js×15, qc.js×10, qc2.js×22, qimen.js×3, quote.js×10, refund.js×8, report.js×39, requisitions.js×16, sales.js×16 | — | lib/crud.js |
 
 ## `server/lib/im-sync.js`
 
@@ -1414,6 +1414,18 @@ Prometheus 文本指标渲染 + 抓取令牌校验（ADR-0045）
 | `planReturn` | fn | — | — | lib/pos2.js |
 | `returnedQtyOfItem` | fn | — | — | — |
 
+## `server/lib/role-matrix.js`
+
+角色 x 单据类型可见度矩阵（AD11；AD2 的生成脚本可复用）
+
+| 导出 | 类型 | 路由 | MCP 工具 | 被模块调用 |
+|---|---|---|---|---|
+| `ACCESS` | const | — | — | — |
+| `accessOf` | fn | — | — | — |
+| `buildRoleMatrix` | fn | — | — | — |
+| `describeCaller` | fn | — | — | — |
+| `roleMatrixFor` | fn | GET /api/meta/role-matrix | — | — |
+
 ## `server/lib/sales-order.js`
 
 销售订单领域服务（D5）
@@ -1642,7 +1654,8 @@ Agent Token 管理（管理员）：签发 / 列表 / 吊销 / 调用审计
 | 导出 | 类型 | 路由 | MCP 工具 | 被模块调用 |
 |---|---|---|---|---|
 | `DOC_TYPE_UNMAPPED` | const | — | — | — |
-| `DOC_VIEW_PERMS` | const | — | — | — |
+| `DOC_VIEW_PERMS` | const | — | — | lib/role-matrix.js |
+| `HQ_ONLY_MODULES` | const | — | — | lib/role-matrix.js |
 | `TOKEN_OWNER_BINDING_REQUIRED` | const | — | — | — |
 | `TOKEN_OWNER_PERM_DENIED` | 再导出（未解析） | — | — | — |
 | `assertCanViewDocType` | fn | — | doc.get, doc.query | mcp/tools.js |
