@@ -164,7 +164,7 @@ test('AE3 explain-audit: oms.stats_* / ai.platform_analysis registered with the 
   }
   assert.ok(ALLOW.find((a) => a.statement === 'oms.stats_top_skus' && a.table === 'oms_order_items' && a.reason.length > 20))
   const mine = STATEMENTS.filter((s) => /^(oms\.stats|ai\.platform)/.test(s.id))
-  const all = auditStatements(db, mine, { threshold: 1, allow: ALLOW.filter((a) => mine.some((m) => m.id === a.statement)) })
+  const all = auditStatements(db, mine, { allow: ALLOW.filter((a) => mine.some((m) => m.id === a.statement)) })
   assert.deepEqual(all.violations, [])
   const g = { sql: '1=1', params: [] }
   assert.equal(byId.get('oms.stats_trend').sql, oq.omsStatsTrendStmt(30, g).sql)

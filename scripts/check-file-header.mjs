@@ -191,7 +191,10 @@ const DECLARED = [
   'server/lib/tx.js',
   'scripts/lib/bench-contender.mjs',
   'tests/write-contention.test.mjs',
-  'tests/fixtures/write-contention-worker.mjs'
+  'tests/fixtures/write-contention-worker.mjs',
+  // OMS /stats 与 AI 平台分析的 order_time 区间谓词（AE3，ADR-0044 补充 4）
+  'server/lib/oms-sql.js',
+  'tests/oms-sql.test.mjs'
 ]
 
 /** 参与覆盖率统计的源文件（**排除** node_modules / dist / data） */
