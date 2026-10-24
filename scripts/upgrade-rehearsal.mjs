@@ -286,7 +286,16 @@ async function rehearseDb(r, ctx) {
       const ts = performance.now()
       let res = null
       let err = null
-      try { res = runMigrations(db, { migrationsDir: stage, mode: 'production', warn: (m) => dbr.warnings.push(m) }) } catch (e) { err = e }
+      // 写锁探针（另一个连接的 BEGIN IMMEDIATE; COMMIT）可能恰好在运行器的延迟事务"先读后写"之间提交，SQLite 在 WAL 下对这种
+      // 快照过期的升级写直接返回 SQLITE_BUSY（不等 busy_timeout）。迁移是单事务，失败已整体回滚，所以重试安全；最多 3 次，次数记在 rec.busy_retries，
+      // 任何非 BUSY 错误、或 3 次都 BUSY，照常判失败。
+      rec.busy_retries = 0
+      for (let attempt = 0; attempt < 3; attempt++) {
+        err = null
+        try { res = runMigrations(db, { migrationsDir: stage, mode: 'production', warn: (m) => dbr.warnings.push(m) }); break } catch (e) { err = e }
+        if (!(err && (/^SQLITE_BUSY/.test(String(err.code)) || /database is locked/.test(String(err.message))))) break
+        rec.busy_retries += 1
+      }
       rec.duration_ms = round1(performance.now() - ts)
       rec.lock = await probe.stop()
       if (err) {
