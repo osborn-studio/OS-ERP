@@ -73,6 +73,44 @@ node scripts/audit-archive.mjs --data-dir /abs/data --industry cosmetic --before
 - 幂等：已归档完成时再跑 `--resume` 输出 `already-archived`、退出 0，不再删除、不再写审计。
 - 故障注入 `GML_TEST_ARCHIVE_PAUSE_AFTER_EXPORT=1` 只给测试用（仅 `GML_RUNTIME_MODE=test`），生产设置它会被拒绝。
 
+## 5b. 写入序列的故障注入与恢复语义（AD6）
+
+`scripts/lib/fs-fault.mjs` 在多步写入序列的相邻两步之间放了命名注入点。`GML_TEST_FS_FAULT=<点名>` 命中时按 `GML_TEST_FS_FAULT_MODE=throw`（默认，走脚本自己的失败清理）或 `abort`（`process.abort()`，SIGABRT，不跑 `finally` / 退出处理器，最接近断电）终止。**只在 `GML_RUNTIME_MODE=test` 下可用**：其他模式下只要设置了该变量（或模式变量），三个脚本在做任何写入之前就以 `FS_FAULT_FORBIDDEN` 失败（audit-archive、db-backup 退出 2；`release-candidate --log` 在构建前失败）；点名拼错 ⇒ `FS_FAULT_UNKNOWN`。测试 `tests/fs-fault.test.mjs` 对每个点 × 两种模式起子进程，断言崩后状态属下表之一，且下一次正常运行 / `--resume` 安全、幂等地接续。`abort` 只能模拟“进程死了、页缓存还在”；真正掉电丢失尚未 fsync 的字节，靠表里“撕裂尾部”一行与各步骤的 fsync 顺序保证。
+
+### audit-archive（导出 → fsync → 删除 → 锚定，一个 IMMEDIATE 事务）
+
+| 注入点 | 位置 | abort 后磁盘状态 | throw 后 | 恢复 |
+| --- | --- | --- | --- | --- |
+| `archive.after-export-write` | JSONL 已写、未 fsync | 库不动；只有（可能不完整的）JSONL，无摘要 | 脚本删除本次创建的文件，库不动 | abort：`--resume` 报 `RESUME_INCOMPLETE`，正常重跑报 `OUT_EXISTS`；人工确认库未变后删掉孤儿 JSONL，再按第 2 节做新归档。throw：直接重跑 |
+| `archive.after-export-fsync` | JSONL 已 fsync、摘要未写 | 同上（完整 JSONL，无摘要） | 同上 | 同上 |
+| `archive.before-delete` | 导出与摘要都已落盘、尚未 DELETE | 库不动；JSONL + 摘要完整 | 事务回滚，新建的导出文件被删除 | abort：`--resume` 演练 → `--resume --confirm`；续做不重写导出。throw：直接重跑 |
+| `archive.after-delete` | 段已删、锚点未登记（事务未提交） | 同上（SQLite 回滚未提交的删除） | 同上 | 同上 |
+| `archive.after-anchor` | 锚点与 `AUDIT_ARCHIVE` 审计已写、事务未提交 | 同上 | 同上 | 同上 |
+
+任何状态下库里都不会出现“段已删但锚点缺失”：删除、锚点、审计在同一事务里，提交之前崩溃一律回滚。`--resume` 完成后再跑一次 `--resume` 输出 `already-archived`、退出 0，不再删除、不再写审计。
+
+### db-backup（快照 → 校验 → 清单 → 报告）
+
+| 注入点 | 位置 | abort 后磁盘状态 | throw 后 | 恢复 |
+| --- | --- | --- | --- | --- |
+| `backup.after-db-copy` | `VACUUM INTO` 已完成、尚未校验 | 无密钥：`<终名>.partial`（**没有终名 `.db`**，不会被裁剪当成备份）；有密钥：0600 的 `.plain.tmp` 明文临时文件 | 快照失败路径：`.db.failed`（有密钥时擦除明文），本次非零退出 | 之前的备份不受影响；下一次正常运行照常完成。残留的 `.partial` / `.plain.tmp` 由运维清理（`.plain.tmp` 须擦除，见 ADR-0022） |
+| `backup.before-sidecar` | 快照已校验并改成终名，清单未写 | 已验证的 `.db` 存在但没有 `.audit-manifest.json`（可用，缺链清单；要离机保存清单的话重新备份一次） | 清单失败路径删除这份半成品备份，非零退出 | 下一次正常运行生成带清单的新备份；孤儿 `.db` 确认后可手工删除，否则按 keep 规则被裁剪 |
+| `backup.after-sidecar` | 备份与清单都已落盘、报告未写 | 备份 + 清单完整，没有本次报告 | 同左（未捕获异常，进程非零退出） | 备份可用；下一次正常运行写出新报告并按 keep 裁剪 |
+
+无密钥模式下终名 `.db` 只在 fsync + 校验通过后经 rename 出现，因此“磁盘上有终名 `.db`”总是意味着该快照通过过完整性校验。
+
+### 证据日志追加（`release-candidate --log` → `appendEntry`）
+
+追加在独占锁 `<log>.lock` 内进行：读-校验 → 写一行 → fsync → 解锁。
+
+| 注入点 | 位置 | abort 后状态 | throw 后 | 恢复 |
+| --- | --- | --- | --- | --- |
+| `log.after-lock` | 锁已取得，尚未读日志 | 日志不动；残留锁文件 | 锁释放，日志不动 | abort：确认无进程在追加后手工删除 `<log>.lock`，重跑 |
+| `log.after-write-before-fsync` | 新行已写、未 fsync | 残留锁；新行在页缓存里通常已存在（进程死不丢字节）；真正掉电可能只剩半行 | 文件被截回追加前长度，锁释放：日志与追加前逐字节相同 | abort：删锁；日志有效 ⇒ 该候选已入账，重跑会报“already in the evidence log”（新 commit 换新候选名，或从 git 恢复日志后重建）；半行 ⇒ 日志被拒绝（不自动修复），`git checkout` 已提交的日志再重跑 |
+| `log.after-fsync-before-unlock` | 新行已 fsync、锁未删 | 残留锁；该行已入账 | 锁释放；该行已入账（fsync 之后即算提交） | abort：删锁；该候选已入账，处理同上 |
+
+`release-candidate` 在追加失败时会清理候选产物；若新行已入账而产物被清理，重跑会因同名候选已在日志中被拒绝，这是有意的（日志只增不改）——换新 commit 重建，或在确认该行未提交后用 git 恢复日志文件。
+
 ## 6. 离机保存：链尾、锚点摘要与归档摘要
 
 能写库的人可以改内容后整链重算（含伪造锚点），库内的链和锚点对他无效；只有**库外**的记录能拆穿。需要离机保存三样东西：
