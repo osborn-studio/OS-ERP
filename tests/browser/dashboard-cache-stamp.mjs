@@ -7,7 +7,8 @@
  *     页面戳文案匹配 /数据截至 \d\d:\d\d:\d\d（缓存 30 s）/，data-cached-at 等于四个响应里**最早**的 cached_at（页面不会比任何一块数据更新）；
  *   · 点"刷新"：四个接口各再发一次请求并返回 200；戳不早于刷新前（命中缓存则不变、失效则前进），页面没有未捕获错误；
  *   · 一次真实写入（库存调整）之后再点"刷新"：summary 的 cached_at 前进（缓存被写入失效），页面戳随之前进或不变但不倒退，且等于四个新响应中最早的一个；
- *   · 无全局数据范围账号（role=purchase, data_scope=org）：看板接口 403（GLOBAL_DATA_FORBIDDEN） 时页面不显示戳也不显示刷新按钮（不把拒绝画成带时间的成功结果）。
+ *   · 无全局数据范围账号（role=purchase, data_scope=org）：看板接口 403（GLOBAL_DATA_FORBIDDEN）；路由把它重定向到采购工作台，
+ *     根本不挂载看板——没有任何看板请求、没有戳、没有刷新按钮。
  * 账号密码随机，不打印；外部请求一律拦截并计数，必须为 0。
  * 浏览器部分只在 Linux 托管 CI 运行，未执行前不得称"浏览器场景已通过"。
  * ============================================================================
@@ -38,6 +39,8 @@ async function openDashboard(actor) {
   const errors = []
   page.on('pageerror', (e) => errors.push(e.message))
   await uiLogin(page, base, actor.username, actor.password)
+  // 登录会自己导航回首页并触发一轮看板请求；先让它落定，之后各步骤用显式的一次加载 / 刷新来观察，避免两次导航的响应混在一起
+  await page.waitForLoadState('networkidle')
   return { page, errors }
 }
 
@@ -45,12 +48,14 @@ async function openDashboard(actor) {
 function collect(page, count = CACHED.length) {
   const got = {}
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`only got ${Object.keys(got).join(',')}`)), 15000)
-    page.on('response', async (r) => {
+    const done = (fn, v) => { clearTimeout(timer); page.off('response', onResponse); fn(v) }
+    const timer = setTimeout(() => done(reject, new Error(`only got ${Object.keys(got).join(',')}`)), 15000)
+    const onResponse = async (r) => {
       if (!isCachedDash(r) || got[dashName(r)]) return
-      try { assert.equal(r.status(), 200); got[dashName(r)] = await r.json() } catch (e) { clearTimeout(timer); reject(e); return }
-      if (Object.keys(got).length === count) { clearTimeout(timer); resolve(got) }
-    })
+      try { assert.equal(r.status(), 200); got[dashName(r)] = await r.json() } catch (e) { done(reject, e); return }
+      if (Object.keys(got).length === count) done(resolve, got)
+    }
+    page.on('response', onResponse)
   })
 }
 const oldest = (bodies) => Object.values(bodies).map((b) => b.cached_at).sort()[0]
@@ -63,7 +68,7 @@ try {
   await step('dashboard shows the stamp of the oldest cached response (summary/trend/top/todos), 30 s ttl, ISO stamps', async () => {
     const { page, errors } = await openDashboard({ username: 'admin', password: '12345' })
     const all = collect(page)
-    await page.goto(new URL('/', base).href)
+    await page.reload()
     const bodies = await all
     for (const name of CACHED) {
       assert.match(bodies[name].cached_at, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/, name)
@@ -82,7 +87,7 @@ try {
   await step('refresh re-requests the four endpoints and the stamp never moves backwards; a write restamps summary', async () => {
     const { page, errors } = await openDashboard({ username: 'admin', password: '12345' })
     const initial = collect(page)
-    await page.goto(new URL('/', base).href)
+    await page.reload()
     const first = await initial
     const stamp = page.getByTestId('dashboard-cache-stamp')
     await stamp.waitFor()
@@ -111,15 +116,17 @@ try {
     assert.deepEqual(errors, [])
   })
 
-  await step('non-admin: dashboard APIs are 403 and the page shows neither a stamp nor a refresh button', async () => {
+  await step('restricted account: the API is 403 and the router never mounts the dashboard (redirect, no request, no stamp, no refresh)', async () => {
     const plain = await createAccount(api, adminToken, 'dc_plain', 'purchase', { data_scope: 'org' })
     const direct = await api('/api/dashboard/summary', { token: plain.token })
     assert.equal(direct.status, 403)
     const { page, errors } = await openDashboard(plain)
-    const denied = page.waitForResponse((r) => new URL(r.url()).pathname === '/api/dashboard/summary')
+    const dashRequests = []
+    page.on('request', (r) => { if (new URL(r.url()).pathname.startsWith('/api/dashboard/')) dashRequests.push(r.url()) })
     await page.goto(new URL('/', base).href)
-    assert.equal((await denied).status(), 403)
+    await page.waitForURL((u) => u.pathname === '/purchase/workbench')
     await page.waitForLoadState('networkidle')
+    assert.deepEqual(dashRequests, [], 'a restricted account must not even request dashboard data')
     assert.equal(await page.getByTestId('dashboard-cache-stamp').count(), 0)
     assert.equal(await page.getByTestId('dashboard-refresh').count(), 0)
     assert.deepEqual(errors, [])

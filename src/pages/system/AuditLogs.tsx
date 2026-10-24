@@ -30,7 +30,7 @@ export default function AuditLogs() {
     useList<any>('/meta/audit-logs', { pageSize: 50 })
   const [draft, setDraft] = useState<Draft>(EMPTY)
   const [exporting, setExporting] = useState(false)
-  const [meta, setMeta] = useState<{ retention?: any; max?: number }>({})
+  const [meta, setMeta] = useState<{ retention?: any; max?: number; ok?: boolean }>({})
   const set = (k: keyof Draft) => (v: string) => setDraft((d) => ({ ...d, [k]: v }))
 
   // 保留提示与导出上限随列表一起返回；useList 只暴露 list，故单独取一次元信息（pageSize=1，开销可忽略）
@@ -101,14 +101,15 @@ export default function AuditLogs() {
         </button>
       </FilterBar>
       {/* 提示常驻在过滤条下面：说明关键字走哪条检索路径、以及“只有动作需要模块”；不满足时查询按钮置灰（服务端同口径 400 兜底） */}
-      <div className="mb-3 -mt-1 flex flex-col gap-0.5 text-[12px] text-slate-500">
+      {/* 只在服务端确认过本账号能读审计（meta 请求成功）之后才显示，避免无权限账号在 403 到达前闪现过滤提示 */}
+      {meta.ok && <div className="mb-3 -mt-1 flex flex-col gap-0.5 text-[12px] text-slate-500">
         <div data-testid="audit-fts-hint" data-mode={kwMode} className={kwMode === 'too_short' ? 'text-red-600' : kwMode === 'fts' ? 'text-emerald-700' : undefined}>
           {KEYWORD_HINTS[kwMode]}
         </div>
         <div data-testid="audit-action-hint" data-needs-module={needModule ? '1' : '0'} className={needModule ? 'text-red-600' : undefined}>
           {ACTION_NEEDS_MODULE_HINT}
         </div>
-      </div>
+      </div>}
       {/* 400 等校验错误：useList 失败时保留上一次的结果，不显式处理会让旧行看起来像是本次过滤的结果 */}
       {error && !loading && <div className="mb-3 rounded border border-red-200 bg-red-50 px-3 py-2 text-[13px] text-red-700">查询未执行：{error}。下方不显示旧结果。</div>}
       <Card pad={false}>
@@ -136,12 +137,12 @@ export default function AuditLogs() {
   )
 }
 
-function useMetaOnce(set: (m: { retention?: any; max?: number }) => void) {
+function useMetaOnce(set: (m: { retention?: any; max?: number; ok?: boolean }) => void) {
   useEffect(() => {
     let live = true
     api
       .get('/meta/audit-logs', { page: 1, pageSize: 1 })
-      .then((res: any) => live && set({ retention: res.data?.retention, max: res.data?.export_max_rows }))
+      .then((res: any) => live && set({ retention: res.data?.retention, max: res.data?.export_max_rows, ok: true }))
       .catch(() => {})
     return () => {
       live = false

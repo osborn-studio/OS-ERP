@@ -119,6 +119,7 @@ try {
     await page.goto(new URL('/system/audit-logs', base).href)
     assert.equal((await listed).status(), 403)
     await page.getByTestId('scope-notice').waitFor()
+    await page.waitForLoadState('networkidle')
     assert.equal(await page.getByTestId('audit-fts-hint').count(), 0)
     assert.equal(await page.getByTestId('audit-action-hint').count(), 0)
     assert.deepEqual(errors, [])

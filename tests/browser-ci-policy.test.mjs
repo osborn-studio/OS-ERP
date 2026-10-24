@@ -174,7 +174,7 @@ test('AC11 scenarios assert the hint modes, the disabled/blocked query, the serv
     assert.ok(audit.includes(needle), `audit-fts-hint must assert ${needle}`)
   }
   const dash = read('tests/browser/dashboard-cache-stamp.mjs')
-  for (const needle of ['数据截至', '缓存 30 s', 'cache_ttl_ms', 'cached_at', 'data-cached-at', 'dashboard-refresh', 'oldest(', 'must not move backwards', '/api/inventory/adjust', 'GLOBAL_DATA_FORBIDDEN', 'status(), 403', 'count(), 0', 'externalRequests']) {
+  for (const needle of ['数据截至', '缓存 30 s', 'cache_ttl_ms', 'cached_at', 'data-cached-at', 'dashboard-refresh', 'oldest(', 'must not move backwards', '/api/inventory/adjust', 'GLOBAL_DATA_FORBIDDEN', 'dashRequests, []', 'waitForURL', 'page.off(', 'count(), 0', 'externalRequests']) {
     assert.ok(dash.includes(needle), `dashboard-cache-stamp must assert ${needle}`)
   }
   for (const f of ['audit-fts-hint', 'dashboard-cache-stamp']) {
@@ -186,7 +186,7 @@ test('AC11 scenarios assert the hint modes, the disabled/blocked query, the serv
   }
   // 页面侧的钩子必须存在，场景才有东西可断言
   const page = read('src/pages/Dashboard.tsx')
-  assert.ok(page.includes('dashboard-cache-stamp') && page.includes('dashboard-refresh') && page.includes('selectCacheStamp'))
+  assert.ok(page.includes('dashboard-cache-stamp') && page.includes('dashboard-refresh') && page.includes('selectCacheStamp') && page.includes('dashboard-refresh-failed'))
   const auditPage = read('src/pages/system/AuditLogs.tsx')
   assert.ok(auditPage.includes('audit-fts-hint') && auditPage.includes('audit-action-hint') && auditPage.includes('KEYWORD_HINTS'))
 })
