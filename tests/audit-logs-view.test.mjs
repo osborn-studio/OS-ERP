@@ -731,7 +731,7 @@ test('AD4 setting off: 071 drops the FTS table + triggers (verify false before, 
   assert.equal(ftsAvailable(db), false); assert.equal(keywordUsesFts(db, 'KEEPME'), false)
 })
 
-test('AD4 setting back on: startup healing rebuilds and backfills rows written while FTS was off', needsFts5Build, (t) => {
+test('AD4 setting back on: startup healing rebuilds and backfills rows written while FTS was off', needsFts, (t) => { // GML_AUDIT_FTS=0 也要跳过：该用例断言 FTS 路径可用
   const db = migrated(t)
   setFtsSetting(db, '0'); runMigrations(db, { mode: 'test', warn: () => {} })
   const whileOff = auditRow(db, { action: 'WRITTENWHILEOFF' })
