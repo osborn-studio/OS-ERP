@@ -357,7 +357,31 @@ function McpLimitsCard({ nonce }: { nonce: number }) {
         <StatCard label="被限流（429）" value={data.rate_limited_total} tone={data.rate_limited_total > 0 ? 'amber' : 'default'} sub="本进程自启动以来，重启归零" />
       </div>
       <McpTokenLimitsBlock nonce={nonce} />
+      <McpQuotaSlot nonce={nonce} />
     </Card>
+  )
+}
+
+/**
+ * AG9-SLOT：每令牌日配额读数的预留槽位。数据层归 AG9（`GET /api/mcp/limits/quota`，仅 system.mcp.manage）；端点未合入 / 非 200 / 读取失败时**整块不渲染**（返回 null，不画默认值、不占位）。
+ * 端点 200 后只渲染一个带 `data-testid="mcp-quota-slot"` 的容器并按已知可选字段（`daily_quota`、`tokens[].{id,name,used}`）展示；字段名以 AG9 合入为准，未知字段一律忽略。
+ */
+type McpQuota = { daily_quota?: number; tokens?: { id: number; name?: string; used?: number }[] }
+function McpQuotaSlot({ nonce }: { nonce: number }) {
+  const { data, error } = useFetch<McpQuota>('/mcp/limits/quota', undefined, [nonce])
+  if (!data || error) return null
+  const rows = Array.isArray(data.tokens) ? data.tokens.slice(0, 50) : []
+  return (
+    <div data-testid="mcp-quota-slot" data-daily-quota={Number.isFinite(data.daily_quota) ? data.daily_quota : ''} data-rows={rows.length} className="mt-3">
+      <div className="text-[12px] text-slate-500 mb-1">每令牌当日配额用量{Number.isFinite(data.daily_quota) && (data.daily_quota as number) > 0 ? `（上限 ${data.daily_quota}）` : ''}</div>
+      <ul className="divide-y divide-slate-100 text-[13px]">
+        {rows.map((t) => (
+          <li key={t.id} className="py-1 flex justify-between" data-testid="mcp-quota-row" data-token-id={t.id} data-used={t.used ?? ''}>
+            <span>{t.name ?? `令牌 #${t.id}`}</span><span>{t.used ?? '—'}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
   )
 }
 

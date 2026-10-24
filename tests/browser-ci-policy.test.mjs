@@ -10,7 +10,7 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync, readdirSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -208,7 +208,8 @@ test('AD11 role-matrix scenario asserts the highlighted column, server-equal cel
 test('AF11 scenarios are registered, assert real outcomes and the page hooks exist', () => {
   const declared = driver.match(/const SCENARIOS = \[([^\]]+)\]/)[1].split(',').map((x) => x.trim().replace(/'/g, ''))
   const needles = {
-    'metrics-scoped-marker': ['metric-scoped-marker', 'metric-value-', 'restricted', 'scoped = false', 'route.fulfill', '全局口径', 'count(), 0', 'externalRequests'],
+    'metrics-scoped-real': ['metric-scoped-marker', 'metric-value-', 'scope_restricted', 'createAccount', 'data_scope: \'org\'', 'route.fulfill', '全局口径', 'count(), 0', 'metrics-hidden-note', 'externalRequests'],
+    'audit-fts-fallback': ['audit-fts-fallback', 'audit-fts-fallback-text', 'fallback_total', 'data-count', '/api/meta/audit-logs', 'route.fulfill', 'status, 403', 'scope-notice', 'count(), 0', 'externalRequests'],
     'mcp-token-429': ['/api/mcp/limits/tokens', 'mcp-token-429', 'mcp-token-429-row', 'data-recent', 'busy-agent', 'route.fulfill', 'status, 403', 'status, 401', 'count(), 0', 'externalRequests']
   }
   for (const [f, list] of Object.entries(needles)) {
@@ -225,6 +226,11 @@ test('AF11 scenarios are registered, assert real outcomes and the page hooks exi
   const mcp = read('src/pages/system/McpCenter.tsx')
   for (const hook of ['mcp-token-429', 'mcp-token-429-row', 'data-recent', "'/mcp/limits/tokens'"]) assert.ok(mcp.includes(hook), `McpCenter.tsx must expose ${hook}`)
   assert.ok(read('src/pages/system/AuditLogs.tsx').includes('audit-fts-fallback'), 'AuditLogs.tsx exposes the FTS fallback slot')
+  assert.ok(read('src/pages/system/AuditLogs.tsx').includes('fts.fallback_total'), 'AuditLogs.tsx reads the real fts.fallback_total field')
+  // AG11：标记只认服务端 scope_restricted，不再从行上推断；AG9 配额槽位只在端点 200 时渲染
+  assert.ok(read('src/api/metrics.ts').includes('scope_restricted') && !read('src/api/metrics.ts').includes('AF2-ADAPTER'), 'metrics api reads scope_restricted and has no inference adapter')
+  assert.ok(mcp.includes('mcp-quota-slot') && mcp.includes("'/mcp/limits/quota'"), 'McpCenter.tsx reserves the AG9 quota slot')
+  assert.ok(!existsSync(path.join(ROOT, 'tests/browser/metrics-scoped-marker.mjs')), 'the AF11 marker scenario is replaced by metrics-scoped-real')
   assert.match(read('server/mcp/admin.js'), /'\/limits\/tokens',\s*requireAuth,\s*requirePerm\('system\.mcp\.manage'\)/)
 })
 

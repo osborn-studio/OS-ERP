@@ -280,7 +280,7 @@
 | `ftsAvailable` | fn | — | — | — |
 | `ftsEnvDisabled` | fn | — | — | — |
 | `ftsPhrase` | fn | — | — | — |
-| `ftsState` | fn | GET /api/meta/audit-logs | — | — |
+| `ftsState` | fn | — | — | — |
 | `isFtsMissingError` | fn | — | — | — |
 | `keywordUsesFts` | fn | — | — | — |
 | `orderOf` | fn | GET /api/meta/audit-logs<br>GET /api/meta/audit-logs/export.csv | — | — |
@@ -829,7 +829,7 @@ Prometheus 文本指标渲染 + 抓取令牌校验（ADR-0045）
 | `METRIC_DEFS_FINGERPRINT_ID` | const | — | — | — |
 | `boundAllows` | fn | — | — | — |
 | `isScopeAware` | fn | — | — | — |
-| `isScopeRestricted` | fn | — | — | — |
+| `isScopeRestricted` | fn | GET /api/metrics | — | — |
 | `metricCatalog` | fn | GET /api/metrics/catalog | — | — |
 | `metricDefinitions` | fn | GET /api/ai/metrics<br>GET /api/metrics/defs<br>GET /api/metrics/stale | — | — |
 | `metricDefsStale` | fn | GET /api/metrics/stale<br>POST /api/metrics/sync | — | — |
@@ -1095,7 +1095,7 @@ OMS /stats 与 AI 平台分析的 SQL 唯一来源（AE3，ADR-0044 补充 4；A
 | `COUNTER_DEFS` | const | — | — | lib/metrics-export.js |
 | `HISTOGRAM_DEFS` | const | — | — | lib/metrics-export.js |
 | `MCP_RESULT_CODES` | const | — | — | — |
-| `counterSnapshot` | fn | GET /api/meta/metrics | — | — |
+| `counterSnapshot` | fn | GET /api/meta/metrics<br>GET /api/meta/audit-logs | — | — |
 | `histogramSnapshot` | fn | GET /api/meta/metrics | — | — |
 | `incCounter` | fn | — | — | lib/audit-trail.js, lib/audit-view.js, lib/db-ttl-cache.js, lib/login-throttle.js, lib/mcp-rate-limit.js, mcp/server.js |
 | `incMcpToolCall` | fn | — | — | mcp/server.js |

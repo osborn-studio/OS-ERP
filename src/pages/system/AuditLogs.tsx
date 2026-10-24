@@ -23,7 +23,7 @@ import { ACTION_NEEDS_MODULE_HINT, KEYWORD_HINTS, actionNeedsModule, effectiveKe
 
 const AUDIT_COUNT_CAP = 10000 // 与 server/lib/audit-view.js 的 AUDIT_COUNT_CAP 一致
 type Draft = { module: string; action: string; user: string; entity: string; entity_id: string; from: string; to: string; keyword: string }
-// fallback_total：AF4 的「索引查询失败 / 维护中回退到普通匹配」累计（可选；服务端没有该字段时整块不画）。AF4-ADAPTER: 字段名以 AF4 合入为准
+// fallback_total：AF4 `audit_fts_fallback_total` 各 reason 之和（本进程自启动以来，重启归零；多进程各自计数）。服务端必带；旧服务端缺字段时整块只留空容器
 type FtsState = { setting_enabled: boolean; index_present: boolean; env_disabled: boolean; active: boolean; fallback_total?: number }
 type AuditMeta = { retention?: any; max?: number; ok?: boolean; fts?: FtsState }
 const EMPTY: Draft = { module: '', action: '', user: '', entity: '', entity_id: '', from: '', to: '', keyword: '' }
