@@ -82,7 +82,7 @@
 | `mall_customers` | schema.sql | 025 | lib/coupon.js, lib/member.js, lib/pos2.js, middleware/mall-session.js | routes/mall.js, routes/promo.js |
 | `material_issue_items` | 023 | 023·idx | lib/mfg.js | — |
 | `material_issues` | 023 | 023·idx | lib/docflow.js, lib/mfg.js | — |
-| `mcp_call_logs` | 006 | 006·idx | mcp/admin.js, mcp/server.js, mcp/tokens.js | — |
+| `mcp_call_logs` | 006 | 006·idx | lib/mcp-rate-limit.js, mcp/admin.js, mcp/server.js, mcp/tokens.js | — |
 | `mcp_confirmations` | 006 | 006·idx | mcp/admin.js, mcp/server.js | — |
 | `mcp_idempotency` | 006 | 006·idx, 026·idx | mcp/server.js | — |
 | `member_accounts` | 025 | 025·idx | lib/member.js | routes/promo.js |
@@ -189,7 +189,7 @@
 | `sales_returns` | schema.sql | 028·idx | lib/dealer-statement.js, lib/docflow.js, lib/metrics.js, lib/pos2.js, lib/rebate.js, lib/refund.js, lib/returns.js, lib/sales-order.js | routes/dealers.js, routes/pos.js, routes/sales.js |
 | `serial_numbers` | schema.sql | — | — | routes/inventory.js, routes/master.js |
 | `setting_audit_log` | 038 | 038·idx | lib/settings.js | — |
-| `settings` | schema.sql | — | lib/ops-status.js, lib/settings.js | routes/promo.js |
+| `settings` | schema.sql | — | lib/mcp-rate-limit.js, lib/ops-status.js, lib/settings.js | routes/promo.js |
 | `stock_check_items` | schema.sql | — | lib/pos2.js | routes/inventory.js, routes/pos.js |
 | `stock_checks` | schema.sql | 024 | lib/docflow.js, lib/pos2.js | routes/inventory.js, routes/pos.js |
 | `stock_cost_ledger` | 002 | 002·idx | lib/accounting.js, lib/costing.js, lib/stock.js | — |

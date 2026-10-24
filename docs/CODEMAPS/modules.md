@@ -3,7 +3,7 @@
 <!-- generated -->
 <!-- 由 `node scripts/gen-codemap.mjs` 生成，勿手改；CI 校验不漂移 -->
 
-共 85 个模块。“路由”只列在处理器区域内直接引用该函数的路由（路由超过 5 条时按路由文件汇总，明细见 [routes.md](routes.md)）；“MCP 工具”来自 `server/mcp/tools.js` 的 40 个工具；“被模块调用”是其它 lib/mcp 模块里的跨文件引用。“—”表示静态扫描没找到调用方，不等于死代码。
+共 86 个模块。“路由”只列在处理器区域内直接引用该函数的路由（路由超过 5 条时按路由文件汇总，明细见 [routes.md](routes.md)）；“MCP 工具”来自 `server/mcp/tools.js` 的 40 个工具；“被模块调用”是其它 lib/mcp 模块里的跨文件引用。“—”表示静态扫描没找到调用方，不等于死代码。
 
 ## 扫描边界（必读）
 
@@ -624,7 +624,7 @@ HTTP 响应与错误归一：`ok` / `fail` / `wrap` 的**唯一实现**（统一
 | 导出 | 类型 | 路由 | MCP 工具 | 被模块调用 |
 |---|---|---|---|---|
 | `GENERIC_5XX_MESSAGE` | const | — | — | — |
-| `bizFail` | fn | 11 条：auth.js×1, demand.js×3, meta.js×1, notify.js×1, outsourcing.js×1, quote.js×1, sales.js×3 | — | — |
+| `bizFail` | fn | 11 条：auth.js×1, demand.js×3, meta.js×1, notify.js×1, outsourcing.js×1, quote.js×1, sales.js×3 | — | mcp/server.js |
 | `fail` | fn | 192 条：accounting.js×1, ai.js×1, approval.js×5, ar.js×4, auth.js×2, costing.js×1, credit.js×5, dealers.js×10, demand.js×9, dms.js×7, docflow.js×8, im.js×3, inventory.js×14, invoice.js×2, mall.js×7, manufacture.js×5, master.js×11, meta.js×4, notify.js×1, oms.js×10, order-center.js×8, outsourcing.js×7, pos.js×10, pricing.js×3, promo.js×5, purchase-chain.js×10, purchase.js×7, qc.js×2, qc2.js×5, qimen.js×1, quote.js×2, refund.js×1, requisitions.js×11, sales.js×10 | — | lib/crud.js |
 | `failFromError` | fn | 170 条：accounting.js×18, auth.js×1, dms.js×17, mall.js×3, meta.js×2, pos.js×3, promo.js×40, purchase-chain.js×33, purchase.js×10, refund.js×4, report.js×39 | — | — |
 | `hidesInternals` | fn | — | — | — |
@@ -709,6 +709,16 @@ HTTP 响应与错误归一：`ok` / `fail` / `wrap` 的**唯一实现**（统一
 | `consumeLoginAttempt` | fn | POST /api/auth/login | — | — |
 | `createLoginThrottle` | fn | — | — | — |
 
+## `server/lib/mcp-rate-limit.js`
+
+MCP 按令牌的速率限制与日配额（ADR-0056 / AD9）
+
+| 导出 | 类型 | 路由 | MCP 工具 | 被模块调用 |
+|---|---|---|---|---|
+| `DEFAULT_MCP_RATE` | const | — | — | — |
+| `createMcpRateLimiter` | fn | — | — | mcp/server.js |
+| `dailyQuotaState` | fn | — | — | — |
+
 ## `server/lib/member.js`
 
 模块 18：会员（等级 / 积分 / 储值）
@@ -771,7 +781,9 @@ Prometheus 文本指标渲染 + 抓取令牌校验（ADR-0045）
 | 导出 | 类型 | 路由 | MCP 工具 | 被模块调用 |
 |---|---|---|---|---|
 | `DEFAULT_METRICS_THROTTLE` | const | — | — | — |
+| `createBucketStore` | fn | — | — | lib/mcp-rate-limit.js |
 | `createMetricsThrottle` | fn | — | — | — |
+| `envInt` | fn | — | — | lib/mcp-rate-limit.js |
 
 ## `server/lib/metrics.js`
 
@@ -1470,16 +1482,16 @@ Prometheus 文本指标渲染 + 抓取令牌校验（ADR-0045）
 | `SETTING_ACTIONS` | const | — | — | — |
 | `SETTING_GROUPS` | const | — | — | — |
 | `SETTING_KEYS` | const | — | — | — |
-| `SETTING_RULES` | const | — | — | lib/pos2.js |
+| `SETTING_RULES` | const | — | — | lib/mcp-rate-limit.js, lib/pos2.js |
 | `SettingError` | class | — | — | — |
 | `auditSettingTrail` | fn | GET /api/meta/settings/audit/check | — | lib/report.js |
-| `castSettingValue` | fn | — | — | — |
+| `castSettingValue` | fn | — | — | lib/mcp-rate-limit.js |
 | `ensureSettings` | fn | GET /api/meta/settings<br>PUT /api/meta/settings<br>POST /api/meta/settings/reset<br>GET /api/meta/settings/audit/check | — | — |
 | `listSettingAudit` | fn | GET /api/meta/settings/audit | — | — |
 | `listSettings` | fn | GET /api/meta/settings | — | — |
 | `logSettingChange` | fn | — | — | — |
 | `meta` | fn | — | — | — |
-| `normalizeSettingValue` | fn | — | — | — |
+| `normalizeSettingValue` | fn | — | — | lib/mcp-rate-limit.js |
 | `readSetting` | fn | 7 条：docflow.js×5, invoice.js×1, meta.js×1 | — | 15 个：lib/accounting.js, lib/annual.js, lib/approval.js, lib/closing.js, lib/credit.js, lib/funds-review.js … |
 | `replaySettings` | fn | — | — | — |
 | `resetSetting` | fn | POST /api/meta/settings/reset | — | — |

@@ -31,7 +31,8 @@ async function server(t) {
   await new Promise((resolve) => probe.close(resolve))
   const env = {
     PATH: process.env.PATH, HOME: dir, TMPDIR: dir, HOST: '127.0.0.1', PORT: String(port),
-    GML_RUNTIME_MODE: 'test', GML_DATA_DIR: dir, GML_DB: '', GML_JWT_SECRET: randomBytes(32).toString('hex')
+    GML_RUNTIME_MODE: 'test', GML_DATA_DIR: dir, GML_DB: '', GML_JWT_SECRET: randomBytes(32).toString('hex'),
+    GML_MCP_TOKEN_RPM: '100000', GML_MCP_WRITE_RPM: '100000' // 本矩阵是穷举压测（AD9 默认写 60/分会误伤），限流行为见 mcp-rate-limit.test.mjs
   }
   const child = spawn(process.execPath, ['server/index.js'], { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] })
   let output = ''

@@ -15,7 +15,7 @@ import { isIP } from 'node:net'
 
 export const DEFAULT_METRICS_THROTTLE = Object.freeze({ limit: 120, windowMs: 60000, maxBuckets: 10000 })
 
-function envInt(raw, min, max, fallback) {
+export function envInt(raw, min, max, fallback) {
   if (typeof raw !== 'string' || !/^\d+$/.test(raw)) return fallback
   const n = Number(raw)
   return Number.isSafeInteger(n) && n >= min && n <= max ? n : fallback
@@ -34,14 +34,45 @@ function keyOf(ip) {
   return host
 }
 
+/**
+ * 有上限的桶表（AB10 抽出的通用部分，AD9 的 MCP 按令牌限流复用）：键 → 桶对象（桶必须带 `expires` 毫秒时刻）。
+ * 桶数达到上限时：先看最早过期时刻（O(1)）判断有没有可清理项，有才全表清一遍；清完仍满则 **fail closed**
+ * （返回 `{ full: true, until }`，调用方据此拒绝）。已有桶的键永远能取到自己的桶。
+ * 调用方续期（把 `bucket.expires` 往后推）是安全的：`minExpiry` 只是下界，偏小只会多清一次。
+ */
+export function createBucketStore({ maxBuckets, now = Date.now }) {
+  const buckets = new Map()
+  let minExpiry = Infinity
+  return {
+    get size() { return buckets.size },
+    /** → { bucket } | { full: true, until } */
+    open(key, make) {
+      const t = now()
+      let b = buckets.get(key)
+      if (b && b.expires <= t) { buckets.delete(key); b = undefined }
+      if (!b) {
+        if (buckets.size >= maxBuckets) {
+          if (t < minExpiry) return { full: true, until: minExpiry }
+          minExpiry = Infinity
+          for (const [k, v] of buckets) { if (v.expires <= t) buckets.delete(k); else if (v.expires < minExpiry) minExpiry = v.expires }
+          if (buckets.size >= maxBuckets) return { full: true, until: minExpiry }
+        }
+        b = make()
+        buckets.set(key, b)
+        if (b.expires < minExpiry) minExpiry = b.expires
+      }
+      return { bucket: b }
+    }
+  }
+}
+
 export function createMetricsThrottle({ env = process.env, now = Date.now, ...override } = {}) {
   const policy = {
     limit: override.limit ?? envInt(env.GML_METRICS_IP_LIMIT, 1, 100000, DEFAULT_METRICS_THROTTLE.limit),
     windowMs: override.windowMs ?? envInt(env.GML_METRICS_IP_WINDOW_MS, 1000, 86400000, DEFAULT_METRICS_THROTTLE.windowMs),
     maxBuckets: override.maxBuckets ?? DEFAULT_METRICS_THROTTLE.maxBuckets
   }
-  const buckets = new Map() // key -> { n, expires }
-  let minExpiry = Infinity // 所有桶中最早的过期时刻（桶满时 O(1) 判断是否有可清理项，避免每个新来源都全表扫描）
+  const store = createBucketStore({ maxBuckets: policy.maxBuckets, now })
   return {
     policy,
     /** → { allowed: true } | { allowed: false, retryAfter(秒, ≥1) } */
@@ -50,19 +81,9 @@ export function createMetricsThrottle({ env = process.env, now = Date.now, ...ov
       const key = keyOf(ip)
       const reject = (until) => ({ allowed: false, retryAfter: Math.max(1, Math.ceil((until - t) / 1000)) })
       if (key === null) return reject(t + policy.windowMs)
-      let b = buckets.get(key)
-      if (b && b.expires <= t) { buckets.delete(key); b = undefined }
-      if (!b) {
-        if (buckets.size >= policy.maxBuckets) {
-          if (t < minExpiry) return reject(minExpiry)
-          minExpiry = Infinity
-          for (const [k, v] of buckets) { if (v.expires <= t) buckets.delete(k); else if (v.expires < minExpiry) minExpiry = v.expires }
-          if (buckets.size >= policy.maxBuckets) return reject(minExpiry)
-        }
-        b = { n: 0, expires: t + policy.windowMs }
-        buckets.set(key, b)
-        if (b.expires < minExpiry) minExpiry = b.expires
-      }
+      const o = store.open(key, () => ({ n: 0, expires: t + policy.windowMs }))
+      if (o.full) return reject(o.until)
+      const b = o.bucket
       if (b.n >= policy.limit) return reject(b.expires)
       b.n += 1
       return { allowed: true }
@@ -70,4 +91,4 @@ export function createMetricsThrottle({ env = process.env, now = Date.now, ...ov
   }
 }
 
-export default { createMetricsThrottle, DEFAULT_METRICS_THROTTLE }
+export default { createMetricsThrottle, createBucketStore, DEFAULT_METRICS_THROTTLE }
