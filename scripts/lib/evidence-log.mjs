@@ -125,14 +125,16 @@ export function appendEntry(file, { name, evidence, sigText, builtBy, timestamp 
     const lfd = fs.openSync(file, 'a')
     const sizeBefore = fs.fstatSync(lfd).size
     try {
-      fs.writeSync(lfd, entryLine(entry) + '\n')
+      const buf = Buffer.from(entryLine(entry) + '\n', 'utf8')
+      for (let off = 0; off < buf.length;) off += fs.writeSync(lfd, buf, off) // writeSync 可能短写：写满为止
       faultPoint('log.after-write-before-fsync')
       fs.fsyncSync(lfd)
     } catch (error) {
       try { fs.ftruncateSync(lfd, sizeBefore) } catch { /* 截不回去就让下一次校验报告半行 */ }
       throw error
     } finally { fs.closeSync(lfd) }
-    faultPoint('log.after-fsync-before-unlock')
+    // fsync 之后该行已入账：此后的任何错误都带 committed=true，调用方不得再清理候选产物（否则同名重建会被日志拒绝）
+    try { faultPoint('log.after-fsync-before-unlock') } catch (error) { error.committed = true; throw error }
     return entry
   } finally { fs.closeSync(fd); fs.rmSync(lock, { force: true }) }
 }

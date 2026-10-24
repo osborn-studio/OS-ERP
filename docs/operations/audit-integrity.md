@@ -109,7 +109,7 @@ node scripts/audit-archive.mjs --data-dir /abs/data --industry cosmetic --before
 | `log.after-write-before-fsync` | 新行已写、未 fsync | 残留锁；新行在页缓存里通常已存在（进程死不丢字节）；真正掉电可能只剩半行 | 文件被截回追加前长度，锁释放：日志与追加前逐字节相同 | abort：删锁；日志有效 ⇒ 该候选已入账，重跑会报“already in the evidence log”（新 commit 换新候选名，或从 git 恢复日志后重建）；半行 ⇒ 日志被拒绝（不自动修复），`git checkout` 已提交的日志再重跑 |
 | `log.after-fsync-before-unlock` | 新行已 fsync、锁未删 | 残留锁；该行已入账 | 锁释放；该行已入账（fsync 之后即算提交） | abort：删锁；该候选已入账，处理同上 |
 
-`release-candidate` 在追加失败时会清理候选产物；若新行已入账而产物被清理，重跑会因同名候选已在日志中被拒绝，这是有意的（日志只增不改）——换新 commit 重建，或在确认该行未提交后用 git 恢复日志文件。
+`release-candidate` 在追加失败时会清理候选产物；追加在 fsync 之后才抛的错误带 `committed=true`，此时**保留**候选产物（行已入账，清理会让同名重建被日志拒绝）。进程被杀的情形下产物可能已被留在 `--output` 里：行已入账 ⇒ 提交这一行并保留产物；行未入账 ⇒ 删除产物后重跑。写入用循环写满（短写不会被当成成功）。
 
 ## 6. 离机保存：链尾、锚点摘要与归档摘要
 

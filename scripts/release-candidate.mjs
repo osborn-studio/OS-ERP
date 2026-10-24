@@ -327,7 +327,8 @@ function main() {
     }
     console.log(JSON.stringify({ candidate: zipFile, sha256: zipHash, evidence: path.join(evidenceDir, 'EVIDENCE.json'), notes: path.join(evidenceDir, 'RELEASE-NOTES.md'), not_a_release: true }, null, 2))
   } catch (error) {
-    cleanupOutputs()
+    if (error.committed) console.error(`[release-candidate] the evidence log line for ${name} is already durable; candidate outputs are kept (commit the log line)`)
+    else cleanupOutputs()
     console.error(`[release-candidate] ${error.message}`)
     process.exitCode = 1
   } finally {

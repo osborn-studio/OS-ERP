@@ -196,7 +196,8 @@ for (const point of FAULT_POINTS.backup) {
       const r = f.B(['--keep=5'], fault(point, mode))
       assertDied(r, mode, point)
       assert.deepEqual(f.dbs().slice(0, 1), good.slice(0, 1), 'the earlier verified backup is untouched')
-      assert.deepEqual(f.reports(), reportsBefore, 'no report is written by a run that died before the report')
+      if (mode === 'abort') assert.deepEqual(f.reports(), reportsBefore, 'no report is written by a run that died before the report')
+      else assert.match(JSON.parse(readFileSync(path.join(f.bdir, f.reports().at(-1)), 'utf8')).results[0].status, point === 'backup.after-sidecar' ? /ok|failed/ : /failed/, 'handled failures are reported (same-second runs may overwrite the earlier report)')
       const names = f.names()
       const partials = names.filter((n) => n.endsWith('.partial'))
       const failedFiles = names.filter((n) => n.endsWith('.failed'))
@@ -265,7 +266,7 @@ const { appendEntry } = await import(${JSON.stringify(logUrl)})
 try {
   const e = appendEntry(${JSON.stringify(file)}, { name: 'RC-1.0.0-' + String(${n}).padStart(7, '0'), evidence: { n: ${n} }, sigText: null, builtBy: 'local', timestamp: '2026-10-24T00:00:0${n}.000Z' })
   console.log('APPENDED ' + e.name)
-} catch (e) { console.error('ERR ' + (e.code || '') + ' ' + e.message); process.exit(4) }`],
+} catch (e) { console.error('ERR ' + (e.code || '') + (e.committed ? ' committed' : '') + ' ' + e.message); process.exit(4) }`],
 { cwd: ROOT, env: envFor(path.dirname(file), env), encoding: 'utf8', timeout: 60000 })
 
 for (const point of FAULT_POINTS.log) {
@@ -278,6 +279,7 @@ for (const point of FAULT_POINTS.log) {
       const base = readFileSync(file, 'utf8')
       const r = APPEND(file, 2, fault(point, mode))
       assertDied(r, mode, point)
+      if (mode === 'throw') assert.equal(/committed/.test(r.stderr), point === 'log.after-fsync-before-unlock', 'only a post-fsync error is flagged committed')
       const text = readFileSync(file, 'utf8')
       assert.equal(verifyLog(text).ok, true, `${point}: the log is still a valid chain`)
       const lock = `${file}.lock`
