@@ -135,6 +135,7 @@ node scripts/check-audit-allowlist.mjs
 npm audit --omit=dev --json --registry=https://registry.npmjs.org</code></pre>
 <p>新增依赖回归检查锁定版本、ZIP中文往返、畸形ZIP64及时退出、路由匹配及CSS解析兼容性。构建后的样式按PostCSS解析并规范化无意义空白后比较，1294条声明一致。</p>
 <p>全依赖npm audit仍会显示braces及chokidar、fast-glob、micromatch、tailwindcss共5个受影响包。这些条目源于同一条未修复公告，不应描述为额外修复了5个独立漏洞。只审计运行依赖时未发现已知公告，不代表已证明业务代码、浏览器包和部署环境绝对安全。</p>
+<p><code>check-audit-allowlist.mjs</code> 是 CI 里的运行依赖高危公告门禁：每条公告必须在 <code>docs/security/audit-allowlist.json</code> 里带原因和不超过 180 天的到期日，到期或未登记即失败；它是限期豁免，不等于已修复。参数、条目规则与处置流程见操作手册第四十二章。</p>
 <p>完整业务回归、实际浏览器检查及新版安装验收结果以本次交付记录为准。GitHub依赖分析为异步处理，远程告警关闭状态需在推送后复核，不预先声称平台已经清零。</p>
 <h2 id="四-权威来源">四 权威来源</h2>
 <ul><li>Vite及编辑器调用：https://github.com/advisories/GHSA-587h-7wmj-h5pm</li><li>React Router跳转：https://github.com/advisories/GHSA-wrjc-x8rr-h8h6</li><li>React Router后续补丁：https://github.com/advisories/GHSA-qwww-vcr4-c8h2</li><li>fflate ZIP64：https://github.com/advisories/GHSA-px8p-9vwx-vf98</li><li>braces剩余漏洞：https://github.com/advisories/GHSA-vfj7-8cjw-p6xm</li></ul>
