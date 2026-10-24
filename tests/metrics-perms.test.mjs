@@ -150,6 +150,7 @@ test('AE1: metrics are filtered by business view permission (absent, not 403)', 
     assert.equal(v.hidden_count, 0)
     assert.equal(okData(await api('/api/metrics/catalog', { token: f.admin })).items.length, METRICS.length)
     assert.equal(okData(await api('/api/metrics', { token: f.admin })).hidden_count, 0)
+    assert.strictEqual(okData(await api('/api/metrics', { token: f.admin })).scope_restricted, false, 'AG11: global caller is not restricted')
   })
 })
 
@@ -189,6 +190,7 @@ test('AE1: metrics_global_for_restricted hides scope-less metrics from restricte
     assert.equal(cat.hidden_count, GLOBAL_ONLY.length)
     const dict = okData(await api('/api/metrics', { token: A.token }))
     assert.equal(dict.total, SCOPE_AWARE.length)
+    assert.strictEqual(dict.scope_restricted, true, 'AG11: restricted caller is flagged on the dictionary response')
     assert.equal(dict.hidden_count, GLOBAL_ONLY.length)
   })
 

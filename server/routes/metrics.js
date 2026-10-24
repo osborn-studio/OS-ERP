@@ -40,7 +40,7 @@ import { boundStoreId, boundDealerId, isExternalSubject, storeBindingExempt } fr
 import { audit } from '../middleware/audit.js'
 import {
   METRICS, METRIC_BY_KEY, metricDefinitions, metricValues,
-  metricCatalog, metricGroups, metricScopedFlags, metricVisibility, syncMetricDefs, metricDefsStale
+  metricCatalog, metricGroups, metricScopedFlags, isScopeRestricted, metricVisibility, syncMetricDefs, metricDefsStale
 } from '../lib/metrics.js'
 
 const r = Router()
@@ -91,7 +91,9 @@ r.get(
       groups,
       total: vis.allow.size,
       modules: groups.map((g) => g.module),
-      hidden_count: vis.hidden
+      hidden_count: vis.hidden,
+      // AG11：调用者是否受限（与 `metricScopedFlags` 同一判据，绑定主体也算）；前端据此决定是否标「按范围计算」，不再从行上推断
+      scope_restricted: isScopeRestricted(req.orgScope) || subjectBoundOf(req)
     })
   })
 )
