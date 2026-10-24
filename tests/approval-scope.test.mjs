@@ -406,3 +406,28 @@ test('AA3: template maintenance needs system:approval:template AND global scope;
     assert.equal(lib.templateIsGlobal({ id: 1, org_id: whA.org_id }), false)
   })
 })
+
+// AC3（ADR-0011 补充 2 的 Codex 审计 high）：data_scope=all 不绕过单据类型的账号绑定——审批实例的可见性与单据范围判据
+// （approvalDocScope / instanceVisibleTo）对绑定账号按 DOC_SCOPE_RESOLVERS 的 binding 过滤。
+test('AC3: approval visibility honours account bindings under data_scope=all', { timeout: 300000 }, async (t) => {
+  const f = await server(t)
+  const { db } = f
+  const { approvalDocScope, instanceVisibleTo } = await import('../server/lib/approval.js')
+  const custs = db.prepare("SELECT c.id, c.source_id FROM oc_customers c WHERE c.source_type='dealer' AND EXISTS (SELECT 1 FROM oc_orders o WHERE o.customer_id=c.id) ORDER BY c.id LIMIT 2").all()
+  assert.equal(custs.length, 2)
+  const ord = (cid) => db.prepare('SELECT id FROM oc_orders WHERE customer_id=? LIMIT 1').get(cid).id
+  const all = { scope: 'all', orgIds: null }
+  const sc = (user) => ({ orgScope: all, user })
+  const dealerA = { id: 7001, role: 'dealer', dealer_id: custs[0].source_id }
+  assert.equal(approvalDocScope(db, 'OC', ord(custs[0].id), sc(dealerA)), true, 'own order')
+  assert.equal(approvalDocScope(db, 'OC', ord(custs[1].id), sc(dealerA)), false, 'foreign order is hidden under scope=all')
+  assert.equal(approvalDocScope(db, 'OC', ord(custs[1].id), sc({ id: 7002, role: 'warehouse' })), true, 'internal unbound account: unchanged')
+  assert.equal(approvalDocScope(db, 'OC', ord(custs[1].id), sc({ id: 7003, role: 'admin', dealer_id: custs[0].source_id })), true, 'admin exempt')
+  assert.equal(approvalDocScope(db, 'OC', ord(custs[1].id), null), true, 'no scope context: unchanged')
+  assert.equal(approvalDocScope(db, 'TF', 999999, sc(dealerA)), true, 'types without a binding keep the global-scope read')
+  const inst = (id) => ({ doc_type: 'OC', doc_id: id, status: 'approved', submitted_by_id: null, template_id: 1, current_step: 1 })
+  assert.equal(instanceVisibleTo(db, inst(ord(custs[1].id)), dealerA, sc(dealerA)), false)
+  assert.equal(instanceVisibleTo(db, inst(ord(custs[0].id)), dealerA, sc(dealerA)), true)
+  assert.equal(instanceVisibleTo(db, { ...inst(ord(custs[1].id)), submitted_by_id: 7001 }, dealerA, sc(dealerA)), true, 'own submission stays visible')
+  assert.equal(instanceVisibleTo(db, inst(ord(custs[1].id)), { id: 7002 }, sc({ id: 7002, role: 'warehouse' })), true)
+})

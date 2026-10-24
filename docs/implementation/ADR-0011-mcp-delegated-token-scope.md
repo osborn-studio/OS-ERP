@@ -226,3 +226,9 @@
 **验收**：`tests/mcp-doc-perms.test.mjs` 的 AC3 两条——注册表层（binding 声明与 `DOC_VIEW_PERMS` 镜像、`all` 范围下 PS / PSF / DR / OC / OCS / DS / RB 的绑定本方 / 他方 / 未绑定（严格与非严格）/ admin / 无主、事件范围收窄、读注册表不写 `oc_customers`）与 MCP 矩阵（每类型 × {绑定本方、绑定他方、未绑定、admin}，经 `doc.get` / `doc.query` / `order.trace_document`，改绑即时生效，业务表 / `audit_logs` / `doc_events` / 幂等 / 确认 / `oc_customers` 行数不变；RB 没有单据号列，不参与按单号追溯）。`tests/mcp-tool-matrix.test.mjs` 增 `registry_ac3_state`，`registry_binding_state` 扩到 PS / PSF。
 
 **与 AC2 的合并说明**：AC2 在注册表加总部角色豁免与设置键；本工作流只动各类型的 `binding` 声明、`GENERIC_BUILDERS.dealer` 的经销商收窄与 `docScopeOf` 里 `all` 快捷路径之前的绑定闸。实际的 `DOC_SCOPE_RESOLVERS` / `docScopeOf` 住在 `server/lib/docflow.js`（`doc-scope-registry.js` 只是构建器登记表）。
+
+**Codex 审计（AC3，`gpt-6.1-sol`，只读）**：
+1. **high — 审批域绕过绑定（已修）**：`approval.js` 的 `approvalDocScope` / `instanceVisibleTo` / `isGlobalCtx` 在 `scope=all` 下无条件放行，绑定账号能经审批实例列表 / 详情 / 历史读到注册表已隐藏的单据。修复：`isGlobalCtx` 对"绑了门店 / 经销商或外部订货主体的非 admin 账号"不再视为全局；`approvalDocScope` 在 `all` 范围且单据类型带 `binding` 时转调 `docInScope`（其余类型照旧全局放行，提交人本人与"我的待办"口径不变）。`tests/approval-scope.test.mjs` 增 AC3 用例。
+2. **high — 未绑定的 HTTP 账号对 PS / PSF / DR 仍不受限（既有残余，未修）**：注册表只在 `strictBinding`（MCP）下对未绑定账号整类隐藏；`/api/docflow/*` 的上下文不设该标志，所以"未绑门店 / 经销商、`data_scope=all`、非总部角色名"的自定义内部角色仍可经 docflow 读这些类型的留痕。这与 AB7 登记的 RC / YQ / SH 残余同源（需要先复刻 `pos.js` / `demand.js` 的总部角色名闸），属 AC2（`hq-roles.js` 单一名单 + docflow `strictBinding` + 总部豁免 + 回退开关）的范围，AC3 不抢先改；AC2 合入后 PS / PSF / DR 自动纳入该开关。
+3. **medium — DS / RB 对"绑了门店 / 经销商的内部账号"整类隐藏（有意的策略，记录）**：`requireInternal` 只拒 `dealer` / `store` 角色，所以绑定的 finance 之类账号经业务路由仍能读 DS / RB。本次按"总部专属、无自视图、绑定账号即非总部口径"收口，与任务要求一致；若某总部角色确实会被绑定门店，应在 AC2 的总部角色名单落地后对 `hq` 规则加角色豁免，而不是放宽绑定判据。
+审计另确认：订货中心构建器的外部主体分支只读（无 `ensureCustomer`）、`docEventScope` / `docInScope` 与三个 MCP 读工具无新增绕过。

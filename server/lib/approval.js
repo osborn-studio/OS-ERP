@@ -39,7 +39,8 @@
 
 import { getDb } from '../db/index.js'
 import { userPermissions } from '../middleware/auth.js'
-import { setApprovalGate, effectOwnerOf } from './docflow.js'
+import { setApprovalGate, effectOwnerOf, docInScope, DOC_SCOPE_RESOLVERS } from './docflow.js'
+import { boundStoreId, boundDealerId, isExternalSubject, storeBindingExempt } from './store-binding.js'
 // 采购订单（PO）本体的业务入口实现。**这里 import 业务模块是刻意的**，理由见下方「口径④」：
 // 审批放行必须走正门那段代码，而 PO 的效果归属只有域侧知道。
 import { transitionPurchaseOrder, purchaseScopeSql } from './purchase.js'
@@ -87,7 +88,13 @@ const OC_SCOPE = { OC: 'oc_orders', OCS: 'oc_statements' }
 
 export function approvalDocScope(db, docType, docId, scopeCtx = null) {
   const s = scopeCtx?.orgScope
-  if (!scopeCtx || !s || s.scope === 'all') return true
+  if (!scopeCtx || !s) return true
+  if (s.scope === 'all') {
+    // AC3：data_scope=all 不绕过单据类型的账号绑定（门店 / 经销商 / 订货主体，同 docflow 的 DOC_SCOPE_RESOLVERS.binding）
+    const spec = DOC_SCOPE_RESOLVERS[docType]
+    if (!spec || !spec.binding || !bindingNarrowed(scopeCtx)) return true
+    return docInScope({ db, user: scopeCtx.user, orgScope: s }, docType, docId)
+  }
   const id = Number(docId)
   if (!Number.isFinite(id)) return false
   let sql = null
@@ -131,7 +138,12 @@ function managerSeesAll(db, actor, scopeCtx) {
   return readSetting(db, 'approval_manager_global') === true
 }
 
-const isGlobalCtx = (scopeCtx) => !scopeCtx || !scopeCtx.orgScope || scopeCtx.orgScope.scope === 'all'
+/** AC3：账号绑了门店 / 经销商、或是外部订货主体（admin / 超管豁免）⇒ 即使 data_scope=all 也不算"全局"，绑定类型的实例按单据过滤。 */
+const bindingNarrowed = (scopeCtx) => {
+  const u = scopeCtx && scopeCtx.user
+  return !!u && !storeBindingExempt(u) && (boundStoreId(u) != null || boundDealerId(u) != null || isExternalSubject(u))
+}
+const isGlobalCtx = (scopeCtx) => (!scopeCtx || !scopeCtx.orgScope || scopeCtx.orgScope.scope === 'all') && !(scopeCtx && scopeCtx.orgScope && bindingNarrowed(scopeCtx))
 const stepOfInstance = (db, inst) =>
   db.prepare('SELECT * FROM approval_steps WHERE template_id=? AND step_no=?').get(inst.template_id, inst.current_step)
 
