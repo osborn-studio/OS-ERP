@@ -619,6 +619,12 @@ node scripts/upgrade-rehearsal.mjs --from=58 --backup-dir=/abs/new-dir/data/back
 - 结果：已派发 0 次（`nightly-capacity.yml` 0/3，`capacity-smoke` 0/1，`candidate` 0/1，`dependency-review` 0/1，`audit-no-fts5` 0/1）；没有 run id，结果登记表保持待填，本节没有任何托管 runner 数字。`capacity-smoke` 过渡 job 因此保留（它不在 `main` 上，也从未跑过，且 `nightly-capacity.yml` 也不在 `main` 上）。未修改任何工作流或仓库设置。
 - 等待项不变：合入顺序决定首跑条件；到达 `main` 后各派发一次，全部成功且 `nightly-capacity.yml` 在 `main` 上时才删除 `capacity-smoke`（整块）及其策略测试。
 
+### AG8 复查（2026-10-24）：仍未派发（main 上不可用）
+- 检查：`main`（提交 `a524d3b`）的 `.github/workflows` 只有 `ci.yml` 与 `linux-validation.yml`；`nightly-capacity.yml`、`release-candidate.yml` 的 `gh api …/contents/…?ref=main` 均返回 HTTP 404；`ci.yml` 只含 `checks`、`docker`、`regression`，**没有** `capacity-smoke`、`dependency-review`、`audit-no-fts5`、`candidate`。
+- PR 状态（`gh pr list --state all`）：#1–#3 MERGED；#4–#10 全部 OPEN、未合并；#11 查不到（`gh pr view 11` 与 pulls API 均 404），第十五批候选尚无 PR。
+- 结果：已派发 0 次（`nightly-capacity.yml` 0/3，`capacity-smoke` 0/1，`candidate` 含 `dry_run=true` 与完整各 0/1，`dependency-review` 0/1，`audit-no-fts5` 0/1）；没有 run id，结果登记表保持待填，本节没有任何托管 runner 数字。`capacity-smoke` 过渡 job 保留（不在 `main` 上、从未跑过，`nightly-capacity.yml` 也不在 `main` 上）。未修改任何工作流或仓库设置。
+- 等待项不变：到达 `main` 后各派发一次（`release-candidate.yml` 若有 `dry_run` 输入先 `-f dry_run=true` 再完整一次）；全部成功且 `nightly-capacity.yml` 在 `main` 上时才删除 `capacity-smoke`（整块）及其策略测试。
+
 ### 触发（合入 `main` 之后；只用 `gh workflow run`，不改仓库设置）
 ```bash
 gh workflow run nightly-capacity.yml --ref main -f rehearsal=true -f snapshot_upto=58
