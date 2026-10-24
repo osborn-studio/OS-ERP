@@ -1471,7 +1471,9 @@ Prometheus 文本指标渲染 + 抓取令牌校验（ADR-0045）
 
 | 导出 | 类型 | 路由 | MCP 工具 | 被模块调用 |
 |---|---|---|---|---|
+| `boundDealerId` | fn | — | — | lib/docflow.js |
 | `boundStoreId` | fn | 36 条：pos.js×31, requisitions.js×5 | — | lib/docflow.js |
+| `isExternalSubject` | fn | — | — | lib/docflow.js |
 | `storeBindingExempt` | fn | — | — | lib/docflow.js |
 
 ## `server/lib/transfer.js`

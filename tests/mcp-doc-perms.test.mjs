@@ -626,3 +626,231 @@ test('AB7 RC/YQ/SH binding rules live in DOC_SCOPE_RESOLVERS and use the shared 
     assert.equal(snap(), before)
   })
 })
+
+// AC3（ADR-0011 补充 2）：DOC_VIEW_PERMS 里剩余的绑定类型都在 DOC_SCOPE_RESOLVERS 里有 `binding` 规则，
+// 且 `scope=all` 不再绕过：PS / PSF（store）、DR（dealer）、OC / OCS（subject）、DS / RB（hq：总部专属、无自视图）。
+// 注册表层（docScopeOf / docInScope / docEventScope）与 MCP 读工具（doc.get / doc.query / order.trace_document）各测一遍，
+// 每类型 × {绑定本方、绑定他方、未绑定、admin}，全程零写。
+const AC3_EXPECT = { PS: 'store', PSF: 'store', RC: 'store', YQ: 'store', SH: 'store', DR: 'dealer', OC: 'subject', OCS: 'subject', DS: 'hq', RB: 'hq' }
+test('AC3 registry: every bound DOC_VIEW_PERMS type has a resolver binding rule, scope=all no longer bypasses it', { timeout: 300000 }, async (t) => {
+  const f = await server(t)
+  const { db } = f
+  const { DOC_SCOPE_RESOLVERS, docInScope, docScopeOf, docEventScope } = await import('../server/lib/docflow.js')
+  await import('../server/lib/purchase.js')
+  await import('../server/lib/order-center.js')
+  const sb = await import('../server/lib/store-binding.js')
+  for (const [c, b] of Object.entries(AC3_EXPECT)) assert.equal(DOC_SCOPE_RESOLVERS[c].binding, b, `${c} declares binding ${b}`)
+  for (const [c, e] of Object.entries(DOC_VIEW_PERMS)) {
+    if (e.binding) assert.equal(DOC_SCOPE_RESOLVERS[c]?.binding, e.binding, `${c}: resolver binding mirrors DOC_VIEW_PERMS`)
+  }
+  assert.equal(sb.boundDealerId({ dealer_id: '4' }), 4)
+  assert.equal(sb.boundDealerId({ dealer_id: 0 }), null)
+  assert.equal(sb.boundDealerId(null), null)
+  assert.equal(sb.isExternalSubject({ role: 'dealer' }), true)
+  assert.equal(sb.isExternalSubject({ role: 'store' }), true)
+  assert.equal(sb.isExternalSubject({ role: 'warehouse' }), false)
+
+  const countOf = (tn) => db.prepare(`SELECT COUNT(*) c FROM ${tn}`).get().c
+  const before = ['oc_customers', 'oc_orders', 'oc_statements', 'doc_events', 'audit_logs'].map(countOf)
+  const ctxOf = (user, extra = {}) => ({ db, user, orgScope: { scope: 'all', orgIds: null }, ...extra })
+  const strict = { strictBinding: true }
+
+  // PS / PSF（store）
+  for (const c of ['PS', 'PSF']) {
+    const tn = DOC_SCOPE_RESOLVERS[c].table
+    const stores = db.prepare(`SELECT store_id FROM ${tn} WHERE store_id IS NOT NULL GROUP BY store_id ORDER BY COUNT(*) DESC, store_id LIMIT 2`).all()
+    assert.equal(stores.length, 2, `${c}: fixture needs two stores`)
+    const own = db.prepare(`SELECT id FROM ${tn} WHERE store_id=? LIMIT 1`).get(stores[0].store_id).id
+    const foreign = db.prepare(`SELECT id FROM ${tn} WHERE store_id=? LIMIT 1`).get(stores[1].store_id).id
+    const bound = { id: 9001, role: 'warehouse', store_id: stores[0].store_id }
+    assert.equal(docInScope(ctxOf(bound), c, own), true, `${c} own under scope=all`)
+    assert.equal(docInScope(ctxOf(bound), c, foreign), false, `${c} foreign under scope=all`)
+    assert.equal(docInScope(ctxOf({ ...bound, role: 'admin' }), c, foreign), true, `${c} admin`)
+    assert.equal(docInScope(ctxOf(null), c, foreign), true, `${c} unowned`)
+    const unbound = { id: 9001, role: 'warehouse', store_id: null }
+    assert.equal(docInScope(ctxOf(unbound), c, foreign), true, `${c} unbound non-strict keeps HTTP role-name semantics`)
+    assert.equal(docScopeOf(ctxOf(unbound, strict), c), null, `${c} unbound strict`)
+  }
+
+  // DR（dealer）
+  {
+    const dealers = db.prepare('SELECT dealer_id FROM dealer_requisitions GROUP BY dealer_id ORDER BY COUNT(*) DESC, dealer_id LIMIT 2').all()
+    assert.equal(dealers.length, 2)
+    const own = db.prepare('SELECT id FROM dealer_requisitions WHERE dealer_id=? LIMIT 1').get(dealers[0].dealer_id).id
+    const foreign = db.prepare('SELECT id FROM dealer_requisitions WHERE dealer_id=? LIMIT 1').get(dealers[1].dealer_id).id
+    const bound = { id: 9002, role: 'warehouse', dealer_id: dealers[0].dealer_id }
+    assert.equal(docInScope(ctxOf(bound), 'DR', own), true)
+    assert.equal(docInScope(ctxOf(bound), 'DR', foreign), false, 'DR foreign under scope=all')
+    assert.equal(docInScope(ctxOf({ ...bound, role: 'admin' }), 'DR', foreign), true)
+    assert.equal(docInScope(ctxOf(null), 'DR', foreign), true)
+    const unbound = { id: 9002, role: 'warehouse', dealer_id: null }
+    assert.equal(docInScope(ctxOf(unbound), 'DR', foreign), true, 'DR unbound non-strict')
+    assert.equal(docScopeOf(ctxOf(unbound, strict), 'DR'), null, 'DR unbound strict')
+    // 受限范围里的绑定同样收窄到本经销商（再叠加组织）
+    const orgs = db.prepare('SELECT org_id FROM dealers WHERE id=?').get(dealers[0].dealer_id)
+    const restricted = { db, user: bound, orgScope: { scope: 'org', orgIds: [orgs.org_id] } }
+    assert.equal(docInScope(restricted, 'DR', foreign), false)
+  }
+
+  // OC / OCS（subject）
+  {
+    const custs = db.prepare("SELECT c.id, c.source_id FROM oc_customers c WHERE c.source_type='dealer' AND EXISTS (SELECT 1 FROM oc_orders o WHERE o.customer_id=c.id) ORDER BY c.id LIMIT 2").all()
+    assert.equal(custs.length, 2, 'fixture needs two dealer customers with orders')
+    const ordOf = (cid) => db.prepare('SELECT id FROM oc_orders WHERE customer_id=? LIMIT 1').get(cid).id
+    const dealerA = { id: 9003, role: 'dealer', dealer_id: custs[0].source_id }
+    assert.equal(docInScope(ctxOf(dealerA), 'OC', ordOf(custs[0].id)), true, 'OC own under scope=all')
+    assert.equal(docInScope(ctxOf(dealerA), 'OC', ordOf(custs[1].id)), false, 'OC foreign under scope=all')
+    const stOther = db.prepare('SELECT id FROM oc_statements WHERE customer_id<>? LIMIT 1').get(custs[0].id)
+    if (stOther) assert.equal(docInScope(ctxOf(dealerA), 'OCS', stOther.id), false, 'OCS foreign under scope=all')
+    assert.equal(docScopeOf(ctxOf({ id: 9004, role: 'dealer', dealer_id: null }), 'OC'), null, 'unbound external subject sees nothing, even non-strict')
+    assert.equal(docScopeOf(ctxOf({ id: 9005, role: 'store', store_id: null }), 'OCS'), null)
+    assert.deepEqual(docScopeOf(ctxOf({ id: 9006, role: 'warehouse' }), 'OC'), { all: true }, 'internal accounts keep the org scope')
+    assert.deepEqual(docScopeOf(ctxOf(null), 'OCS'), { all: true })
+    const es = docEventScope(ctxOf(dealerA), 'e')
+    assert.equal(es.all, false, 'events under scope=all are narrowed for an external subject')
+    const leak = db.prepare(`SELECT COUNT(*) c FROM doc_events e WHERE e.doc_type='OC' AND e.doc_id IN (SELECT id FROM oc_orders WHERE customer_id<>?) AND ${es.sql}`).get(custs[0].id, ...es.params)
+    assert.equal(leak.c, 0)
+  }
+
+  // DS / RB（hq：任何门店 / 经销商绑定的账号整类不可见）
+  for (const c of ['DS', 'RB']) {
+    const tn = DOC_SCOPE_RESOLVERS[c].table
+    const did = db.prepare(`SELECT dealer_id FROM ${tn} LIMIT 1`).get().dealer_id
+    for (const u of [{ role: 'warehouse', dealer_id: did }, { role: 'finance', store_id: 1 }, { role: 'dealer', dealer_id: did }, { role: 'store', store_id: 1 }]) {
+      assert.equal(docScopeOf(ctxOf({ id: 9007, ...u }), c), null, `${c} hidden from ${JSON.stringify(u)} even under scope=all`)
+      assert.equal(docScopeOf(ctxOf({ id: 9007, ...u }, strict), c), null)
+    }
+    assert.deepEqual(docScopeOf(ctxOf({ id: 9008, role: 'finance' }), c), { all: true }, `${c}: unbound internal keeps the scope`)
+    assert.deepEqual(docScopeOf(ctxOf({ id: 9008, role: 'admin', dealer_id: did }), c), { all: true }, `${c}: admin exempt`)
+    assert.deepEqual(docScopeOf(ctxOf(null), c), { all: true })
+  }
+  assert.deepEqual(['oc_customers', 'oc_orders', 'oc_statements', 'doc_events', 'audit_logs'].map(countOf), before, 'registry reads wrote nothing (no ensureCustomer)')
+})
+
+test('AC3 MCP matrix: PS PSF DR OC OCS DS RB x {bound-own, bound-other, unbound, admin} through doc.get / doc.query / order.trace_document, zero writes', { timeout: 300000 }, async (t) => {
+  const f = await server(t)
+  const { db, api, mcp } = f
+  const { DOC_SCOPE_RESOLVERS } = await import('../server/lib/docflow.js')
+  const admin = (await api('/api/auth/login', { body: { username: 'admin', password: '12345', industry: 'cosmetic' } })).body.data.token
+  const mk = async (username, role) => {
+    const r = (await api('/api/auth/users', { token: admin, body: { username, name: username, role, password: secret(), data_scope: 'all' } })).body
+    assert.equal(r.success, true, JSON.stringify(r))
+    return r.data.id
+  }
+  const internal = await mk('ac3_internal', 'warehouse')
+  const dealerOwner = await mk('ac3_dealer', 'dealer')
+  const adminId = db.prepare("SELECT id FROM users WHERE username='admin'").get().id
+  const tok = (uid, name) => createToken(db, { name, ownerUserId: uid, industry: 'cosmetic', scopes: 'read' }).token
+  const iTok = tok(internal, 'ac3-i')
+  const dTok = tok(dealerOwner, 'ac3-d')
+  const aTok = tok(adminId, 'ac3-a')
+  const call = (name, args, tk) => mcp('tools/call', { name, arguments: args }, tk)
+  const grant = (role, codes) => {
+    db.prepare('DELETE FROM role_permissions WHERE role_code=?').run(role)
+    const ins = db.prepare('INSERT INTO role_permissions (role_code, perm_code) VALUES (?,?)')
+    for (const c of new Set(codes)) ins.run(role, c)
+  }
+  const types = ['PS', 'PSF', 'DR', 'OC', 'OCS', 'DS', 'RB']
+  grant('warehouse', [...types.flatMap((c) => DOC_VIEW_PERMS[c].perms), 'sales.order.view', 'purchase.order.view', 'inventory.stock.view'])
+  grant('dealer', ['order.view', 'order.statement.view', 'sales.order.view', 'purchase.order.view', 'inventory.stock.view'])
+  const tableOf = (c) => DOC_SCOPE_RESOLVERS[c].table
+  const noField = (c) => db.prepare('SELECT doc_no_field f FROM doc_types WHERE code=?').get(c).f || 'doc_no'
+  const bind = (uid, { store = null, dealer = null }) => db.prepare('UPDATE users SET store_id=?, dealer_id=? WHERE id=?').run(store, dealer, uid)
+  const idsOf = (r) => toolText(r).rows.map((x) => x.id)
+  const WATCH = ['audit_logs', 'doc_events', 'mcp_idempotency', 'mcp_confirmations', 'oc_customers', ...types.map(tableOf)]
+  const snap = () => WATCH.map((tn) => `${tn}=${db.prepare(`SELECT COUNT(*) c FROM ${tn}`).get().c}`).join(',')
+  const before = snap()
+  const notFound = (res) => toolErr(res) === 'NOT_FOUND'
+  // RB（dealer_rebates）没有单据号列：dn 为 null，order.trace_document 无从按单号探测它（只测 doc.get / doc.query）
+  const hasNo = (c) => db.prepare(`PRAGMA table_info(${tableOf(c)})`).all().some((x) => x.name === noField(c))
+  const rowOf = (c, where, ...args) => db.prepare(`SELECT id, ${hasNo(c) ? noField(c) : 'NULL'} AS dn FROM ${tableOf(c)} WHERE ${where} ORDER BY id LIMIT 1`).get(...args)
+  const traceable = async (c, row, tk) => row.dn == null || okTool(await call('order.trace_document', { doc_no: String(row.dn) }, tk))
+  const hidden = async (c, row, tk) => row.dn == null || notFound(await call('order.trace_document', { doc_no: String(row.dn) }, tk))
+
+  for (const c of ['PS', 'PSF', 'DR']) {
+    const kind = c === 'DR' ? 'dealer' : 'store'
+    const col = kind === 'dealer' ? 'dealer_id' : 'store_id'
+    await t.test(`${c}: ${kind}-bound owner`, async () => {
+      const groups = db.prepare(`SELECT ${col} k FROM ${tableOf(c)} WHERE ${col} IS NOT NULL GROUP BY ${col} ORDER BY COUNT(*) DESC, ${col} LIMIT 2`).all()
+      assert.equal(groups.length, 2, `${c}: fixture needs two ${kind}s`)
+      const [mine, other] = groups.map((g) => g.k)
+      const own = rowOf(c, `${col}=?`, mine)
+      const foreign = rowOf(c, `${col}=?`, other)
+      const set = (k) => bind(internal, kind === 'dealer' ? { dealer: k } : { store: k })
+      set(mine)
+      const q = await call('doc.query', { doc_type: c, limit: 100 }, iTok)
+      assert.ok(okTool(q))
+      assert.ok(idsOf(q).length > 0 && idsOf(q).every((id) => db.prepare(`SELECT ${col} k FROM ${tableOf(c)} WHERE id=?`).get(id).k === mine), `${c} bound-own query`)
+      assert.ok(okTool(await call('doc.get', { doc_type: c, id: own.id }, iTok)))
+      assert.ok(notFound(await call('doc.get', { doc_type: c, id: foreign.id }, iTok)), `${c} bound-other get`)
+      assert.ok(await traceable(c, own, iTok))
+      assert.ok(await hidden(c, foreign, iTok), `${c} bound-other trace`)
+      set(other)
+      assert.ok(notFound(await call('doc.get', { doc_type: c, id: own.id }, iTok)), 're-bound: former own doc hidden at once')
+      assert.ok(await hidden(c, own, iTok))
+      set(null)
+      assert.equal(toolErr(await call('doc.query', { doc_type: c }, iTok)), 'TOKEN_OWNER_BINDING_REQUIRED')
+      assert.equal(toolErr(await call('doc.get', { doc_type: c, id: own.id }, iTok)), 'TOKEN_OWNER_BINDING_REQUIRED')
+      assert.ok(await hidden(c, own, iTok), `${c} unbound trace`)
+      assert.ok(okTool(await call('doc.get', { doc_type: c, id: foreign.id }, aTok)), 'admin reads cross-binding')
+      assert.ok(await traceable(c, foreign, aTok))
+      assert.equal(idsOf(await call('doc.query', { doc_type: c, limit: 100 }, aTok)).length, Math.min(100, db.prepare(`SELECT COUNT(*) c FROM ${tableOf(c)}`).get().c))
+    })
+  }
+
+  for (const c of ['OC', 'OCS']) {
+    await t.test(`${c}: subject-bound external owner`, async () => {
+      const custs = db.prepare(`SELECT c.id, c.source_id FROM oc_customers c WHERE c.source_type='dealer' AND EXISTS (SELECT 1 FROM ${tableOf(c)} o WHERE o.customer_id=c.id) ORDER BY c.id LIMIT 2`).all()
+      assert.equal(custs.length, 2, `${c}: fixture needs two dealer customers with documents`)
+      const [mine, other] = custs
+      const own = rowOf(c, 'customer_id=?', mine.id)
+      const foreign = rowOf(c, 'customer_id=?', other.id)
+      bind(dealerOwner, { dealer: mine.source_id })
+      const q = await call('doc.query', { doc_type: c, limit: 100 }, dTok)
+      assert.ok(okTool(q))
+      assert.ok(idsOf(q).length > 0 && idsOf(q).every((id) => db.prepare(`SELECT customer_id k FROM ${tableOf(c)} WHERE id=?`).get(id).k === mine.id))
+      assert.ok(okTool(await call('doc.get', { doc_type: c, id: own.id }, dTok)))
+      assert.ok(notFound(await call('doc.get', { doc_type: c, id: foreign.id }, dTok)), `${c} bound-other get`)
+      assert.ok(await traceable(c, own, dTok))
+      assert.ok(await hidden(c, foreign, dTok), `${c} bound-other trace`)
+      bind(dealerOwner, { dealer: other.source_id })
+      assert.ok(notFound(await call('doc.get', { doc_type: c, id: own.id }, dTok)))
+      assert.ok(await hidden(c, own, dTok))
+      bind(dealerOwner, {})
+      assert.equal(toolErr(await call('doc.query', { doc_type: c }, dTok)), 'TOKEN_OWNER_BINDING_REQUIRED')
+      assert.equal(toolErr(await call('doc.get', { doc_type: c, id: own.id }, dTok)), 'TOKEN_OWNER_BINDING_REQUIRED')
+      assert.ok(await hidden(c, own, dTok), `${c} unbound trace`)
+      assert.ok(okTool(await call('doc.get', { doc_type: c, id: foreign.id }, aTok)))
+      assert.ok(await traceable(c, foreign, aTok))
+      // 内部账号（未绑定）保持组织范围口径（data_scope=all ⇒ 全部可见）
+      bind(internal, {})
+      assert.ok(okTool(await call('doc.get', { doc_type: c, id: foreign.id }, iTok)), 'internal owner keeps the org-scope read')
+    })
+  }
+
+  for (const c of ['DS', 'RB']) {
+    await t.test(`${c}: HQ-only, bound owners see nothing`, async () => {
+      const row = rowOf(c, '1=1')
+      const did = db.prepare(`SELECT dealer_id k FROM ${tableOf(c)} WHERE id=?`).get(row.id).k
+      bind(internal, {})
+      assert.ok(idsOf(await call('doc.query', { doc_type: c, limit: 100 }, iTok)).length > 0, 'unbound internal owner reads')
+      assert.ok(okTool(await call('doc.get', { doc_type: c, id: row.id }, iTok)))
+      assert.ok(await traceable(c, row, iTok))
+      for (const b of [{ dealer: did }, { store: 1 }, { dealer: did + 1000 }]) {
+        bind(internal, b)
+        assert.equal(idsOf(await call('doc.query', { doc_type: c, limit: 100 }, iTok)).length, 0, `${c} bound ${JSON.stringify(b)}: query is empty`)
+        assert.ok(notFound(await call('doc.get', { doc_type: c, id: row.id }, iTok)), `${c} bound get`)
+        assert.ok(await hidden(c, row, iTok), `${c} bound trace`)
+      }
+      bind(internal, {})
+      assert.ok(okTool(await call('doc.get', { doc_type: c, id: row.id }, aTok)), 'admin')
+      assert.ok(await traceable(c, row, aTok))
+    })
+  }
+
+  await t.test('the matrix performed zero writes', () => {
+    bind(internal, {})
+    bind(dealerOwner, {})
+    assert.equal(snap(), before)
+  })
+})

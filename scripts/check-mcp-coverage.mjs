@@ -167,15 +167,22 @@ for (const [code, e] of Object.entries(DOC_VIEW_PERMS)) {
   if (!['store', 'dealer', 'subject'].includes(e.binding) || !cols.includes(e.bindCol)) badBind.push(`${code}:${e.binding}/${e.bindCol}`)
 }
 ok('DOC_VIEW_PERMS 的绑定声明合法且归属列真实存在（Y6）', badBind.length === 0, badBind.join(' / '))
-// AB7：门店绑定类型在注册表里也声明 `binding: 'store'`（RC / YQ / SH 必须有），且读工具的范围上下文开了严格模式
-const resolverBind = ['RC', 'YQ', 'SH'].filter((c) => DOC_SCOPE_RESOLVERS[c]?.binding !== 'store')
-ok('RC / YQ / SH 在 DOC_SCOPE_RESOLVERS 声明 binding: store（AB7，与 HTTP 同一判据 store-binding.js）', resolverBind.length === 0, resolverBind.join(' / '))
-const bindDrift = Object.entries(DOC_SCOPE_RESOLVERS).filter(([c, sp]) => sp.binding === 'store' && DOC_VIEW_PERMS[c]?.binding !== 'store').map(([c]) => c)
-// 反向：DOC_VIEW_PERMS 的门店绑定类型里，注册表尚未声明的只允许是登记过的残余（PS / PSF，ADR-0011 AB7 补充"仍无绑定规则的类型"）
-const AB7_RESIDUAL = new Set(['PS', 'PSF'])
-const bindUndeclared = Object.entries(DOC_VIEW_PERMS).filter(([c, e]) => e.binding === 'store' && DOC_SCOPE_RESOLVERS[c]?.binding !== 'store' && !AB7_RESIDUAL.has(c)).map(([c]) => c)
-bindDrift.push(...bindUndeclared)
-ok('门店绑定类型在注册表与 DOC_VIEW_PERMS 两处一致（除登记的残余 PS / PSF；两处不漂移）', bindDrift.length === 0, bindDrift.join(' / '))
+// AB7 / AC3：DOC_VIEW_PERMS 里**每个**绑定类型（store / dealer / subject）都必须在 DOC_SCOPE_RESOLVERS 声明同一个 binding，
+// 反向亦然（无残留白名单）；DS / RB 这类总部专属、没有自视图的经销商往来类型在注册表声明 `binding: 'hq'`（任何门店 / 经销商绑定的账号整类不可见）。
+const bindMissing = Object.entries(DOC_VIEW_PERMS).filter(([c, e]) => e.binding && DOC_SCOPE_RESOLVERS[c]?.binding !== e.binding).map(([c, e]) => `${c}(应为 ${e.binding}，实为 ${DOC_SCOPE_RESOLVERS[c]?.binding ?? '无'})`)
+ok('DOC_VIEW_PERMS 的每个绑定类型在 DOC_SCOPE_RESOLVERS 都有同一个 binding 规则（AC3，无残留白名单）', bindMissing.length === 0, bindMissing.join(' / '))
+const bindExtra = Object.entries(DOC_SCOPE_RESOLVERS)
+  .filter(([c, sp]) => sp.binding && sp.binding !== 'hq' && DOC_VIEW_PERMS[c]?.binding !== sp.binding)
+  .map(([c, sp]) => `${c}(注册表 ${sp.binding}，DOC_VIEW_PERMS ${DOC_VIEW_PERMS[c]?.binding ?? '无'})`)
+ok('注册表里的 store / dealer / subject 绑定在 DOC_VIEW_PERMS 里同样声明（两处不漂移）', bindExtra.length === 0, bindExtra.join(' / '))
+const hqBad = Object.entries(DOC_SCOPE_RESOLVERS)
+  .filter(([c, sp]) => (sp.binding === 'hq') !== (sp.builder === 'dealer' && !DOC_VIEW_PERMS[c]?.binding))
+  .map(([c]) => c)
+ok('经销商往来类型要么按经销商绑定（DR）、要么声明 hq（DS / RB）；hq 只用于未绑定的经销商往来类型', hqBad.length === 0, hqBad.join(' / '))
+const colDrift = Object.entries(DOC_VIEW_PERMS)
+  .filter(([c, e]) => (e.binding === 'store' || e.binding === 'dealer') && DOC_SCOPE_RESOLVERS[c]?.cols?.[0] !== e.bindCol)
+  .map(([c]) => c)
+ok('store / dealer 绑定的归属列在两处一致（resolver cols[0] == bindCol）', colDrift.length === 0, colDrift.join(' / '))
 ok('读工具的范围上下文启用 strictBinding（docScopeCtx，AB7）', /strictBinding:\s*true/.test((await import('node:fs')).readFileSync(new URL('../server/mcp/tools.js', import.meta.url), 'utf8')), 'docScopeCtx 没有 strictBinding')
 
 // ---------------------------------------------------------------- ③ 覆盖结论

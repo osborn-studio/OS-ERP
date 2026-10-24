@@ -1472,11 +1472,20 @@ export default {
 
 // 单据流读接口（ADR-0032）：订货中心范围谓词登记给 docflow 的 DOC_SCOPE_RESOLVERS（按 customer_id 收口，同 ocScope）。
 registerDocScopeBuilder('order-center', ({ db, user, orgScope }) => {
+  const u = user || {}
+  // AC3：外部主体（role=dealer|store）只读查自己的订货档案（不像 HTTP 的 selfCustomerId 那样 ensureCustomer 建档——读不写库）；
+  //   未绑定 / 尚无档案 ⇒ 不可见（失败关闭）。data_scope=all 的外部主体同样走这里（docScopeOf 的 subject 绑定不再被 all 快捷路径绕过）。
+  if (u.role === 'dealer' || u.role === 'store') {
+    const sid = u.role === 'dealer' ? u.dealer_id : u.store_id
+    if (!sid) return null
+    const c = db.prepare('SELECT id FROM oc_customers WHERE source_type=? AND source_id=?').get(u.role, Number(sid))
+    return c ? { sql: 't.customer_id = ?', params: [c.id] } : null
+  }
   let s
   try {
-    s = ocScope(db, { user: user || {}, orgScope }, 't.customer_id')
+    s = ocScope(db, { user: u, orgScope }, 't.customer_id')
   } catch {
-    return null // 外部主体未绑定订货主体等：失败关闭
+    return null // 失败关闭
   }
   return s.empty ? null : { sql: s.sql, params: s.params }
 })
