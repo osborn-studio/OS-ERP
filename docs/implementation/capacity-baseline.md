@@ -301,11 +301,51 @@ node scripts/synth-pipeline.mjs --dir /tmp/synth-large --skus 20000 --txns 25000
 `explain-audit`：新增 21 条 `audit.list_* / count_* / export_*` 语句（SQL 文本由 `server/lib/audit-view.js` 生成，与路由同一份），其中 12 条声明 `expectIndex`；**没有迁移 065 时这 12 条全部报红，有 065 时 0 违规**（`tests/audit-logs-view.test.mjs` 断言两侧）。`audit_logs` 已加入 `GROWTH_TABLES`（不看行数）。
 
 ### 已知残余（未解决，不要读成已解决）
-- **关键词是子串匹配**（`LIKE '%x%'` 于 action / entity / user_name），任何索引都帮不上：命中多时靠 `LIMIT` 早停，**命中稀少时仍读全表**。已把范围收窄（不再搜 module / entity_id / detail）并要求至少 2 个有效字符；`explain-audit` 为 `audit.list_keyword` / `audit.count_keyword` 登记了带理由的豁免。组合 module / user 过滤（走索引）才会快。
+- **（AB3 更新：≥3 字符且命中稀少的关键词现在走 FTS5，见下方 AB3 一节；2 字关键词与命中很多的关键词仍是下面描述的 LIKE 行为。）** **关键词是子串匹配**（`LIKE '%x%'` 于 action / entity / user_name），任何索引都帮不上：命中多时靠 `LIMIT` 早停，**命中稀少时仍读全表**。已把范围收窄（不再搜 module / entity_id / detail）并要求至少 2 个有效字符；`explain-audit` 为 `audit.list_keyword` / `audit.count_keyword` 登记了带理由的豁免。组合 module / user 过滤（走索引）才会快。
 - **仅按日期区间或仅按 action 过滤**没有可用索引（`created_at` 单列、`action` 不在三棵索引里）：沿 rowid 倒扫，区间越旧读得越多。需要时再评估 `(created_at)` 索引，代价是再多一棵写放大。
 - **仅按 entity（不带 entity_id）**：Codex 复核实测，让它走 `idx_audit_entity` 要对全部命中行临时排序（10 万行内存库 0.15 ms → 48 ms），比不建索引还差，所以此形态用 `+entity = ?` 屏蔽该索引，仍沿 rowid 倒扫（与迁移前相同：命中多的类型凑够一页即停，命中稀少的类型读到整表）。带 entity_id 才走索引。
 - 非字符串/含 `%` 的 `user` 子串过滤（按姓名）仍是整表扫描；纯数字现在只匹配 `user_id`（旧版也匹配 `user_name` 恰为该数字的行——行为收窄，已在代码注释中说明）。
 - 只在 Mac mini 上、合成数据、机器带负载；`dmserver` 上的数字、真实长明细的库体积、HTTP 端到端导出时间均**未测**。
+
+## AB3 审计日志关键词检索：迁移 067（FTS5）+ `created_at` 单列索引决定（**Mac mini / 合成 100 万行 / 非目标主机**）
+
+脚本：`node scripts/bench-audit-logs.mjs --rows 1000000`（同 AA6 的库：100 万行、143 MB；065 之后继续应用 067，再临时建 `created_at` 索引量化，测完即删）。机器有负载（运行时 1 分钟负载约 14–22，同机并行其它工作流），**只看量级**。
+
+### 迁移 067 做了什么
+`audit_logs_fts(action, entity, user_name)`：FTS5 **外部内容**表（`content='audit_logs'`，tokenizer = `trigram`，子串语义与 `LIKE '%x%'` 一致、含中文），由 `audit_logs` 上的 INSERT / DELETE / `UPDATE OF action, entity, user_name` 三个触发器维护。`PRAGMA compile_options` 无 `ENABLE_FTS5`（或 trigram 不可用）时迁移是空操作且 `verify()` 为真，`audit-view.js` 查不到 `audit_logs_fts` 就走原 LIKE；`explain-audit` 为该回退登记了带理由的豁免（`audit.count_keyword_nofts` / `audit.list_keyword_nofts`）。
+**何时走 FTS**（`keywordUsesFts`）：库里有 FTS 表、关键词 ≥3 字符（trigram 下限；2 字关键词走 LIKE）、且探测到命中稀少（≤2000 条）。命中很多时 FTS 反而慢（第一版无条件走 FTS 的实测：常见词 `APPROVE` 列表 0.2 → 22.6 ms，`module + 关键词` 0.09 → 144 ms，因为要物化全部命中 rowid），所以命中多时回退 LIKE（沿索引/rowid 倒扫，凑够一页即停）。两条路径返回的行完全相同（FTS 只缩小候选集，候选行再过一遍同一个 LIKE 谓词：trigram 对 Unicode 大小写不敏感而 LIKE 只折叠 ASCII，Codex 复核实测 `ÄBC` / `äbc` 两路径曾不一致，已修；`tests/audit-logs-view.test.mjs` 对一组含 FTS 语法、通配符、中文、大小写的关键词逐个比对，含 Unicode 大小写对）。
+
+### 实测（ms；列表 = 第 1 页，计数 = 封顶 10 001；FTS 列含"命中是否稀少"的探测耗时）
+| 关键词 | LIKE（仅 065）列表 / 计数 | 067 列表 / 计数 | 走的路径 |
+|---|---|---|---|
+| 稀有（`user499`，26 行）| 354 / 272 | **0.8 / 0.7** | FTS |
+| 不存在（`zzqq`）| 116 / 193 | **0.09 / 0.10** | FTS |
+| 常见（`APPROVE`）| 0.2 / 9.2 | 0.6 / 12.7 | 探测后回退 LIKE（多出的是探测开销）|
+| 实体名（`ent7`，命中很多）| 0.3 / 53 | 1.9 / 100 | 探测后回退 LIKE |
+| `module=rare_mod` + `user` | 0.09 / 0.02 | 0.7 / 0.5 | 回退 LIKE |
+
+读法（诚实边界）：收益只在**命中稀少**的关键词（百毫秒 → 亚毫秒）；命中很多时 LIKE 本来就快，067 只多一次探测（本表 +0.4 ~ +47 ms，计数那一格最大；探测读到 2001 个命中即停，但若关键词的每个三元组都很常见而短语本身稀少，探测会读较长的倒排链，上界与一次 LIKE 扫描同量级）。
+
+### 代价
+- **建表 / 回填**：对 100 万行执行 067 的 `up`（含 `rebuild`）约 **2.7–3.9 s**（持写锁；`rebuild` 是单次写事务，升级演练 AA11 应把它纳入）。
+- **库体积**：239 → 301 MB（**+62 MB / 100 万行，约 +26%**；trigram 把每个字段切成三元组，明细里的短字段也被索引）。
+- **写放大**（交替轮次、独立库、逐行自动提交的 `insertAuditRow`，20 万行种子，5 轮 × 5000 行；µs/行，取最小值 / 中位数）：仅 065 **107 / 134**；065 + FTS **248 / 432**（**约 +140 µs/行，最小值口径 2.3×**；机器有负载，中位数抖动更大）；065 + `created_at` 索引 **104 / 215**（最小值与仅 065 持平）。复跑一次（机器较空闲，Codex 修复之后）：仅 065 **73 / 82**，065 + FTS **133 / 137**（最小值口径 **1.8×，约 +60 µs/行**），065 + `created_at` **81 / 95**——倍数随机器负载变化，量级稳定。绝对量级：一次业务写入追加 1–2 行审计，多付约 0.15–0.3 ms。不要拿"在同一个库上顺序比较"的写入耗时做结论：大批量建索引 / 回填之后 WAL 与页缓存状态不同，会把"之后"的写入测慢几倍（本脚本第一版就是这样测出 5× 的，已改为独立库交替）。
+- 触发器在同一事务内更新索引；`DELETE FROM audit_logs`（保留清理）每行多一次索引删除。
+
+### `created_at` 单列索引：**不建**（决定）
+测量（同库，`audit_logs(created_at)`，与 AB6 的哈希链无关）：
+| 形态（只有日期区间）| 无索引 | 有索引 |
+|---|---|---|
+| 1 天（2880 行）列表 / 计数 | 74.6 / 78.1 | **1.3 / 0.06** |
+| 1 个月（>10 000 行）列表 / 计数 | 65.0 / 9.2 | **82.6** / 0.69 |
+写放大：最小值与仅 065 持平（104 vs 107 µs/行）；库体积 +25–30 MB / 100 万行。
+**不建的理由**：① 收益只在"窄日期区间"，而列表排序仍是 `id DESC`，宽区间时规划器选了该索引再对整段区间做临时排序，反而更慢（65 → 83 ms）；要让宽区间受益得把"只有日期"也并入 `orderOf` 的 `created_at DESC, id DESC` 序，那是另一个改动（连同导出游标）；② 常见的复核口径已经带 module 或 user（命中 065 的 `(module, created_at)` / `(user_id, created_at)`）；③ 本批 AB3 的边界是"只加 FTS 影子表与触发器"。**重新评估的条件**：出现"只按日期区间"的高频查询，或把 `orderOf` 扩展到日期过滤——届时单独开迁移（写成本已在上表量化，不是阻碍）。
+
+### 仅 action 过滤
+`action` 必须同时带 `module`（400，业务码 `AUDIT_ACTION_NEEDS_MODULE`，经 `bizFail`；列表与导出同一判据，`buildWhere` 自身也强制；前端提示"按动作过滤时必须同时填写模块"）。带 module 后走 `(module, created_at)` 索引，action 只是索引范围内的行过滤。
+
+### 未覆盖
+进程内计时（不含 HTTP / 鉴权）；单机单连接；合成数据（关键词分布不代表生产）；FTS 的 `integrity-check` 与长期碎片（`optimize`）未测；无 FTS5 构建的回退路径只在测试里模拟（`setFtsOverride(false)` 与 DROP 掉 FTS 对象），没有真正的无 FTS5 二进制可跑。
 
 ## AA11 迁移升级演练：059–062 在合成 medium 库上的逐迁移耗时（**Mac mini / 合成数据 / 非目标主机 / 单次墙钟**）
 

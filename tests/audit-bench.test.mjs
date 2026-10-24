@@ -27,4 +27,21 @@ test('AA6 bench script: seeds through insertAuditRow, plans flip from rowid scan
   assert.equal(all.count_value, 6600, 'below the cap the count is exact (6000 seeded + 2 x 300 write probes)')
   for (const row of r.after) assert.ok(row.export_rows <= 1500)
   assert.ok(r.index_build_ms >= 0 && r.write_ms_per_1k_before > 0 && r.write_ms_per_1k_after > 0)
+  // AB3：067（FTS5）与 created_at 单列索引的量化
+  const ab3 = r.ab3
+  assert.ok(ab3.fts_build_ms >= 0)
+  assert.deepEqual(Object.keys(ab3.write_amplification.configs), ['065', '065+067(fts)', '065+created_at'])
+  for (const c of Object.values(ab3.write_amplification.configs)) assert.ok(c.min_us_per_row > 0 && c.median_us_per_row >= c.min_us_per_row)
+  for (const c of ab3.keyword_like) assert.doesNotMatch(c.list_plan.join(' '), /audit_logs_fts/, `${c.case} uses LIKE`)
+  for (const c of ab3.keyword_fts) {
+    // 与路由同一选择：稀少命中走 FTS、命中很多回退 LIKE
+    if (c.mode === 'fts') assert.match(c.list_plan.join(' '), /audit_logs_fts VIRTUAL TABLE INDEX/, `${c.case} uses FTS`)
+    else assert.doesNotMatch(c.list_plan.join(' '), /audit_logs_fts/, `${c.case} fell back to LIKE`)
+  }
+  assert.equal(ab3.keyword_fts.find(c => c.case.startsWith('keyword absent')).mode, 'fts')
+  const hits = (arr, name) => arr.find(c => c.case.startsWith(name))
+  assert.equal(hits(ab3.keyword_fts, 'keyword rare').count_value, hits(ab3.keyword_like, 'keyword rare').count_value, 'FTS and LIKE agree on the count')
+  assert.equal(hits(ab3.keyword_fts, 'keyword absent').count_value, 0)
+  assert.match(ab3.created_at_index.date_only_with[0].list_plan.join(' '), /idx_audit_created_probe/)
+  assert.doesNotMatch(ab3.created_at_index.date_only_without[0].list_plan.join(' '), /idx_audit_created_probe/)
 })

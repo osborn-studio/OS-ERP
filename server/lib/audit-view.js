@@ -10,6 +10,8 @@
  *   · 导出有行数上限（`AUDIT_EXPORT_MAX_ROWS`），超出截断并在审计里记 truncated；
  *   · （AA6）列表总数是"最多 10,001"的封顶估算（`countCapped`）+ `has_more`，不再对百万行做整表 COUNT；翻页深度同样封顶；
  *   · （AA6）关键词只搜 action / entity / user_name 且至少 2 个有效字符（`assertKeyword`，buildWhere 内也强制，绕不过）；
+ *   · （AB3）迁移 067 的 FTS5 外部内容表 `audit_logs_fts`（trigram）可用、关键词 ≥3 字符且命中稀少（≤ FTS_RARE_MAX）时关键词走 FTS，否则（无 FTS5 构建 / 2 字关键词 / 命中很多）走 LIKE；
+ *     仅按 action 过滤必须带 module（`AUDIT_ACTION_NEEDS_MODULE`，400）。
  *   · （AA6）排序随过滤选择：命中 module / user_id 索引（末列 created_at）时按 `created_at DESC, id DESC`，索引直接给出顺序、无排序临时表；
  *     其余按 `id DESC`（rowid 倒扫）。导出的游标与列表排序同一份（`orderOf` / `exportChunks`）。
  * ============================================================================
@@ -25,7 +27,21 @@ const DETAIL_MAX = 8000
 const CSV_CELL_MAX = 32000
 
 export class AuditViewError extends Error {
-  constructor(message) { super(message); this.status = 400; this.code = 'AUDIT_VIEW_BAD_FILTER' }
+  constructor(message, code = 'AUDIT_VIEW_BAD_FILTER') { super(message); this.status = 400; this.code = code }
+}
+/** 仅按 action 过滤（不带 module）既无可用索引、命中面又大：必须同时给 module（走 (module, created_at)） */
+export const AUDIT_ACTION_NEEDS_MODULE = 'AUDIT_ACTION_NEEDS_MODULE'
+
+/** FTS5 关键词检索的最小字符数（trigram 分词器的下限）；更短的关键词（2 字）走 LIKE */
+export const KEYWORD_FTS_MIN_CHARS = 3
+export const FTS_TABLE = 'audit_logs_fts'
+let ftsOverride = null
+/** 测试钩子：false = 模拟没有 FTS5 的构建（强制 LIKE 回退）；null = 按库里是否有 audit_logs_fts 判断 */
+export function setFtsOverride(v) { ftsOverride = v }
+/** 这个库能不能走 FTS：迁移 067 建了 `audit_logs_fts`（没有 FTS5 的构建上迁移是空操作，表不存在 → 回退 LIKE） */
+export function ftsAvailable(db) {
+  if (ftsOverride === false) return false
+  try { return !!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(FTS_TABLE) } catch { return false }
 }
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
@@ -56,6 +72,7 @@ export function parseFilters(query = {}) {
     if (v) f[k] = v
   }
   if (f.keyword !== undefined) assertKeyword(f.keyword)
+  if (f.action && !f.module) throw new AuditViewError('按动作过滤必须同时指定模块（module）', AUDIT_ACTION_NEEDS_MODULE)
   for (const k of ['from', 'to']) {
     const v = str(query[k], 10)
     if (!v) continue
@@ -66,10 +83,28 @@ export function parseFilters(query = {}) {
   return f
 }
 
-/** 过滤 → { where, args }（列表与导出共用） */
-export function buildWhere(f) {
+/**
+ * 本次关键词要不要走 FTS：库里有 audit_logs_fts、关键词 ≥3 字符，且命中**稀少**（探测最多读 FTS_RARE_MAX+1 个命中）。
+ * 命中很多时 FTS 反而慢（要物化全部命中 rowid 再去探 audit_logs；1M 行实测常见词 0.2 ms → 22 ms，与 module 组合时 0.09 → 144 ms），
+ * 而 LIKE 沿索引/rowid 倒扫很快凑够一页；命中稀少时 FTS 把整表扫描（190–240 ms）变成亚毫秒。两条路径结果完全相同，只是读量不同。
+ */
+export const FTS_RARE_MAX = 2000
+export function keywordUsesFts(db, keyword) {
+  if (keyword === undefined || [...String(keyword)].length < KEYWORD_FTS_MIN_CHARS || !ftsAvailable(db)) return false
+  try {
+    return db.prepare(`SELECT COUNT(*) c FROM (SELECT 1 FROM ${FTS_TABLE} WHERE ${FTS_TABLE} MATCH ? LIMIT ?)`).get(ftsPhrase(keyword), FTS_RARE_MAX + 1).c <= FTS_RARE_MAX
+  } catch { return false } // 索引损坏 / 不可用：回退 LIKE，结果不变
+}
+
+/** FTS5 短语：整个关键词当作一个带引号的短语（内部 `"` 加倍），AND / OR / NEAR / 通配星号 / 列过滤等语法一律成为字面文本 */
+export const ftsPhrase = (kw) => `"${String(kw).replace(/"/g, '""')}"`
+export const useFtsFor = (keyword, fts) => !!fts && [...String(keyword)].length >= KEYWORD_FTS_MIN_CHARS
+
+/** 过滤 → { where, args }（列表与导出共用）。opts.fts（由 keywordUsesFts 决定）：true 且关键词 ≥3 字符时走 FTS，否则 LIKE */
+export function buildWhere(f, { fts = false } = {}) {
   const c = []
   const a = []
+  if (f.action && !f.module) throw new AuditViewError('按动作过滤必须同时指定模块（module）', AUDIT_ACTION_NEEDS_MODULE)
   if (f.module) { c.push('module = ?'); a.push(f.module) }
   if (f.action) { c.push('action = ?'); a.push(f.action) }
   // 仅按 entity（无 entity_id）时用 `+entity` 屏蔽 idx_audit_entity：entity 类型只有几十种、每种命中很多行，
@@ -85,11 +120,21 @@ export function buildWhere(f) {
   if (f.to) { c.push('created_at <= ?'); a.push(`${f.to} 23:59:59`) }
   if (f.keyword !== undefined) {
     assertKeyword(f.keyword)
-    const p = `%${likeEsc(f.keyword)}%`
     // 只搜 action / entity / user_name。不搜 detail：旧行的明细可能带明文，按原文匹配会成为读取侧脱敏之外的"侧信道"（Codex 复核 P1）；
     // 也不搜 module / entity_id（它们有精确过滤项，子串匹配只会扩大扫描面）
-    c.push("(action LIKE ? ESCAPE '\\' OR entity LIKE ? ESCAPE '\\' OR user_name LIKE ? ESCAPE '\\')")
-    a.push(p, p, p)
+    if (useFtsFor(f.keyword, fts)) {
+      // FTS 外部内容表只索引这三列（detail 不在其中，侧信道结论同上）；trigram 的子串语义与 LIKE 一致
+      // FTS 只负责缩小候选集：trigram 是 Unicode 大小写不敏感，而 LIKE 只折叠 ASCII（Ä/ä 在 LIKE 下不相等），
+      // 所以候选行再过一遍同一个 LIKE 谓词，保证两条路径的结果逐行相同（候选集 ⊇ LIKE 命中集，不会漏）
+      const p = `%${likeEsc(f.keyword)}%`
+      c.push(`id IN (SELECT rowid FROM ${FTS_TABLE} WHERE ${FTS_TABLE} MATCH ?)`)
+      c.push("(action LIKE ? ESCAPE '\\' OR entity LIKE ? ESCAPE '\\' OR user_name LIKE ? ESCAPE '\\')")
+      a.push(ftsPhrase(f.keyword), p, p, p)
+    } else {
+      const p = `%${likeEsc(f.keyword)}%`
+      c.push("(action LIKE ? ESCAPE '\\' OR entity LIKE ? ESCAPE '\\' OR user_name LIKE ? ESCAPE '\\')")
+      a.push(p, p, p)
+    }
   }
   return { where: c.length ? `WHERE ${c.join(' AND ')}` : '', args: a }
 }

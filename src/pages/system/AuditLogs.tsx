@@ -50,6 +50,8 @@ export default function AuditLogs() {
   const applyFilters = () => {
     const kw = draft.keyword.replace(/[\s\p{Cc}\p{Cf}]/gu, '')
     if (draft.keyword && [...kw].length < 2) return toast('关键字至少需要 2 个字符', 'error')
+    // 仅按动作过滤既无索引、命中面又大：必须同时给模块（与服务端 AUDIT_ACTION_NEEDS_MODULE 同口径）
+    if (draft.action.trim() && !draft.module.trim()) return toast('按动作过滤时必须同时填写模块（如 sales）', 'error')
     setFilters(Object.fromEntries(Object.entries(draft).filter(([, v]) => v)))
   }
 
@@ -81,7 +83,7 @@ export default function AuditLogs() {
         }}
       >
         <Inp value={draft.module} onChange={set('module')} placeholder="模块（如 sales）" w={120} />
-        <Inp value={draft.action} onChange={set('action')} placeholder="动作（如 CREATE）" w={130} />
+        <Inp value={draft.action} onChange={set('action')} placeholder="动作（须同时填模块）" w={130} />
         <Inp value={draft.user} onChange={set('user')} placeholder="操作人 / 用户 ID" w={130} />
         <Inp value={draft.entity} onChange={set('entity')} placeholder="对象类型" w={110} />
         <Inp value={draft.entity_id} onChange={set('entity_id')} placeholder="对象 ID" w={90} />

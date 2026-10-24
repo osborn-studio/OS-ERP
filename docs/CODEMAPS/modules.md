@@ -209,11 +209,15 @@
 
 | 导出 | 类型 | 路由 | MCP 工具 | 被模块调用 |
 |---|---|---|---|---|
+| `AUDIT_ACTION_NEEDS_MODULE` | const | — | — | — |
 | `AUDIT_COUNT_CAP` | const | — | — | — |
 | `AUDIT_EXPORT_MAX_ROWS` | const | — | — | — |
 | `AUDIT_PAGE_MAX` | const | — | — | — |
 | `AuditViewError` | class | — | — | — |
 | `CSV_HEADER` | const | — | — | — |
+| `FTS_RARE_MAX` | const | — | — | — |
+| `FTS_TABLE` | const | — | — | — |
+| `KEYWORD_FTS_MIN_CHARS` | const | — | — | — |
 | `KEYWORD_MIN_CHARS` | const | — | — | — |
 | `assertKeyword` | fn | — | — | — |
 | `buildWhere` | fn | GET /api/meta/audit-logs<br>GET /api/meta/audit-logs/export.csv | — | — |
@@ -223,9 +227,14 @@
 | `csvLine` | fn | — | — | — |
 | `exportChunks` | fn | GET /api/meta/audit-logs/export.csv | — | — |
 | `exportSql` | fn | — | — | — |
+| `ftsAvailable` | fn | — | — | — |
+| `ftsPhrase` | fn | — | — | — |
+| `keywordUsesFts` | fn | — | — | — |
 | `orderOf` | fn | GET /api/meta/audit-logs<br>GET /api/meta/audit-logs/export.csv | — | — |
 | `parseFilters` | fn | GET /api/meta/audit-logs<br>GET /api/meta/audit-logs/export.csv | — | — |
 | `redactDetail` | fn | — | — | — |
+| `setFtsOverride` | fn | — | — | — |
+| `useFtsFor` | fn | — | — | — |
 | `viewRow` | fn | GET /api/meta/audit-logs | — | — |
 
 ## `server/lib/backup-alert.js`
