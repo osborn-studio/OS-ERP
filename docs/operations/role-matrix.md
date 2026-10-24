@@ -107,48 +107,48 @@ docflow 读接口只按数据范围与总部豁免收口，不按查看权限点
 
 ## 三、单据类型：查看权限点与绑定要求
 
-| 单据 | 模块 | 查看权限点（任一） | MCP 绑定 | 范围注册表绑定 | 范围构建器 |
-|---|---|---|---|---|---|
-| `PO` 采购订单 | purchase | `purchase.order.view`、`purchase.inbound`、`purchase.return` | 无 | 无 | purchase |
-| `GR` 采购到货单 | purchase | `purchase.order.view`、`purchase.inbound`、`purchase.return` | 无 | 无 | purchase |
-| `PRT` 采购退货单 | purchase | `purchase.order.view`、`purchase.inbound`、`purchase.return` | 无 | 无 | purchase |
-| `PRQ` 请购单 | purchase | `purchase.order.view`、`purchase.inbound`、`purchase.return` | 无 | 无 | purchase |
-| `PI` 采购发票 | purchase | `purchase.order.view`、`purchase.inbound`、`purchase.return` | 无 | 无 | purchase |
-| `PST` 采购结算单 | purchase | `purchase.order.view`、`purchase.inbound`、`purchase.return` | 无 | 无 | purchase |
-| `PAY` 付款单 | purchase | `purchase.order.view`、`purchase.inbound`、`purchase.return` | 无 | 无 | purchase |
-| `INS` 采购质检单 | purchase | `quality.inspect.view` | 无 | 无 | purchase |
-| `QT` 销售报价单 | sales | `sales.quote.view` | 无 | 无 | sales |
-| `SO` 销售订单 | sales | `sales.order.view` | 无 | 无 | sales |
-| `DL` 销售发货单 | sales | `sales.order.view` | 无 | 无 | sales |
-| `SR` 销售退货单 | sales | `sales.order.view` | 无 | 无 | sales |
-| `SI` 销售发票 | sales | `sales.invoice.view` | 无 | 无 | org |
-| `QCR` 报检单 | quality | `quality.qc.view` | 无 | 无 | org |
-| `QCI` 检验单 | quality | `quality.qc.view` | 无 | 无 | warehouse |
-| `DH` 不良品处理单 | quality | `quality.qc.view` | 无 | 无 | warehouse |
-| `TF` 库存调拨单 | inventory | `inventory.stock.view` | 无 | 无 | warehouse |
-| `CK` 库存盘点单 | inventory | `inventory.stock.view` | 无 | 无 | warehouse |
-| `AS` 组装拆卸单 | inventory | `inventory.stock.view` | 无 | 无 | warehouse |
-| `CA` 存货成本调整单 | inventory | `cost.view` | 无 | 无 | global |
-| `AR` 应收单 | finance | `finance.receipt.view` | 无 | 无 | global |
-| `YQ` 门店要货单 | requisition | `pos.store.requisition` | 门店 | 门店 | store |
-| `RCP` 收款单 | finance | `finance.receipt.view` | 无 | 无 | global |
-| `SH` 门店发货单 | requisition | `pos.store.requisition` | 门店 | 门店 | store |
-| `VOUCHER` 记账凭证 | finance | `finance.voucher.view` | 无 | 无 | global |
-| `RFD` 退款单 | finance | `finance.refund.view` | 无 | 无 | global |
-| `MO` 生产订单 | produce | `produce.bom.view` | 无 | 无 | warehouse |
-| `WW` 委外订单 | outsource | `produce.order.view` | 无 | 无 | warehouse |
-| `WM` 委外发料单 | outsource | `produce.order.view` | 无 | 无 | warehouse |
-| `WR` 委外收货单 | outsource | `produce.order.view` | 无 | 无 | warehouse |
-| `MR` 生产领料单 | produce | `produce.bom.view` | 无 | 无 | warehouse |
-| `OM` 商城订单 | oms | `oms.order.view` | 无 | 无 | global |
-| `PS` 门店零售单 | pos | `pos.cashier` | 门店 | 门店 | store |
-| `PSF` 收银交班单 | pos | `pos.shift` | 门店 | 门店 | store |
-| `RC` 门店日结单 | pos | `pos.dailyclose` | 门店 | 门店 | store |
-| `DR` 经销商要货单 | dealer | `dms.dealer.view` | 经销商 | 经销商 | dealer |
-| `DS` 经销商对账单 | dealer | `dms.dealer.view` | 无 | 总部专属 | dealer |
-| `RB` 经销商返利单 | dealer | `dms.dealer.view` | 无 | 总部专属 | dealer |
-| `OC` 订货单 | order-center | `order.view` | 订货主体 | 订货主体 | order-center |
-| `OCS` 订货对账单 | order-center | `order.statement.view` | 订货主体 | 订货主体 | order-center |
+| 单据 | 模块 | 查看权限点（任一） | MCP 绑定 | 范围注册表绑定 | 范围构建器 | 范围谓词来源（表 · 归属列 / 形状） |
+|---|---|---|---|---|---|---|
+| `PO` 采购订单 | purchase | `purchase.order.view`、`purchase.inbound`、`purchase.return` | 无 | 无 | purchase | purchase_orders · via=wh |
+| `GR` 采购到货单 | purchase | `purchase.order.view`、`purchase.inbound`、`purchase.return` | 无 | 无 | purchase | purchase_receipts · via=wh |
+| `PRT` 采购退货单 | purchase | `purchase.order.view`、`purchase.inbound`、`purchase.return` | 无 | 无 | purchase | purchase_returns · via=wh |
+| `PRQ` 请购单 | purchase | `purchase.order.view`、`purchase.inbound`、`purchase.return` | 无 | 无 | purchase | purchase_requisitions · via=org |
+| `PI` 采购发票 | purchase | `purchase.order.view`、`purchase.inbound`、`purchase.return` | 无 | 无 | purchase | purchase_invoices · via=org |
+| `PST` 采购结算单 | purchase | `purchase.order.view`、`purchase.inbound`、`purchase.return` | 无 | 无 | purchase | purchase_settlements · via=org |
+| `PAY` 付款单 | purchase | `purchase.order.view`、`purchase.inbound`、`purchase.return` | 无 | 无 | purchase | purchase_payments · via=org |
+| `INS` 采购质检单 | purchase | `quality.inspect.view` | 无 | 无 | purchase | purchase_inspections · via=wh |
+| `QT` 销售报价单 | sales | `sales.quote.view` | 无 | 无 | sales | sales_quotes · kind=order |
+| `SO` 销售订单 | sales | `sales.order.view` | 无 | 无 | sales | sales_orders · kind=order |
+| `DL` 销售发货单 | sales | `sales.order.view` | 无 | 无 | sales | sales_deliveries · kind=delivery |
+| `SR` 销售退货单 | sales | `sales.order.view` | 无 | 无 | sales | sales_returns · kind=return |
+| `SI` 销售发票 | sales | `sales.invoice.view` | 无 | 无 | org | sales_invoices · org_id |
+| `QCR` 报检单 | quality | `quality.qc.view` | 无 | 无 | org | qc_requests · org_id |
+| `QCI` 检验单 | quality | `quality.qc.view` | 无 | 无 | warehouse | qc_inspections · warehouse_id |
+| `DH` 不良品处理单 | quality | `quality.qc.view` | 无 | 无 | warehouse | qc_defect_handlings · warehouse_id |
+| `TF` 库存调拨单 | inventory | `inventory.stock.view` | 无 | 无 | warehouse | stock_transfers · from_warehouse_id+to_warehouse_id |
+| `CK` 库存盘点单 | inventory | `inventory.stock.view` | 无 | 无 | warehouse | stock_checks · warehouse_id |
+| `AS` 组装拆卸单 | inventory | `inventory.stock.view` | 无 | 无 | warehouse | assembly_orders · warehouse_id |
+| `CA` 存货成本调整单 | inventory | `cost.view` | 无 | 无 | global | cost_adjustments |
+| `AR` 应收单 | finance | `finance.receipt.view` | 无 | 无 | global | ar_documents |
+| `YQ` 门店要货单 | requisition | `pos.store.requisition` | 门店 | 门店 | store | store_requisitions · store_id |
+| `RCP` 收款单 | finance | `finance.receipt.view` | 无 | 无 | global | receipts |
+| `SH` 门店发货单 | requisition | `pos.store.requisition` | 门店 | 门店 | store | store_shipments · store_id |
+| `VOUCHER` 记账凭证 | finance | `finance.voucher.view` | 无 | 无 | global | vouchers |
+| `RFD` 退款单 | finance | `finance.refund.view` | 无 | 无 | global | refunds |
+| `MO` 生产订单 | produce | `produce.bom.view` | 无 | 无 | warehouse | production_orders · warehouse_id |
+| `WW` 委外订单 | outsource | `produce.order.view` | 无 | 无 | warehouse | outsourcing_orders · warehouse_id |
+| `WM` 委外发料单 | outsource | `produce.order.view` | 无 | 无 | warehouse | outsourcing_materials · warehouse_id |
+| `WR` 委外收货单 | outsource | `produce.order.view` | 无 | 无 | warehouse | outsourcing_receipts · warehouse_id |
+| `MR` 生产领料单 | produce | `produce.bom.view` | 无 | 无 | warehouse | material_issues · warehouse_id |
+| `OM` 商城订单 | oms | `oms.order.view` | 无 | 无 | global | oms_orders |
+| `PS` 门店零售单 | pos | `pos.cashier` | 门店 | 门店 | store | pos_orders · store_id |
+| `PSF` 收银交班单 | pos | `pos.shift` | 门店 | 门店 | store | pos_shifts · store_id |
+| `RC` 门店日结单 | pos | `pos.dailyclose` | 门店 | 门店 | store | pos_daily_closes · store_id |
+| `DR` 经销商要货单 | dealer | `dms.dealer.view` | 经销商 | 经销商 | dealer | dealer_requisitions · dealer_id |
+| `DS` 经销商对账单 | dealer | `dms.dealer.view` | 无 | 总部专属 | dealer | dealer_statements · dealer_id |
+| `RB` 经销商返利单 | dealer | `dms.dealer.view` | 无 | 总部专属 | dealer | dealer_rebates · dealer_id |
+| `OC` 订货单 | order-center | `order.view` | 订货主体 | 订货主体 | order-center | oc_orders |
+| `OCS` 订货对账单 | order-center | `order.statement.view` | 订货主体 | 订货主体 | order-center | oc_statements |
 
 ## 四、内置角色与总部名单（`server/lib/hq-roles.js`）
 

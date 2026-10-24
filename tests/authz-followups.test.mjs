@@ -25,7 +25,7 @@ import assert from 'node:assert/strict'
 import { spawn, execFileSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { once } from 'node:events'
-import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import net from 'node:net'
@@ -405,8 +405,13 @@ test('role matrix generator: committed file is current and --check fails on drif
   }
   assert.equal(run(['--check']).code, 0)
   assert.equal(run(['--bogus']).code, 2)
+  assert.equal(run(['--check', '--json']).code, 2, '--json must not be able to switch the drift check off')
   const dir = mkdtempSync(path.join(tmpdir(), 'os-erp-role-matrix-drift-'))
   try {
+    // 继承来的 GML_DB 不能把迁移 / 夹具写进别人的库
+    const foreign = path.join(dir, 'foreign.db')
+    assert.equal(run(['--check'], { GML_DB: foreign }).code, 0)
+    assert.equal(existsSync(foreign), false, 'GML_DB must be ignored by the generator')
     const good = readFileSync(path.join(ROOT, 'docs/operations/role-matrix.md'), 'utf8')
     const file = path.join(dir, 'm.md')
     assert.equal(run(['--check', `--file=${file}`]).code, 1, 'missing file is drift')

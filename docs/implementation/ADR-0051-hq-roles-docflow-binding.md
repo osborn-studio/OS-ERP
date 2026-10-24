@@ -84,3 +84,12 @@ ADR-0011 AB7 补充登记过一条既有的高危发现：`/api/docflow/*` 的�
 
 - `tests/hq-roles.test.mjs`：并集 = 旧两份名单 ∪ {boss}；POS / 要货名单不含 boss；docflow 默认开关下 `viewer`（非总部）仍看不到 RC / 流转留痕，`boss` 与其它总部角色同视；overview 分布含 RC；开关置 0 / 1 / 非法值的行为不变。
 - `tests/authz-followups.test.mjs`：抽样 10 格（boss×RC、boss×DR、viewer×RC、finance×VOUCHER、purchase×AR、warehouse×TF、sales×SO、scm×PO、store×PS、dealer×OC），期望字面值写死，分别断言生成器 JSON、已提交的 `role-matrix.md` 与真实 `/api/docflow/events` 响应三者一致（G = 全部、O = 严格子集且 TF 与独立 SQL 精确相等、B / - = 空、外部主体 403；另验同角色绑店后只见本店）；`--check` 对缺文件 / 手改 / 尾部字节 / CRLF 改写为红。
+
+### Codex 审计（AD2）
+
+`gpt-6.1-sol`（只读）审阅 `batch-twelve...HEAD`：无 high；boss 并入"不引入 POS / 要货扩权"的结论被确认（`isHqRole` 的唯一运行时消费者是 docflow 未绑定豁免，覆盖 PS / PSF / RC / YQ / SH 与 DR，已绑者仍收窄，DS / RB 仍挡绑定账号，MCP 无豁免）。
+
+- **medium，已修**：生成器只设 `GML_DATA_DIR`，继承来的 `GML_DB` 优先，迁移与夹具用户可能写进别人的库。现在先清除 `GML_DB`，并校验解析出的库路径在临时目录内，否则拒绝；测试覆盖（传入外部 `GML_DB` 不产生文件）。
+- **medium，已修**：生成器把 `strictBinding / hqExempt` 写死为 true，而路由取设置键 `docflow_strict_store_binding`；改默认值时矩阵不会漂移。现在与路由同一判据（`readSetting(...) === true`）。
+- **medium，已修（缩小假阳性面）**：`O` 格把所有受限谓词折叠成一类，解析表的 `cols / via / kind` 变动不改变任何格子。第三节新增"范围谓词来源（表 · 归属列 / 形状）"列，任一变动都使文件漂移；仍然不是逐行谓词证据，文件头与上文"诚实边界"如实说明，具体行级收窄由 `docflow-scope` 等集成测试与本测试的 TF 精确断言兜底。
+- **low，已修**：`--check --json` 因 `--json` 先退出而跳过比对。现在两者同用直接退出 2，测试覆盖。

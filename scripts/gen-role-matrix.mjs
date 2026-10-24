@@ -30,6 +30,10 @@ import { fileURLToPath } from 'node:url'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const args = new Set(process.argv.slice(2))
+if (args.has('--check') && args.has('--json')) {
+  console.error('--check 与 --json 不能同时使用（--json 会在比对之前退出，等于关掉漂移检查）')
+  process.exit(2)
+}
 let OUT = path.join(ROOT, 'docs/operations/role-matrix.md')
 for (const a of args) {
   if (a.startsWith('--file=') && path.isAbsolute(a.slice(7))) OUT = a.slice(7) // 测试用：对另一个文件做 --check / 写入
@@ -44,10 +48,14 @@ async function evaluate() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'os-erp-role-matrix-'))
   process.env.GML_DATA_DIR = tmp
   process.env.GML_RUNTIME_MODE = 'test'
+  delete process.env.GML_DB // 继承来的 GML_DB 优先于 GML_DATA_DIR，会把迁移与夹具写进别人的库
   try {
     const dbm = await import('../server/db/index.js')
+    const dbFile = path.resolve(dbm.dbPathFor('cosmetic'))
+    if (path.relative(tmp, dbFile).startsWith('..') || path.isAbsolute(path.relative(tmp, dbFile))) throw new Error(`库路径 ${dbFile} 不在临时目录内，拒绝写入`)
     const db = dbm.initSchemaFor('cosmetic')
     const { resolveOrgScope, permContext, hasPerm } = await import('../server/middleware/auth.js')
+    const { readSetting } = await import('../server/lib/settings.js')
     await import('../server/lib/purchase.js')
     await import('../server/lib/sales-order.js')
     await import('../server/lib/order-center.js')
@@ -70,6 +78,8 @@ async function evaluate() {
     // 一个放在组织 1 里的账号（默认范围取角色）；组织 1 只用于让子树 / 本组织范围成立
     db.prepare("INSERT INTO orgs (id, code, name, type, level, path) VALUES (1, 'MATRIX', 'matrix', 'store', 1, '/1/')").run()
     const insUser = db.prepare("INSERT INTO users (username, password_hash, name, role, org_id) VALUES (?, 'x', ?, ?, 1)")
+    // 与 routes/docflow.js 的 scopeCtx 同一判据：strictBinding / hqExempt 都取设置键 docflow_strict_store_binding（默认开）
+    const strict = readSetting(db, 'docflow_strict_store_binding') === true
     const docflow = {}
     const mcp = {}
     for (const role of roles) {
@@ -83,10 +93,10 @@ async function evaluate() {
       docflow[role.code] = {}
       mcp[role.code] = {}
       for (const t of types) {
-        // ① docflow：与 routes/docflow.js 的 scopeCtx 同参（strictBinding + hqExempt）；外部主体被 requireInternal 整体 403
+        // ① docflow：与 routes/docflow.js 的 scopeCtx 同参（strictBinding + hqExempt，取设置键）；外部主体被 requireInternal 整体 403
         let cell = '-'
         if (!external) {
-          const mk = (u) => docScopeOf({ db, user: u, orgScope, strictBinding: true, hqExempt: true }, t.code)
+          const mk = (u) => docScopeOf({ db, user: u, orgScope, strictBinding: strict, hqExempt: strict }, t.code)
           const p = mk(user)
           if (p && p.all) cell = 'G'
           else if (p) cell = 'O'
@@ -110,7 +120,9 @@ async function evaluate() {
       perms: viewPermsOf(t.code) || [],
       binding: DOC_VIEW_PERMS[t.code]?.binding || null,
       resolverBinding: DOC_SCOPE_RESOLVERS[t.code]?.binding || null,
-      builder: DOC_SCOPE_RESOLVERS[t.code]?.builder || null
+      builder: DOC_SCOPE_RESOLVERS[t.code]?.builder || null,
+      // 范围谓词的来源（O 格只说"受限"，具体收窄到哪些行由这几项决定；任一变动都会让本文件漂移）
+      shape: (({ table, cols, via, kind }) => [table, cols && cols.join('+'), via && `via=${via}`, kind && `kind=${kind}`].filter(Boolean).join(' · '))(DOC_SCOPE_RESOLVERS[t.code] || {})
     }))
     db.close()
     return {
@@ -171,11 +183,11 @@ function render(model) {
   lines.push('')
   lines.push('## 三、单据类型：查看权限点与绑定要求')
   lines.push('')
-  lines.push('| 单据 | 模块 | 查看权限点（任一） | MCP 绑定 | 范围注册表绑定 | 范围构建器 |')
-  lines.push('|---|---|---|---|---|---|')
+  lines.push('| 单据 | 模块 | 查看权限点（任一） | MCP 绑定 | 范围注册表绑定 | 范围构建器 | 范围谓词来源（表 · 归属列 / 形状） |')
+  lines.push('|---|---|---|---|---|---|---|')
   for (const t of types) {
     lines.push(
-      `| \`${t.code}\` ${t.name} | ${t.module} | ${t.perms.map((p) => `\`${p}\``).join('、')} | ${t.binding ? BINDING_TEXT[t.binding] : '无'} | ${t.resolverBinding ? BINDING_TEXT[t.resolverBinding] : '无'} | ${t.builder || '无'} |`
+      `| \`${t.code}\` ${t.name} | ${t.module} | ${t.perms.map((p) => `\`${p}\``).join('、')} | ${t.binding ? BINDING_TEXT[t.binding] : '无'} | ${t.resolverBinding ? BINDING_TEXT[t.resolverBinding] : '无'} | ${t.builder || '无'} | ${t.shape || '无'} |`
     )
   }
   lines.push('')
