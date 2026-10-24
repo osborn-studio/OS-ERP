@@ -150,13 +150,13 @@
 
 | 处理器 | 方法 | 路径 | 分类 | 中间件链 | 调用的 lib 函数 | 处理器内 SQL 表 | 经 lib 触达的表 |
 |---|---|---|---|---|---|---|---|
-| `dashboard.js:27` | GET | `/api/dashboard/summary` | GATED | requireAuth → requireInternal → requireGlobalData → requireAuth | lib/db-ttl-cache.js: cachedForDb<br>lib/profile.js: createProfiler<br>lib/stock.js: countBelowSafe | dealers, inventory_stocks, oms_orders, purchase_orders, sales_orders | product_skus, users, warehouses |
-| `dashboard.js:91` | GET | `/api/dashboard/trend` | GATED | requireAuth → requireInternal → requireGlobalData → requireAuth | — | oms_orders, purchase_orders, sales_orders | users |
-| `dashboard.js:140` | GET | `/api/dashboard/channel` | GATED | requireAuth → requireInternal → requireGlobalData → requireAuth | — | oms_orders, platforms, sales_orders | users |
-| `dashboard.js:168` | GET | `/api/dashboard/todos` | GATED | requireAuth → requireInternal → requireGlobalData → requireAuth | lib/stock.js: listBelowSafe | dealers, inventory_stocks, oms_orders, platforms, product_skus, purchase_orders, sales_orders, stores, suppliers, warehouses | products, users |
-| `dashboard.js:209` | GET | `/api/dashboard/top` | GATED | requireAuth → requireInternal → requireGlobalData → requireAuth | — | brands, dealers, product_skus, products, sales_order_items, sales_orders, stores | users |
-| `dashboard.js:254` | GET | `/api/dashboard/recent` | GATED | requireAuth → requireInternal → requireGlobalData → requireAuth | — | dealers, inventory_transactions, oms_orders, platforms, product_skus, purchase_orders, sales_orders, stores, suppliers, warehouses | users |
-| `dashboard.js:290` | GET | `/api/dashboard/inventory-dist` | GATED | requireAuth → requireInternal → requireGlobalData → requireAuth | — | categories, inventory_stocks, product_skus, products, warehouses | users |
+| `dashboard.js:44` | GET | `/api/dashboard/summary` | GATED | requireAuth → requireInternal → requireGlobalData → requireAuth | lib/db-ttl-cache.js: cachedForDb<br>lib/profile.js: createProfiler<br>lib/stock.js: countBelowSafe | dealers, inventory_stocks, oms_orders, purchase_orders, sales_orders | product_skus, users, warehouses |
+| `dashboard.js:108` | GET | `/api/dashboard/trend` | GATED | requireAuth → requireInternal → requireGlobalData → requireAuth | lib/db-ttl-cache.js: cachedForDb<br>lib/profile.js: createProfiler | oms_orders, purchase_orders, sales_orders | users |
+| `dashboard.js:160` | GET | `/api/dashboard/channel` | GATED | requireAuth → requireInternal → requireGlobalData → requireAuth | — | oms_orders, platforms, sales_orders | users |
+| `dashboard.js:188` | GET | `/api/dashboard/todos` | GATED | requireAuth → requireInternal → requireGlobalData → requireAuth | lib/db-ttl-cache.js: cachedForDb<br>lib/profile.js: createProfiler<br>lib/stock.js: listBelowSafe | dealers, inventory_stocks, oms_orders, platforms, product_skus, purchase_orders, sales_orders, stores, suppliers, warehouses | products, users |
+| `dashboard.js:231` | GET | `/api/dashboard/top` | GATED | requireAuth → requireInternal → requireGlobalData → requireAuth | lib/db-ttl-cache.js: cachedForDb<br>lib/profile.js: createProfiler | brands, dealers, product_skus, products, sales_order_items, sales_orders, stores | users |
+| `dashboard.js:283` | GET | `/api/dashboard/recent` | GATED | requireAuth → requireInternal → requireGlobalData → requireAuth | — | dealers, inventory_transactions, oms_orders, platforms, product_skus, purchase_orders, sales_orders, stores, suppliers, warehouses | users |
+| `dashboard.js:319` | GET | `/api/dashboard/inventory-dist` | GATED | requireAuth → requireInternal → requireGlobalData → requireAuth | lib/db-ttl-cache.js: cachedForDb<br>lib/profile.js: createProfiler | categories, inventory_stocks, product_skus, products, warehouses | users |
 
 ## server/routes/dealers.js
 

@@ -8,6 +8,9 @@
  *   不是新编的，原文保留在下面。人工完善时补三件事：
  *   这块解决什么问题 / 为什么这样设计 / 改它要注意什么。
  *
+ * 【AB2（ADR-0044 补充）】summary / trend / top / todos / inventory-dist 都经 `cachedRead`：`GML_PROFILE=1` 分块计时 + 30 s 进程内缓存
+ *   （键 = 接口名 + 规范化后的 days；任何写入、跨零点、TTL 到期都失效，见 lib/db-ttl-cache.js）。channel / recent 未缓存（未剖析，也不在本批范围）。
+ *
  * 【通用硬规矩】判据只有一处（不要在第二个地方再抄一遍条件）；
  *   改完跑 `node scripts/regress-all.mjs`（3 轮）与相关 `test-*.mjs`。
  * ============================================================================
@@ -23,6 +26,20 @@ import { cachedForDb } from '../lib/db-ttl-cache.js'
 
 const r = Router()
 r.use(requireAuth, requireInternal('总部经营看板'), requireGlobalData('总部经营看板'))
+
+/**
+ * AB2：只读聚合接口的统一入口——剖析（GML_PROFILE=1 才记录）+ 30 s 进程内缓存。
+ * 为什么直接缓存是范围安全的：本文件第一行的 `r.use(requireAuth, requireInternal, requireGlobalData)` 保证能走到这里的调用者
+ * 都是全局数据范围，响应与调用者无关；受限账号在进入处理器之前就被 403，不会读到也不会预热缓存。
+ * 缓存键只含接口名与规范化后的 `days`（数值），不含用户 / 组织。若将来给某个接口加入范围相关的字段，必须把范围放进键或不缓存。
+ */
+function cachedRead(label, key, compute) {
+  const db = getDb()
+  const prof = createProfiler(label)
+  const { value, hit } = prof.time('cache_or_compute', () => cachedForDb(db, () => compute(db, prof), { key }))
+  prof.done({ cache: hit ? 'hit' : 'miss' })
+  return value
+}
 
 r.get(
   '/summary',
@@ -92,50 +109,53 @@ r.get(
   '/trend',
   requireAuth,
   wrap((req, res) => {
-    const db = getDb()
     const days = Number(req.query.days || 30)
-    const from = `date('now','localtime','-${days} day')`
-    const sales = db
-      .prepare(
-        `SELECT order_date AS date, COUNT(*) orders, COALESCE(SUM(receivable_amount),0) amount FROM sales_orders
-         WHERE status NOT IN ('cancelled','draft') AND order_date >= ${from} GROUP BY order_date ORDER BY date`
-      )
-      .all()
-    const purchase = db
-      .prepare(
-        `SELECT order_date AS date, COALESCE(SUM(total_amount),0) amount FROM purchase_orders
-         WHERE status <> 'cancelled' AND order_date >= ${from} GROUP BY order_date ORDER BY date`
-      )
-      .all()
-    const online = db
-      .prepare(
-        `SELECT date(order_time) AS date, COALESCE(SUM(pay_amount),0) amount FROM oms_orders
-         WHERE date(order_time) >= ${from} GROUP BY date(order_time) ORDER BY date`
-      )
-      .all()
-    const map = new Map()
-    const touch = (d) => {
-      if (!map.has(d)) map.set(d, { date: d, offline: 0, online: 0, purchase: 0, orders: 0 })
-      return map.get(d)
-    }
-    sales.forEach((x) => {
-      const t = touch(x.date)
-      t.offline = Number(x.amount.toFixed(2))
-      t.orders = x.orders
-    })
-    online.forEach((x) => {
-      touch(x.date).online = Number(x.amount.toFixed(2))
-    })
-    purchase.forEach((x) => {
-      touch(x.date).purchase = Number(x.amount.toFixed(2))
-    })
-    const list = [...map.values()].sort((a, b) => (a.date > b.date ? 1 : -1))
-    list.forEach((x) => {
-      x.total = Number((x.offline + x.online).toFixed(2))
-    })
-    return ok(res, list)
+    return ok(res, cachedRead('dashboard.trend', `trend:${days}`, (db, prof) => computeTrend(db, prof, days)))
   })
 )
+
+function computeTrend(db, prof, days) {
+  const from = `date('now','localtime','-${days} day')`
+  const sales = prof.time('sales', () => db
+    .prepare(
+      `SELECT order_date AS date, COUNT(*) orders, COALESCE(SUM(receivable_amount),0) amount FROM sales_orders
+       WHERE status NOT IN ('cancelled','draft') AND order_date >= ${from} GROUP BY order_date ORDER BY date`
+    )
+    .all())
+  const purchase = prof.time('purchase', () => db
+    .prepare(
+      `SELECT order_date AS date, COALESCE(SUM(total_amount),0) amount FROM purchase_orders
+       WHERE status <> 'cancelled' AND order_date >= ${from} GROUP BY order_date ORDER BY date`
+    )
+    .all())
+  const online = prof.time('online', () => db
+    .prepare(
+      `SELECT date(order_time) AS date, COALESCE(SUM(pay_amount),0) amount FROM oms_orders
+       WHERE date(order_time) >= ${from} GROUP BY date(order_time) ORDER BY date`
+    )
+    .all())
+  const map = new Map()
+  const touch = (d) => {
+    if (!map.has(d)) map.set(d, { date: d, offline: 0, online: 0, purchase: 0, orders: 0 })
+    return map.get(d)
+  }
+  sales.forEach((x) => {
+    const t = touch(x.date)
+    t.offline = Number(x.amount.toFixed(2))
+    t.orders = x.orders
+  })
+  online.forEach((x) => {
+    touch(x.date).online = Number(x.amount.toFixed(2))
+  })
+  purchase.forEach((x) => {
+    touch(x.date).purchase = Number(x.amount.toFixed(2))
+  })
+  const list = [...map.values()].sort((a, b) => (a.date > b.date ? 1 : -1))
+  list.forEach((x) => {
+    x.total = Number((x.offline + x.online).toFixed(2))
+  })
+  return list
+}
 
 r.get(
   '/channel',
@@ -168,88 +188,97 @@ r.get(
 r.get(
   '/todos',
   requireAuth,
-  wrap((_req, res) => {
-    const db = getDb()
-    const pendingDelivery = db
-      .prepare(
-        `SELECT so.id, so.doc_no, so.order_date, so.channel, so.receivable_amount,
-                COALESCE(d.name, s.name, so.receiver, '线上买家') AS customer_name
-         FROM sales_orders so LEFT JOIN dealers d ON d.id=so.dealer_id LEFT JOIN stores s ON s.id=so.store_id
-         WHERE so.status='confirmed' ORDER BY so.order_date LIMIT 10`
-      )
-      .all()
-    const pendingReceipt = db
-      .prepare(
-        `SELECT po.id, po.doc_no, po.order_date, po.total_amount, sup.name AS supplier_name, w.name AS warehouse_name
-         FROM purchase_orders po JOIN suppliers sup ON sup.id=po.supplier_id JOIN warehouses w ON w.id=po.warehouse_id
-         WHERE po.status IN ('submitted','approved') ORDER BY po.order_date LIMIT 10`
-      )
-      .all()
-    const omsPending = db
-      .prepare(
-        `SELECT o.id, o.platform_order_no, o.order_time, o.pay_amount, o.status, pf.name AS platform_name, o.sales_order_id
-         FROM oms_orders o JOIN platforms pf ON pf.id=o.platform_id WHERE o.status='pending' ORDER BY o.order_time LIMIT 10`
-      )
-      .all()
-    // 与预警页同一口径（lib/stock.js），看板只取前 10 且不带 shortage 字段
-    const stockAlerts = listBelowSafe(db, 10).map(({ shortage, ...row }) => row)
-    const expiring = db
-      .prepare(
-        `SELECT st.id, st.batch_no, st.expire_date, st.qty_on_hand, sk.sku_code, sk.name AS sku_name, w.name AS warehouse_name,
-                CAST(julianday(st.expire_date) - julianday('now','localtime') AS INTEGER) AS days_left
-         FROM inventory_stocks st JOIN product_skus sk ON sk.id=st.sku_id JOIN warehouses w ON w.id=st.warehouse_id
-         WHERE st.qty_on_hand>0 AND st.expire_date IS NOT NULL AND st.expire_date<>'' AND st.expire_date <= date('now','localtime','+90 day')
-         ORDER BY st.expire_date LIMIT 10`
-      )
-      .all()
-    return ok(res, { pendingDelivery, pendingReceipt, omsPending, stockAlerts, expiring })
-  })
+  wrap((_req, res) => ok(res, cachedRead('dashboard.todos', 'todos', computeTodos)))
 )
+
+function computeTodos(db, prof) {
+  const pendingDelivery = prof.time('pendingDelivery', () => db
+    .prepare(
+      `SELECT so.id, so.doc_no, so.order_date, so.channel, so.receivable_amount,
+              COALESCE(d.name, s.name, so.receiver, '线上买家') AS customer_name
+       FROM sales_orders so LEFT JOIN dealers d ON d.id=so.dealer_id LEFT JOIN stores s ON s.id=so.store_id
+       WHERE so.status='confirmed' ORDER BY so.order_date LIMIT 10`
+    )
+    .all())
+  const pendingReceipt = prof.time('pendingReceipt', () => db
+    .prepare(
+      `SELECT po.id, po.doc_no, po.order_date, po.total_amount, sup.name AS supplier_name, w.name AS warehouse_name
+       FROM purchase_orders po JOIN suppliers sup ON sup.id=po.supplier_id JOIN warehouses w ON w.id=po.warehouse_id
+       WHERE po.status IN ('submitted','approved') ORDER BY po.order_date LIMIT 10`
+    )
+    .all())
+  const omsPending = prof.time('omsPending', () => db
+    .prepare(
+      `SELECT o.id, o.platform_order_no, o.order_time, o.pay_amount, o.status, pf.name AS platform_name, o.sales_order_id
+       FROM oms_orders o JOIN platforms pf ON pf.id=o.platform_id WHERE o.status='pending' ORDER BY o.order_time LIMIT 10`
+    )
+    .all())
+  // 与预警页同一口径（lib/stock.js），看板只取前 10 且不带 shortage 字段
+  const stockAlerts = prof.time('stockAlerts', () => listBelowSafe(db, 10).map(({ shortage, ...row }) => row))
+  const expiring = prof.time('expiring', () => db
+    .prepare(
+      `SELECT st.id, st.batch_no, st.expire_date, st.qty_on_hand, sk.sku_code, sk.name AS sku_name, w.name AS warehouse_name,
+              CAST(julianday(st.expire_date) - julianday('now','localtime') AS INTEGER) AS days_left
+       FROM inventory_stocks st JOIN product_skus sk ON sk.id=st.sku_id JOIN warehouses w ON w.id=st.warehouse_id
+       WHERE st.qty_on_hand>0 AND st.expire_date IS NOT NULL AND st.expire_date<>'' AND st.expire_date <= date('now','localtime','+90 day')
+       ORDER BY st.expire_date LIMIT 10`
+    )
+    .all())
+  return { pendingDelivery, pendingReceipt, omsPending, stockAlerts, expiring }
+}
+
 
 r.get(
   '/top',
   requireAuth,
   wrap((req, res) => {
-    const db = getDb()
     const days = Number(req.query.days || 30)
-    const from = `date('now','localtime','-${days} day')`
-    const products = db
-      .prepare(
-        `SELECT p.name AS product_name, b.name AS brand_name, SUM(i.qty) qty, SUM(i.amount) amount
-         FROM sales_order_items i JOIN sales_orders so ON so.id=i.order_id
-         JOIN product_skus sk ON sk.id=i.sku_id JOIN products p ON p.id=sk.product_id LEFT JOIN brands b ON b.id=p.brand_id
-         WHERE so.status NOT IN ('cancelled','draft') AND so.order_date >= ${from}
-         GROUP BY p.id ORDER BY amount DESC LIMIT 10`
-      )
-      .all()
-    const brands = db
-      .prepare(
-        `SELECT COALESCE(b.name,'未标品牌') AS brand_name, SUM(i.qty) qty, SUM(i.amount) amount
-         FROM sales_order_items i JOIN sales_orders so ON so.id=i.order_id
-         JOIN product_skus sk ON sk.id=i.sku_id JOIN products p ON p.id=sk.product_id LEFT JOIN brands b ON b.id=p.brand_id
-         WHERE so.status NOT IN ('cancelled','draft') AND so.order_date >= ${from}
-         GROUP BY b.id ORDER BY amount DESC LIMIT 10`
-      )
-      .all()
-    const dealers = db
-      .prepare(
-        `SELECT d.name, d.level, COUNT(so.id) orders, COALESCE(SUM(so.receivable_amount),0) amount
-         FROM sales_orders so JOIN dealers d ON d.id=so.dealer_id
-         WHERE so.status NOT IN ('cancelled','draft') AND so.order_date >= ${from}
-         GROUP BY d.id ORDER BY amount DESC LIMIT 10`
-      )
-      .all()
-    const stores = db
-      .prepare(
-        `SELECT s.name, s.region, COUNT(so.id) orders, COALESCE(SUM(so.receivable_amount),0) amount
-         FROM sales_orders so JOIN stores s ON s.id=so.store_id
-         WHERE so.status NOT IN ('cancelled','draft') AND so.order_date >= ${from}
-         GROUP BY s.id ORDER BY amount DESC LIMIT 10`
-      )
-      .all()
-    return ok(res, { products, brands, dealers, stores })
+    return ok(res, cachedRead('dashboard.top', `top:${days}`, (db, prof) => computeTop(db, prof, days)))
   })
 )
+
+// AB2：原写法 `FROM sales_order_items i JOIN sales_orders so …` 让 SQLite 先全表扫明细（5 万行）再按主键回查订单、最后才过滤日期；
+// `CROSS JOIN` 固定连接顺序为"先按 idx_so_order_date 取窗口内订单，再按 idx_soi_order 取其明细"。结果集相同（tests/dashboard-perf.test.mjs 逐行比对），
+// 合成 medium 库上 products 约 55 → 21 ms、brands 约 29 → 12 ms（同进程同时测，负载下中位数）。
+function computeTop(db, prof, days) {
+  const from = `date('now','localtime','-${days} day')`
+  const products = prof.time('products', () => db
+    .prepare(
+      `SELECT p.name AS product_name, b.name AS brand_name, SUM(i.qty) qty, SUM(i.amount) amount
+       FROM sales_orders so CROSS JOIN sales_order_items i ON i.order_id=so.id
+       JOIN product_skus sk ON sk.id=i.sku_id JOIN products p ON p.id=sk.product_id LEFT JOIN brands b ON b.id=p.brand_id
+       WHERE so.status NOT IN ('cancelled','draft') AND so.order_date >= ${from}
+       GROUP BY p.id ORDER BY amount DESC LIMIT 10`
+    )
+    .all())
+  const brands = prof.time('brands', () => db
+    .prepare(
+      `SELECT COALESCE(b.name,'未标品牌') AS brand_name, SUM(i.qty) qty, SUM(i.amount) amount
+       FROM sales_orders so CROSS JOIN sales_order_items i ON i.order_id=so.id
+       JOIN product_skus sk ON sk.id=i.sku_id JOIN products p ON p.id=sk.product_id LEFT JOIN brands b ON b.id=p.brand_id
+       WHERE so.status NOT IN ('cancelled','draft') AND so.order_date >= ${from}
+       GROUP BY b.id ORDER BY amount DESC LIMIT 10`
+    )
+    .all())
+  const dealers = prof.time('dealers', () => db
+    .prepare(
+      `SELECT d.name, d.level, COUNT(so.id) orders, COALESCE(SUM(so.receivable_amount),0) amount
+       FROM sales_orders so JOIN dealers d ON d.id=so.dealer_id
+       WHERE so.status NOT IN ('cancelled','draft') AND so.order_date >= ${from}
+       GROUP BY d.id ORDER BY amount DESC LIMIT 10`
+    )
+    .all())
+  const stores = prof.time('stores', () => db
+    .prepare(
+      `SELECT s.name, s.region, COUNT(so.id) orders, COALESCE(SUM(so.receivable_amount),0) amount
+       FROM sales_orders so JOIN stores s ON s.id=so.store_id
+       WHERE so.status NOT IN ('cancelled','draft') AND so.order_date >= ${from}
+       GROUP BY s.id ORDER BY amount DESC LIMIT 10`
+    )
+    .all())
+  return { products, brands, dealers, stores }
+}
+
 
 r.get(
   '/recent',
@@ -290,23 +319,58 @@ r.get(
 r.get(
   '/inventory-dist',
   requireAuth,
-  wrap((_req, res) => {
-    const db = getDb()
-    const byWarehouse = db
-      .prepare(
-        `SELECT w.name AS warehouse_name, w.type, COALESCE(SUM(st.qty_on_hand),0) qty, COALESCE(SUM(st.qty_on_hand*st.cost_price),0) amount
-         FROM warehouses w LEFT JOIN inventory_stocks st ON st.warehouse_id=w.id GROUP BY w.id ORDER BY amount DESC`
-      )
-      .all()
-    const byCategory = db
-      .prepare(
-        `SELECT COALESCE(c.name,'未分类') AS category_name, COALESCE(SUM(st.qty_on_hand),0) qty, COALESCE(SUM(st.qty_on_hand*st.cost_price),0) amount
-         FROM inventory_stocks st JOIN product_skus sk ON sk.id=st.sku_id JOIN products p ON p.id=sk.product_id
-         LEFT JOIN categories c ON c.id=p.category_id GROUP BY c.id ORDER BY amount DESC`
-      )
-      .all()
-    return ok(res, { byWarehouse, byCategory })
-  })
+  wrap((_req, res) => ok(res, cachedRead('dashboard.inventory-dist', 'inventory-dist', computeInventoryDist)))
 )
+
+// AB2：原写法对库存宽表（medium 库 8.5 万行）整表扫两遍——byWarehouse 对每个仓 LEFT JOIN 回表，byCategory 每行再三次主键回查。
+// 改成**一遍**扫描按 (仓库, 品类) 聚合，再在内存里折成两张表（分组数 = 仓库数 × 品类数，很小）。语义保持：
+//   · 仓库合计含所有库存行；无库存的仓库仍列出且为 0；并列金额按仓库 id（原先并列顺序未定义）；
+//   · 品类合计只含 SKU / 商品能匹配上的行（原写法是内连接），品类缺失或指向不存在的品类 → '未分类'。
+// 浮点求和顺序与原写法不同（先分组再相加），最后一位可能不同；tests/dashboard-perf.test.mjs 逐行比对（4 位小数）。
+function computeInventoryDist(db, prof) {
+  const groups = prof.time('stockAgg', () => db
+    .prepare(
+      `SELECT st.warehouse_id AS wid, p.category_id AS cid, (p.id IS NOT NULL) AS matched,
+              SUM(st.qty_on_hand) AS qty, SUM(st.qty_on_hand*st.cost_price) AS amount
+       FROM inventory_stocks st LEFT JOIN product_skus sk ON sk.id=st.sku_id LEFT JOIN products p ON p.id=sk.product_id
+       GROUP BY st.warehouse_id, p.category_id, (p.id IS NOT NULL)`
+    )
+    .all())
+  return prof.time('assemble', () => {
+    const byWh = new Map()
+    const byCat = new Map()
+    for (const g of groups) {
+      const w = byWh.get(g.wid) || { qty: 0, amount: 0 }
+      w.qty += g.qty ?? 0
+      w.amount += g.amount ?? 0
+      byWh.set(g.wid, w)
+      if (g.matched) {
+        const c = byCat.get(g.cid) || { qty: 0, amount: 0 }
+        c.qty += g.qty ?? 0
+        c.amount += g.amount ?? 0
+        byCat.set(g.cid, c)
+      }
+    }
+    const byWarehouse = db
+      .prepare('SELECT id, name, type FROM warehouses ORDER BY id')
+      .all()
+      .map((w) => ({ warehouse_name: w.name, type: w.type, qty: byWh.get(w.id)?.qty ?? 0, amount: byWh.get(w.id)?.amount ?? 0 }))
+      .sort((a, b) => b.amount - a.amount) // Array#sort 稳定：并列保持仓库 id 升序
+    const catNames = new Map(db.prepare('SELECT id, name FROM categories').all().map((c) => [c.id, c.name]))
+    const merged = new Map() // 品类缺失 / 指向不存在的品类 → 同一个 '未分类'（key null）
+    for (const [cid, v] of byCat) {
+      const key = catNames.has(cid) ? cid : null
+      const m = merged.get(key) || { qty: 0, amount: 0 }
+      m.qty += v.qty
+      m.amount += v.amount
+      merged.set(key, m)
+    }
+    const byCategory = [...merged]
+      .sort(([a], [b]) => (a === null ? -1 : b === null ? 1 : a - b)) // 原写法按品类 id 分组（NULL 在前）
+      .map(([cid, v]) => ({ category_name: cid === null ? '未分类' : catNames.get(cid) ?? '未分类', qty: v.qty, amount: v.amount }))
+      .sort((a, b) => b.amount - a.amount)
+    return { byWarehouse, byCategory }
+  })
+}
 
 export default r
