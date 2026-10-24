@@ -602,6 +602,12 @@ node scripts/upgrade-rehearsal.mjs --from=58 --backup-dir=/abs/new-dir/data/back
 - 因此**一次运行也没有派发**（已派发 0/3；被拒绝的请求不产生 run id），三次规定运行（`rehearsal=true snapshot_upto=58`、`scale=large-ci`、默认）全部未执行。
 - 修复建议（需要用户决定，AC8 未改仓库设置也未改工作流）：合并 PR #7（或把 `nightly-capacity.yml` 单独 cherry-pick 进 `main`）之后，再按下面的命令触发三次；合并前在 PR 分支上无法验证该工作流能否在 GitHub 上跑通。
 
+### AD8 过渡入口（2026-10-24）：`ci.yml` 的 `capacity-smoke` job
+- 复查：`gh api repos/osborn-studio/OS-ERP/contents/.github/workflows/nightly-capacity.yml?ref=main` 仍返回 HTTP 404，`main` 仍没有该文件（PR #7/#8 未合入），所以三条规定运行**仍无法派发**，已派发 0/3，表格保持待填。
+- 过渡：`ci.yml` 新增 `capacity-smoke` job，**仅** `workflow_dispatch` 触发（`if: github.event_name == 'workflow_dispatch'`，不在 push / pull_request 上跑）；medium 规模（`--skus 20000 --docs 30000 --txns 150000`）、生成预算 `--time-budget 20`、作业 `timeout-minutes: 30`；步骤为流水线 → 写档压测 → `capacity-summary.mjs --scale medium`，只上传白名单 `capacity-summary.json`（保留 14 天）。不含升级演练、`large-ci`、`audit_fts`。
+- **它是过渡，不是 `nightly-capacity.yml` 的替代**。`ci.yml` 已在 `main` 上（已有 `workflow_dispatch`），按 GitHub 的规则，`gh workflow run ci.yml --ref <推送后的分支>` 理论上可以在合入前直接运行分支上的新 job；但**本次没有推送、没有触发**，没有任何 run id，所以这里没有它的任何数字（该分支派发方式也未验证）。`nightly-capacity.yml` 合入 `main` 后应删除该 job，按下方命令跑三次规定运行。
+- 未验证：该 job 在 GitHub 上能否 30 分钟内跑完（20 分钟预算只约束生成阶段，备份、两次恢复演练、explain-audit、压测、写档压测在剩余时间内；Mac mini 上 medium 生成曾用 356 s，但那是另一台机器，不外推）。
+
 ### 触发（合入 `main` 之后；只用 `gh workflow run`，不改仓库设置）
 ```bash
 gh workflow run nightly-capacity.yml --ref main -f rehearsal=true -f snapshot_upto=58

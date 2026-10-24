@@ -202,7 +202,7 @@ test('capacity-baseline has a hosted-runner section with the exact manual dispat
   // 锚定到以「托管 runner」开头的小节标题（AB11 的 large-ci 小节标题里也含这四个字，不能用 `.*` 松匹配）
   const section = doc.match(/^## 托管 runner[\s\S]*?(?=^## |(?![\s\S]))/m)?.[0]
   assert.ok(section, '托管 runner section must exist')
-  assert.match(section, /gh workflow run nightly-capacity\.yml -f rehearsal=true/)
+  assert.match(section, /gh workflow run nightly-capacity\.yml( --ref main)? -f rehearsal=true/)
   assert.match(section, /gh run (list|watch|view)/)
   assert.match(section, /待填|尚未/, 'placeholder table must say it is unfilled')
   assert.doesNotMatch(section, /\b\d{2,}(\.\d+)? ?ms\b/, 'no invented latency numbers')

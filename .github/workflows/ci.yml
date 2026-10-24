@@ -253,3 +253,81 @@ jobs:
           path: artifacts/ci-summary/summary.json
           if-no-files-found: error
           retention-days: 14
+
+  # AD8 STOPGAP: nightly-capacity.yml is not on main yet (PR #7/#8 unmerged), so a workflow_dispatch cannot reach it. This job runs the
+  # same synthetic pipeline at medium scale on a hosted runner, manual dispatch only (never push / pull_request). Remove it once
+  # nightly-capacity.yml is on main. Numbers are trend indicators on a shared VM with synthetic data: not dmserver, not a capacity
+  # commitment, not acceptance. Generation is time-boxed (--time-budget 20); the job is capped at 30 minutes; only the allowlisted
+  # capacity-summary.json is uploaded (raw reports, databases and logs never are).
+  capacity-smoke:
+    name: Capacity smoke (manual, medium, hosted, trend only)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CAP_RUN: ${{ runner.temp }}/capacity-run
+      CAP_REPORTS: ${{ runner.temp }}/capacity-reports
+      CAP_SUMMARY: ${{ runner.temp }}/capacity-summary
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Install locked dependencies and selected native build hooks
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm rebuild better-sqlite3 esbuild --no-audit --no-fund
+          pw="$(node -e "process.stdout.write(require('node:crypto').randomBytes(24).toString('hex'))")"
+          echo "::add-mask::$pw"
+          echo "GML_PIPELINE_ADMIN_PASSWORD=$pw" >> "$GITHUB_ENV"
+          mkdir -p "$CAP_REPORTS" "$CAP_SUMMARY"
+      - name: Synthetic pipeline (medium, 20 min generation budget)
+        id: pipeline
+        continue-on-error: true
+        env:
+          HOST: 127.0.0.1
+          GML_DB: ''
+        run: |
+          set -uo pipefail
+          node scripts/synth-pipeline.mjs --dir "$CAP_RUN" --keep --skus 20000 --docs 30000 --txns 150000 --time-budget 20 --iterations 100 --concurrency 4 --out "$CAP_REPORTS/pipeline-report.json" > "$CAP_REPORTS/pipeline.log" 2>&1
+          rc=$?
+          grep -E '^\[pipeline\] [a-z_]+: exit [0-9a-z]+ in [0-9.]+s$' "$CAP_REPORTS/pipeline.log" || true
+          [ "$rc" -eq 0 ] || echo "::error::pipeline exited with code $rc (raw output withheld)"
+          exit "$rc"
+      - name: Bench write profile (on a copy of the bench database)
+        id: bench_write
+        if: steps.pipeline.outcome == 'success'
+        continue-on-error: true
+        env:
+          HOST: 127.0.0.1
+          GML_RUNTIME_MODE: test
+          GML_BENCH_USER: synthadmin
+        run: |
+          set -uo pipefail
+          cp -R "$CAP_RUN/bench-copy" "$CAP_RUN/write-copy" || exit 1
+          GML_DATA_DIR="$CAP_RUN/write-copy" GML_BENCH_PASSWORD="$GML_PIPELINE_ADMIN_PASSWORD" \
+            node scripts/bench-api.mjs --profile=write --iterations 50 --concurrency 4 --max-error-rate 0 --out "$CAP_REPORTS/bench-write.json" > "$CAP_REPORTS/bench-write.log" 2>&1
+          rc=$?
+          [ "$rc" -eq 0 ] || echo "::error::bench write profile exited with code $rc (raw output withheld)"
+          exit "$rc"
+      - name: Reduce reports to the allowlisted summary (printed to the log)
+        id: summary
+        if: always()
+        run: |
+          set -euo pipefail
+          node scripts/capacity-summary.mjs --pipeline "$CAP_REPORTS/pipeline-report.json" --write "$CAP_REPORTS/bench-write.json" --out "$CAP_SUMMARY/capacity-summary.json" --scale medium
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: os-erp-capacity-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/capacity-summary/capacity-summary.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Remove databases, backups and raw reports
+        if: always()
+        run: rm -rf "$CAP_RUN" "$CAP_REPORTS"
