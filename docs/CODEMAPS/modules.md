@@ -480,7 +480,7 @@ BOM 服务层（模块 10B · 一个 BOM + 三类执行单）
 | 导出 | 类型 | 路由 | MCP 工具 | 被模块调用 |
 |---|---|---|---|---|
 | `cacheKeyCount` | fn | — | — | — |
-| `cacheTtlMs` | fn | — | — | — |
+| `cacheTtlMs` | fn | GET /api/dashboard/trend<br>GET /api/dashboard/todos<br>GET /api/dashboard/top<br>GET /api/dashboard/inventory-dist | — | — |
 | `cachedForDb` | fn | GET /api/dashboard/summary<br>GET /api/dashboard/trend<br>GET /api/dashboard/todos<br>GET /api/dashboard/top<br>GET /api/dashboard/inventory-dist | — | — |
 | `invalidateForDb` | fn | — | — | — |
 
