@@ -28,6 +28,9 @@ import { requestLogger } from './lib/logger.js'
 import { assertTrustProxyConfig, trustProxyFn } from './lib/trust-proxy.js'
 import { requireAuth, JWT_SECRET, assertJwtSecretPosture, isTokenInvalid } from './middleware/auth.js'
 import jwt from 'jsonwebtoken'
+import { shutdownSnapshotLine } from './lib/metrics-export.js'
+import { counterSnapshot, histogramSnapshot } from './lib/process-counters.js'
+import { writeRetryStats } from './lib/tx.js'
 import { securityHeaders } from './middleware/security-headers.js'
 import { sessionCookieToken } from './middleware/session-transport.js'
 import authRoutes from './routes/auth.js'
@@ -298,8 +301,19 @@ API 入口：
 
 app.use(errorHandler)
 
-app.listen(PORT, HOST, () => {
+const httpServer = app.listen(PORT, HOST, () => {
   console.log(`[gml] 服务已启动：http://localhost:${PORT}`)
   console.log(`[gml] 行业版本：${Object.values(INDUSTRIES).map((x) => x.label).join(' / ')}（登录时选择）`)
   console.log(`[gml] 演示账号：admin / 12345（主管理员，全部模块）· 其余角色账号密码 123456`)
+})
+
+// AC9：SIGTERM 时先把进程内指标快照写成一行 JSON（重启后计数器归零，运维靠它对账），再优雅收尾退出。
+// 快照只读内存计数器，不查库；兜底定时器保证挂住的连接不会拖住退出。
+process.once('SIGTERM', () => {
+  // 日志不能阻止退出：快照失败也照常往下走
+  try { console.log(shutdownSnapshotLine({ counters: counterSnapshot(), histograms: histogramSnapshot(), retry: writeRetryStats() })) } catch { void 0 }
+  const force = setTimeout(() => process.exit(0), 5000)
+  force.unref()
+  httpServer.close(() => process.exit(0))
+  httpServer.closeIdleConnections?.()
 })

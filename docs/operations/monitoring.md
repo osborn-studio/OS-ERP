@@ -67,104 +67,17 @@ AB10 新增：
 | `os_erp_audit_write_duration_seconds_bucket{le}` / `_sum` / `_count` | histogram | `audit_logs` INSERT 耗时（秒，含失败的尝试）；固定桶 0.0005 … 1 与 `+Inf` |
 | `os_erp_mcp_tool_calls_total{tool,code}` | counter | MCP 工具调用（以调用审计行成功落地为准），`code` 为 `ok` 或登记的错误码；未登记的工具名折成 `unknown`、未登记的码折成 `other`，基数固定 |
 
-计数器是进程内的，重启归零；用 `increase()`/`rate()`，不要直接比较绝对值。
+计数器是进程内的，重启归零；用 `increase()`/`rate()`，不要直接比较绝对值。收到 `SIGTERM`（`kill`、`docker stop`、systemd 停止）时，服务在优雅退出前向标准输出写**一行** JSON 快照（`"msg":"metrics_snapshot","event":"shutdown"`，含计数器、直方图、写重试；不含路径与账号），重启前后可据此对账。`SIGKILL` 与崩溃不会有快照。
 
 ## 4. 告警规则（5 条 + AB10 的 4 条，见 4.1）
 
-```yaml
-groups:
-  - name: os-erp
-    rules:
-      - alert: OsErpBackupStaleOrFailed
-        # 备份失败、从未备份、或超过 26 小时没有新报告（每日备份留 2 小时余量）；未知（-1）也算异常
-        expr: os_erp_backup_last_failed == 1 or os_erp_backup_missing == 1 or os_erp_backup_age_seconds > 93600 or os_erp_backup_age_seconds == -1
-        for: 15m
-        labels: { severity: critical }
-        annotations:
-          summary: "OS-ERP 备份失败/缺失/过期"
-          description: "按 docs/operations/restore-runbook.md 检查备份目录与最新 backup-report；备份没跑（cron 挂了）只有这条规则能发现。"
-
-      - alert: OsErpAuditStrictWriteFailing
-        # 安全审计写不进去 ⇒ 受保护的业务变更全部 503 回滚；任何一次都值得看
-        expr: increase(os_erp_security_audit_unavailable_total[10m]) > 0 or increase(os_erp_audit_strict_write_failures_total{reason=~"insert_error|no_row|mcp_call_log"}[10m]) > 0
-        labels: { severity: critical }
-        annotations:
-          summary: "严格审计写失败，业务变更被回滚"
-          description: "检查 audit_logs / mcp_call_logs 表、磁盘空间、数据库只读或锁。outside_tx 是编码错误，不在此规则内，看日志 AUDIT_OUTSIDE_TX。"
-
-      - alert: OsErpLoginThrottleUnavailable
-        # 节流存储坏了 ⇒ 登录 fail closed（全部 503），或已经出现 unavailable 拒绝
-        expr: os_erp_login_throttle_unavailable == 1 or increase(os_erp_login_throttle_rejections_total{reason="unavailable"}[10m]) > 0
-        for: 2m
-        labels: { severity: critical }
-        annotations:
-          summary: "登录节流存储不可用，用户无法登录"
-          description: "检查数据目录下 login-throttle.sqlite 的权限/损坏/磁盘；见 ADR-0005。"
-
-      - alert: OsErpWriteContention
-        # 写重试用尽 = 有请求因 SQLITE_BUSY 最终失败；或重试速率持续偏高
-        expr: increase(os_erp_write_retry_exhausted_total[10m]) > 0 or rate(os_erp_write_retries_total[10m]) > 1
-        for: 10m
-        labels: { severity: warning }
-        annotations:
-          summary: "写事务争用：重试用尽或重试频繁"
-          description: "检查是否有长事务/备份与写入同时进行；见 ADR-0035，必要时调 GML_WRITE_RETRY_MAX 或错开备份时段。"
-
-      - alert: OsErpDiskLowOrMigrationDrift
-        # 磁盘可用低于 5 GiB（-1 为未知，不触发），或迁移文件与已登记校验和不一致
-        expr: (os_erp_disk_free_bytes >= 0 and os_erp_disk_free_bytes < 5 * 1024 * 1024 * 1024) or os_erp_migration_checksum_mismatches > 0
-        for: 10m
-        labels: { severity: warning }
-        annotations:
-          summary: "数据卷空间不足或迁移校验和漂移"
-          description: "磁盘写满会让备份与审计写入失败；校验和不一致说明已应用的迁移文件被改过，先评审再决定是否收养。"
-```
+以上 5 条规则在 `docs/operations/alerts/os-erp.yml`（CI 的 docker job 用 `promtool check rules` 校验；Prometheus 的 `rule_files` 直接引用该文件）。
 
 另外建议（非 OS-ERP 指标）：用 `up{job="os-erp"} == 0` 监控抓取本身；`rate_limited` 的突增可单独做看板观察撞库趋势，但不建议直接告警（误输入会触发）。
 
 ### 4.1 AB10 新增序列的告警规则
 
-```yaml
-groups:
-  - name: os-erp-ab10
-    rules:
-      - alert: OsErpDashboardCacheIneffective
-        # 看板请求持续、但命中率低于 20%：库写入频繁使缓存不断失效，或 TTL 被配得过短。命中率低本身不是故障，仅提示
-        expr: |
-          sum(increase(os_erp_dashboard_cache_total{result="hit"}[30m]))
-            / clamp_min(sum(increase(os_erp_dashboard_cache_total[30m])), 1) < 0.2
-          and sum(increase(os_erp_dashboard_cache_total[30m])) > 60
-        for: 30m
-        labels: { severity: info }
-        annotations:
-          summary: "总部看板缓存命中率低"
-          description: "检查 GML_DASHBOARD_CACHE_MS 是否为 0/过小，或写入是否过于频繁（ADR-0044：任何写入都会让缓存失效）。"
-
-      - alert: OsErpAuditWriteSlow
-        # 审计写入 p95 超过 100 ms：磁盘或锁争用，会拖慢所有受审计的写请求
-        expr: histogram_quantile(0.95, sum by (le) (rate(os_erp_audit_write_duration_seconds_bucket[10m]))) > 0.1
-        for: 10m
-        labels: { severity: warning }
-        annotations:
-          summary: "审计写入 p95 延迟超过 100ms"
-          description: "检查磁盘 IO、WAL 检查点、备份是否与写入重叠；与 OsErpWriteContention 一起看。"
-
-      - alert: OsErpMcpDeniedSpike
-        # 权限/范围类拒绝突增：令牌被滥用或配置错误的 Agent 在反复撞墙
-        expr: sum(increase(os_erp_mcp_tool_calls_total{code=~"PERM_DENIED|SCOPE_DENIED|TOOL_DENIED|TOOL_NOT_ALLOWED|TOKEN_OWNER_PERM_DENIED|ORG_OUT_OF_SCOPE"}[10m])) > 50
-        labels: { severity: warning }
-        annotations:
-          summary: "MCP 工具调用被拒绝次数突增"
-          description: "到 MCP 调用日志（mcp_call_logs）按 token_name 看是谁；必要时吊销该令牌。"
-
-      - alert: OsErpMcpAuditUnavailable
-        # 调用审计写不进去的同时仍有工具调用失败：与 OsErpAuditStrictWriteFailing 互补（后者按失败计数，这里看 AUDIT_UNAVAILABLE 结果码）
-        expr: increase(os_erp_mcp_tool_calls_total{code="AUDIT_UNAVAILABLE"}[10m]) > 0
-        labels: { severity: critical }
-        annotations:
-          summary: "MCP 写型工具因调用审计不可用而被拒"
-          description: "检查 mcp_call_logs 表与磁盘；见 ADR-0011。"
-```
+规则在 `docs/operations/alerts/os-erp-ab10.yml`，同样由 CI 的 `promtool check rules` 校验。
 
 说明：抓取被节流（429）时 Prometheus 侧表现为 `up == 0`，已有的 `up{job="os-erp"} == 0` 规则覆盖；默认限额（120 次/分钟/IP）远高于 30 s 一次的抓取频率。
 

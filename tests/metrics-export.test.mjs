@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { once } from 'node:events'
-import { mkdtempSync, rmSync, readFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, readFileSync, readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import net from 'node:net'
@@ -12,11 +12,12 @@ import { fileURLToPath } from 'node:url'
 import { setTimeout as delay } from 'node:timers/promises'
 import Database from 'better-sqlite3'
 import jwt from 'jsonwebtoken'
-import { incCounter, counterSnapshot, resetCounters, incMcpToolCall, registerMcpTools, observeHistogram, histogramSnapshot } from '../server/lib/process-counters.js'
+import { incCounter, counterSnapshot, resetCounters, incMcpToolCall, registerMcpTools, MCP_RESULT_CODES, observeHistogram, histogramSnapshot } from '../server/lib/process-counters.js'
 import { createMetricsThrottle } from '../server/lib/metrics-throttle.js'
 import { cachedForDb } from '../server/lib/db-ttl-cache.js'
 import { insertAuditRow } from '../server/lib/audit-trail.js'
-import { renderPrometheus, metricsTokenOk, METRICS_TOKEN_MIN_LENGTH } from '../server/lib/metrics-export.js'
+import { renderPrometheus, metricsTokenOk, METRICS_TOKEN_MIN_LENGTH, shutdownSnapshotLine } from '../server/lib/metrics-export.js'
+import { createToken } from '../server/mcp/tokens.js'
 import { auditStrictRow } from '../server/lib/audit-trail.js'
 import { createLoginThrottle } from '../server/lib/login-throttle.js'
 import { withWriteRetry, resetWriteRetryStats } from '../server/lib/tx.js'
@@ -214,7 +215,7 @@ async function server(t, extraEnv = {}) {
   }
   const get = (route, token) => fetch(`http://127.0.0.1:${port}${route}`, { headers: token ? { Authorization: `Bearer ${token}` } : {}, signal: AbortSignal.timeout(5000) })
   const post = (route, body) => fetch(`http://127.0.0.1:${port}${route}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(5000) })
-  return { dir, get, post, tokenFor, output: () => output }
+  return { dir, port, get, post, tokenFor, output: () => output }
 }
 const PROM = '/api/meta/metrics?format=prometheus'
 
@@ -402,4 +403,115 @@ test('AB10 HTTP: metrics throttled per IP (429 + bizcode + Retry-After), bad tok
   assert.ok(Number(res.headers.get('retry-after')) >= 1)
   assert.equal((await s.get('/api/meta/metrics', s.tokenFor('admin'))).status, 429, 'JSON form and admin JWT share the same per-IP bucket')
   assert.ok(!s.output().includes(a) && !s.output().includes(b))
+})
+
+// ------------------------------------------------------------ AC9
+test('AC9 HTTP: a real MCP tools/call increments os_erp_mcp_tool_calls_total{tool,code} as scraped from /metrics', { timeout: 180000 }, async (t) => {
+  const s = await server(t)
+  const admin = s.tokenFor('admin')
+  const series = (tool, code) => `os_erp_mcp_tool_calls_total{tool="${tool}",code="${code}"}`
+  const scrape = async () => valueOf(await (await s.get(PROM, admin)).text(), series('org.tree', 'ok'))
+  assert.equal(await scrape(), 0, 'preseeded zero series exists before any call')
+  const db = new Database(path.join(s.dir, 'gml_cosmetic.db'))
+  t.after(() => db.close())
+  const owner = db.prepare("SELECT id FROM users WHERE username='admin'").get().id
+  const { token } = createToken(db, { name: 'ac9-e2e', ownerUserId: owner, industry: 'cosmetic', scopes: 'read' })
+  const call = async (name, args = {}) => {
+    const res = await fetch(`http://127.0.0.1:${s.port}/mcp`, {
+      method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }), signal: AbortSignal.timeout(15000)
+    })
+    return res.json()
+  }
+  const r1 = await call('org.tree')
+  assert.ok(!r1.error && !r1.result?.isError, JSON.stringify(r1).slice(0, 300))
+  assert.equal(await scrape(), 1)
+  await call('org.tree')
+  assert.equal(await scrape(), 2)
+  // 未知工具名折成 tool="unknown"，不会为用户可控字符串造新序列
+  await call('no.such_tool_ac9')
+  const text = await (await s.get(PROM, admin)).text()
+  assert.ok(!text.includes('no.such_tool_ac9'))
+  assert.equal(valueOf(text, series('org.tree', 'ok')), 2)
+})
+
+test('AC9 shutdownSnapshotLine: one JSON line with counters and histograms, no ops/paths, never throws', () => {
+  resetCounters()
+  registerMcpTools(['org.tree'])
+  incMcpToolCall('org.tree', null)
+  const line = shutdownSnapshotLine({ counters: counterSnapshot(), histograms: histogramSnapshot(), retry: { calls: 1, retries: 0, exhausted: 0, non_retryable: 0 }, now: () => new Date('2026-10-24T00:00:00.000Z') })
+  assert.ok(!line.includes('\n'))
+  const o = JSON.parse(line)
+  assert.equal(o.msg, 'metrics_snapshot')
+  assert.equal(o.event, 'shutdown')
+  assert.equal(o.ts, '2026-10-24T00:00:00.000Z')
+  assert.equal(o.counters.mcp_tool_calls_total['org.tree'].ok, 1)
+  assert.ok(o.histograms.audit_write_duration_seconds)
+  assert.equal(o.retry.calls, 1)
+  const bad = JSON.parse(shutdownSnapshotLine({ counters: { get x() { throw new Error('boom') } }, now: () => new Date(0) }))
+  assert.equal(bad.msg, 'metrics_snapshot_failed')
+  resetCounters()
+})
+
+test('AC9 SIGTERM: a server we spawn writes a one-line JSON metrics snapshot to the log and exits cleanly', { timeout: 180000 }, async (t) => {
+  const dir = tmp(t, 'os-erp-mx-term-')
+  const probe = net.createServer(); probe.listen(0, '127.0.0.1'); await once(probe, 'listening')
+  const port = probe.address().port; await new Promise((r) => probe.close(r))
+  const env = { PATH: process.env.PATH, HOME: dir, TMPDIR: dir, HOST: '127.0.0.1', PORT: String(port), GML_RUNTIME_MODE: 'test', GML_DATA_DIR: dir, GML_DB: '', GML_JWT_SECRET: randomBytes(32).toString('hex') }
+  const child = spawn(process.execPath, ['server/index.js'], { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] })
+  let out = ''
+  child.stdout.on('data', (d) => { out += d })
+  child.stderr.on('data', (d) => { out += d })
+  const closed = once(child, 'close')
+  t.after(() => { if (child.exitCode === null) child.kill('SIGKILL') })
+  for (let i = 0; i < 1200 && !out.includes('服务已启动') && child.exitCode === null; i++) await delay(50)
+  assert.ok(out.includes('服务已启动'), out)
+  assert.ok(!out.includes('"msg":"metrics_snapshot"'), 'no snapshot before shutdown')
+  child.kill('SIGTERM')
+  const [code, signal] = await closed
+  assert.equal(signal, null, 'handler exits on its own instead of dying from the signal')
+  assert.equal(code, 0)
+  const lines = out.split('\n').filter((l) => l.includes('"msg":"metrics_snapshot"'))
+  assert.equal(lines.length, 1)
+  const o = JSON.parse(lines[0])
+  assert.equal(o.event, 'shutdown')
+  assert.equal(typeof o.counters.dashboard_cache_total.hit, 'number')
+  assert.ok(Array.isArray(o.histograms.audit_write_duration_seconds.buckets))
+  assert.ok(!lines[0].includes(dir), 'no filesystem paths in the snapshot')
+})
+
+test('AC9 alert rule files: docs/operations/alerts/*.yml exist, monitoring.md points at them, every referenced series is exported', () => {
+  const dir = path.join(ROOT, 'docs/operations/alerts')
+  const files = readdirSync(dir).filter((f) => f.endsWith('.yml')).sort()
+  assert.ok(files.length >= 2, files.join())
+  const doc = readFileSync(path.join(ROOT, 'docs/operations/monitoring.md'), 'utf8')
+  assert.ok(!/^\s*- alert: /m.test(doc), 'rules live in alerts/*.yml, not inline in monitoring.md')
+  for (const f of files) assert.ok(doc.includes(`alerts/${f}`), `monitoring.md must reference ${f}`)
+  resetCounters()
+  registerMcpTools(['org.tree'])
+  const exported = renderPrometheus({ ops: OPS, retry: { calls: 0, retries: 0, exhausted: 0, non_retryable: 0 }, counters: counterSnapshot(), histograms: histogramSnapshot(), version: '1.0.0' })
+  const names = new Set([...exported.matchAll(/^# TYPE (os_erp_[a-z0-9_]+) /gm)].map((m) => m[1]))
+  const alerts = []
+  for (const f of files) {
+    const text = readFileSync(path.join(dir, f), 'utf8')
+    assert.match(text, /^groups:\s*$/m, `${f}: groups`)
+    for (const m of text.matchAll(/^\s*- alert: (\w+)\s*$/gm)) alerts.push(m[1])
+    // 每条规则都有 expr 与 severity 标签
+    const nAlert = [...text.matchAll(/^\s*- alert: /gm)].length
+    assert.equal([...text.matchAll(/^\s*expr: /gm)].length, nAlert, `${f}: one expr per alert`)
+    assert.equal([...text.matchAll(/severity: (critical|warning|info)/g)].length, nAlert, `${f}: one severity per alert`)
+    const expr = text.split('\n').filter((l) => !l.trim().startsWith('#')).join('\n')
+    for (const m of expr.matchAll(/\bos_erp_[a-z0-9_]+/g)) {
+      const base = m[0].replace(/_(bucket|sum|count)$/, '')
+      assert.ok(names.has(m[0]) || names.has(base), `${f}: ${m[0]} is not an exported series`)
+    }
+  }
+  assert.equal(new Set(alerts).size, alerts.length, 'alert names unique')
+  assert.equal(alerts.length, 9)
+  // 引用 label 值必须是登记的封闭集合成员
+  const all = files.map((f) => readFileSync(path.join(dir, f), 'utf8')).join('\n')
+  for (const m of all.matchAll(/os_erp_mcp_tool_calls_total\{code(=~?)"([^"]+)"\}/g)) {
+    for (const c of m[2].split('|')) assert.ok(MCP_RESULT_CODES.includes(c), `unknown MCP code ${c}`)
+  }
+  resetCounters()
 })

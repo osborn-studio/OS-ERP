@@ -88,3 +88,15 @@ ADR-0036 的 CSP 目前只发 `Content-Security-Policy-Report-Only`，头里没�
 
 ### 验证
 `tests/metrics-export.test.mjs` 增：轮换（两把有效、仅 NEXT、过短忽略）、缓存命中/未命中、MCP 计数封闭集合与注入、直方图累计桶与 `insertAuditRow` 计时（含失败）、节流单元（独立桶、窗口过期、容量 fail closed、非法配置回退、映射地址）、真实服务进程上的 429 形状 / `Retry-After` / 错误令牌也计数 / 两把令牌均可抓取。
+
+## 补充 2（AC9，batch twelve）：规则文件化、promtool 校验与端到端
+
+### 告警规则文件化
+`monitoring.md` 里内联的两段规则移到 `docs/operations/alerts/os-erp.yml`（5 条）与 `os-erp-ab10.yml`（4 条），文档只引用文件，Prometheus 的 `rule_files` 可直接指向它们。CI 的 docker job 增一步 `promtool check rules`：`prom/prometheus` v3.5.0 以 **digest 固定**（`@sha256:63805ebb…`，与同文件 action 的 SHA 固定同风格）、`--network none`、规则目录只读挂载、仅 `promtool` 入口，不起 Prometheus 进程。
+本机没有 `promtool`：本地只做 YAML 解析 + 结构检查（`groups[].rules[].alert/expr/labels.severity`），promtool 的 PromQL 语法检查要等 CI 实跑。`tests/metrics-export.test.mjs` 另断言：每个规则文件有 `groups`、每条告警恰有一个 `expr` 与 `severity`、告警名唯一、表达式里引用的每个 `os_erp_*` 序列（去掉 `_bucket/_sum/_count`）都出现在真实渲染的导出里、`os_erp_mcp_tool_calls_total{code=...}` 的码都在 `MCP_RESULT_CODES` 内，`monitoring.md` 不再内联规则且引用每个文件。
+
+### MCP 计数端到端
+测试在真实服务进程上用 `createToken` 建只读令牌，发真实 `tools/call`（`org.tree`），从 `/metrics?format=prometheus` 抓取 `os_erp_mcp_tool_calls_total{tool="org.tree",code="ok"}`：预置 0 → 1 → 2；未登记工具名不产生新序列。
+
+### SIGTERM 指标快照
+`server/index.js` 的 `SIGTERM` 处理（`process.once`）先写一行 JSON（`shutdownSnapshotLine`，`msg=metrics_snapshot`、`event=shutdown`，含 `counters`、`histograms`、`retry`），再 `server.close()` 并退出 0；5 s 兜底定时器（unref）。安全性：只读内存计数器、不查库、不含路径/账号；序列化失败折成 `metrics_snapshot_failed` 一行；`SIGKILL`/崩溃无快照。日志直接 `console.log` 一行 JSON（不经文本格式的 logger，以保证测试模式下同样是单行 JSON）。

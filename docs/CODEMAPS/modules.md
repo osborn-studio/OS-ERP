@@ -719,6 +719,7 @@ Prometheus 文本指标渲染 + 抓取令牌校验（ADR-0045）
 | `PROMETHEUS_CONTENT_TYPE` | const | — | — | — |
 | `metricsTokenOk` | fn | GET /api/meta/metrics | — | — |
 | `renderPrometheus` | fn | GET /api/meta/metrics | — | — |
+| `shutdownSnapshotLine` | fn | — | — | — |
 
 ## `server/lib/metrics-throttle.js`
 
