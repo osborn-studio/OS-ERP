@@ -56,10 +56,10 @@ groups:
           description: "检查数据库文件所在磁盘 / 权限 / 写锁争用（日志里 mcp rate store write failed 一行含 err_code）与迁移 073 是否已执行；purge_failed 则是后台清理过期桶失败（不影响放行，但表会变大）。见 ADR-0056 补充。"
 
       - alert: OsErpMcpRateStoreWaitHigh
-        # AF9：db 限速模式下，consume 等写锁的 p95 持续偏高（高频 MCP 调用与业务写入争用同一个 SQLite 写锁）。要求有流量（每秒 > 0.1 次）避免空闲时抖动。
+        # AF9：db 限速模式下，consume 等写锁的 p95 持续偏高（高频 MCP 调用与业务写入争用同一个 SQLite 写锁）。要求有流量（每秒 > 0.1 次）避免空闲时抖动；按 instance 分别判定，多实例时一台退化不会被另一台稀释。
         expr: |
-          histogram_quantile(0.95, sum by (le) (rate(os_erp_mcp_rate_store_wait_seconds_bucket[5m]))) > 0.1
-          and sum(rate(os_erp_mcp_rate_store_wait_seconds_count[5m])) > 0.1
+          histogram_quantile(0.95, sum by (instance, le) (rate(os_erp_mcp_rate_store_wait_seconds_bucket[5m]))) > 0.1
+          and sum by (instance) (rate(os_erp_mcp_rate_store_wait_seconds_count[5m])) > 0.1
         for: 15m
         labels: { severity: warning }
         annotations:
