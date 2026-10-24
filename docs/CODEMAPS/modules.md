@@ -3,7 +3,7 @@
 <!-- generated -->
 <!-- 由 `node scripts/gen-codemap.mjs` 生成，勿手改；CI 校验不漂移 -->
 
-共 86 个模块。“路由”只列在处理器区域内直接引用该函数的路由（路由超过 5 条时按路由文件汇总，明细见 [routes.md](routes.md)）；“MCP 工具”来自 `server/mcp/tools.js` 的 40 个工具；“被模块调用”是其它 lib/mcp 模块里的跨文件引用。“—”表示静态扫描没找到调用方，不等于死代码。
+共 87 个模块。“路由”只列在处理器区域内直接引用该函数的路由（路由超过 5 条时按路由文件汇总，明细见 [routes.md](routes.md)）；“MCP 工具”来自 `server/mcp/tools.js` 的 40 个工具；“被模块调用”是其它 lib/mcp 模块里的跨文件引用。“—”表示静态扫描没找到调用方，不等于死代码。
 
 ## 扫描边界（必读）
 
@@ -190,6 +190,21 @@
 | `statement` | fn | GET /api/ar/statement | — | — |
 | `syncOcAr` | fn | POST /api/ar/oc/sync | — | — |
 | `voidReceipt` | fn | POST /api/ar/receipts/:id/void | — | — |
+
+## `server/lib/audit-anchor-intent.js`
+
+审计锚点“操作意图”：写入（保留清理 / 归档 / 隐私抹除）与校验（离机锚点比对）（AE5，ADR-0055 补充）
+
+| 导出 | 类型 | 路由 | MCP 工具 | 被模块调用 |
+|---|---|---|---|---|
+| `INTENT_FORMAT` | const | — | — | — |
+| `OPERATION_ACTIONS` | const | — | — | — |
+| `anchorMark` | fn | — | — | — |
+| `intentHash` | fn | — | — | — |
+| `intentRef` | fn | — | — | — |
+| `linkIntentAuditRow` | fn | — | — | — |
+| `recordAnchorIntent` | fn | — | — | — |
+| `verifyAnchorIntents` | fn | — | — | — |
 
 ## `server/lib/audit-anchor-manifest.js`
 

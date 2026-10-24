@@ -23,7 +23,7 @@
 - 测试接缝：`OS_ERP_SSH` / `OS_ERP_SCP` 指向替身（与 `OS_ERP_GH` 同类）。只设 `OS_ERP_SSH` 不设 `OS_ERP_SCP` 时拒绝，避免真 `scp` 经替身 `ssh` 出网。测试从不连接真实主机。
 
 ### 3. 校验
-- `audit-verify-chain --offbox <文件> --pubkey <公钥PEM>`（二者必须同时给）：先验签（改文件、换钥、去签名、多余字段、`format` 不符都失败），再对每个被选中行业：在用链自身通过校验 + 锚定链尾是其祖先（沿用 AC7 `compareLiveToBackup`：`ok` / `rewrite`（`tip-row-differs`、`behind`、`anchors-removed`）/ `unverifiable`）；被锚定有链的行业库现已不存在 ⇒ 失败；锚点之后在**追加区间**（`at_row_id` 大于锚定链尾 id）新增的库内锚点是正常增长；但在**已锚定范围内**（`at_row_id` ≤ 锚定链尾 id）新增的库内锚点默认失败（`anchors-added/in-anchored-range`）并列出——伪造的"桥"锚点可以洗白对历史行的改写（见审计记录），而合法的保留清理 / 归档 / 隐私抹除在该范围内也会产生同样的锚点，所以由操作者对照操作记录后用 `--accept-new-anchors` 明确接受（或先做一次新锚点再比对）。锚定链尾被保留清理删除或归档搬出时需 `--archive-dir`，否则 `unverifiable`（失败）。
+- `audit-verify-chain --offbox <文件> --pubkey <公钥PEM>`（二者必须同时给）：先验签（改文件、换钥、去签名、多余字段、`format` 不符都失败），再对每个被选中行业：在用链自身通过校验 + 锚定链尾是其祖先（沿用 AC7 `compareLiveToBackup`：`ok` / `rewrite`（`tip-row-differs`、`behind`、`anchors-removed`）/ `unverifiable`）；被锚定有链的行业库现已不存在 ⇒ 失败；锚点之后在**追加区间**（`at_row_id` 大于锚定链尾 id）新增的库内锚点是正常增长；但在**已锚定范围内**（`at_row_id` ≤ 锚定链尾 id）新增的库内锚点默认失败（`anchors-added/in-anchored-range`）并列出——伪造的"桥"锚点可以洗白对历史行的改写（见审计记录），而合法的保留清理 / 归档 / 隐私抹除在该范围内也会产生同样的锚点，所以由操作者对照操作记录后用 `--accept-new-anchors` 明确接受（或先做一次新锚点再比对）。**（该语义已被文末「补充（AE5）」取代：现在要求操作意图对账，`--accept-new-anchors` 不再放行无意图的锚点。）**锚定链尾被保留清理删除或归档搬出时需 `--archive-dir`，否则 `unverifiable`（失败）。
 - `verify-release --log=<日志> --offbox <文件> --pubkey <公钥PEM>`（三者必须同时给；可不带 `--evidence`）：验签后要求现日志自身是有效链、行数不少于锚定行数，且第 `lines` 行的哈希等于锚定的 `tail_hash`——截尾、整份替换为另一条有效链、改中间行、日志被删都失败。裸 `--log`（不带 `=`）沿用既有语义，指仓库默认日志。`verify-release` 不接数据目录，因此审计链部分只由 `audit-verify-chain` 校验。
 
 ## 诚实边界
@@ -41,3 +41,27 @@
 Codex 审计（gpt-6.1-sol，只读，针对相对 batch-twelve 的差异）：
 - 高：`audit-verify-chain --offbox` 丢弃了 `anchors_added`，攻击者可改第 k 行并重算，再往库里插一条把新哈希接回第 k+1 行原 `prev_hash` 的桥锚点；链校验与链尾比对都通过（审计方在内存库中复现）⇒ 已修：已锚定范围内新增的库内锚点默认失败并列出，需 `--accept-new-anchors` 明确接受；回归测试 `forged bridge anchor` 先红后绿。局限：接受该开关后的桥锚点仍无法与合法清理区分，只能靠操作记录。
 - 审计确认：未发现经 `--dest ssh://别名/路径` 的命令 / 选项注入（别名与路径白名单、`--` 终止选项、参数数组调用、远端路径单引号）；未发现私钥泄露路径（私钥只经 `loadSigningKey`，不写入锚点、不进命令行输出）。
+
+## 补充（AE5）：锚点操作意图对账
+
+状态：开发实现，尚非产品上线验收｜相关：roadmap-v10 AE5、迁移 072、`server/lib/audit-anchor-intent.js`、`docs/operations/audit-integrity.md` §8b
+
+### 背景
+AD5 的修复让“已锚定范围内新增的库内锚点”默认失败、由操作者用 `--accept-new-anchors` 接受。但接受之后，伪造的桥锚点与合法的保留清理 / 归档 / 隐私抹除锚点仍不可区分，只能靠人对照操作记录。
+
+### 决定
+1. **迁移 072 `audit_anchor_intents`**：`id, created_at, operation ∈ {retention, archive, erase}（CHECK）, range_desc, operator_user_id, operator_name, anchors_json, intent_hash, key_id, signature, audit_row_id`。`intent_hash = sha256(JSON([格式标识, operation, range_desc, operator_user_id, operator_name, created_at, 锚点元组列表]))`，锚点元组 = `[kind, at_row_id, anchor_hash, prev_id, prev_row_hash]`；配置了 `GML_ANCHOR_INTENT_KEY`（缺省 `GML_RELEASE_SIGN_KEY`）时对 `格式标识:intent_hash` 做 Ed25519 签名（可空）。`up()` 缺表建表、缺列补列，`verify()` = 表与全部列在，二者一致。不对 `audit_logs` 建外键或索引。
+2. **写入同事务**：`retention.mjs`、`audit-archive.mjs`、`privacy-erase.mjs` 在操作前记锚点自增水位（`anchorMark`），操作后把水位之后新增的**全部**锚点记成一条意图（`recordAnchorIntent`，不在事务内抛 `AUDIT_OUTSIDE_TX`），把 `{id, hash}` 放进自己的操作审计行明细的 `anchor_intent`，再把审计行 id 回填到意图（`linkIntentAuditRow`）。审计写不进（`SECURITY_AUDIT_UNAVAILABLE`）时整个事务回滚，意图与锚点一起撤销（测试：`BEFORE INSERT` 触发器吞掉 `RETENTION_PURGE`）。没有新增锚点则不写意图。签名私钥配置了却读不出来 ⇒ 脚本在改库之前退出。
+   - 与路线图措辞的差异：路线图写“`AUDIT_*` 审计行”。保留清理 / 归档 / 隐私抹除原本就各写一条严格审计（`RETENTION_PURGE` / `AUDIT_ARCHIVE` / `PRIVACY_ERASE`），本次**复用这三条**并在明细里加引用，而不是再多写一行（再写一行会改变既有审计行数口径与测试）。印证时按操作类型核对 action。
+3. **校验（`audit-verify-chain --offbox`）**：对 AD5 已有的“锚点之后在已锚定范围内新增”的每个库内锚点（`at_row_id ≤ 锚定链尾 id`）要求：匹配意图（五元组全等）→ 意图哈希重算一致（`intent-hash-mismatch`）→ 有签名且有匹配公钥时验签（`intent-signature-invalid`）→ 被审计行印证（`intent-uncorroborated`：`audit_row_id` 缺失 / 不晚于锚定链尾 / 行不存在 / action 与操作不符 / 明细引用的 id 与哈希不符）。缺意图 = `anchor-without-intent`。任何一项失败 ⇒ `offbox.status = rewrite`，退出 1，并在 `intent_problems` 里列出每个锚点的问题。`--require-signed-intents`（公钥 `--intent-pubkey`，缺省 `--pubkey`）要求签名存在且可验（`intent-unsigned` / `intent-signature-unverifiable`）。
+4. **`--accept-new-anchors` 语义变更**：旧——放行所有已锚定范围内的新增锚点；新——**不放行没有意图的锚点**，只接受意图齐全、但印证它的审计行已被后来的归档搬出库（`corroboration-archived`，`audit_row_id` 小于库内最小审计行 id）的锚点。正常的清理 / 归档 / 抹除不再需要任何开关。AD5 回归测试 `forged bridge anchor` 相应改为：无意图 ⇒ `rewrite/anchor-without-intent`，带 `--accept-new-anchors` 仍失败。
+5. **升级**：迁移 072 之前、且发生在某份离机锚点之后的锚点没有意图，会被判 `anchor-without-intent`；处理方式是核对后重新做一份离机锚点。
+
+### 诚实边界
+- 意图不签名时，能同时写库并通过 `insertAuditRow` 追加审计行的攻击者，可以造出“桥锚点 + 意图 + 引用它的审计行”三件自洽的东西；这些审计行落在锚定链尾之后，会留下可见的痕迹，但校验器不能凭自己证明它们是伪造的。签名意图（私钥不在业务主机）与 `--require-signed-intents` 才能挡住它。
+- 印证行被后来的归档搬出库后，意图只能靠 `--accept-new-anchors` + 人工核对归档摘要；`audit_row_id` 不进哈希（审计行明细里的引用与它互指，但回填的 id 本身可被改，改动后的指向仍需通过 action / 明细引用检查）。
+- `--against-backup` 比对没有做意图对账（仍按 ADR-0049 §AC7 列出备份之后新增的锚点）。
+- 意图只在锚点比对时参与；`verifyChain` 自身对锚点的承认规则不变。
+
+### 审计记录（AE5）
+（见下，Codex 审计后补）

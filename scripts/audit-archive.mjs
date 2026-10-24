@@ -41,6 +41,7 @@ import { createRequire } from 'node:module'
 import { parseArgs, locateDatabases, die } from './lib/audit-chain-cli.mjs'
 import { sha256FileSync } from '../server/lib/audit-anchor-manifest.js'
 import { faultPoint, assertFsFaultAllowed } from './lib/fs-fault.mjs'
+import { loadIntentSigner } from './lib/anchor-intent-signer.mjs'
 
 const { anchorAccepts } = createRequire(import.meta.url)('../server/db/migrations/_audit_chain.cjs')
 
@@ -56,6 +57,13 @@ const outDir = path.resolve(args.out)
 
 const { verifyChain, verifyJsonlSegment, chainColumnsPresent } = await import('../server/lib/audit-chain-verify.js')
 const { auditStrictRow } = await import('../server/lib/audit-trail.js')
+const { anchorMark, recordAnchorIntent, linkIntentAuditRow, intentRef } = await import('../server/lib/audit-anchor-intent.js')
+
+// AE5：执行时才需要意图签名私钥；配置了却读不出来 ⇒ 动手前退出（不写出没签名的意图）
+let intentSigner = null
+if (args.confirm) {
+  try { intentSigner = loadIntentSigner() } catch (e) { die(e.code || 'USAGE', e.message) }
+}
 const { targets, absent } = await locateDatabases(args)
 {
   // 目录可能还不存在：对最近的已存在祖先取 realpath 再接回尾部（macOS 的 /var → /private/var 等符号链接）
@@ -293,6 +301,7 @@ if (args.confirm && !failed) {
           if (p.error || tokenOf(code, p) !== tokenOf(code, p0)) throw Object.assign(new Error(p.error ? p.message : '加锁后计划与演练不一致'), { code: p.error || 'PLAN_CHANGED' })
           if (args.resume) { made = checkResume(db, code, p); resumed = true } else { made = exportSegment(db, code, p); pauseAfterExport() }
           faultPoint('archive.before-delete')
+          const mark = anchorMark(db)
           const removed = db.prepare('DELETE FROM audit_logs WHERE id <= ?').run(p.lastId).changes
           if (removed !== p.count) throw Object.assign(new Error(`删除行数 ${removed} 与计划 ${p.count} 不一致`), { code: 'DELETE_COUNT_MISMATCH' })
           faultPoint('archive.after-delete')
@@ -300,10 +309,13 @@ if (args.confirm && !failed) {
           db.prepare('DELETE FROM audit_chain_anchors WHERE at_row_id <= ?').run(p.lastId)
           db.prepare('INSERT INTO audit_chain_anchors (kind, at_row_id, anchor_hash, prev_id, prev_row_hash, reason) VALUES (?,?,?,NULL,NULL,?)')
             .run('archive', p.boundaryId, p.boundaryPrevHash, `archive before ${args.before}: ids ${p.firstId}..${p.lastId}`)
+          // AE5：归档锚点与操作意图同事务；意图由 AUDIT_ARCHIVE 审计行引用并回填该行 id
+          const intent = recordAnchorIntent(db, mark, { operation: 'archive', operatorName: actor, signer: intentSigner, range: `archive before ${args.before}: ids ${p.firstId}..${p.lastId} (${p.count} rows)` })
           auditStrictRow(db, {
             userName: actor, action: 'AUDIT_ARCHIVE', module: 'audit', entity: 'audit_logs', entityId: code,
-            detail: { before: args.before, rows: p.count, first_id: p.firstId, last_id: p.lastId, tip_row_hash: p.tipHash, file_sha256: made.digest.file_sha256, file: made.digest.file }
+            detail: { before: args.before, rows: p.count, first_id: p.firstId, last_id: p.lastId, tip_row_hash: p.tipHash, file_sha256: made.digest.file_sha256, file: made.digest.file, ...(intent ? { anchor_intent: intentRef(intent) } : {}) }
           })
+          linkIntentAuditRow(db, intent)
           faultPoint('archive.after-anchor')
           const after = verifyChain(db)
           if (!after.ok) throw Object.assign(new Error(`归档后剩余链校验失败：id=${after.brk.id} ${after.brk.kind}`), { code: 'POST_VERIFY_FAILED' })

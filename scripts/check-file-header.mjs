@@ -38,6 +38,10 @@ const DECLARED = [
   'server/lib/audit-chain-verify.js',
   'server/lib/audit-anchor-manifest.js',
   'server/db/migrations/068_audit_hash_chain.cjs',
+  // 锚点操作意图（AE5，ADR-0055 补充）
+  'server/db/migrations/072_audit_anchor_intents.cjs',
+  'server/lib/audit-anchor-intent.js',
+  'scripts/lib/anchor-intent-signer.mjs',
   'scripts/audit-verify-chain.mjs',
   'scripts/audit-archive.mjs',
   'scripts/gen-role-matrix.mjs',

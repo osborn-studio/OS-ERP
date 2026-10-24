@@ -18,6 +18,8 @@
  * 【用法】node scripts/retention.mjs [行业] [--dry-run | --execute] [--json] [--actor <名字>]
  *   退出码：0 完成；1 任一库设置非法或事务失败；2 参数 / 环境错误。
  *
+ * 【AE5】新增审计锚点时同事务写 `audit_anchor_intents` 意图（operation=retention）并在 RETENTION_PURGE 明细里引用；配置了意图签名私钥（GML_ANCHOR_INTENT_KEY / GML_RELEASE_SIGN_KEY）却读不出来 ⇒ 执行前退出 2。见 ADR-0055 补充。
+ *
  * 【改它要注意什么】受保护集合改动属于政策变更，要同步 ADR-0030 与 tests/retention.test.mjs；
  *   `created_at` 存的是本地时间字符串，截止时间用 SQLite `datetime('now','localtime','-N days')` 保持同一口径。
  * ============================================================================
@@ -27,6 +29,8 @@ import Database from 'better-sqlite3'
 import { INDUSTRIES, requireExplicitDataDir, dbPathFor } from '../server/db/index.js'
 import { SETTING_RULES, settingRow, normalizeSettingValue, castSettingValue } from '../server/lib/settings.js'
 import { auditStrictRow, deleteAuditRowsAnchored } from '../server/lib/audit-trail.js'
+import { anchorMark, recordAnchorIntent, linkIntentAuditRow, intentRef } from '../server/lib/audit-anchor-intent.js'
+import { loadIntentSigner } from './lib/anchor-intent-signer.mjs'
 
 // 白名单而非黑名单：审计行里几乎每个业务模块的 CREATE/UPDATE/pay/approve/void 都是账务证据（purchase/sales/pos/dealer/
 // inventory/…），逐个列"不许删"必然漏。所以只有**明确登记为无账务 / 无授权影响**的模块才可被清理；
@@ -67,6 +71,12 @@ try {
 }
 
 const codes = positional[0] ? [positional[0]] : Object.keys(INDUSTRIES)
+
+// AE5：配置了意图签名私钥却读不出来 ⇒ 动手前就退出（不悄悄写出没签名的意图）
+let intentSigner = null
+if (execute) {
+  try { intentSigner = loadIntentSigner() } catch (e) { usage(`${e.code || 'USAGE'}: ${e.message}`) }
+}
 
 // 不用 `readSetting`：它对库里的非法值静默回落默认值，而清理是破坏性操作，
 // 配置坏了应当停手让人看，而不是悄悄换一个窗口去删。
@@ -109,15 +119,22 @@ for (const code of codes) {
     db.pragma('busy_timeout = 5000')
     const counts = db.transaction(() => {
       const off = (d) => `-${d} days`
+      const mark = anchorMark(db)
       const done = {
         audit_logs: deleteAuditRowsAnchored(db, AUDIT_ELIGIBLE, [off(days.audit), ...PURGEABLE_AUDIT_MODULES], { kind: 'retention', reason: 'retention-purge' }),
         notify_logs: db.prepare(`DELETE FROM notify_logs WHERE ${NOTIFY_ELIGIBLE}`).run(off(days.notify)).changes,
         mcp_call_logs: db.prepare(`DELETE FROM mcp_call_logs WHERE ${MCP_ELIGIBLE}`).run(off(days.mcp)).changes
       }
+      // AE5：本次新增的审计锚点与操作意图同事务；意图由 RETENTION_PURGE 审计行引用并回填该行 id
+      const intent = recordAnchorIntent(db, mark, {
+        operation: 'retention', operatorName: actor, signer: intentSigner,
+        range: `retention-purge audit_logs older than ${days.audit}d (modules ${PURGEABLE_AUDIT_MODULES.join(',')}): ${done.audit_logs} rows`
+      })
       auditStrictRow(db, {
         userName: actor, action: 'RETENTION_PURGE', module: 'retention', entity: 'logs', entityId: code,
-        detail: { counts: done, days, purgeable_audit_modules: PURGEABLE_AUDIT_MODULES }
+        detail: { counts: done, days, purgeable_audit_modules: PURGEABLE_AUDIT_MODULES, ...(intent ? { anchor_intent: intentRef(intent) } : {}) }
       })
+      linkIntentAuditRow(db, intent)
       return done
     }).immediate()
     report.industries[code] = { status: 'ok', days, counts }

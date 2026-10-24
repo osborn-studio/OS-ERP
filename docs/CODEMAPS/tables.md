@@ -3,7 +3,7 @@
 <!-- generated -->
 <!-- 由 `node scripts/gen-codemap.mjs` 生成，勿手改；CI 校验不漂移 -->
 
-共 199 张表、67 个迁移。“建于”= schema.sql / 迁移编号 / 运行时建表的文件；“改于”= ALTER、addColumn（无后缀）、建索引（·idx）、触发器（·trg）、DROP（·drop）所在迁移编号。“触达”= 该文件的 SQL 文本里出现这张表（server/db/ 下的种子与启动文件不计）。
+共 200 张表、68 个迁移。“建于”= schema.sql / 迁移编号 / 运行时建表的文件；“改于”= ALTER、addColumn（无后缀）、建索引（·idx）、触发器（·trg）、DROP（·drop）所在迁移编号。“触达”= 该文件的 SQL 文本里出现这张表（server/db/ 下的种子与启动文件不计）。
 
 ## 扫描边界（必读）
 
@@ -27,8 +27,9 @@
 | `ar_documents` | 019 | 019·idx, 020·idx | lib/ar.js, lib/credit-release.js, lib/docflow.js, lib/invoice.js, lib/report.js | routes/ar.js |
 | `assembly_order_items` | schema.sql | — | — | routes/inventory.js |
 | `assembly_orders` | schema.sql | — | lib/docflow.js | routes/inventory.js, routes/master.js |
-| `audit_chain_anchors` | 068 | 068·idx | lib/audit-anchor-manifest.js, lib/audit-chain-verify.js, lib/audit-trail.js | — |
-| `audit_logs` | schema.sql | 067·trg, 068 | lib/audit-anchor-manifest.js, lib/audit-chain-verify.js, lib/audit-trail.js, lib/audit-view.js | routes/auth.js, routes/meta.js |
+| `audit_anchor_intents` | 072 | 072 | lib/audit-anchor-intent.js | — |
+| `audit_chain_anchors` | 068 | 068·idx | lib/audit-anchor-intent.js, lib/audit-anchor-manifest.js, lib/audit-chain-verify.js, lib/audit-trail.js | — |
+| `audit_logs` | schema.sql | 067·trg, 068 | lib/audit-anchor-intent.js, lib/audit-anchor-manifest.js, lib/audit-chain-verify.js, lib/audit-trail.js, lib/audit-view.js | routes/auth.js, routes/meta.js |
 | `biz_flow_steps` | 008 | — | lib/order-center.js | routes/docflow.js, routes/order-center.js, routes/purchase-chain.js |
 | `biz_flows` | 008 | — | lib/order-center.js | routes/docflow.js, routes/order-center.js, routes/purchase-chain.js |
 | `bom_items` | 023 | 023·idx | lib/bom.js | — |
@@ -285,3 +286,4 @@
 | 069 | `069_qimen_clear_demo_secret.cjs` | 清除库内公开奇门演示签名常量并记录事实 | — | — |
 | 070 | `070_oms_order_time_index.cjs` | 线上订单下单时间索引（oms_orders.order_time） | — | — |
 | 071 | `071_audit_fts_optional.cjs` | 审计日志 FTS5 索引可选化（设置 audit_fts_enabled） | — | — |
+| 072 | `072_audit_anchor_intents.cjs` | 审计锚点操作意图表（audit_anchor_intents） | audit_anchor_intents | audit_anchor_intents |
