@@ -42,7 +42,7 @@ function assertDied(r, mode, what) {
 // ---------------------------------------------------------------- 库本身
 test('fs-fault: unset env is a no-op; outside test mode any setting is refused; unknown point / bad mode refused', () => {
   const all = Object.values(FAULT_POINTS).flat()
-  assert.equal(all.length, 13)
+  assert.equal(all.length, 15)
   for (const p of all) faultPoint(p, { GML_RUNTIME_MODE: 'test' })
   assert.equal(assertFsFaultAllowed({}), null)
   for (const mode of [undefined, 'production', 'demo']) {
@@ -186,7 +186,11 @@ function assertGoodBackup(f, file, what) {
   try { assert.equal(chk.pragma('integrity_check', { simple: true }), 'ok', what) } finally { chk.close() }
 }
 
-for (const point of FAULT_POINTS.backup) {
+// AG6 的两个点（报告/清理的持久性）有各自的专用用例（见文件后部）：它们依赖 --keep 与报告的两阶段写入，不适用下面的通用断言
+const AG6_POINTS = ['backup.after-report-write-before-rename', 'backup.after-prune-delete-before-dirsync']
+const GENERIC_BACKUP_POINTS = FAULT_POINTS.backup.filter((p) => !AG6_POINTS.includes(p))
+
+for (const point of GENERIC_BACKUP_POINTS) {
   for (const mode of MODES) {
     test(`db-backup fault ${point} (${mode}): earlier backups intact, no unverified .db, next run completes`, { timeout: 180000 }, (t) => {
       const f = backupFixture(t)
@@ -279,7 +283,7 @@ function decryptTo(t, file) {
   return out
 }
 
-for (const point of FAULT_POINTS.backup) {
+for (const point of GENERIC_BACKUP_POINTS) {
   for (const mode of MODES) {
     test(`db-backup fault ${point} (${mode}, encrypted): no plaintext survives except the documented abort temp; .enc/manifest states are recoverable; next run completes`, { timeout: 180000 }, (t) => {
       const f = backupFixture(t)
@@ -352,7 +356,7 @@ for (const point of FAULT_POINTS.backup) {
 
 // 多库（AF6）：三库的明文快照在同一冻结窗口内先全部生成，但随后**所有库先完成加密 + 目录 fsync + 擦除明文**，之后才进入清单阶段。
 // 因此 after-db-copy 之后的每个注入点（abort 也一样）都不留任何明文临时文件；唯一的明文窗口是 after-db-copy 本身与冻结窗口内（kill -9 / 断电）。
-for (const point of FAULT_POINTS.backup.filter((p) => p !== 'backup.after-db-copy')) {
+for (const point of GENERIC_BACKUP_POINTS.filter((p) => p !== 'backup.after-db-copy')) {
   test(`db-backup fault ${point} (encrypted, all three industries): abort leaves NO plaintext for any database; throw leaves none`, { timeout: 180000 }, (t) => {
     const f = backupFixture(t, ['cosmetic', 'food', 'apparel'])
     const ab = f.B([], { ...KEY, ...fault(point, 'abort') })
@@ -398,11 +402,11 @@ wrap('rmSync', (a) => log({ op: 'rm', path: a[0] }))
 wrap('unlinkSync', (a) => log({ op: 'rm', path: a[0] }))
 wrap('writeFileSync', (a) => { if (typeof a[0] === 'string' && !a[0].startsWith(out)) log({ op: 'write', path: a[0] }) })
 `
-function traceRun(t, f, env) {
+function traceRun(t, f, env, extraArgs = []) {
   const hook = path.join(tmp(t, 'os-af6-hook-'), 'trace.mjs')
   writeFileSync(hook, TRACER)
   const trace = path.join(tmp(t, 'os-af6-trace-'), 'trace.jsonl')
-  const r = spawnSync(process.execPath, ['--import', pathToFileURL(hook).href, BACKUP, 'cosmetic'], { cwd: ROOT, env: envFor(f.dir, { AF6_TRACE: trace, ...env }), encoding: 'utf8', timeout: 120000 })
+  const r = spawnSync(process.execPath, ['--import', pathToFileURL(hook).href, BACKUP, 'cosmetic', ...extraArgs], { cwd: ROOT, env: envFor(f.dir, { AF6_TRACE: trace, ...env }), encoding: 'utf8', timeout: 120000 })
   assert.equal(r.status, 0, r.stdout + r.stderr)
   return readFileSync(trace, 'utf8').trim().split('\n').map((l) => JSON.parse(l))
 }
@@ -426,7 +430,7 @@ test('fsync order (encrypted): ciphertext fsync -> rename -> directory fsync BEF
   const mencSync = idx(ev, (e) => e.op === 'fsync' && e.path === ev[menc].from)
   assert.ok(mencSync < menc, 'encrypted manifest partial fsynced before its rename')
   const mDir = idx(ev, (e) => e.op === 'fsync' && e.path === f.bdir, Math.max(mjSync, menc))
-  const report = idx(ev, (e) => e.op === 'write' && /backup-report-.*\.json$/.test(e.path))
+  const report = idx(ev, (e) => e.op === 'rename' && /backup-report-.*\.json$/.test(e.to))
   assert.ok(mj < mjSync && mjSync < mDir && menc < mDir && mDir < report, 'manifest fsync + enc-manifest rename, then directory fsync, then the report write')
 })
 
@@ -440,8 +444,140 @@ test('fsync order (plaintext mode): snapshot fsync -> rename -> directory fsync;
   const mj = idx(ev, (e) => (e.op === 'open' || e.op === 'write') && e.path.endsWith('.audit-manifest.json'))
   const mjSync = idx(ev, (e) => e.op === 'fsync' && e.path.endsWith('.audit-manifest.json'), mj)
   const mDir = idx(ev, (e) => e.op === 'fsync' && e.path === f.bdir, mjSync)
-  const report = idx(ev, (e) => e.op === 'write' && /backup-report-.*\.json$/.test(e.path))
+  const report = idx(ev, (e) => e.op === 'rename' && /backup-report-.*\.json$/.test(e.to))
   assert.ok(rDir < mj && mjSync < mDir && mDir < report)
+})
+
+// ---------------------------------------------------------------- 报告与清理的持久性（AG6）
+// 报告：临时文件 → fsync → rename → 目录 fsync。清理：先把"将要删除的清单"写进报告（prune_state=planned，持久化），再删，再 fsync 目录，
+// 最后重写终版报告（prune_state=done）。两个新注入点：报告临时文件已写已 fsync 但未改名；清理删除已做但目录未 fsync。
+const reportTmps = (f) => f.names().filter((n) => /^\.backup-report-.*\.tmp$/.test(n))
+const readReport = (f, name = f.reports().at(-1)) => JSON.parse(readFileSync(path.join(f.bdir, name), 'utf8'))
+const cosEntry = (rep) => rep.results.find((x) => x.code === 'cosmetic')
+const sidecarsOf = (f, db) => f.names().filter((n) => n.startsWith(`${db}.audit-manifest.`))
+
+test('registry: AG6 fault points are registered for db-backup', () => {
+  for (const p of AG6_POINTS) assert.ok(FAULT_POINTS.backup.includes(p), p)
+})
+
+for (const mode of MODES) {
+  for (const keep of ['--keep=5', '--keep=1']) {
+    test(`db-backup fault backup.after-report-write-before-rename (${mode}, ${keep}): backups + manifests complete, previous report intact, nothing pruned, stale temp is valid JSON; next run repairs`, { timeout: 180000 }, (t) => {
+      const f = backupFixture(t)
+      assert.equal(f.B(['--keep=5']).status, 0)
+      const good = f.dbs()
+      const reportBefore = f.reports().map((n) => [n, readFileSync(path.join(f.bdir, n), 'utf8')])
+      const r = f.B([keep], fault('backup.after-report-write-before-rename', mode))
+      assertDied(r, mode, 'report fault')
+      // 新备份及其清单完整（报告只是诊断记录）；旧报告原样保留（rename 前不动它）
+      const fresh = f.dbs().filter((n) => !good.includes(n))
+      assert.equal(fresh.length, 1)
+      assertGoodBackup(f, fresh[0], 'report fault')
+      assert.deepEqual(f.reports().map((n) => [n, readFileSync(path.join(f.bdir, n), 'utf8')]), reportBefore, 'no partial/new report under a report name')
+      // 记录先于删除：报告没落地 ⇒ 不得有任何删除（--keep=1 时旧备份仍在）
+      assert.ok(f.dbs().includes(good[0]), 'nothing is pruned before the report that records the prune is durable')
+      assert.ok(existsSync(`${path.join(f.bdir, good[0])}.audit-manifest.json`))
+      if (mode === 'abort') {
+        const tmps = reportTmps(f)
+        assert.equal(tmps.length, 1, 'abort leaves the fsynced report temp')
+        assert.equal(JSON.parse(readFileSync(path.join(f.bdir, tmps[0]), 'utf8')).results[0].status, 'ok', 'the temp was fully written before the crash')
+      } else {
+        assert.deepEqual(reportTmps(f), [], 'handled failure removes its own temp')
+        assert.equal(r.status, 1); assert.match(r.stdout + r.stderr, /报告写入失败/)
+      }
+      // 下一次正常运行：退出 0、终版报告落地、残留临时文件被清理、keep 规则照常裁剪
+      const next = f.B([keep])
+      assert.equal(next.status, 0, next.stdout + next.stderr)
+      assert.deepEqual(reportTmps(f), [], 'next run sweeps the stale report temp')
+      const rep = readReport(f)
+      assert.equal(rep.report_phase, 'final'); assert.equal(cosEntry(rep).status, 'ok')
+      assert.equal(cosEntry(rep).prune_state, keep === '--keep=1' ? 'done' : 'none')
+      if (keep === '--keep=1') {
+        assert.equal(f.dbs().length, 1, 'keep=1 leaves only the newest backup')
+        assert.equal(f.names().filter((n) => n.includes('.audit-manifest.')).length, 1, 'pruned backups took their manifests along')
+      }
+      assert.equal(f.B([keep]).status, 0, 'idempotent')
+    })
+  }
+}
+
+for (const mode of MODES) {
+  test(`db-backup fault backup.after-prune-delete-before-dirsync (${mode}): the durable pre-prune report already names what was deleted; newest backup intact; next run finishes the prune and sweeps orphans`, { timeout: 180000 }, (t) => {
+    const f = backupFixture(t)
+    assert.equal(f.B(['--keep=5']).status, 0)
+    const old = f.dbs()
+    assert.equal(old.length, 1)
+    const r = f.B(['--keep=1'], fault('backup.after-prune-delete-before-dirsync', mode))
+    assertDied(r, mode, 'prune fault')
+    const fresh = f.dbs().filter((n) => !old.includes(n))
+    assert.equal(fresh.length, 1, 'the new backup survives')
+    assertGoodBackup(f, fresh[0], 'prune fault')
+    assert.deepEqual(f.dbs().filter((n) => old.includes(n)), [], 'the old backup was deleted (dir entry not yet fsynced)')
+    assert.deepEqual(sidecarsOf(f, old[0]), [], 'its manifest went with it')
+    const rep = readReport(f)
+    // abort ⇒ 只有 pre-prune 报告（planned，列出已/将删除的名字）；throw ⇒ 已处理：终版报告记失败
+    if (mode === 'abort') {
+      assert.equal(rep.report_phase, 'pre-prune'); assert.equal(cosEntry(rep).prune_state, 'planned')
+      assert.deepEqual(cosEntry(rep).pruned, old, 'the report written BEFORE the delete lists exactly what was deleted')
+    } else {
+      assert.equal(rep.report_phase, 'final'); assert.equal(cosEntry(rep).prune_state, 'failed')
+      assert.match(cosEntry(rep).prune_error, /BACKUP_PRUNE_FAILED/)
+      assert.equal(r.status, 1); assert.equal(rep.failed, 1)
+    }
+    assert.equal(cosEntry(rep).status, 'ok', 'the backup itself is fine')
+    assert.deepEqual(reportTmps(f), [])
+    // 模拟"删了备份、没来得及删清单"的孤儿清单：下一次运行清扫，并在报告里记名
+    const orphan = `${old[0]}.audit-manifest.json`
+    writeFileSync(path.join(f.bdir, orphan), '{}\n')
+    const next = f.B(['--keep=1'])
+    assert.equal(next.status, 0, next.stdout + next.stderr)
+    assert.ok(!f.names().includes(orphan), 'orphan manifest swept')
+    const rep2 = readReport(f); const e2 = cosEntry(rep2)
+    assert.equal(rep2.report_phase, 'final'); assert.equal(e2.prune_state, 'done')
+    assert.deepEqual(e2.pruned_orphans, [orphan])
+    assert.equal(f.dbs().length, 1, 'keep=1 honoured; the previous newest was pruned by the continuing run')
+    assert.equal(f.B(['--keep=1']).status, 0, 'idempotent')
+  })
+}
+
+test('db-backup prune point does not fire when nothing is deleted (no step to interrupt)', { timeout: 120000 }, (t) => {
+  const f = backupFixture(t)
+  assert.equal(f.B(['--keep=5']).status, 0)
+  assert.equal(f.B(['--keep=5'], fault('backup.after-prune-delete-before-dirsync', 'abort')).status, 0)
+})
+
+test('db-backup fault (encrypted): report/prune points leave no plaintext and the .enc backups + manifests stay decryptable', { timeout: 180000 }, (t) => {
+  for (const [point, mode] of [['backup.after-report-write-before-rename', 'abort'], ['backup.after-prune-delete-before-dirsync', 'abort'], ['backup.after-prune-delete-before-dirsync', 'throw']]) {
+    const f = backupFixture(t)
+    assert.equal(f.B(['--keep=5'], KEY).status, 0)
+    const r = f.B(['--keep=1'], { ...KEY, ...fault(point, mode) })
+    assertDied(r, mode, point)
+    assert.deepEqual(plaintextSnapshots(f), [], point)
+    const encs = f.names().filter((n) => n.endsWith('.db.enc'))
+    assert.ok(encs.length >= 1)
+    for (const n of encs) decryptFile(path.join(f.bdir, n), null, KEY_BYTES)
+    assert.equal(f.B(['--keep=1'], KEY).status, 0)
+    assert.equal(f.names().filter((n) => n.endsWith('.db.enc')).length, 1)
+  }
+})
+
+test('fsync order (AG6): report temp fsync -> rename -> directory fsync; the pre-prune report is durable BEFORE the first unlink; directory fsync after the unlinks; final report after that', (t) => {
+  const f = backupFixture(t)
+  assert.equal(f.B(['--keep=5']).status, 0)
+  const ev = traceRun(t, f, {}, ['--keep=1'])
+  const isReportRename = (e) => e.op === 'rename' && /\/backup-report-[^/]*\.json$/.test(e.to)
+  const r1 = idx(ev, isReportRename)
+  const tmpPath = ev[r1].from
+  assert.match(path.basename(tmpPath), /^\.backup-report-.*\.tmp$/)
+  const tSync = idx(ev, (e) => e.op === 'fsync' && e.path === tmpPath)
+  const d1 = idx(ev, (e) => e.op === 'fsync' && e.path === f.bdir, r1)
+  const unlink = idx(ev, (e) => e.op === 'rm' && /gml_cosmetic_[^/]*\.db$/.test(e.path))
+  const d2 = idx(ev, (e) => e.op === 'fsync' && e.path === f.bdir, unlink)
+  const r2 = idx(ev, isReportRename, r1 + 1)
+  assert.ok(tSync < r1 && r1 < d1 && d1 < unlink, 'pre-prune report: fsync, rename, dir fsync, only then delete')
+  assert.ok(unlink < d2 && d2 < r2, 'deletes, then dir fsync, then the final report')
+  const d3 = idx(ev, (e) => e.op === 'fsync' && e.path === f.bdir, r2)
+  assert.ok(r2 < d3, 'final report rename is followed by a directory fsync')
 })
 
 // ---------------------------------------------------------------- 平台差异（macOS / Linux）

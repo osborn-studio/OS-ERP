@@ -21,6 +21,10 @@
  *   （AES-256-GCM，认证）。这些是**要离机保存**的对象（docs/operations/audit-integrity.md §6），`audit-verify-chain --against-backup` 据此识别“整链重算”。
  *   链校验失败不挡备份（被篡改的库也要有备份），只在清单里 `verified:false`。清单写失败 ⇒ 该库备份失败（不留没有清单的新备份）。
  *
+ * 【报告与清理的持久性】（AG6）报告写成临时文件 `.backup-report-<stamp>.json.<rand>.tmp` → fsync → rename → 目录 fsync（被打断遗留的临时文件由下一次运行清扫）。清理分三步：
+ *   ① 算出要删的旧备份与孤儿清单，记进报告条目（`pruned` / `pruned_orphans`，`prune_state=planned`）并把 `report_phase=pre-prune` 的报告持久化；② 才删除（备份先、清单后），再 fsync 目录；
+ *   ③ 写 `report_phase=final` 终版报告（`prune_state=done|failed|skipped|none`）。pre-prune 报告写不下去 ⇒ 不删任何文件（`skipped`）。注入点 `backup.after-report-write-before-rename`、`backup.after-prune-delete-before-dirsync`。
+ *
  * 【写入顺序】（AD6）无密钥时快照先写 `<终名>.partial`，校验通过、fsync 后才 rename 成终名 `.db`；注入点 `backup.{after-db-copy,before-sidecar,after-sidecar}`（GML_TEST_FS_FAULT，仅 test 模式）
  *   之后的状态与恢复见 docs/operations/audit-integrity.md §5b。
  *
@@ -62,6 +66,7 @@ const FREEZE_FAILED = 'BACKUP_FREEZE_FAILED'
 const ENCRYPT_FAILED = 'BACKUP_ENCRYPT_FAILED'
 const MANIFEST_FAILED = 'BACKUP_MANIFEST_FAILED'
 const FINALIZE_FAILED = 'BACKUP_FINALIZE_FAILED'
+const PRUNE_FAILED = 'BACKUP_PRUNE_FAILED'
 const CONSISTENCY_NOTE = '短暂写冻结下的近似一致点：三库在同一窗口内各持有 BEGIN IMMEDIATE 保留锁后依次快照，窗口内无新提交；这不是跨库事务，窗口外的写入顺序不被保证。'
 
 function usageError(message) {
@@ -252,8 +257,8 @@ function mkdirDurable(dir) {
   for (const d of created) fsyncDir(path.dirname(d))
 }
 /** 新建文件（wx，0600）→ 写入 → fsync → 关闭；先登记再写，失败时调用方才能清理本次创建的文件 */
-function writeFileDurable(file, text, owned) {
-  const fd = fs.openSync(file, 'wx', 0o600)
+function writeFileDurable(file, text, owned, mode = 0o600) {
+  const fd = fs.openSync(file, 'wx', mode)
   owned.push(file)
   try { const buf = Buffer.from(text, 'utf8'); for (let off = 0; off < buf.length;) off += fs.writeSync(fd, buf, off, buf.length - off); fs.fsyncSync(fd) } finally { fs.closeSync(fd) }
 }
@@ -446,47 +451,109 @@ for (const { snap, chainSummary } of pending) {
   }
   faultPoint('backup.after-sidecar')
   entry.status = 'ok'
-
-  // 裁剪：只处理本脚本命名规则生成的 .db / .db.enc，新文件永远保留，其余按时间保留 keep-1 份
-  const outName = path.basename(entry.file)
-  const others = fs
-    .readdirSync(dir)
-    .filter((f) => f.startsWith(`${base}_`) && (f.endsWith('.db') || f.endsWith('.db.enc')) && f !== outName)
-    .map((f) => ({ f, p: path.join(dir, f), m: fs.statSync(path.join(dir, f)).mtimeMs }))
-    .sort((a, b) => b.m - a.m)
-  for (const item of others.slice(Math.max(cfg.keep - 1, 0))) {
-    fs.unlinkSync(item.p)
-    for (const sfx of ['.audit-manifest.json', '.audit-manifest.enc']) fs.rmSync(`${item.p}${sfx}`, { force: true }) // 清单随备份一起裁剪
-    entry.pruned.push(item.f)
-  }
 }
 
-// ---- 报告：写到用到的每个备份目录；只有整次成功才顺带清理旧报告 ----
-const report = {
+// ---- 清理计划（AG6）：先**算出**要删什么（旧备份 + 备份已不在的孤儿清单），记进 entry（prune_state=planned）；
+// 随后先把含该清单的报告持久化（临时文件 → fsync → rename → 目录 fsync），才真正删除。删除之后 fsync 目录，再写终版报告。
+// 这样“删了但报告没写”时，盘上已有一份说明删了什么的持久报告；“报告没落地”时一个文件都没删。
+const SIDECAR_SFX = ['.audit-manifest.json', '.audit-manifest.enc']
+const isBackupName = (f) => f.endsWith('.db') || f.endsWith('.db.enc')
+for (const { snap } of pending) {
+  const { entry, cfg, dir, base } = snap
+  if (entry.status !== 'ok') continue
+  const outName = path.basename(entry.file)
+  const names = fs.readdirSync(dir)
+  const others = names
+    .filter((f) => f.startsWith(`${base}_`) && isBackupName(f) && f !== outName)
+    .map((f) => ({ f, m: fs.statSync(path.join(dir, f)).mtimeMs }))
+    .sort((a, b) => b.m - a.m)
+  // 裁剪：只处理本脚本命名规则生成的 .db / .db.enc，新文件永远保留，其余按时间保留 keep-1 份
+  entry.pruned = others.slice(Math.max(cfg.keep - 1, 0)).map((x) => x.f)
+  // 孤儿清单：清单文件还在、对应备份已不在（上一次删除在“删备份”与“删清单”之间被打断）。备份被裁掉后清单没有用处，随这次清扫
+  entry.pruned_orphans = names.filter((f) => {
+    if (!f.startsWith(`${base}_`)) return false
+    const sfx = SIDECAR_SFX.find((s) => f.endsWith(s))
+    return !!sfx && isBackupName(f.slice(0, -sfx.length)) && !names.includes(f.slice(0, -sfx.length))
+  })
+  entry.prune_state = entry.pruned.length || entry.pruned_orphans.length ? 'planned' : 'none'
+}
+
+// ---- 报告：临时文件 → fsync → rename → 目录 fsync（AG6）。写到用到的每个备份目录；只有整次成功才顺带清理旧报告 ----
+const reportBody = (phase) => JSON.stringify({
   script: 'scripts/db-backup.mjs',
   generated_at: new Date().toISOString(),
   stamp,
+  report_phase: phase, // pre-prune：清理前已持久化的“将要删除”记录；final：终版
   runtime_mode: mode,
   data_dir: DATA_DIR,
   failed,
   encrypted: !!backupKey,
   consistency_stamp: consistency,
   results
-}
-const reportFiles = []
-for (const [dir, keep] of dirsUsed) {
+}, null, 2) + '\n'
+const sweptDirs = new Set()
+const reportFiles = new Set()
+/** 写一份报告到 dir；失败（含注入的 throw）⇒ 删掉自己的临时文件、记录失败并返回 false。abort 不经过这里，临时文件会留盘，下次运行清扫 */
+function writeReport(dir, phase) {
+  const file = path.join(dir, `backup-report-${stamp}.json`)
+  const tmpFile = path.join(dir, `.backup-report-${stamp}.json.${randomBytes(6).toString('hex')}.tmp`)
   try {
-    fs.mkdirSync(dir, { recursive: true })
-    const file = path.join(dir, `backup-report-${stamp}.json`)
-    fs.writeFileSync(file, JSON.stringify(report, null, 2) + '\n')
-    reportFiles.push(file)
-    if (!failed) {
-      const old = fs.readdirSync(dir).filter((f) => /^backup-report-.*\.json$/.test(f)).sort().reverse().slice(keep)
-      for (const f of old) fs.unlinkSync(path.join(dir, f))
+    mkdirDurable(dir)
+    if (!sweptDirs.has(dir)) {
+      sweptDirs.add(dir)
+      for (const f of fs.readdirSync(dir)) if (/^\.backup-report-.*\.tmp$/.test(f)) fs.rmSync(path.join(dir, f), { force: true }) // 上次被打断遗留的报告临时文件
     }
+    writeFileDurable(tmpFile, reportBody(phase), [], 0o666)
+    faultPoint('backup.after-report-write-before-rename')
+    fs.renameSync(tmpFile, file)
+    fsyncDir(dir)
+    reportFiles.add(file)
+    return true
   } catch (e) {
+    fs.rmSync(tmpFile, { force: true })
     console.error(`报告写入失败（${dir}）：${e.message}`)
     failed++
+    return false
+  }
+}
+
+// 1) 清理前：把含“将要删除”清单的报告落盘；落不了 ⇒ 该目录不删任何东西
+for (const dir of dirsUsed.keys()) {
+  const planned = results.filter((r) => r.prune_state === 'planned' && path.dirname(r.file) === dir)
+  if (!planned.length) continue
+  if (!writeReport(dir, 'pre-prune')) {
+    for (const r of planned) { r.prune_state = 'skipped'; r.pruned = []; r.pruned_orphans = [] }
+  }
+}
+// 2) 删除，然后 fsync 目录；被打断后 pruned 里的名字就是“已删或将删”，下一次运行按 keep 规则继续
+for (const entry of results.filter((r) => r.prune_state === 'planned')) {
+  const dir = path.dirname(entry.file)
+  try {
+    for (const f of entry.pruned) {
+      fs.unlinkSync(path.join(dir, f))
+      for (const sfx of SIDECAR_SFX) fs.rmSync(path.join(dir, `${f}${sfx}`), { force: true }) // 清单随备份一起裁剪
+    }
+    for (const f of entry.pruned_orphans) fs.rmSync(path.join(dir, f), { force: true })
+    faultPoint('backup.after-prune-delete-before-dirsync')
+    fsyncDir(dir)
+    entry.prune_state = 'done'
+  } catch (e) {
+    failed++
+    entry.prune_state = 'failed'
+    entry.prune_error = `${PRUNE_FAILED}: ${e.message}`
+  }
+}
+// 3) 终版报告；整次成功才清理旧报告（删除后同样 fsync 目录）
+for (const [dir, keep] of dirsUsed) {
+  if (!writeReport(dir, 'final')) continue
+  if (!failed) {
+    try {
+      const old = fs.readdirSync(dir).filter((f) => /^backup-report-.*\.json$/.test(f)).sort().reverse().slice(keep)
+      for (const f of old) fs.unlinkSync(path.join(dir, f))
+      if (old.length) fsyncDir(dir)
+    } catch (e) {
+      console.error(`旧报告清理失败（${dir}）：${e.message}`)
+    }
   }
 }
 

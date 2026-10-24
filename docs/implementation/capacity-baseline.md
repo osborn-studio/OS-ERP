@@ -850,6 +850,11 @@ gh run view <run-id> --log-failed
 - 本机（macOS）：`tests/fs-fault.test.mjs` 在加入 `backup.after-enc-rename-fsync` / `backup.after-manifest-fsync` 与多库 × 4 点用例后全部通过；其中 fsync 顺序用例只断言调用顺序，不是断电实验。
 
 
+## AG6 备份报告与清理删除的持久性：故障矩阵耗时（**Mac mini / 非目标主机 / 整机负载 40–60**）
+
+- `tests/fs-fault.test.mjs` 在加入两个新注入点（报告临时文件已写未改名、清理删除后未 fsync 目录）的专用用例与 fsync 顺序用例后共 62 个。**整机负载 40–60（其他批次并行）时实测约 208 秒**（AF6 在空闲机约 45–80 秒；本次用例数 52 → 62，其中新增的多为多次子进程的 keep 场景），运行时间受整机负载支配，不能视为空闲机数字，也不是 `dmserver` / Linux 结果。新注入点只用单库夹具（不做三库 × 点的组合），子进程超时与用例级超时不变（120 / 180 秒）。
+- Linux CI 上的该文件：**仍未运行**（同 AF6 记录）。
+
 ## AF3 OMS `/stats` 平台维度、热销与受限范围语句改走时间索引：改写 + 迁移 074（**Mac mini / 合成 20 万 OMS 单 + 每单一行明细 / 非目标主机 / 整机负载 12–25 / 同机轮转计时**）
 
 脚本：`node scripts/bench-oms-order-time.mjs --rows 200000 --span 365 --ordered --writes 4000 --rounds 5 --repeat 31 --out result.json`（输出 `af3` 键；`--span 60 --no-write` 为密集窗口最坏情形；`--ordered` = 订单时间随 id 递增 ±6 h，更接近真实落库，不加则时间与 id 无关、对窗口驱动计划偏不利）。全新临时目录；不跑 `ANALYZE`。四种索引状态各用一份库副本、各开一个连接：S0（仅迁移 070，即 AE3 现状）、S0+B（再加被否决的 `oms_orders(platform_id, order_time, status, pay_amount)`）、S1（+迁移 074，已发布）、S1+B；每条语句**轮转**所有（状态 × 写法）配置计时（每轮每配置一次，31 轮取 p50 / p95），整机负载漂移落在所有配置上，比逐配置连续计时可比。新写法与最初的 `date(order_time)` 旧 SQL 逐条核对：整数 / 文本 / 行序严格相同，浮点列相对误差 `af3.max_rel_diff = 0`（脚本断言 `af3.identical: true`，所有运行均为真）。**负载高，p95 含抖动，只看量级；不是 `dmserver` 结果。**
