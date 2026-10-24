@@ -477,33 +477,39 @@ function nextInsNo(db, date) {
 // 概览
 // ---------------------------------------------------------------------------
 
-export function inspectionOverview(db) {
+export function inspectionOverview(db, { orgScope = null } = {}) {
+  // ADR-0046：质检单按自身 warehouse_id、判退退货单按其 warehouse_id，同一份 stockScopeSql；
+  // 全局范围谓词为 `1=1`（口径不变），空范围 ⇒ 全 0。
+  const si = stockScopeSql(orgScope, '')
+  const sr = stockScopeSql(orgScope, 'r')
   const one = (sql, ...a) => num(db.prepare(sql).get(...a)?.v)
+  const ins = (expr, extra = '') => one(`SELECT ${expr} v FROM purchase_inspections WHERE ${si.sql}${extra}`, ...si.params)
   return {
-    total: one('SELECT COUNT(*) v FROM purchase_inspections'),
-    pending: one("SELECT COUNT(*) v FROM purchase_inspections WHERE status='draft'"),
-    inspected: one("SELECT COUNT(*) v FROM purchase_inspections WHERE status='inspected'"),
-    closed: one("SELECT COUNT(*) v FROM purchase_inspections WHERE status='closed'"),
-    waiting_receipts: num(pendingReceipts(db, { limit: 999 }).length),
+    total: ins('COUNT(*)'),
+    pending: ins('COUNT(*)', " AND status='draft'"),
+    inspected: ins('COUNT(*)', " AND status='inspected'"),
+    closed: ins('COUNT(*)', " AND status='closed'"),
+    waiting_receipts: num(pendingReceipts(db, { limit: 999, orgScope }).length),
     // 其中已经建了草稿、只等提交的那部分。单列出来是因为这两种「待质检」要做的事不一样：
     // 没有草稿的要去建单，有草稿的是上次提交没成功（多为判退库存不足），要改数字再提交。
-    draft_ready: one("SELECT COUNT(DISTINCT receipt_id) v FROM purchase_inspections WHERE status='draft'"),
+    draft_ready: ins('COUNT(DISTINCT receipt_id)', " AND status='draft'"),
     // 判退：这一段是质检存在的意义 —— 没有判退，质检就只是一张纸
-    rejected_qty: round2(one('SELECT COALESCE(SUM(rejected_qty),0) v FROM purchase_inspections')),
+    rejected_qty: round2(ins('COALESCE(SUM(rejected_qty),0)')),
     rejected_amount: round2(
       one(
         `SELECT COALESCE(SUM(ri.qty * ri.price),0) v
            FROM purchase_return_items ri
            JOIN purchase_returns r ON r.id = ri.return_id
-          WHERE r.reason LIKE '质检判退%'`
+          WHERE r.reason LIKE '质检判退%' AND ${sr.sql}`,
+        ...sr.params
       )
     ),
-    concession_qty: round2(one('SELECT COALESCE(SUM(concession_qty),0) v FROM purchase_inspections')),
-    returns_created: one("SELECT COUNT(*) v FROM purchase_returns WHERE reason LIKE '质检判退%'"),
+    concession_qty: round2(ins('COALESCE(SUM(concession_qty),0)')),
+    returns_created: one(`SELECT COUNT(*) v FROM purchase_returns r WHERE r.reason LIKE '质检判退%' AND ${sr.sql}`, ...sr.params),
     // 判退率：按数量算（金额会被高价值 SKU 带偏，与库存周转口径一致）
     reject_rate: (() => {
-      const t = one('SELECT COALESCE(SUM(total_qty),0) v FROM purchase_inspections')
-      const r = one('SELECT COALESCE(SUM(rejected_qty),0) v FROM purchase_inspections')
+      const t = ins('COALESCE(SUM(total_qty),0)')
+      const r = ins('COALESCE(SUM(rejected_qty),0)')
       return t > 0 ? round2((r / t) * 100) : 0
     })()
   }

@@ -560,7 +560,7 @@ HTTP 响应与错误归一：`ok` / `fail` / `wrap` 的**唯一实现**（统一
 | `GENERIC_5XX_MESSAGE` | const | — | — | — |
 | `bizFail` | fn | 8 条：auth.js×1, demand.js×1, notify.js×1, outsourcing.js×1, quote.js×1, sales.js×3 | — | — |
 | `fail` | fn | 192 条：accounting.js×1, ai.js×1, approval.js×5, ar.js×4, auth.js×2, costing.js×1, credit.js×5, dealers.js×10, demand.js×9, dms.js×7, docflow.js×8, im.js×3, inventory.js×14, invoice.js×2, mall.js×7, manufacture.js×5, master.js×11, meta.js×4, notify.js×1, oms.js×10, order-center.js×8, outsourcing.js×7, pos.js×10, pricing.js×3, promo.js×5, purchase-chain.js×10, purchase.js×7, qc.js×2, qc2.js×5, qimen.js×1, quote.js×2, refund.js×1, requisitions.js×11, sales.js×10 | — | lib/crud.js |
-| `failFromError` | fn | 169 条：accounting.js×18, auth.js×1, dms.js×17, mall.js×3, meta.js×2, pos.js×3, promo.js×40, purchase-chain.js×33, purchase.js×9, refund.js×4, report.js×39 | — | — |
+| `failFromError` | fn | 170 条：accounting.js×18, auth.js×1, dms.js×17, mall.js×3, meta.js×2, pos.js×3, promo.js×40, purchase-chain.js×33, purchase.js×10, refund.js×4, report.js×39 | — | — |
 | `hidesInternals` | fn | — | — | — |
 | `newIncidentId` | fn | — | — | — |
 | `ok` | fn | 572 条：accounting.js×17, ai.js×4, approval.js×13, ar.js×23, auth.js×15, costing.js×11, credit.js×13, dashboard.js×7, dealers.js×15, demand.js×13, dms.js×13, docflow.js×15, im.js×8, inv-txn-types.js×2, inventory.js×23, invoice.js×14, mall.js×16, manufacture.js×26, master.js×15, meta.js×9, metrics.js×6, notify.js×8, oms.js×12, order-center.js×21, outsourcing.js×9, pos.js×39, pricing.js×8, promo.js×35, purchase-chain.js×33, purchase.js×12, qc.js×9, qc2.js×19, qimen.js×2, quote.js×10, refund.js×8, report.js×38, requisitions.js×14, sales.js×13, warehouses.js×4 | — | lib/crud.js |
@@ -1010,7 +1010,7 @@ Prometheus 文本指标渲染 + 抓取令牌校验（ADR-0045）
 | `PURCHASE_ORDER_SELECT` | const | — | — | — |
 | `PurchaseError` | class | — | — | — |
 | `assertNotParamOnly` | fn | — | purchase.advance_order, purchase.advance_requisition | mcp/tools.js |
-| `assertPurchaseDocInScope` | fn | 24 条：purchase-chain.js×14, purchase.js×8, qc.js×2 | — | — |
+| `assertPurchaseDocInScope` | fn | 25 条：purchase-chain.js×14, purchase.js×9, qc.js×2 | — | — |
 | `buildSettlement` | fn | POST /api/purchase/settlements | purchase.build_settlement | mcp/tools.js |
 | `checkOverReceive` | fn | POST /api/purchase/price-preview<br>POST /api/purchase/orders/:id/receive-check | — | — |
 | `checkSupplyCatalog` | fn | GET /api/purchase/price<br>POST /api/purchase/price-preview | — | — |
@@ -1034,7 +1034,7 @@ Prometheus 文本指标渲染 + 抓取令牌校验（ADR-0045）
 | `purchaseActions` | fn | GET /api/purchase/chain/actions<br>GET /api/purchase/requisitions/:id<br>GET /api/purchase/invoices/:id<br>GET /api/purchase/settlements/:id<br>GET /api/purchase/payments/:id | — | — |
 | `purchaseOverview` | fn | GET /api/purchase/chain/overview | — | — |
 | `purchaseReturnSource` | fn | — | — | — |
-| `purchaseScopeSql` | fn | 9 条：purchase-chain.js×7, purchase.js×2 | — | lib/approval.js |
+| `purchaseScopeSql` | fn | 11 条：purchase-chain.js×7, purchase.js×4 | — | lib/approval.js |
 | `purchaseTodos` | fn | GET /api/purchase/chain/todos | — | — |
 | `recalcOrder` | fn | PUT /api/purchase/orders/:id | — | — |
 | `receivePurchaseOrder` | fn | POST /api/purchase/orders/:id/receive | purchase.receive_order | mcp/tools.js |
@@ -1420,7 +1420,7 @@ Prometheus 文本指标渲染 + 抓取令牌校验（ADR-0045）
 | `resolveCurrency` | fn | — | — | — |
 | `resolveOwnerOrg` | fn | — | inventory.adjust, inventory.get_cost, inventory.ownership_transfer, inventory.pick_suggestion, inventory.stock_in, inventory.stock_out, inventory.transfer | mcp/tools.js |
 | `setStockNowProvider` | fn | — | — | — |
-| `stockScopeSql` | fn | 17 条：inventory.js×14, master.js×1, oms.js×1, warehouses.js×1 | inventory.list_batches, inventory.list_transactions, inventory.query_stock, inventory.stock_alert | lib/qc.js, lib/qc2.js, lib/transfer.js, mcp/tools.js |
+| `stockScopeSql` | fn | 18 条：inventory.js×14, master.js×2, oms.js×1, warehouses.js×1 | inventory.list_batches, inventory.list_transactions, inventory.query_stock, inventory.stock_alert | lib/qc.js, lib/qc2.js, lib/transfer.js, mcp/tools.js |
 | `warehouseInScope` | fn | 35 条：inventory.js×1, pos.js×31, qc2.js×2, warehouses.js×1 | inventory.adjust, inventory.get_cost, inventory.ownership_transfer, inventory.pick_suggestion, inventory.stock_in, inventory.stock_out, inventory.transfer | lib/qc2.js, mcp/tools.js |
 
 ## `server/lib/transfer.js`

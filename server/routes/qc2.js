@@ -121,9 +121,10 @@ r.get('/meta', requireAuth, wrap((_req, res) =>
   })
 ))
 
-r.get('/overview', requireAuth, requirePerm(P_VIEW), wrap((_req, res) => ok(res, qcOverview(getDb()))))
+// ADR-0046：概览与审计的聚合只含范围内仓（与列表同一谓词）；空范围 ⇒ 全 0 / 全空
+r.get('/overview', requireAuth, requirePerm(P_VIEW), attachOrgScope, wrap((req, res) => ok(res, qcOverview(getDb(), { orgScope: req.orgScope }))))
 
-r.get('/audit', requireAuth, requirePerm(P_VIEW), wrap((_req, res) => ok(res, auditQc(getDb()))))
+r.get('/audit', requireAuth, requirePerm(P_VIEW), attachOrgScope, wrap((req, res) => ok(res, auditQc(getDb(), { orgScope: req.orgScope }))))
 
 r.get('/sample-plan', requireAuth, wrap((req, res) => {
   const qty = Number(req.query.qty || 0)
