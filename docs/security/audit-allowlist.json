@@ -1,0 +1,11 @@
+{
+  "note": "Time-boxed exemptions for npm audit --omit=dev --audit-level=high (scripts/check-audit-allowlist.mjs). Each entry needs advisory, reason, expires (YYYY-MM-DD, future, at most 180 days). An exemption is not a fix.",
+  "allow": [
+    {
+      "advisory": "GHSA-mrhx-c7xc-m3w5",
+      "package": "zod",
+      "reason": "zod 3.25.76 is declared in package.json but no server, script or src file imports it (git grep finds only a comment in server/lib/xlsx.js), so the array-validation memory exhaustion is not reachable. The only fix is the 4.x major; follow-up is to remove the unused dependency or migrate.",
+      "expires": "2026-12-15"
+    }
+  ]
+}

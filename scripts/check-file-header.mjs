@@ -70,6 +70,8 @@ const DECLARED = [
   'scripts/lib/runtime-closure.mjs',
   'scripts/gen-third-party-notices.mjs',
   'scripts/check-file-header.mjs',
+  'scripts/check-audit-allowlist.mjs',
+  'tests/audit-allowlist.test.mjs',
   'scripts/db-backup.mjs',
   // 数据保留与个人信息处理（ADR-0030）
   'scripts/retention.mjs',
