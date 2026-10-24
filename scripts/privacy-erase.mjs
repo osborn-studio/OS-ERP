@@ -31,6 +31,8 @@
  */
 import { INDUSTRIES, requireExplicitDataDir } from '../server/db/index.js'
 import { auditStrictRow } from '../server/lib/audit-trail.js'
+import { anchorMark, recordAnchorIntent, linkIntentAuditRow, intentRef } from '../server/lib/audit-anchor-intent.js'
+import { loadIntentSigner } from './lib/anchor-intent-signer.mjs'
 import { PHONE_RE, ERASED_PREFIX, OPEN_OMS, OPEN_SALES, fatal, phoneHash, alreadyErased, openIndustryDbs, collect, isEmpty, planErase, applyPlan, manualReview, scanRawPhone, maskedPhone } from './lib/privacy-common.mjs'
 
 const args = process.argv.slice(2)
@@ -73,6 +75,12 @@ try {
   fatal(e.code || 'KEY_UNSAFE', e.message)
 }
 
+// AE5：执行抹除才需要意图签名私钥；配置了却读不出来 ⇒ 动手前退出（不写出没签名的意图）
+let intentSigner = null
+if (!readOnly) {
+  try { intentSigner = loadIntentSigner() } catch (e) { fatal(e.code || 'USAGE', e.message) }
+}
+
 class Refusal extends Error {}
 
 /** 读出这个库里该手机号当前的状态并生成计划。预检、--report 与事务内复核共用 —— 事务内再算一遍，防止预检之后有新订单 / 订单状态变化。
@@ -99,7 +107,14 @@ function applyErase(db, code) {
   const ev = evaluate(db, code)
   if (ev.state !== 'ready') return ev
   const { c, admin, plan } = ev
+  const mark = anchorMark(db)
   const n = applyPlan(db, plan)
+  // AE5：改写审计行产生的锚点与操作意图同事务（范围描述不含手机号 / 个人数据，只有行数与 id 区间）
+  const auditIds = plan.ops.filter((op) => op.table === 'audit_logs').map((op) => op.id)
+  const intent = recordAnchorIntent(db, mark, {
+    operation: 'erase', operatorUserId: admin.id, operatorName: admin.username, signer: intentSigner,
+    range: auditIds.length ? `privacy-erase audit_logs: ${auditIds.length} rows, ids ${Math.min(...auditIds)}..${Math.max(...auditIds)}` : 'privacy-erase'
+  })
   if (JSON.stringify(n, Object.keys(n).sort()) !== JSON.stringify(plan.counts, Object.keys(plan.counts).sort())) {
     throw new Error(`实际改动行数 ${JSON.stringify(n)} 与计划 ${JSON.stringify(plan.counts)} 不一致，已回滚`)
   }
@@ -111,9 +126,11 @@ function applyErase(db, code) {
       subject: plan.pp.slice(0, ERASED_PREFIX.length + 8), counts: n, order_ids: c.orders.map((o) => o.id), sales_order_ids: c.sales_orders.map((o) => o.id),
       allow_open_orders: allowOpen, include_ambiguous_masked: includeAmbiguous,
       ambiguous_masked_untouched: includeAmbiguous ? { audit_logs: 0, notify_logs: 0 } : { audit_logs: plan.ambiguous_masked.audit_logs, notify_logs: plan.ambiguous_masked.notify_logs },
-      residual_raw_phone: Object.entries(residual).map(([k, v]) => `${k}:${v}`)
+      residual_raw_phone: Object.entries(residual).map(([k, v]) => `${k}:${v}`),
+      ...(intent ? { anchor_intent: intentRef(intent) } : {})
     }
   })
+  linkIntentAuditRow(db, intent)
   return { state: 'erased', counts: n, residual }
 }
 

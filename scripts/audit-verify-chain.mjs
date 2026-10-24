@@ -14,8 +14,11 @@
  *     链尾已被归档搬出库时，用 `--archive-dir` 指向归档摘要目录证明。`--strict-anchors`：备份之后新增 / 消失的锚点也算失败。
  *   · `--offbox <anchor-*.json> --pubkey <公钥PEM>`（AD5，ADR-0055）：验 `offbox-anchor.mjs` 写出的签名锚点（改文件 / 换钥 / 去签名都失败），
  *     并要求每个被锚定的行业库的在用链是锚定链尾的**后代**（同 `--against-backup` 的 ok / rewrite / unverifiable 口径；`--archive-dir` 同样适用）。
- *     被锚定为有链的行业库现已不存在 ⇒ 失败。只检查本次选中的行业。在已锚定范围内新增的库内锚点（可能是伪造的桥锚点）默认失败，
- *     核对操作记录后用 `--accept-new-anchors` 明确接受。
+ *     被锚定为有链的行业库现已不存在 ⇒ 失败。只检查本次选中的行业。
+ *     AE5（ADR-0055 补充）：在已锚定范围内新增的库内锚点必须各有一条匹配的 `audit_anchor_intents` 意图（保留清理 / 归档 / 隐私抹除在新增锚点的同一事务里写），
+ *     且意图被 RETENTION_PURGE / AUDIT_ARCHIVE / PRIVACY_ERASE 审计行印证，否则判 `rewrite`（anchor-without-intent / intent-hash-mismatch / intent-uncorroborated / …）。
+ *     `--accept-new-anchors` 的语义已改：不再放行没有意图的锚点，只接受“意图齐全、但印证它的审计行已被归档搬出库”的锚点。
+ *     `--require-signed-intents`：意图必须带可验证的签名（公钥取 `--intent-pubkey`，缺省同 `--pubkey`；签名密钥见 `GML_ANCHOR_INTENT_KEY`）。
  *   退出码：0 全部 OK；1 有断点（或库未迁移到 068、`--against-backup` 非 ok）；2 参数 / 环境错误。
  * 【边界】不改库、不创建缺失的行业库；不覆盖 user_name / module / ip 三列（规格如此，见 ADR-0049「限制」）。
  * ============================================================================
@@ -24,12 +27,12 @@ import path from 'node:path'
 import Database from 'better-sqlite3'
 import { parseArgs, locateDatabases, die } from './lib/audit-chain-cli.mjs'
 
-const args = parseArgs(process.argv.slice(2), { values: ['--data-dir', '--industry', '--expect-tip', '--against-backup', '--archive-dir', '--offbox', '--pubkey'], flags: ['--json', '--strict-anchors', '--accept-new-anchors'] })
+const args = parseArgs(process.argv.slice(2), { values: ['--data-dir', '--industry', '--expect-tip', '--against-backup', '--archive-dir', '--offbox', '--pubkey', '--intent-pubkey'], flags: ['--json', '--strict-anchors', '--accept-new-anchors', '--require-signed-intents'] })
 if (!args['data-dir'] && !process.env.GML_DATA_DIR) die('USAGE', '用法：audit-verify-chain.mjs --data-dir <绝对路径> [--industry <行业>] [--expect-tip <hash>] [--json]')
 if (args['expect-tip'] && !/^[0-9a-f]{64}$/.test(args['expect-tip'])) die('USAGE', '--expect-tip 必须是 64 位小写十六进制')
 if (args['expect-tip'] && !args.industry) die('USAGE', '--expect-tip 只对单个行业有意义，请同时给 --industry')
 
-if (args['accept-new-anchors'] && !args.offbox) die('USAGE', '--accept-new-anchors 只与 --offbox 一起使用')
+if ((args['accept-new-anchors'] || args['require-signed-intents'] || args['intent-pubkey']) && !args.offbox) die('USAGE', '--accept-new-anchors / --require-signed-intents / --intent-pubkey 只与 --offbox 一起使用')
 if (!!args.offbox !== !!args.pubkey) die('USAGE', '--offbox 与 --pubkey 必须同时给出（公钥须带外获得）')
 if ((args['archive-dir'] || args['strict-anchors']) && !args['against-backup'] && !(args['archive-dir'] && args.offbox && !args['strict-anchors'])) die('USAGE', '--archive-dir / --strict-anchors 只与 --against-backup 一起使用')
 
@@ -38,6 +41,7 @@ const { loadBackupManifest, compareLiveToBackup } = await import('../server/lib/
 const { loadBackupKey } = await import('../server/lib/backup-crypto.js')
 const { loadPublicKey } = await import('./lib/evidence-sign.mjs')
 const { loadAnchor, asManifest } = await import('./lib/offbox-anchor.mjs')
+const { verifyAnchorIntents } = await import('../server/lib/audit-anchor-intent.js')
 
 // 离机锚点先验签：验不过就是失败，不是跳过
 let offbox = null
@@ -50,6 +54,11 @@ if (args.offbox) {
     process.exit(1)
   }
   offbox = loaded
+}
+
+let intentPublicKey = null
+if (args.offbox) {
+  try { intentPublicKey = loadPublicKey(path.resolve(args['intent-pubkey'] || args.pubkey)) } catch (e) { die('USAGE', e.message) }
 }
 
 // 备份清单先读（它决定行业）；清单读不出来 / 与备份对不上就是失败，不是通过
@@ -100,14 +109,20 @@ for (const { code, file } of targets) {
         off = compareLiveToBackup(db, asManifest(code, entry), { archiveDir: args['archive-dir'] ? path.resolve(args['archive-dir']) : null })
         // 锚点之后新增、但落在已锚定范围内（at_row_id <= 锚定链尾 id）的库内锚点：伪造的"桥"锚点可以洗白一次对历史行的改写
         // （改第 k 行并重算它，再登记一条把新哈希接回第 k+1 行原 prev_hash 的锚点；链校验与链尾比对都会通过）。
-        // 合法的保留清理 / 归档 / 隐私抹除在已锚定范围内也会产生这类锚点，所以默认失败并列出，操作者对照操作记录后用
-        // --accept-new-anchors 明确接受（或先做一次新锚点）。锚点之后的追加区间里新增的锚点是正常增长，不在此列。
+        // AE5（ADR-0055 补充）：合法的保留清理 / 归档 / 隐私抹除在新增锚点的同一事务里写 audit_anchor_intents，并由 RETENTION_PURGE / AUDIT_ARCHIVE /
+        // PRIVACY_ERASE 审计行引用；这里逐个要求匹配的意图 + 审计行印证（+ 签名，若有）。没有 ⇒ rewrite。
+        // --accept-new-anchors 不再放行没有意图的锚点，只接受“意图齐全、但印证它的审计行已被归档搬出库”的锚点。锚点之后的追加区间里新增的锚点是正常增长，不在此列。
         const inRange = (off.anchors_added || []).filter((a) => entry.last_id != null && a.at_row_id <= entry.last_id)
         off.anchors_added_in_range = inRange.length
-        if (inRange.length && off.status === 'ok' && !args['accept-new-anchors']) {
-          off.status = 'anchors-added'
-          off.kind = 'in-anchored-range'
-          off.message = `锚点之后在已锚定范围内新增了 ${inRange.length} 条库内锚点（${inRange.map((a) => `${a.kind}@${a.at_row_id}`).join(', ')}）：可能是保留清理 / 归档 / 隐私抹除，也可能是伪造的桥锚点；对照操作记录，确认后加 --accept-new-anchors`
+        if (inRange.length && off.status === 'ok') {
+          const iv = verifyAnchorIntents(db, inRange, { publicKey: intentPublicKey, requireSigned: !!args['require-signed-intents'], minAuditRowId: entry.last_id, acceptArchived: !!args['accept-new-anchors'] })
+          off.intents_checked = iv.checked
+          if (!iv.ok) {
+            off.status = 'rewrite'
+            off.kind = iv.problems[0].kind
+            off.intent_problems = iv.problems.map((p) => ({ kind: p.kind, anchor: `${p.anchor.kind}@${p.anchor.at_row_id}`, message: p.message }))
+            off.message = `锚点之后在已锚定范围内新增了 ${inRange.length} 条库内锚点，其中 ${iv.problems.length} 条没有通过操作意图对账：${iv.problems.map((p) => `${p.anchor.kind}@${p.anchor.at_row_id}=${p.kind}`).join(', ')}（伪造的桥锚点？或操作发生在迁移 072 之前——对照操作记录，必要时重新做一份离机锚点）`
+          }
         }
       }
       if (off.status !== 'ok' && off.status !== 'not-anchored') report.ok = false

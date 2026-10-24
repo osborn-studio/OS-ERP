@@ -5,6 +5,7 @@ import { mkdtempSync, rmSync, existsSync, readFileSync, statSync, writeFileSync 
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { createRequire } from 'node:module'
 import Database from 'better-sqlite3'
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url))
@@ -503,4 +504,28 @@ test('Y8 round 2: JSON edits are lossless, protection follows ancestors, phone-n
   const out = path.join(f.dir, 'r2.json')
   assert.equal(run('scripts/privacy-export.mjs', f.dir, [OTHER, '--out', out]).status, 0)
   assert.ok(!readFileSync(out, 'utf8').includes('R2B'))
+})
+
+test('AE5 privacy-erase records an erase intent in the same transaction as the rewritten-row anchors and references it from PRIVACY_ERASE', (t) => {
+  const f = y8Fixture(t)
+  const db0 = open(f.dir)
+  // 夹具用裸 INSERT 写审计行；先把它们接上链（与启动自愈同一规则），隐私抹除才会改写已入链的行并登记锚点
+  const mig = createRequire(import.meta.url)(path.join(ROOT, 'server/db/migrations/_audit_chain.cjs'))
+  mig.adoptOrphans(db0)
+  db0.close()
+  const r = run2(f.dir, [PHONE, '--confirm', '--actor', 'boss'])
+  assert.equal(r.status, 0, r.stderr + r.stdout)
+  const db = open(f.dir)
+  const intents = db.prepare('SELECT * FROM audit_anchor_intents').all()
+  assert.equal(intents.length, 1)
+  assert.equal(intents[0].operation, 'erase')
+  assert.equal(intents[0].operator_name, 'boss')
+  assert.ok(intents[0].operator_user_id !== null)
+  assert.ok(!JSON.stringify(intents[0]).includes(PHONE), 'no personal data in the intent')
+  const audit = db.prepare("SELECT id, detail FROM audit_logs WHERE action='PRIVACY_ERASE'").get()
+  assert.deepEqual([JSON.parse(audit.detail).anchor_intent.id, JSON.parse(audit.detail).anchor_intent.hash, intents[0].audit_row_id], [intents[0].id, intents[0].intent_hash, audit.id])
+  const anchors = db.prepare("SELECT at_row_id FROM audit_chain_anchors WHERE kind='erase'").all()
+  assert.ok(anchors.length >= 1)
+  assert.equal(JSON.parse(intents[0].anchors_json).length, anchors.length)
+  db.close()
 })

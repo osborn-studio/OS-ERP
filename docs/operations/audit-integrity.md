@@ -200,7 +200,17 @@ node scripts/audit-verify-chain.mjs --data-dir /abs/data --offbox /path/anchor-2
 node scripts/verify-release.mjs --log=/abs/repo/docs/release/EVIDENCE-LOG.jsonl --offbox /path/anchor-20261024T020000000Z.json --pubkey /abs/keys/release-sign.pub.pem   # 在发行包里执行
 ```
 
-- 审计链：在用链必须是锚定链尾的后代。`rewrite/tip-row-differs` = 整链被改写并重算（隐私抹除后需对照操作记录）；`rewrite/behind` = 尾部被截或库被回滚；`unverifiable` = 锚定链尾已被保留清理删除或归档（给 `--archive-dir`）。被锚定的行业库不见了也算失败。`anchors-added/in-anchored-range`：锚点之后在已锚定范围内新增了库内锚点——伪造的桥锚点可以洗白对历史行的改写，合法的保留清理 / 归档 / 隐私抹除也会产生；对照操作记录确认后加 `--accept-new-anchors`，或在这些操作之后立刻做一次新锚点，以后用新锚点复核。
+- 审计链：在用链必须是锚定链尾的后代。`rewrite/tip-row-differs` = 整链被改写并重算（隐私抹除后需对照操作记录）；`rewrite/behind` = 尾部被截或库被回滚；`unverifiable` = 锚定链尾已被保留清理删除或归档（给 `--archive-dir`）。被锚定的行业库不见了也算失败。锚点之后在已锚定范围内新增的库内锚点（保留清理 / 归档 / 隐私抹除都会产生）必须各有一条匹配的**操作意图**（§8b）；没有、或意图没有被审计行印证，一律 `rewrite`（`anchor-without-intent` / `intent-hash-mismatch` / `intent-uncorroborated` / `intent-signature-invalid`），不再有“人工对照后一键放行”。
 - 透明日志：必须仍包含锚定的尾（截尾、整份换成另一条有效链、日志被删都失败）；之后新增的行是正常增长。
 - 不通过时**保留所有锚点与当前库 / 日志的副本**再排查；不要用新锚点覆盖旧证据。验证用旧锚点（几天前的）也应通过——它们是更难被同时篡改的参照。
 - 局限：锚点之间的窗口无保护；离机目的地被攻破可删最新锚点；时间是持钥机自述。
+
+### 8b. 锚点操作意图（AE5，ADR-0055 补充，迁移 072）
+
+保留清理（`retention.mjs --execute`）、归档（`audit-archive.mjs --confirm`）和隐私抹除（`privacy-erase.mjs --confirm`）每次**新增**审计锚点时，在同一个事务里写一行 `audit_anchor_intents`（操作类型、范围描述、操作者、本次新增的全部锚点、意图哈希、可选签名），并把意图 id 与哈希写进该操作自己的审计行（`RETENTION_PURGE` / `AUDIT_ARCHIVE` / `PRIVACY_ERASE` 的明细里的 `anchor_intent`），再把审计行 id 回填到意图。三者同提交同回滚：审计写不进，意图与锚点一起撤销。
+
+- `audit-verify-chain --offbox` 对“锚点之后在已锚定范围内新增”的每个锚点要求：有匹配意图 → 意图哈希按字段重算一致 → （有签名且有对应公钥时）验签通过 → 意图指向的审计行存在、晚于离机锚点的链尾、action 与操作类型对应、明细引用的意图 id 与哈希一致。任何一环缺失 = `rewrite`。**正常的清理 / 归档 / 抹除不再需要任何开关**即可通过。
+- **`--accept-new-anchors` 语义变更**：以前是“对照操作记录后放行所有在已锚定范围内新增的锚点”，现在**不再放行没有意图的锚点**；它只接受“意图齐全，但印证它的审计行已被后来的归档搬出库”（`corroboration-archived`）的锚点，供你核对归档摘要后使用。更稳妥的做法仍是：操作之后立刻做一份新的离机锚点，以后用新锚点复核。
+- 签名（可选）：设置 `GML_ANCHOR_INTENT_KEY`（缺省回落 `GML_RELEASE_SIGN_KEY`）指向 Ed25519 私钥（与证据签名同一套检查：仓库外、0600）时，三个脚本给意图签名；配置了却读不出来则脚本在动手前退出，不会写出无签名的意图。复核时 `--require-signed-intents` 要求每个意图都带可验证签名，公钥取 `--intent-pubkey`（缺省同 `--pubkey`）。**生产建议把意图私钥放在业务主机之外的操作机上执行这三个脚本**；不签名的意图只能挡住“只改了锚点表”的伪造，挡不住同时能写审计链的攻击者（见 ADR-0055 补充的诚实边界）。
+- 升级前（迁移 072 之前）产生、且发生在某份离机锚点之后的锚点没有意图：这份旧锚点会判 `anchor-without-intent`。处理：核对操作记录后，做一份新的离机锚点，以后用新锚点复核。
+- 范围：目前只有 `--offbox` 比对做意图对账；`--against-backup` 仍按 §6 列出“备份之后新增的锚点”供人工对照。

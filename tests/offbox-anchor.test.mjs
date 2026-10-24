@@ -225,10 +225,11 @@ test('audit descent: a forged bridge anchor inside the anchored range cannot lau
   const r = w.chain(anchorFile)
   assert.equal(r.status, 1, r.stdout)
   const o = JSON.parse(r.stdout).industries.cosmetic.offbox
-  assert.deepEqual([o.status, o.kind], ['anchors-added', 'in-anchored-range'])
+  assert.deepEqual([o.status, o.kind], ['rewrite', 'anchor-without-intent'], 'AE5: a bridge anchor needs a matching operation intent')
+  assert.equal(o.anchors_added.length, 1)
   const accepted = w.chain(anchorFile, ['--accept-new-anchors'])
-  assert.equal(accepted.status, 0, 'explicit operator opt-in lists the anchors and passes')
-  assert.equal(JSON.parse(accepted.stdout).industries.cosmetic.offbox.anchors_added.length, 1)
+  assert.equal(accepted.status, 1, '--accept-new-anchors no longer accepts anchors that have no intent')
+  assert.equal(JSON.parse(accepted.stdout).industries.cosmetic.offbox.kind, 'anchor-without-intent')
   w.db.close()
 })
 
