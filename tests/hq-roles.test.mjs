@@ -33,11 +33,14 @@ const secret = () => randomBytes(24).toString('base64url')
 test('hq-roles: union of the two historical lists, per-surface lists unchanged', () => {
   const OLD_POS = ['admin', 'sales', 'finance', 'warehouse']
   const OLD_REQ = ['purchase', 'warehouse', 'sales', 'scm', 'admin', 'finance']
-  assert.deepEqual([...HQ_ROLES].sort(), [...new Set([...OLD_POS, ...OLD_REQ])].sort())
+  // AD2 (ADR-0051 supplement): `boss` joins the union only (general-manager view), the two per-surface route gates stay as they were
+  assert.deepEqual([...HQ_ROLES].sort(), [...new Set([...OLD_POS, ...OLD_REQ, 'boss'])].sort())
+  assert.equal(POS_HQ_ROLES.includes('boss'), false)
+  assert.equal(REQUISITION_HQ_ROLES.includes('boss'), false)
   assert.deepEqual([...POS_HQ_ROLES].sort(), [...OLD_POS].sort())
   assert.deepEqual([...REQUISITION_HQ_ROLES].sort(), [...OLD_REQ].sort())
   for (const r of HQ_ROLES) assert.ok(isHqRole(r), r)
-  for (const r of ['boss', 'viewer', 'store', 'dealer', 'x', undefined, null]) assert.equal(isHqRole(r), false, String(r))
+  for (const r of ['viewer', 'store', 'dealer', 'x', undefined, null]) assert.equal(isHqRole(r), false, String(r))
   assert.ok(Object.isFrozen(HQ_ROLES) && Object.isFrozen(POS_HQ_ROLES) && Object.isFrozen(REQUISITION_HQ_ROLES))
 })
 
@@ -135,26 +138,26 @@ test('docflow strict store binding: both switch states, HQ exemption, bound acco
   const superBoss = await f.account('ac2_super', 'boss', { data_scope: 'all' })
   db.prepare('UPDATE users SET is_super=1 WHERE id=?').run(superBoss.id)
 
-  await t.test('default (switch absent = on): unbound non-HQ all-scope sees no RC but still sees non-store types', async () => {
-    for (const who of [boss, viewer]) assert.deepEqual(mine(await events(who.token)), sorted('po'), who.username)
-    const hist = await api(`/api/docflow/history/RC/${rc1}`, { token: boss.token })
+  await t.test('default (switch absent = on): unbound non-HQ (viewer) all-scope sees no RC but still sees non-store types', async () => {
+    for (const who of [viewer]) assert.deepEqual(mine(await events(who.token)), sorted('po'), who.username)
+    const hist = await api(`/api/docflow/history/RC/${rc1}`, { token: viewer.token })
     assert.equal(hist.status, 404)
-    const trace = await api('/api/docflow/trace?doc_no=RBJ-AC2-1', { token: boss.token })
+    const trace = await api('/api/docflow/trace?doc_no=RBJ-AC2-1', { token: viewer.token })
     assert.equal(trace.status, 200)
     assert.ok(Array.isArray(trace.body.data), 'trace returns an array')
     assert.equal(trace.body.data.length, 0)
   })
 
   await t.test('default: HQ roles, admin and is_super are exempt and still see everything', async () => {
-    for (const who of [finance, purchase, scm, superBoss]) assert.deepEqual(mine(await events(who.token)), sorted('rc1', 'rc2', 'po'), who.username)
+    for (const who of [finance, purchase, scm, boss, superBoss]) assert.deepEqual(mine(await events(who.token)), sorted('rc1', 'rc2', 'po'), who.username)
     assert.deepEqual(mine(await events(f.admin)), sorted('rc1', 'rc2', 'po'))
     assert.equal((await api(`/api/docflow/history/RC/${rc1}`, { token: finance.token })).status, 200)
   })
 
   await t.test('POST /transition does not reveal RC documents to unbound non-HQ accounts (same 404 as missing)', async () => {
     const probe = (tk, id) => api('/api/docflow/transition', { token: tk, body: { doc_type: 'RC', id, action: 'probe' } })
-    const hidden = await probe(boss.token, rc1)
-    const missing = await probe(boss.token, 999999)
+    const hidden = await probe(viewer.token, rc1)
+    const missing = await probe(viewer.token, 999999)
     assert.equal(hidden.status, 404)
     assert.deepEqual(hidden.body, missing.body)
     assert.notEqual((await probe(finance.token, rc1)).status, 404, 'HQ role is not blocked by the binding gate')
@@ -173,15 +176,16 @@ test('docflow strict store binding: both switch states, HQ exemption, bound acco
 
   await t.test('switch back on (explicit 1) strict again; garbage value falls back to default on', async () => {
     setSwitch('1')
-    assert.deepEqual(mine(await events(boss.token)), sorted('po'))
+    assert.deepEqual(mine(await events(viewer.token)), sorted('po'))
     setSwitch('garbage')
-    assert.deepEqual(mine(await events(boss.token)), sorted('po'))
+    assert.deepEqual(mine(await events(viewer.token)), sorted('po'))
   })
 
   await t.test('overview distribution hides RC from unbound non-HQ and keeps it for HQ', async () => {
     setSwitch('1')
     const dist = (r) => r.body.data.distribution.map((d) => d.docType)
-    assert.ok(!dist(await api('/api/docflow/overview', { token: boss.token })).includes('RC'))
+    assert.ok(!dist(await api('/api/docflow/overview', { token: viewer.token })).includes('RC'))
     assert.ok(dist(await api('/api/docflow/overview', { token: finance.token })).includes('RC'))
+    assert.ok(dist(await api('/api/docflow/overview', { token: boss.token })).includes('RC'), 'boss is HQ since AD2')
   })
 })

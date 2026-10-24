@@ -10,6 +10,9 @@
  *      （`revoked_by_owner_change`），每次调用仍以 `delegation.js` 为准（`TOKEN_OWNER_REVOKED`），
  *      管理员清扫后行状态落为 `revoked` 并带原因；重新签发照常可用。
  *
+ *   ③ AD2（ADR-0051 补充）：`docs/operations/role-matrix.md` 的角色 × 单据类型格子与真实 `/api/docflow/events` 行为一致
+ *      （抽样 10 格，期望字面值写死），生成器 `--check` 对漂移 / 缺文件 / 手改 / 换行改写都红。
+ *
  * 【夹具口径】test 运行时 + 全新临时数据目录（演示种子）+ 随机回环端口；账号经 `/api/auth/users` 建，
  *   单据 / 审批实例直接写库（只为摆出"谁该看到什么"的局面，不验业务流转）。
  *
@@ -19,10 +22,10 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { spawn } from 'node:child_process'
+import { spawn, execFileSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { once } from 'node:events'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import net from 'node:net'
@@ -306,4 +309,116 @@ test('agent token list reports an effective status after the owner auth_version 
     forbidden(await api('/api/mcp/tokens/sweep', { token: owner.token, body: {} }))
     forbidden(await api('/api/mcp/tokens', { token: owner.token }))
   })
+})
+
+// ---------------------------------------------------------------------------
+// ③ AD2：角色矩阵（docs/operations/role-matrix.md）与真实 docflow 路由行为一致（抽样 10 格）
+// ---------------------------------------------------------------------------
+
+test('role matrix cells match real /api/docflow/events behaviour (10 sampled role x type cells)', { timeout: 300000 }, async (t) => {
+  // 期望值写死在这里：生成器若画错，光靠"矩阵 = 路由"的自证循环抓不到；这里同时钉住字面结论
+  const SAMPLES = [
+    ['boss', 'RC', 'G'], // AD2：老板是总部角色，未绑门店也看全部门店日结
+    ['boss', 'DR', 'G'], // 同一豁免也覆盖经销商要货单的未绑定闸
+    ['viewer', 'RC', 'B'], // 非总部：未绑定看不到，绑了只看本店
+    ['finance', 'VOUCHER', 'G'],
+    ['purchase', 'AR', '-'], // 子树范围看不到无组织归属的总账类单据
+    ['warehouse', 'TF', 'O'],
+    ['sales', 'SO', 'O'],
+    ['scm', 'PO', 'G'],
+    ['store', 'PS', '-'], // 外部主体：docflow 读接口整体 403
+    ['dealer', 'OC', '-']
+  ]
+  const model = JSON.parse(
+    execFileSync(process.execPath, ['scripts/gen-role-matrix.mjs', '--json'], { cwd: ROOT, env: { PATH: process.env.PATH }, timeout: 120000, maxBuffer: 16 * 1024 * 1024 }).toString()
+  )
+  const md = readFileSync(path.join(ROOT, 'docs/operations/role-matrix.md'), 'utf8')
+  const mdRoles = md.split('\n').find((l) => l.startsWith('| 单据 |')).split('|').map((x) => x.trim().replace(/`/g, '')).slice(2, -1)
+  const mdCell = (role, type) => {
+    const row = md.split('\n').find((l) => l.startsWith(`| \`${type}\` `))
+    return row.split('|').map((x) => x.trim())[2 + mdRoles.indexOf(role)]
+  }
+  for (const [role, type, want] of SAMPLES) {
+    assert.equal(model.docflow[role][type], want, `generator ${role} x ${type}`)
+    assert.equal(mdCell(role, type), want, `committed role-matrix.md ${role} x ${type}`)
+  }
+
+  const f = await server(t)
+  const { db, api } = f
+  const orgId = 3 // 演示库：22 张调拨单的来源仓属于组织 3
+  assert.ok(db.prepare('SELECT 1 FROM orgs WHERE id=?').get(orgId), 'demo org 3 must exist')
+  const store = db.prepare("SELECT id FROM stores WHERE status='active' ORDER BY id LIMIT 1").get()
+  const dealer = db.prepare("SELECT id FROM dealers WHERE status='active' ORDER BY id LIMIT 1").get()
+  const insEv = db.prepare(`INSERT INTO doc_events (doc_type,doc_id,doc_no,action,action_name,to_state,source,created_at)
+    VALUES (?,?,?,'ad2matrix','ad2matrix','x','api',datetime('now','localtime'))`)
+  const seeded = {}
+  for (const type of new Set(SAMPLES.map((x) => x[1]))) {
+    const table = db.prepare('SELECT table_name FROM doc_types WHERE code=?').get(type).table_name
+    const ids = db.prepare(`SELECT id FROM ${table} ORDER BY id LIMIT 80`).all().map((r) => r.id)
+    assert.ok(ids.length > 0, `demo data must have ${type} rows (${table})`)
+    for (const id of ids) insEv.run(type, id, `AD2-${type}-${id}`)
+    seeded[type] = { table, ids }
+  }
+  const extra = (role) => (role === 'store' ? { store_id: store.id } : role === 'dealer' ? { dealer_id: dealer.id } : { org_id: orgId })
+  const events = (tk, type) => api(`/api/docflow/events?doc_type=${type}&action=ad2matrix&pageSize=500`, { token: tk })
+  const seen = (r) => r.body.data.list.map((x) => x.doc_id).sort((a, b) => a - b)
+
+  for (const [role, type, want] of SAMPLES) {
+    await t.test(`${role} x ${type} = ${want}`, async () => {
+      const who = await f.account(`ad2_${role}_${type.toLowerCase()}`, role, extra(role))
+      const r = await events(who.token, type)
+      const all = seeded[type].ids
+      if (role === 'store' || role === 'dealer') return forbidden(r)
+      assert.equal(r.status, 200, JSON.stringify(r.body))
+      const got = seen(r)
+      if (want === 'G') assert.deepEqual(got, all)
+      else if (want === 'O') {
+        assert.ok(got.length < all.length, 'org scope must be a strict subset')
+        for (const id of got) assert.ok(all.includes(id))
+        if (type === 'TF') {
+          const sub = db.prepare('SELECT id FROM orgs WHERE path LIKE ? OR id=?').all(`${db.prepare('SELECT path FROM orgs WHERE id=?').get(orgId).path}%`, orgId).map((x) => x.id)
+          const ph = sub.map(() => '?').join(',')
+          const exp = db.prepare(`SELECT id FROM stock_transfers WHERE from_warehouse_id IN (SELECT id FROM warehouses WHERE org_id IN (${ph}))
+            OR to_warehouse_id IN (SELECT id FROM warehouses WHERE org_id IN (${ph})) ORDER BY id`).all(...sub, ...sub).map((x) => x.id).filter((id) => all.includes(id))
+          assert.ok(exp.length > 0)
+          assert.deepEqual(got, exp)
+        }
+      } else assert.deepEqual(got, [], 'hidden cell must expose no rows')
+    })
+  }
+
+  await t.test('bound-only cell: the same viewer role bound to a store sees exactly that store', async () => {
+    const bound = await f.account('ad2_viewer_bound', 'viewer', { store_id: store.id })
+    const exp = db.prepare('SELECT id FROM pos_daily_closes WHERE store_id=? ORDER BY id').all(store.id).map((x) => x.id).filter((id) => seeded.RC.ids.includes(id))
+    assert.ok(exp.length > 0 && exp.length < seeded.RC.ids.length, 'store must own some but not all demo day-closes')
+    assert.deepEqual(seen(await events(bound.token, 'RC')), exp)
+  })
+})
+
+test('role matrix generator: committed file is current and --check fails on drift', { timeout: 300000 }, () => {
+  const run = (args, env = {}) => {
+    try {
+      return { code: 0, out: execFileSync(process.execPath, ['scripts/gen-role-matrix.mjs', ...args], { cwd: ROOT, env: { PATH: process.env.PATH, ...env }, timeout: 120000 }).toString() }
+    } catch (e) {
+      return { code: e.status, out: `${e.stdout || ''}${e.stderr || ''}` }
+    }
+  }
+  assert.equal(run(['--check']).code, 0)
+  assert.equal(run(['--bogus']).code, 2)
+  const dir = mkdtempSync(path.join(tmpdir(), 'os-erp-role-matrix-drift-'))
+  try {
+    const good = readFileSync(path.join(ROOT, 'docs/operations/role-matrix.md'), 'utf8')
+    const file = path.join(dir, 'm.md')
+    assert.equal(run(['--check', `--file=${file}`]).code, 1, 'missing file is drift')
+    writeFileSync(file, good)
+    assert.equal(run(['--check', `--file=${file}`]).code, 0)
+    writeFileSync(file, good.replace('| `RC` 门店日结单 | G | G', '| `RC` 门店日结单 | G | -'))
+    assert.equal(run(['--check', `--file=${file}`]).code, 1, 'a hand-edited cell is drift')
+    writeFileSync(file, `${good}\n`)
+    assert.equal(run(['--check', `--file=${file}`]).code, 1, 'trailing bytes are drift')
+    writeFileSync(file, good.replace(/\n/g, '\r\n'))
+    assert.equal(run(['--check', `--file=${file}`]).code, 1, 'CRLF rewrite is drift')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 })

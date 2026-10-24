@@ -56,3 +56,31 @@ ADR-0011 AB7 补充登记过一条既有的高危发现：`/api/docflow/*` 的�
 - **medium，已修**：`POST /api/docflow/transition` 对 RC / YQ / SH 只过 `assertCanRead`（不含绑定），未绑门店的非总部账号用不存在的 action 绕过权限点检查后，409 错误里会带出其不可见单据的 `docNo`。现在带 `binding` 的类型在驱动前先过 `docInScope`，范围外与不存在同形 404（`记录不存在`）；总部角色不受影响，已绑门店的账号在此入口同样收窄到本店（此前可跨店驱动，属有意收紧）。测试覆盖。
 - **medium，接受**：`readSetting` 把空白 / 空串的 bool 值归一为 `'0'`，所以库里被写成空白会关闭严格绑定。bool 键写 `0 / false / no / off / 空串` 都是"明确关闭"的既有语义，写入走危险键流程（必须写理由并留痕）；缺失 / 空 JSON / 非法值仍回落默认开。不为单个键破坏 `normalizeSettingValue` 的统一口径。
 - **low，已修**：测试里 `/trace` 返回数组，原断言读 `.events` 恒真；改为直接断言数组长度。
+
+## AD2 补充：`boss` 并入总部名单，与角色矩阵文档（第十三批）
+
+状态：开发实现，尚非产品上线验收。
+
+### 决定：`boss` 进 `HQ_ROLES`（并集），POS / 要货两个面不放行
+
+上文"行为变化 1"把 `boss` 排除在并集之外，并说明"是否并入是产品决定"。该决定现已作出：**老板 / 总经理看得到所有门店的单据**。理由：
+
+- 老板的内置角色本就是 `data_scope=all`、持有 57 个权限点（含各模块查看权），业务上没有"只看自己门店"的口径；ADR-0051 落地后他经 docflow 看不到 RC / YQ / SH，是名单口径的副作用，不是设计意图（"总经理看不到门店日结"在客户场景里是缺陷）。
+- 改动只是 `hq-roles.js` 表里加一行：`boss: { pos: false, requisition: false }`。`POS_HQ_ROLES`（admin / finance / sales / warehouse）与 `REQUISITION_HQ_ROLES`（admin / finance / sales / warehouse / purchase / scm）逐项不变，测试断言 boss 不在这两份里。所以老板**不会**因此获得 POS 日结确认、全店现金接口、要货 / 发货总部写入口——"看得见"和"能操作"是两件事，后者仍由权限点与各路由的角色闸决定。
+- 后果（需知悉）：并集豁免的是 docflow 严格绑定闸的"未绑定"分支，对 `binding: 'store'`（RC / YQ / SH / PS / PSF）与 `binding: 'dealer'`（DR）一视同仁，所以未绑定的 boss 同时能经 docflow 读到全部经销商要货单（DR）的流转留痕；`binding: 'hq'`（DS / RB）与 `subject`（OC / OCS）本来就不挡 boss。已绑门店 / 经销商的 boss 账号仍只限本店 / 本经销商（与其它总部角色一致）。MCP 的 `docScopeCtx` 仍不带 `hqExempt`，boss 的 MCP 令牌读 RC / YQ / SH 仍需要所有者有门店绑定，并且 boss 没有 `pos.*` 的查看权限点，MCP 侧本来就读不到这些类型（矩阵第二节可见）。
+- 回退：设置键 `docflow_strict_store_binding=0` 的语义不变；要撤销 boss 豁免，删掉表里这一行即可（矩阵会随之漂移，CI 提醒重新生成）。
+
+### 角色矩阵：`docs/operations/role-matrix.md`（生成物）
+
+`scripts/gen-role-matrix.mjs` 在临时库里跑迁移，对每个内置角色（10 个）× 每类单据（40 类）**调用真实门禁函数**求值，不手写任何结论：
+
+- 单据流转（HTTP docflow）：`docScopeOf` + `resolveOrgScope` + `hq-roles.js` → G 全局｜O 组织范围｜B 仅绑定｜- 不可见（外部主体整体 403）。
+- MCP 通用读工具：权限点（`permContext` / `hasPerm`）+ 外部主体闸 + `holdsBinding` → Y｜Y*（需门店 / 经销商 / 订货主体绑定）｜-；与 `canViewDocType` 逐格对拍，不一致则生成失败。
+- 另列每类单据的查看权限点、`DOC_VIEW_PERMS` 绑定与 `DOC_SCOPE_RESOLVERS` 绑定 / 构建器，以及三份总部名单的角色标志。
+- `--check` 用于 CI（`ci.yml` checks job 新增独立一步 "Role matrix is current"）：与生成结果逐字节比对，文件缺失、手改格子、尾部多字节、换行改写都判漂移；有任一在用单据类型缺 `DOC_VIEW_PERMS` / `DOC_SCOPE_RESOLVERS` 登记则直接失败而不是画成 `-`。`--file=<绝对路径>` 只给测试造漂移用。
+- 诚实边界：矩阵描述"该角色的默认账号"（默认数据范围、放在某组织、未绑定）；单账号的 `data_scope` 覆盖、多角色叠加、自定义角色不在内；docflow 读接口本身不按查看权限点收口，权限点由 MCP 读工具和各业务路由把关（矩阵正文已写明）。
+
+### 验收
+
+- `tests/hq-roles.test.mjs`：并集 = 旧两份名单 ∪ {boss}；POS / 要货名单不含 boss；docflow 默认开关下 `viewer`（非总部）仍看不到 RC / 流转留痕，`boss` 与其它总部角色同视；overview 分布含 RC；开关置 0 / 1 / 非法值的行为不变。
+- `tests/authz-followups.test.mjs`：抽样 10 格（boss×RC、boss×DR、viewer×RC、finance×VOUCHER、purchase×AR、warehouse×TF、sales×SO、scm×PO、store×PS、dealer×OC），期望字面值写死，分别断言生成器 JSON、已提交的 `role-matrix.md` 与真实 `/api/docflow/events` 响应三者一致（G = 全部、O = 严格子集且 TF 与独立 SQL 精确相等、B / - = 空、外部主体 403；另验同角色绑店后只见本店）；`--check` 对缺文件 / 手改 / 尾部字节 / CRLF 改写为红。

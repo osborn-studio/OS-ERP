@@ -1643,6 +1643,7 @@ Agent Token 管理（管理员）：签发 / 列表 / 吊销 / 调用审计
 |---|---|---|---|---|
 | `DOC_TYPE_UNMAPPED` | const | — | — | — |
 | `DOC_VIEW_PERMS` | const | — | — | — |
+| `HQ_ONLY_MODULES` | const | — | — | — |
 | `TOKEN_OWNER_BINDING_REQUIRED` | const | — | — | — |
 | `TOKEN_OWNER_PERM_DENIED` | 再导出（未解析） | — | — | — |
 | `assertCanViewDocType` | fn | — | doc.get, doc.query | mcp/tools.js |
