@@ -176,7 +176,8 @@ test('driver gives every scenario a 5 minute kill timer and runs them in registr
 
 test('capacity-baseline has a hosted-runner section with the exact manual dispatch commands, without claiming a run', () => {
   const doc = read('docs/implementation/capacity-baseline.md')
-  const section = doc.match(/^## .*托管 runner[\s\S]*?(?=^## |(?![\s\S]))/m)?.[0]
+  // 锚定到以「托管 runner」开头的小节标题（AB11 的 large-ci 小节标题里也含这四个字，不能用 `.*` 松匹配）
+  const section = doc.match(/^## 托管 runner[\s\S]*?(?=^## |(?![\s\S]))/m)?.[0]
   assert.ok(section, '托管 runner section must exist')
   assert.match(section, /gh workflow run nightly-capacity\.yml -f rehearsal=true/)
   assert.match(section, /gh run (list|watch|view)/)
