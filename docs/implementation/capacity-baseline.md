@@ -725,3 +725,21 @@ gh run view <run-id> --log-failed
 - 复现：`node scripts/bench-oms-order-time.mjs --rows 200000 --span 365 --out result.json`（`--span 60` 为最坏情形）。
 - 未覆盖：`dmserver` 与生产规模副本；机器空闲时的数字；真实 OMS 订单的时间分布；并发写入下的索引争用；`oms.js` `/stats` 等其它 `date(order_time)` 查询（未改）。
 - explain-audit（合成库，`synth-data --skus 300 --docs 300 --txns 1500`，只读）：111 条语句，**0 违规**，裸 SCAN 27（豁免 26、小表 1），索引全扫 6；`dash.trend_*` 与 `dash.channel_online` 的计划见上表，`dash.channel_online` 的豁免已移除。
+
+## AE4 审计 FTS 开关：`--enable`（回填）/ `--disable` 在合成 100 万行库上的耗时（**Mac mini / 合成 100 万行 / 非目标主机 / 单次墙钟 / 机器有负载（1 分钟负载约 7）**）
+
+脚本：`node scripts/bench-audit-fts-toggle.mjs --rows 1000000`（用法见 `docs/operations/audit-search.md` 第 5 节）。流程：临时目录建库（schema + 全部迁移）→ 先 `--disable`（空库）→ 用 `bench-audit-logs.mjs` 的 `seed()`（唯一 INSERT 点 `insertAuditRow`，含 AB6 哈希链，此时**没有** FTS 触发器）写入 100 万行（种子 20261024，37.4 s）→ `wal_checkpoint(TRUNCATE)`（库 373 MB）→ 依次 `--enable`、`--integrity-check`、`--disable`、`--enable`、`--integrity-check`；每步都是真实子进程调用维护脚本、读它的 JSON 报告（`elapsed_ms` = BEGIN→COMMIT 墙钟；`lock_probe` = 另一线程每约 1 ms 试 `BEGIN IMMEDIATE`）。临时目录结束即删（脚本打印 `temp dir removed: true`）。
+
+| 步骤 | elapsed_ms | 写入者被挡（下界 / 上界，ms）| 库文件（含 WAL，MB）|
+|---|---|---|---|
+| `--enable`（第 1 次，建表 + 触发器 + 回填 100 万行）| **1637** | **1462 / 1465** | 373 → 489 |
+| `--integrity-check` | 740 | 738 / 741 | 431 → 431 |
+| `--disable`（100 万行时删表 + 触发器）| **18.8** | 17 / 20 | 431 → 431（不缩小）|
+| `--enable`（第 2 次）| **1540** | **1442 / 1445** | 431 → 489 |
+| `--integrity-check` | 774 | 772 / 775 | 431 → 431 |
+
+读法（诚实边界）：
+- **100 万行启用回填约 1.5–1.6 s 持写锁**（一个被挡窗口 = 单次写事务）。比 AC5（`--rebuild` 3–4 s）和 AB3（067 回填 2.7–3.9 s）都快，原因是本次测量时机器负载低得多（约 7，AC5 时约 29–30），不是代码差异；**只看量级**，目标主机更慢或真实库三列文本更长时回填更久，可能超过默认 `busy_timeout` 5 s（届时并发写入收到 `SQLITE_BUSY`）——低峰执行。
+- `--disable` 只是 `DROP`，近乎瞬时（约 19 ms），但**数据库文件不会缩小**（页进入空闲链表，431 → 431 MB）；要回收磁盘需要另行 `VACUUM`（本次未测，大库上要重写整个文件并持写锁）。
+- 启用后库增量约 +116 MB（373 → 489，含 WAL 里待检查点的页；稳定后索引约 +58 MB，见 `--integrity-check` 前后 431 MB 对 373 MB），合成数据的 `detail` 很短，三列文本也短。
+- 未覆盖：`dmserver` 与生产规模副本；服务在满负荷写入下执行 `--enable` 时的写入者失败率；回收磁盘的 `VACUUM`。
