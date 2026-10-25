@@ -221,12 +221,18 @@ jobs:
 
   regression:
     name: Isolated regression (cosmetic, food)
-    needs: checks
+    # Preserve the existing required status while gating the split slow/no-FTS run.
+    needs: [checks, slow-tests]
+    if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
       GML_VERIFY_PLATFORM: linux
     steps:
+      - name: Require focused and slow test success
+        run: |
+          test '${{ needs.checks.result }}' = success
+          test '${{ needs.slow-tests.result }}' = success
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false

@@ -104,3 +104,33 @@ test('--run on a fixture file writes the JSON and exits 1 when a file fails; the
   const c = spawnSync(process.execPath, [SCRIPT, '--check'], { cwd: ROOT, encoding: 'utf8' })
   assert.equal(c.status, 0, c.stdout + c.stderr)
 })
+
+test('timing children receive disposable data paths and cleaned-up temporary storage', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tt-isolation-'))
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+  const result = path.join(dir, 'paths.json')
+  const fx = path.join(dir, 'isolated.test.mjs')
+  fs.writeFileSync(fx, `import test from 'node:test'; import fs from 'node:fs'; import assert from 'node:assert/strict';
+    test('isolated data', () => { assert.ok(process.env.GML_DATA_DIR); fs.writeFileSync(${JSON.stringify(result)}, JSON.stringify({data: process.env.GML_DATA_DIR, home: process.env.HOME})); });`)
+  const r = spawnSync(process.execPath, [SCRIPT, '--run', '--output', path.join(dir, 'out.json'), fx], { cwd: ROOT, encoding: 'utf8' })
+  assert.equal(r.status, 0, r.stdout + r.stderr)
+  const dirs = JSON.parse(fs.readFileSync(result, 'utf8'))
+  assert.ok(path.relative(ROOT, dirs.data).startsWith('..' + path.sep), 'data stays outside the checkout')
+  assert.equal(fs.existsSync(dirs.data), false, 'the timing runner cleans its own data path')
+  assert.equal(fs.existsSync(dirs.home), false)
+})
+
+test('timing failures expose bounded redacted case names and process failure codes', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tt-diagnostics-'))
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+  const fx = path.join(dir, 'failed.test.mjs')
+  const opaque = 'x'.repeat(48)
+  fs.writeFileSync(fx, `import test from 'node:test'; test('repro ${opaque}', () => { throw Error('private payload must not be printed') });`)
+  const out = path.join(dir, 'out.json')
+  const r = spawnSync(process.execPath, [SCRIPT, '--run', '--output', out, fx], { cwd: ROOT, encoding: 'utf8' })
+  assert.equal(r.status, 1)
+  assert.match(r.stdout, /repro \[REDACTED\]/)
+  assert.ok(!r.stdout.includes(opaque))
+  assert.ok(!r.stdout.includes('private payload'))
+  assert.deepEqual(JSON.parse(fs.readFileSync(out)).files[0].failed_cases, ['repro [REDACTED]'])
+})

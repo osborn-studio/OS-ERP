@@ -84,3 +84,9 @@ node scripts/test-timings.mjs --check [--input <json>]
 - `tests/mcp-limits-readout.test.mjs`：`GET /api/meta/audit-logs carries fts state …` 的键集合多出 `fallback_total`。
 
 这两处在托管 CI 上是否通过未知（本批没有触发工作流）；见 backlog。
+
+### 独立挑战审计后的门禁补强（2026-10-24）
+
+`regression` 保留既有必需检查名称，但依赖 `checks` 与 `slow-tests`，并用 `always()` 在依赖失败或取消后仍执行首步结果校验；只有两者均为 success 才运行回归。这样慢测试及 `GML_AUDIT_FTS=0` 重跑的失败不能因 job 非必需而绕过门禁，无需修改仓库保护设置。
+
+`test-timings` 为每个文件分配新临时 HOME/TMPDIR/GML_DATA_DIR（默认位于临时目录的 osstack 下，支持 OSSTACK_SCRATCH_ROOT），结束后清理。仅透传 CI 与显式负载倍率；倍率默认 1，不自动放宽行为断言。失败时输出最多 10 个脱敏用例名称与进程错误码/信号，不输出原始断言或凭据。提交的 timings JSON 是历史测量，不是所有新增测试都低于 60 秒的证明；托管最新耗时 artifact 与完整套件结果需另行核验。

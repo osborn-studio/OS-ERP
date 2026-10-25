@@ -27,6 +27,7 @@ import { spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
+import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 
@@ -74,20 +75,30 @@ export function defaultFiles(root = ROOT) {
 }
 
 export function runOne(rel, { root = ROOT, timeoutMs = 1500000 } = {}) {
+  const scratch = process.env.OSSTACK_SCRATCH_ROOT || path.join(tmpdir(), 'osstack')
+  fs.mkdirSync(scratch, { recursive: true })
+  const dataDir = fs.mkdtempSync(path.join(scratch, 'erp-test-timing-'))
   const env = {
-    PATH: process.env.PATH, HOME: process.env.HOME,
+    PATH: process.env.PATH, HOME: dataDir, TMPDIR: dataDir, GML_DATA_DIR: dataDir,
+    ...(process.env.CI ? { CI: process.env.CI } : {}),
     GML_RUNTIME_MODE: 'test', HOST: '127.0.0.1', GML_DB: '', GML_JWT_SECRET: randomBytes(32).toString('hex')
   }
   if (process.env.GML_TEST_LOAD_FACTOR) env.GML_TEST_LOAD_FACTOR = process.env.GML_TEST_LOAD_FACTOR
   const t0 = Date.now()
-  const r = spawnSync(process.execPath, ['--test', '--test-concurrency=1', '--test-reporter=tap', rel], {
+  let r
+  try { r = spawnSync(process.execPath, ['--test', '--test-concurrency=1', '--test-reporter=tap', rel], {
     cwd: root, env, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 256 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe']
-  })
+  }) } finally { fs.rmSync(dataDir, { recursive: true, force: true }) }
   const duration_ms = Date.now() - t0
   const { cases, counts } = parseTap(r.stdout || '')
   const slowest = cases.filter((c) => c.duration_ms != null).sort((a, b) => b.duration_ms - a.duration_ms).slice(0, 5)
     .map((c) => ({ name: c.name, duration_ms: Math.round(c.duration_ms) }))
-  return { file: rel, duration_ms, exit: r.status === null ? -1 : r.status, ...counts, slowest }
+  // Only bounded case names and process codes are exposed; raw assertion payloads may contain credentials.
+  const redact = (name) => name.replace(/[A-Za-z0-9_.-]{32,}/g, '[REDACTED]').slice(0, 240)
+  const failed_cases = cases.filter((c) => !c.ok && !c.todo).slice(0, 10).map((c) => redact(c.name))
+  return { file: rel, duration_ms, exit: r.status === null ? -1 : r.status, ...counts,
+    failed_cases, signal: r.signal || null, error_code: r.error?.code || null,
+    slowest: slowest.map((c) => ({ ...c, name: redact(c.name) })) }
 }
 
 export function summarize(files, thresholdS) {
@@ -134,6 +145,10 @@ function main() {
     const r = runOne(rel)
     results.push(r)
     console.log(`${r.exit === 0 ? 'ok  ' : 'FAIL'} ${String(Math.round(r.duration_ms / 1000)).padStart(5)} s  ${rel}`)
+    if (r.exit !== 0) {
+      for (const name of r.failed_cases) console.log(`  failed case: ${name}`)
+      if (r.signal || r.error_code) console.log(`  process: signal=${r.signal || 'none'} error=${r.error_code || 'none'}`)
+    }
   }
   const doc = { generated_at: new Date().toISOString(), node: process.version, platform: `${process.platform}-${process.arch}`, ...summarize(results, thresholdS), files: results }
   const out = path.resolve(ROOT, values.output)

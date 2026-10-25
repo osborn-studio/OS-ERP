@@ -98,3 +98,12 @@ test('the isolated regression runner (regress-all) discovers tests/slow as well 
 test('the timing runner forwards GML_TEST_LOAD_FACTOR to the test processes', () => {
   assert.match(fs.readFileSync(path.join(ROOT, 'scripts/test-timings.mjs'), 'utf8'), /env\.GML_TEST_LOAD_FACTOR = process\.env\.GML_TEST_LOAD_FACTOR/)
 })
+
+test('the required regression status fails when focused or slow/no-FTS testing fails or is cancelled', () => {
+  const job = ciCode.match(/^  regression:\n[\s\S]*?(?=^  \S)/m)?.[0] || ''
+  assert.match(job, /needs: \[checks, slow-tests\]/)
+  assert.match(job, /if: \$\{\{ always\(\) \}\}/)
+  assert.match(job, /test '\$\{\{ needs.checks.result \}\}' = success/)
+  assert.match(job, /test '\$\{\{ needs.slow-tests.result \}\}' = success/)
+  assert.ok(job.indexOf('Require focused and slow test success') < job.indexOf('actions/checkout@'))
+})
