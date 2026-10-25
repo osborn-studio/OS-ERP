@@ -251,7 +251,8 @@ test('qimen gateway never passes through unauthenticated or badly signed calls',
   assert.equal(own.warehouseCode, whRows[0].code)
   const ownSum = db.prepare('SELECT COALESCE(SUM(qty_on_hand),0) q FROM inventory_stocks WHERE warehouse_id=? AND qty_on_hand<>0').get(whRows[0].id).q
   assert.ok(own.items.length <= 100)
-  if (own.items.length < 100) assert.equal(own.items.reduce((a, x) => a + x.quantity, 0), ownSum)
+  // 浮点求和顺序因平台/SQLite 版本而异（ubuntu 上出现 22357.892099999997 vs 22357.8921），按容差比较
+  if (own.items.length < 100) assert.ok(Math.abs(own.items.reduce((a, x) => a + x.quantity, 0) - ownSum) < 1e-6, `qimen inventory sum ${ownSum}`)
   assert.equal((await inv({ warehouseCode: whRows[0].code })).warehouseCode, whRows[0].code)
   // 停用平台不再通过
   db.prepare("UPDATE platforms SET status='disabled' WHERE app_key=?").run(pf.app_key)
