@@ -7,7 +7,21 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
+import { hashEntries, listTestsTree, TESTS_TREE_FILE } from './lib/tests-tree.mjs'
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+// Evidence/archive options must never silently turn into a manifest-only check.
+// Normalize the space form before the existing consumers read the equals form.
+for (const flag of ['--evidence', '--artifact']) {
+  const hits = process.argv.map((value, index) => value === flag || value.startsWith(`${flag}=`) ? index : -1).filter(index => index >= 0)
+  if (hits.length > 1) throw new Error(`${flag} given more than once`)
+  if (!hits.length) continue
+  const index = hits[0]
+  const spaced = process.argv[index] === flag
+  const value = spaced ? process.argv[index + 1] : process.argv[index].slice(flag.length + 1)
+  if (!value || value.startsWith('--')) throw new Error(`${flag} needs a value`)
+  if (spaced) process.argv.splice(index, 2, `${flag}=${value}`)
+}
+if (process.argv.some(a => a.startsWith('--artifact=')) && !process.argv.some(a => a.startsWith('--evidence='))) throw new Error('--artifact requires --evidence')
 const manifest = JSON.parse(fs.readFileSync(path.join(root, 'MANIFEST.json'), 'utf8'))
 let failed = 0
 const fail = message => { console.error(message); failed++ }
@@ -77,6 +91,16 @@ if (evidenceArg) {
     if (typeof ev.built_at !== 'string' || Number.isNaN(Date.parse(ev.built_at))) bad('built_at', 'not an ISO timestamp')
     if (typeof ev.node !== 'string' || !/^v\d+\./.test(ev.node)) bad('node', 'not a node version')
     if (ev.ci_run_id !== null && !/^\d{1,20}$/.test(String(ev.ci_run_id))) bad('ci_run_id', 'must be null or a numeric run id')
+    // AA7：自动查到的 CI run 必须能追溯到 gh 查询（来源、结论 success）；查不到时必须写明原因。
+    const cl = ev.ci_lookup
+    if (cl !== undefined) {
+      if (!cl || typeof cl !== 'object' || !['auto', 'operator-supplied', 'none'].includes(cl.mode)) bad('ci_lookup', 'mode must be auto, operator-supplied or none')
+      else if (cl.mode === 'auto') {
+        if (ev.ci_run_id === null && !String(cl.reason ?? '').trim()) bad('ci_lookup', 'an auto lookup that found no run must state the reason')
+        if (ev.ci_run_id !== null && (cl.conclusion !== 'success' || cl.source !== 'gh run list' || cl.head_sha !== ev.commit)) bad('ci_lookup', 'an auto-resolved run id must come from gh run list with conclusion success for exactly this commit (head_sha)')
+        if (cl.gh_override) console.warn('[verify] WARNING: ci_lookup used the OS_ERP_GH override binary; this is not a genuine GitHub lookup')
+      } else if (cl.mode === 'none' && ev.ci_run_id !== null) bad('ci_lookup', 'mode none cannot carry a run id')
+    }
     const result = (field, v, { needSource }) => {
       if (!v || typeof v !== 'object' || !RESULT.has(v.result)) return bad(field, 'result must be passed, failed or not run')
       if (v.result === 'failed') return bad(field, 'a candidate cannot carry a failed result')
@@ -87,7 +111,34 @@ if (evidenceArg) {
     }
     // 只有这两项可以是人工声明；其余必须由脚本亲自产生（origin=produced）。
     const produced = (field, v) => { if (v && v.result === 'passed' && v.origin !== 'produced') bad(field, 'must have origin: produced') }
-    result('focused_tests', ev.focused_tests, { needSource: true })
+    result('focused_tests', ev.focused_tests, { needSource: ev.focused_tests?.origin !== 'produced' })
+    // AA7：produced 的焦点测试必须带计数、耗时与测试树哈希，且哈希必须等于本包清单（release/tests-tree.json）重算的值。
+    const ft = ev.focused_tests
+    if (ft?.result === 'passed' && ft.origin === 'produced') {
+      const c = ft.summary_counts
+      const int = v => Number.isInteger(v) && v >= 0
+      if (!c || typeof c !== 'object' || !['tests', 'pass', 'fail', 'cancelled', 'skipped', 'todo'].every(k => int(c[k]))) bad('focused_tests', 'a produced result needs integer summary_counts (tests, pass, fail, cancelled, skipped, todo)')
+      else {
+        if (c.tests < 1 || c.pass < 1) bad('focused_tests', 'a produced passed result must have run at least one passing test')
+        if (c.fail !== 0 || c.cancelled !== 0) bad('focused_tests', 'a passed result cannot have failed or cancelled tests')
+        if (c.tests !== c.pass + c.fail + c.cancelled + c.skipped + c.todo) bad('focused_tests', 'summary_counts are inconsistent: tests must equal pass + fail + cancelled + skipped + todo')
+      }
+      if (typeof ft.duration_ms !== 'number' || !(ft.duration_ms >= 0)) bad('focused_tests', 'a produced result needs duration_ms')
+      if (!/^[0-9a-f]{64}$/.test(String(ft.tests_tree_sha256 ?? ''))) bad('focused_tests', 'a produced result needs tests_tree_sha256')
+      else {
+        try {
+          const listing = JSON.parse(fs.readFileSync(path.join(root, TESTS_TREE_FILE), 'utf8'))
+          if (!manifest.files?.[TESTS_TREE_FILE]) throw new Error(`${TESTS_TREE_FILE} is not listed in MANIFEST.json`)
+          if (!Array.isArray(listing.files) || !listing.files.length) throw new Error('tests listing is empty')
+          const recomputed = hashEntries(listing.files)
+          if (listing.tree_sha256 !== recomputed) throw new Error('listing tree_sha256 does not match its own entries')
+          if (recomputed !== ft.tests_tree_sha256) throw new Error(`tests tree ${recomputed} != EVIDENCE ${ft.tests_tree_sha256}`)
+          // 若包根恰好带着 tests/，它也必须与清单一致（不一致说明事后改过）。
+          const present = listTestsTree(root)
+          if (present.length && hashEntries(present) !== recomputed) throw new Error('tests/ in the package differs from the listing')
+        } catch (error) { bad('focused_tests', `tests tree binding failed: ${error.message}`) }
+      }
+    }
     result('regression', ev.regression, { needSource: true })
     if (!ev.guards || typeof ev.guards !== 'object' || !Object.keys(ev.guards).length) bad('guards', 'missing guard entries')
     else {
