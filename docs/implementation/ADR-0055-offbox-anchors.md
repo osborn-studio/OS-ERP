@@ -107,3 +107,28 @@ Codex 审计（gpt-6.1-sol，只读，防御性审查，针对 AF5 提交）：
 - 低：ADR 补充对签名验证提示的描述不准（`--offbox` 的 `--pubkey` 兼作意图公钥；提示只在有锚点被对账时出现）⇒ 已更正。
 - 审计确认：“印证行已归档”路径在三个受支持流程（归档 / 保留清理 / 隐私抹除）下对库内锚点确实不可达，删除它不产生对合法流程的误拒；keygen 的路径拒绝与独占创建对支持的用途没有发现绕过。
 - 未验证：审计沙箱的 Node ABI 与 `better-sqlite3` 不匹配，审计方没有跑测试，结论来自读码与内存库试验；测试结果以本仓库实跑为准。
+
+## 补充 3（AG5）：意图 / 锚点签名密钥轮换与多密钥校验
+
+状态：开发实现，尚非产品上线验收｜相关：roadmap-v12 AG5、`docs/operations/audit-integrity.md` §8c
+
+### 决定
+1. **`key_id` 沿用完整 SHA-256 指纹（64 位十六进制）**。AE5 起 `audit_anchor_intents.key_id` 与锚点 `signature.key_id` 就是公钥 SPKI DER 的 sha256 全长，已有测试与已写入的数据都按这个长度；截成 16 位会让已有行对不上，并把选钥建立在 64 位前缀上。16 位前缀只用于**文件名**（`anchor-intent-<前 16 位>.*.pem`）和人读输出。
+2. **公钥集合**。`audit-verify-chain` 的 `--pubkey`、`--intent-pubkey` 可重复，参数可以是目录（只取其中 `*.pub.pem` 普通文件，不递归）；`loadPublicKeySet` 按 key_id 去重，空集合 / 没有公钥的目录 / 私钥内容 / 非 Ed25519 一律是用法错误（退出 2）。输出 JSON 多一个 `intent_keys`（各钥 key_id 前 16 位）。
+3. **按 key_id 选钥，不逐把试**。意图：`key_id` 在集合里 ⇒ 用那一把验（失败 `intent-signature-invalid`）；明确给了 `--intent-pubkey` 而 `key_id` 不在集合 ⇒ **`intent-key-unknown`**（rewrite，与是否 `--require-signed-intents` 无关）。这改变了 AE5/AF5 的口径：原先公钥对不上只在 `--require-signed-intents` 下失败（`intent-signature-unverifiable`）。回落用的 `--pubkey`（`--offbox` 模式没给 `--intent-pubkey`）仍沿用旧口径，因为那把钥原本是锚点签名钥。离机锚点：按 `signature.key_id` 从 `--pubkey` 集合里选，集合里没有 ⇒ `OFFBOX-INVALID`。
+4. **过渡规则**：带签名而 `key_id` 为空的意图（早于记录 key_id 的数据，或被写库者清空）对集合里每一把试，任何一把通过即可；都不过 ⇒ `intent-signature-invalid`。**结束条件**：库里不再有 `signature` 非空而 `key_id` 为空的需对账意图，且复核方用 `--require-intent-key-id` 跑通一轮之后，把该开关写进日常命令；此后这类意图是 `intent-key-id-missing`。
+5. **`release-keygen --rotate`**：`--out` 必须是已存在、含本用途旧公钥（都能解析）、非组 / 其他可写、不在仓库内的保管目录；新建 `<名>-<key_id 前 16 位>.key.pem` / `.pub.pem`（`wx` 独占，私钥 0600），旧文件不动；输出 `rotated: true` 与 `retained_public_keys`。不带 `--rotate` 的行为不变（非空目录照旧拒绝）；`--rotate` 重复或带值是用法错误。
+6. **`offbox-anchor`**：锚点的签名元数据早已内嵌 `key_id`（签名覆盖它，改不了）；现在输出里打印其前 16 位，用轮换后的新私钥出锚点即可。运维手册 §8c 写了完整轮换步骤、选钥口径、撤销、过渡规则与结束条件。
+
+### 诚实边界
+- `key_id` 不在被签内容里（签名输入沿用 `格式标识:intent_hash`，改动会使已有意图全部失效）：它是选钥提示而非信任来源。写库者能清空 `key_id` 走过渡路径，所以被撤销（泄露）的旧钥必须从公钥集合里拿掉，且过渡结束后用 `--require-intent-key-id`。
+- 公钥集合本身须带外保管；随库或随锚点放的公钥没有意义。
+- 没有为意图增加撤销时间戳：撤销 = 从集合里移除，旧钥签过的意图随之整体不可验，需要重做基线。
+
+### 审计记录（AG5）
+Codex 审计（gpt-6.1-sol，只读，防御性审查，针对 AG5 提交 04d95f9）：
+- 高（接受并写明，不改行为）：回落模式（`--offbox` 没给 `--intent-pubkey`，用 `--pubkey` 兼作意图公钥）下，写库者把匹配的 `key_id` 改成未知值或清空，可让一条签名无效的意图被放行。这是 AE5 起就有的“签名可选”口径，不是本次引入的退化：同一个写库者本来就可以直接写一条**无签名**的意图，在不带 `--require-signed-intents` 时同样通过；带 `--require-signed-intents` 时清空 / 改 `key_id` 得到的是 `intent-signature-unverifiable`（失败）。不能改成“公钥验不过就失败”，因为回落公钥是锚点签名钥，用单独意图钥签名的合法意图在这里本来就验不了。处理：运维手册 §8c 与本节写明——带意图签名的环境**总是显式给 `--intent-pubkey`** 并带 `--require-signed-intents`；显式口径下三种变体（key_id 改成另一把、改成未知、清空）分别是 `intent-signature-invalid` / `intent-key-unknown` / 过渡规则下 `intent-signature-invalid`，有测试覆盖。
+- 中（已修）：目录公钥集合会跟随目录内的符号链接，链接目标在受信目录之外 ⇒ 目录里出现符号链接一律拒绝（显式传入的文件参数仍可是链接）。回归 `loadPublicKeySet … symbolic link`。
+- 中（部分修）：`--rotate` 校验目录后仍按路径写入，祖先目录被替换可重定向写入 ⇒ 保管目录本身是符号链接时拒绝；祖先目录可被他人替换属于“能写祖先目录的人已经控制了保管目录”，不在防护范围，手册要求保管目录放在 0700 的自有路径下。
+- 中（已修）：写到一半失败（如磁盘满）会残留半截密钥文件，且残留的损坏 `*.pub.pem` 会阻止后续轮换与目录校验 ⇒ 改为 `openSync(..., 'wx')` 成功后立刻登记再写内容，失败时清理；`EEXIST` 不登记，不会误删别人的文件。未单独造“磁盘满”的测试（需要故障注入接缝），由读码与既有失败清理测试覆盖。
+- 审计确认：显式意图公钥下按 key_id 选钥没有绕过（伪造成另一把受信 key_id 验签失败）；离机锚点的 key_id 在被签元数据里；重复公钥去重；`*.pub.pem` 里放私钥内容被拒绝。审计方没有跑仓库测试（沙箱 Node 版本不同）。

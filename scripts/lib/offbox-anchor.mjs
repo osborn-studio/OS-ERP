@@ -15,7 +15,7 @@
  */
 import fs from 'node:fs'
 import { createHash } from 'node:crypto'
-import { signEvidence, verifyEvidenceSignature } from './evidence-sign.mjs'
+import { publicKeyId, signEvidence, verifyEvidenceSignature } from './evidence-sign.mjs'
 import { GENESIS_PREV, verifyLog } from './evidence-log.mjs'
 
 export const ANCHOR_FORMAT = 'os-erp-offbox-anchor/1'
@@ -38,7 +38,10 @@ export function buildSignedAnchor({ createdAt = new Date().toISOString(), log, a
   return JSON.stringify({ anchor: evidence, sig: sigBase64 }, null, 2) + '\n'
 }
 
-/** 读取并验签。永不抛错：{ok, anchor, key_id} | {ok:false, reason}。 */
+/**
+ * 读取并验签。永不抛错：{ok, anchor, key_id} | {ok:false, reason}。
+ * `publicKey` 是一把公钥，或公钥集合（AG5）：按锚点里签名元数据的 `key_id` 选钥，集合里没有该 key_id ⇒ 失败（不逐把试）。
+ */
 export function loadAnchor(file, publicKey) {
   const no = (reason) => ({ ok: false, reason: `offbox anchor ${file}: ${reason}` })
   let text
@@ -53,7 +56,13 @@ export function loadAnchor(file, publicKey) {
   const a = doc.anchor
   if (!a || typeof a !== 'object' || Array.isArray(a) || a.format !== ANCHOR_FORMAT) return no(`format is not ${ANCHOR_FORMAT}`)
   if (typeof doc.sig !== 'string') return no('sig must be a string')
-  const v = verifyEvidenceSignature(a, doc.sig, publicKey)
+  let key = publicKey
+  if (Array.isArray(publicKey)) {
+    const want = a.signature && typeof a.signature === 'object' ? a.signature.key_id : undefined
+    key = publicKey.find((k) => publicKeyId(k) === want)
+    if (!key) return no(`signature check failed: signature key_id ${String(want).slice(0, 16)}… is not among the ${publicKey.length} supplied public key(s)`)
+  }
+  const v = verifyEvidenceSignature(a, doc.sig, key)
   if (!v.ok) return no(`signature check failed: ${v.reason}`)
   const L = a.log
   if (!L || typeof L !== 'object' || typeof L.present !== 'boolean') return no('log section malformed')

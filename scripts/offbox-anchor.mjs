@@ -14,6 +14,8 @@
  *   · `--log`：缺省为仓库内 docs/release/EVIDENCE-LOG.jsonl；该文件不存在则锚点记 log.present=false。显式给出但无效 ⇒ 失败。
  *   · 审计链：对每个存在的行业库只读取 verifyChain；链已断 ⇒ 拒绝出锚点（不给坏链背书）。
  *   · 测试接缝：OS_ERP_SSH / OS_ERP_SCP 指向替身；只设 OS_ERP_SSH 而不设 OS_ERP_SCP ⇒ 拒绝（不让真 scp 经替身 ssh 出网）。
+ *   AG5（ADR-0055 补充 3）：锚点签名元数据里的 `key_id`（公钥 SPKI 的 sha256）标明签名者；轮换后换新私钥继续出锚点，复核方给公钥集合（`--pubkey` 可重复或给目录）。
+ *   AG5（ADR-0055 补充 3）：锚点签名元数据里的 `key_id`（公钥 SPKI 的 sha256）标明签名者；轮换后换新私钥继续出锚点，复核方给公钥集合（`--pubkey` 可重复或给目录）。
  *   退出码：0 成功；1 拒绝（链/日志无效、写入失败）；2 用法错误。
  * 【每日流程（AF5）】锚点之后，复核方用 `audit-verify-chain --offbox <文件> --pubkey <公钥> --intent-pubkey <意图公钥> --require-signed-intents`（推荐总带后两项）；
  *   意图签名密钥用 `release-keygen.mjs --purpose anchor-intent` 生成、放在执行清理 / 归档 / 抹除的操作机上。完整命令集见 docs/operations/audit-integrity.md §8。
@@ -28,7 +30,8 @@ import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import Database from 'better-sqlite3'
 import { parseArgs, locateDatabases, die } from './lib/audit-chain-cli.mjs'
-import { loadSigningKey } from './lib/evidence-sign.mjs'
+import { createPublicKey } from 'node:crypto'
+import { loadSigningKey, publicKeyId } from './lib/evidence-sign.mjs'
 import { LOG_FILE } from './lib/evidence-log.mjs'
 import { buildSignedAnchor, stampFor, summarizeLog } from './lib/offbox-anchor.mjs'
 import { isWithin, resolveThroughSymlinks } from './lib/safe-path.mjs'
@@ -127,5 +130,6 @@ if (target.kind === 'local') {
   if (r.status !== 0 || r.stdout !== text) die('WRITE', `读回 ${alias}:${remoteFinal} 与写入内容不一致`, 1)
   console.log(`ANCHOR ssh://${alias}${remoteFinal}`)
 }
+console.log(`  key_id: ${publicKeyId(createPublicKey(key)).slice(0, 16)}（锚点签名元数据里记录完整指纹；复核方的公钥集合按它选钥）`)
 console.log(`  log: ${log.present ? `${log.lines} 行 tail=${log.tail_hash}` : '(无日志)'}`)
 for (const [code, e] of Object.entries(audit)) console.log(`  ${code}: ${e.status === 'chain' ? `${e.rows} 行 tip=${e.tip_hash ?? '(空表)'}` : e.status}`)
