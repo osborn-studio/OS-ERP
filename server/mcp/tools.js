@@ -23,7 +23,7 @@
 // 设计原则：工具直接复用五维库存引擎与组织数据权限，而不是另写一套取数逻辑 ——
 //          这样 AI 看到的数据与人在界面上看到的永远一致，不会出现「AI 说还有 10 件、页面显示 0 件」。
 
-import { pickBatches, queryBalance, costOf, getInvParam, resolveOwnerOrg, applyStockGain } from '../lib/stock.js'
+import { pickBatches, queryBalance, costOf, getInvParam, resolveOwnerOrg, applyStockGain, warehouseInScope } from '../lib/stock.js'
 import { localDate, localNow } from '../lib/dates.js'
 // D5：MCP 工具不再"平行实现"业务 —— 有领域服务的一律调领域服务
 import { decideApproval, ApprovalError } from '../lib/approval.js'
@@ -919,11 +919,12 @@ export const TOOLS = [
     handler({ db, args, ctx }) {
       const no = String(args.doc_no).trim()
       const e = scopeEntityIds(ctx, db)
-      // 库存流水按货主过滤；单据按各自归属列过滤（拿不到归属列的表 = 受限令牌看不到）
+      // 库存流水按货主与仓库范围取交集；单据按各自归属列过滤（拿不到归属列的表 = 受限令牌看不到）
       const txns = db
         .prepare('SELECT * FROM inventory_transactions WHERE doc_no=? ORDER BY id')
         .all(no)
         .filter((t) => !e || e.orgIds.includes(Number(t.owner_org_id)))
+        .filter((t) => warehouseInScope(db, t.warehouse_id, ctx.scope))
       const hits = []
       const owns = {
         purchase_orders: { stores: ['target_store_id'], warehouses: ['warehouse_id'] },
