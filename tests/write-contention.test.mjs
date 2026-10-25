@@ -334,8 +334,9 @@ test('bench-api --profile=write: fixed schema, integrity verified, retries count
     assert.equal(bench(bad, env).status, 2, bad.join(' '))
   }
   const out = path.join(dir, 'write.json')
-  // busy-ms 5 + 外部写者占锁 → BUSY 真实出现；retry-max 8 让写入最终都成功
-  const r = bench(['--profile=write', '--iterations', '12', '--concurrency', '4', '--busy-ms', '5', '--retry-max', '8', '--contender-hold-ms', '25', '--contender-gap-ms', '10', '--out', out], env)
+  // busy-ms 15 < 外部写者占锁 25 ms → BUSY 真实出现；每次尝试约有 (gap+busy)/(hold+gap) ≈ 7 成机会拿到锁，
+  // retry-max 10（上限）让 36 次写入全部成功的概率在托管 runner 的负载抖动下仍接近 1（busy 5 / retry 8 时约 1/3 的运行会有一次用尽）
+  const r = bench(['--profile=write', '--iterations', '12', '--concurrency', '4', '--busy-ms', '15', '--retry-max', '10', '--contender-hold-ms', '25', '--contender-gap-ms', '10', '--out', out], env)
   assert.equal(r.status, 0, r.stdout + r.stderr)
   assert.ok(existsSync(out))
   const j = JSON.parse(readFileSync(out, 'utf8'))
