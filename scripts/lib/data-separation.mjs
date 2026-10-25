@@ -7,7 +7,7 @@
  *     · exposed        其他账号可写（目录或库文件 world-writable）——任何本机账号都能直接改库，高危；
  *     · group-shared   同组账号可写——组成员等于“能写库者”，中危；
  *     · unknown        无法判断（符号链接、读目录 / stat 失败）——不当作通过；
- *     · separated      文件属于**另一个**账号，且当前账号对它们都没有写权限（运行本命令的账号不是能写库者）；
+ *     · separated      文件属于**另一个**账号，当前账号对它们都没有写权限，且对上一级目录也不可写（否则可整体替换 data 目录）；
  *     · single-account 数据归当前账号所有或当前账号仍可写——没有账号级隔离，只能靠离机私钥签名意图（`GML_ANCHOR_INTENT_KEY` + `--require-signed-intents`）；
  *     · not-created    数据目录尚未创建；  · skipped  平台无法判定（Windows 没有可比的 uid / 模式位）。
  * 【边界】这是文件级的账号隔离检查，不是表级的：SQLite 把意图表与业务表放在同一个库文件里，应用账号要写业务数据就必然能写这个文件。
@@ -66,7 +66,10 @@ export function assessDataSeparation({ dataDir, ...injected }) {
   if (has('world-writable')) return done('exposed', 'the data directory or a database file is writable by any local account', dedupe(findings))
   if (has('group-writable')) return done('group-shared', 'the owning group can write the data directory or a database file: group members can write the database', dedupe(findings))
   if (linked || unreadable) return done('unknown', 'some paths could not be inspected (symbolic link or stat failure)', dedupe(findings))
-  if (foreignOwner === targets.length) return done('separated', 'data is owned by another account and not writable from this one', [])
+  // 上一级目录当前账号可写 ⇒ 可以改名 / 替换整个 data 目录，不算隔离（Codex AH5 审计）
+  const parent = path.dirname(dataDir)
+  if (foreignOwner === targets.length && io.canWrite(parent)) add('parent-writable-by-this-account', 'medium', parent, 'the parent directory is writable from this account: the data directory can be renamed and replaced')
+  if (foreignOwner === targets.length && !has('parent-writable-by-this-account')) return done('separated', 'data is owned by another account and not writable from this one', [])
   return done('single-account', 'no account-level separation: the account that owns / can write the data can also forge unsigned anchor intents', dedupe(findings))
 }
 

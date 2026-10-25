@@ -43,6 +43,13 @@ test('AH5 data separation: files owned by another account that this account cann
   assert.deepEqual(r.findings, [])
 })
 
+test('AH5 data separation: a writable parent directory lets the account replace the whole data directory, so it is not separation', () => {
+  const entries = { [D]: { uid: 0, mode: 0o40755, dir: true }, [`${D}/gml_cosmetic.db`]: { uid: 0, mode: 0o100644 } }
+  const r = assessDataSeparation({ dataDir: D, ...fake(entries, { uid: 1000, writable: (p) => p === '/inst' }) })
+  assert.equal(r.status, 'single-account')
+  assert.ok(r.findings.some((f) => f.code === 'parent-writable-by-this-account' && f.path === '/inst'))
+})
+
 test('AH5 data separation: another owner but this account can still write (root, ACL, group) is not separation', () => {
   const entries = { [D]: { uid: 0, mode: 0o40755, dir: true }, [`${D}/gml_cosmetic.db`]: { uid: 0, mode: 0o100644 } }
   const r = assessDataSeparation({ dataDir: D, ...fake(entries, { uid: 0, writable: () => true }) })

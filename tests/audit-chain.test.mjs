@@ -1614,3 +1614,17 @@ test('AH5 baseline-anchor-list-missing: an offbox anchor entry that has a chain 
   assert.deepEqual([r2.status, off(r2).kind], [1, 'baseline-anchor-list-missing'])
   w.db.close()
 })
+
+test('AH5 the key_id date rule also applies on the --against-backup path', (t) => {
+  const k = ae5Keys(t)
+  const w = af5World(t)
+  assert.equal(w.archive({ GML_ANCHOR_INTENT_KEY: k.priv }).status, 0)
+  w.db.prepare('UPDATE audit_anchor_intents SET key_id=NULL').run()
+  const args = ['--require-signed-intents', '--intent-pubkey', k.pub]
+  let v = w.verify(args, { GML_RUNTIME_MODE: 'production', GML_ANCHOR_INTENT_KEY_ID_REQUIRED_AFTER: '2000-01-01' })
+  assert.deepEqual([v.status, ab(v).kind, rule(v).rule], [1, 'intent-key-id-missing', 'production-date-reached'])
+  v = w.verify(args, { GML_RUNTIME_MODE: 'production', GML_ANCHOR_INTENT_KEY_ID_REQUIRED_AFTER: '2999-12-31' })
+  assert.equal(v.status, 0, v.stdout)
+  assert.equal(rule(v).rule, 'production-date-not-reached')
+  w.db.close()
+})
