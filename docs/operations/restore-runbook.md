@@ -69,9 +69,11 @@ GML_BACKUP_KEY="$(cat /secure/backup.key)" GML_RUNTIME_MODE=production GML_DATA_
 | B 加密被打断 | `gml_<库>_<stamp>.db.enc.partial`（或 `….audit-manifest.enc.partial`），0600，是**密文**，不是备份，不能用于恢复 | 密文写完、改名前被杀（断电 / kill -9） | 命名匹配本库、普通文件、修改时间早于 10 分钟（`GML_BACKUP_PARTIAL_MIN_AGE_MS`） | 确认没有备份进程在跑后，等超过 10 分钟再运行 `db-backup`，或手工删除该 `.partial`。**同时**检查同目录有没有 `.*.plain.tmp`：被杀时明文临时文件来不及擦除，必须用 `shred`/脚本的擦除方式处理（不是普通删除），见 `audit-integrity.md` §5b。该次备份没有成功，重新跑一次备份即可。 |
 | C 写报告被打断 | `.backup-report-<stamp>.json.<随机串>.tmp`（点文件） | 报告写完、改名前被杀 | 下一次运行写报告前清扫（上面 A 小节第 2 步） | 不要手工改名成报告；需要时 `jq .` 查看内容。重新运行 `db-backup`。 |
 
+注意：10 分钟年龄保护是启发式的，不是锁；**同一备份目录不要同时跑两个 `db-backup`**（一个进程卡住超过 10 分钟，另一个运行可能清扫它的 `.partial`，卡住的那次恢复后会因改名失败而报 `BACKUP_ENCRYPT_FAILED`，不会产生半截备份，重跑即可）。
+
 核对：下一次成功运行后，`jq .orphan_causes <最新报告>` 应显示各计数与 `files`；若 B 的 `.partial` 仍在，多半是修改时间不足 10 分钟（并发运行保护），稍后再跑即可。`exit 0` 且 `failed=0` 才算收尾。
 
-> AH6 Codex 审计记录：见本分支提交说明（`Codex audit` 段）。
+> AH6 Codex 审计记录：无高危发现；两个中危（清扫 `.partial` 的并发保护只是年龄启发式、登记报告把“配置了”当成“已注入”）——后者已修复（报告区分 injected / not-reached / refused），前者已在上文如实写明限制，未加文件锁。
 
 ## 2. 定期：恢复演练（证明备份能起来，量 RTO/RPO）
 

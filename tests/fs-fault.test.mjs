@@ -31,7 +31,12 @@ const FAULT_RECORDS = []
 if (process.env.GML_FS_FAULT_REPORT) process.on('exit', () => { writeFaultReport(process.env.GML_FS_FAULT_REPORT, FAULT_RECORDS) })
 const run = (script, args, dir, extra = {}) => {
   const r = spawnSync(process.execPath, [script, ...args], { cwd: ROOT, env: envFor(dir, extra), encoding: 'utf8', timeout: 120000 })
-  if (extra.GML_TEST_FS_FAULT) FAULT_RECORDS.push({ script, point: extra.GML_TEST_FS_FAULT, mode: extra.GML_TEST_FS_FAULT_MODE ?? 'throw', status: r.status, signal: r.signal })
+  if (extra.GML_TEST_FS_FAULT) {
+    const out = `${r.stdout}${r.stderr}`
+    // 到达证据：SIGABRT、或输出里有注入消息、或非零退出且不是配置被拒；退出 0 = 没走到该点；FS_FAULT_* 拒绝 = 配置被拒
+    const result = r.signal === 'SIGABRT' || out.includes(`injected filesystem fault at ${extra.GML_TEST_FS_FAULT}`) ? 'injected' : /FS_FAULT_(FORBIDDEN|UNKNOWN|MODE_INVALID)/.test(out) ? 'refused' : r.status === 0 ? 'not-reached' : 'injected'
+    FAULT_RECORDS.push({ script, point: extra.GML_TEST_FS_FAULT, mode: extra.GML_TEST_FS_FAULT_MODE ?? 'throw', status: r.status, signal: r.signal, result })
+  }
   return r
 }
 const fault = (name, mode) => ({ GML_TEST_FS_FAULT: name, GML_TEST_FS_FAULT_MODE: mode })
@@ -745,11 +750,11 @@ const partialsOf = (f) => f.names().filter((n) => n.endsWith('.partial'))
 
 test('registry (AH6): the two new backup points are registered; fault report builder records only whitelisted fields and lists unexercised points', () => {
   for (const p of AH6_POINTS) assert.ok(FAULT_POINTS.backup.includes(p), p)
-  const rep = buildFaultReport([{ script: BACKUP, point: 'backup.after-db-copy', mode: 'abort', status: null, signal: 'SIGABRT', secret: 'x' }, { script: BACKUP, point: 'backup.after-sidecar', mode: 'throw', status: 1, signal: null }], { GITHUB_ACTIONS: 'true', GML_JWT_SECRET: 'nope' })
+  const rep = buildFaultReport([{ script: BACKUP, point: 'backup.after-db-copy', mode: 'abort', status: null, signal: 'SIGABRT', result: 'injected', secret: 'x' }, { script: BACKUP, point: 'backup.after-sidecar', mode: 'throw', status: 1, signal: null, result: 'injected' }, { script: BACKUP, point: 'archive.after-delete', mode: 'throw', status: 0, signal: null, result: 'not-reached' }, { script: BACKUP, point: 'log.after-lock', mode: 'throw', status: 2, signal: null, result: 'refused' }], { GITHUB_ACTIONS: 'true', GML_JWT_SECRET: 'nope' })
   assert.equal(rep.target_host, false); assert.equal(rep.hosted_runner, true)
-  assert.deepEqual(rep.injections.map((i) => [i.point, i.mode, i.outcome]), [['backup.after-db-copy', 'abort', 'signal:SIGABRT'], ['backup.after-sidecar', 'throw', 'exit:1']])
-  assert.deepEqual(rep.summary, { injections: 2, aborted: 1, nonzero_exit: 1, exit_zero: 0 })
-  assert.ok(rep.not_exercised.includes('archive.after-delete') && !rep.not_exercised.includes('backup.after-db-copy'))
+  assert.deepEqual(rep.injections.map((i) => [i.point, i.mode, i.outcome]), [['backup.after-db-copy', 'abort', 'signal:SIGABRT'], ['backup.after-sidecar', 'throw', 'exit:1'], ['archive.after-delete', 'throw', 'exit:0'], ['log.after-lock', 'throw', 'exit:2']])
+  assert.deepEqual(rep.summary, { attempts: 4, injected: 2, not_reached: 1, refused: 1, aborted: 1, nonzero_exit: 2, exit_zero: 1 })
+  assert.ok(rep.not_exercised.includes('archive.after-delete') && rep.not_exercised.includes('log.after-lock') && !rep.not_exercised.includes('backup.after-db-copy'), 'only points confirmed injected count as exercised')
   assert.doesNotMatch(JSON.stringify(rep), /nope|secret/)
 })
 

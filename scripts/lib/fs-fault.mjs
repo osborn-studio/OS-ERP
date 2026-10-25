@@ -58,9 +58,10 @@ export function buildFaultReport(records, env = process.env, now = new Date()) {
     script: String(r.script),
     point: String(r.point),
     mode: String(r.mode ?? 'throw'),
+    result: r.result ?? 'injected', // injected = 确认走到该点；not-reached = 配置了但进程正常结束；refused = 配置被拒
     outcome: r.signal ? `signal:${r.signal}` : `exit:${r.status}`
   }))
-  const seen = new Set(injections.map((i) => i.point))
+  const seen = new Set(injections.filter((i) => i.result === 'injected').map((i) => i.point))
   return {
     schema: 'os-erp.fs-fault-report/1',
     generated_at: now.toISOString(),
@@ -72,7 +73,10 @@ export function buildFaultReport(records, env = process.env, now = new Date()) {
     note: 'hosted runner or development machine; not a target host and not release acceptance',
     registered_points: [...ALL].length,
     summary: {
-      injections: injections.length,
+      attempts: injections.length,
+      injected: injections.filter((i) => i.result === 'injected').length,
+      not_reached: injections.filter((i) => i.result === 'not-reached').length,
+      refused: injections.filter((i) => i.result === 'refused').length,
       aborted: injections.filter((i) => i.outcome === 'signal:SIGABRT').length,
       nonzero_exit: injections.filter((i) => /^exit:(?!0$)/.test(i.outcome)).length,
       exit_zero: injections.filter((i) => i.outcome === 'exit:0').length

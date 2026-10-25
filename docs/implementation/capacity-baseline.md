@@ -868,7 +868,7 @@ gh run view <run-id> --log-failed
 
 | 项 | macOS（Mac mini） | Linux（hosted runner） |
 | --- | --- | --- |
-| 注入次数 / SIGABRT / 非零退出 / 退出 0 | 60 / 29 / 30 / 1（本机一次运行的报告汇总） | **待从 CI 产物填写；托管 runner，不是目标主机** |
+| 注入次数 / SIGABRT / 非零退出 / 退出 0 | 本机一次运行 60 次尝试（其中 1 次配置了但未走到该点，即“无删除则不触发”用例）、29 次 SIGABRT；报告把 injected / not-reached / refused 分开记 | **待从 CI 产物填写；托管 runner，不是目标主机** |
 | 未被演练的注册点 | `log.*` 三个（由 evidence-log 专用用例直接驱动，不经 `run` 记录） | 待从 CI 产物填写 |
 | `platform:` 用例（目录 fsync、rename 覆盖、`wx`、大小写） | 通过 | 待从 CI 产物 / 日志填写 |
 | 总耗时 | 约 213 秒 | 待填 |
