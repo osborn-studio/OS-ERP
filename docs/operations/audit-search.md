@@ -77,7 +77,7 @@ node scripts/audit-fts-maintain.mjs --data-dir /abs/path/to/data --industry cosm
 - 并发与失败：设置与对象在同一个 `BEGIN IMMEDIATE` 事务里改，拿不到锁 → `status: busy`、二者都不变；中途失败 → 整体回滚。
 - **在途请求与 `--disable`（AF4 已处理）**：检索请求「选定走 FTS」与「执行查询」之间索引表被删时，查询路径捕获 `no such table: audit_logs_fts`，**只重试一次**，换 LIKE 重跑（结果与 FTS 路径逐行相同），并使 `os_erp_audit_fts_fallback_total{reason="query"}` +1；CSV 导出跨批次时在原游标处换 LIKE 继续（`reason="export_batch"`），行不重不漏。重试后再失败、或别的错误，照常报错——不吞错。
 - **启动自愈与维护脚本重叠（AF4 已处理）**：启动自愈（迁移 071 经 `supersedesVerifyOf` 接管 067 的自检）与 `--enable`/`--disable` 都用 `BEGIN IMMEDIATE` 先取写锁（遇 `SQLITE_BUSY` / `SQLITE_BUSY_SNAPSHOT` 有上限地重试，脚本总等待不超过 `--busy-ms`），**拿到锁后重读设置与对象**：状态已被对方收敛则什么都不做（脚本报告 `already_in_state: true`；启动日志出现 `heal-skip 071`）。所以「后到者」的结论是：它不会撤销先到者的决定，也不会因陈旧快照使启动失败。仍然成立的边界：重叠的 `--enable` 持写锁到回填结束，等待超过上限的一方得到 `busy`（脚本）或启动失败（重启即可）。
-- 回退计数 `os_erp_audit_fts_fallback_total{reason}` 的读法见操作手册第五十四章。注意：审计页上"维护中 / 回退"槽位读的 `fallback_total` 字段服务端的 FTS 状态目前没有返回，槽位不会显示数据，请以该计数器为准。
+- 回退计数 `os_erp_audit_fts_fallback_total{reason}` 的读法见操作手册第五十四章。审计列表响应的 `fts.fallback_total`（AG11）是各 `reason` 之和，审计页的索引状态卡据此显示；它同样是本进程自启动以来的累计，重启归零、多进程各自计数，分 `reason` 的明细只在计数器里。
 - 无 FTS5 构建：CI 的 `audit-no-fts5` job（`ci.yml`）从源码重编译去掉 `SQLITE_ENABLE_FTS5` 的 better-sqlite3 并跑审计视图与维护测试；该 job 在托管 runner 上的首次运行结果尚未验证（见 ADR-0054）。
 
 ## 6. 切换时机与写入失败的含义（AG4，ADR-0054 补充）
