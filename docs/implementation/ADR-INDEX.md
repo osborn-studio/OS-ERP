@@ -3,7 +3,7 @@
 <!-- generated -->
 <!-- 由 `node scripts/gen-codemap.mjs` 生成，勿手改；CI 校验不漂移 -->
 
-共 43 个 ADR 文件。批次来自 `scripts/gen-changelog.mjs` 的 BATCHES（编号区间）；状态是 ADR 原文“状态：”一句的摘录（没有就如实标注），**不代表验收**；“守卫 / 测试”是 ADR 正文里提到的文件路径（静态正则提取，路径不存在时标注“（不存在）”），不证明该测试覆盖了 ADR 的全部决定。
+共 44 个 ADR 文件。批次来自 `scripts/gen-changelog.mjs` 的 BATCHES（编号区间）；状态是 ADR 原文“状态：”一句的摘录（没有就如实标注），**不代表验收**；“守卫 / 测试”是 ADR 正文里提到的文件路径（静态正则提取，路径不存在时标注“（不存在）”），不证明该测试覆盖了 ADR 的全部决定。
 
 | 编号 | 标题 | 批次 | 状态（原文摘录） | 守卫（scripts/） | 测试（tests/） |
 |---|---|---|---|---|---|
@@ -50,3 +50,4 @@
 | 0041 | [ADR-0041：MCP `order.trace_document` 与 `doc.query` 按单据解析器表判归属](ADR-0041-mcp-trace-query-scope.md) | 第十批（进行中） | 开发实现，尚非产品上线验收 | `check-mcp-coverage.mjs` | — |
 | 0042 | [ADR-0042：OMS 写路由与 MCP 库存工具按组织范围收口](ADR-0042-oms-write-mcp-inventory-scope.md) | 第十批（进行中） | 开发实现，尚非产品上线验收 | `check-mcp-coverage.mjs`<br>`check-route-authz.mjs`<br>`test-mcp.mjs`<br>`test-stock-v2.mjs` | — |
 | 0044 | [ADR-0044：低库存口径统一与看板热点块（AA5）](ADR-0044-dashboard-hot-blocks.md) | 第十批（进行中） | 开发实现，尚非产品上线验收 | — | — |
+| 0045 | [ADR-0045 Prometheus 指标导出与抓取令牌（AA10）](ADR-0045-metrics-export.md) | 第十批（进行中） | 开发实现，尚非产品上线验收 | — | — |

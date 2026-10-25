@@ -412,17 +412,17 @@
 
 | 处理器 | 方法 | 路径 | 分类 | 中间件链 | 调用的 lib 函数 | 处理器内 SQL 表 | 经 lib 触达的表 |
 |---|---|---|---|---|---|---|---|
-| `meta.js:105` | GET | `/api/meta/health` | NO_AUTH | optionalAuth | lib/ops-status.js: computeOpsStatus | products | login_throttle_meta, settings, users |
-| `meta.js:128` | GET | `/api/meta/metrics` | AUTH_ONLY | requireAuth | lib/ops-status.js: computeOpsStatus, opsCounters | — | login_throttle_meta, settings, users |
-| `meta.js:137` | GET | `/api/meta/dict` | NO_AUTH | （无） | — | inv_txn_types | — |
-| `meta.js:199` | GET | `/api/meta/settings` | GATED | requireAuth → requireRole | lib/settings.js: ensureSettings, listSettings | — | setting_audit_log, settings, users |
-| `meta.js:210` | PUT | `/api/meta/settings` | GATED | requireAuth → requireRole | lib/settings.js: ensureSettings, writeSetting | — | audit_logs, setting_audit_log, settings, users |
-| `meta.js:238` | POST | `/api/meta/settings/reset` | GATED | requireAuth → requireRole | lib/settings.js: ensureSettings, resetSetting | — | audit_logs, setting_audit_log, settings, users |
-| `meta.js:262` | GET | `/api/meta/settings/defs` | GATED | requireAuth → requireRole | — | — | users |
-| `meta.js:289` | GET | `/api/meta/settings/audit` | GATED | requireAuth → requireRole | lib/settings.js: listSettingAudit | — | setting_audit_log, users |
-| `meta.js:305` | GET | `/api/meta/settings/audit/check` | GATED | requireAuth → requireRole | lib/settings.js: auditSettingTrail, ensureSettings | — | setting_audit_log, settings, users |
-| `meta.js:339` | GET | `/api/meta/audit-logs` | GATED | requireAuth → requirePerm → requireGlobalData | lib/audit-view.js: buildWhere, countCapped, orderOf, parseFilters, viewRow<br>lib/settings.js: readSetting | audit_logs | orgs, role_permissions, roles, settings, user_roles, users |
-| `meta.js:368` | GET | `/api/meta/audit-logs/export.csv` | GATED | requireAuth → requirePerm → requireGlobalData | lib/audit-view.js: buildWhere, exportChunks, orderOf, parseFilters | audit_logs | orgs, role_permissions, roles, user_roles, users |
+| `meta.js:109` | GET | `/api/meta/health` | NO_AUTH | optionalAuth | lib/ops-status.js: computeOpsStatus | products | login_throttle_meta, settings, users |
+| `meta.js:151` | GET | `/api/meta/metrics` | NO_AUTH | metricsAuth | lib/metrics-export.js: metricsTokenOk, renderPrometheus<br>lib/ops-status.js: computeOpsStatus, opsCounters<br>lib/process-counters.js: counterSnapshot<br>lib/tx.js: writeRetryStats | — | login_throttle_meta, settings, users |
+| `meta.js:168` | GET | `/api/meta/dict` | NO_AUTH | （无） | — | inv_txn_types | — |
+| `meta.js:230` | GET | `/api/meta/settings` | GATED | requireAuth → requireRole | lib/settings.js: ensureSettings, listSettings | — | setting_audit_log, settings, users |
+| `meta.js:241` | PUT | `/api/meta/settings` | GATED | requireAuth → requireRole | lib/settings.js: ensureSettings, writeSetting | — | audit_logs, setting_audit_log, settings, users |
+| `meta.js:269` | POST | `/api/meta/settings/reset` | GATED | requireAuth → requireRole | lib/settings.js: ensureSettings, resetSetting | — | audit_logs, setting_audit_log, settings, users |
+| `meta.js:293` | GET | `/api/meta/settings/defs` | GATED | requireAuth → requireRole | — | — | users |
+| `meta.js:320` | GET | `/api/meta/settings/audit` | GATED | requireAuth → requireRole | lib/settings.js: listSettingAudit | — | setting_audit_log, users |
+| `meta.js:336` | GET | `/api/meta/settings/audit/check` | GATED | requireAuth → requireRole | lib/settings.js: auditSettingTrail, ensureSettings | — | setting_audit_log, settings, users |
+| `meta.js:370` | GET | `/api/meta/audit-logs` | GATED | requireAuth → requirePerm → requireGlobalData | lib/audit-view.js: buildWhere, countCapped, orderOf, parseFilters, viewRow<br>lib/settings.js: readSetting | audit_logs | orgs, role_permissions, roles, settings, user_roles, users |
+| `meta.js:399` | GET | `/api/meta/audit-logs/export.csv` | GATED | requireAuth → requirePerm → requireGlobalData | lib/audit-view.js: buildWhere, exportChunks, orderOf, parseFilters | audit_logs | orgs, role_permissions, roles, user_roles, users |
 
 ## server/routes/metrics.js
 

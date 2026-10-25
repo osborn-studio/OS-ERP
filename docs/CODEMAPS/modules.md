@@ -3,7 +3,7 @@
 <!-- generated -->
 <!-- 由 `node scripts/gen-codemap.mjs` 生成，勿手改；CI 校验不漂移 -->
 
-共 76 个模块。“路由”只列在处理器区域内直接引用该函数的路由（路由超过 5 条时按路由文件汇总，明细见 [routes.md](routes.md)）；“MCP 工具”来自 `server/mcp/tools.js` 的 40 个工具；“被模块调用”是其它 lib/mcp 模块里的跨文件引用。“—”表示静态扫描没找到调用方，不等于死代码。
+共 78 个模块。“路由”只列在处理器区域内直接引用该函数的路由（路由超过 5 条时按路由文件汇总，明细见 [routes.md](routes.md)）；“MCP 工具”来自 `server/mcp/tools.js` 的 40 个工具；“被模块调用”是其它 lib/mcp 模块里的跨文件引用。“—”表示静态扫描没找到调用方，不等于死代码。
 
 ## 扫描边界（必读）
 
@@ -686,6 +686,17 @@ HTTP 响应与错误归一：`ok` / `fail` / `wrap` 的**唯一实现**（统一
 | `updateLevel` | fn | PUT /api/promo/levels/:code | — | — |
 | `yuanToCents` | fn | — | — | — |
 
+## `server/lib/metrics-export.js`
+
+Prometheus 文本指标渲染 + 抓取令牌校验（ADR-0045）
+
+| 导出 | 类型 | 路由 | MCP 工具 | 被模块调用 |
+|---|---|---|---|---|
+| `METRICS_TOKEN_MIN_LENGTH` | const | — | — | — |
+| `PROMETHEUS_CONTENT_TYPE` | const | — | — | — |
+| `metricsTokenOk` | fn | GET /api/meta/metrics | — | — |
+| `renderPrometheus` | fn | GET /api/meta/metrics | — | — |
+
 ## `server/lib/metrics.js`
 
 数据口径字典（模块 23）
@@ -782,7 +793,7 @@ HTTP 响应与错误归一：`ok` / `fail` / `wrap` 的**唯一实现**（统一
 | `lastBackupStatus` | fn | — | — | — |
 | `loginThrottleStatus` | fn | — | — | — |
 | `migrationChecksumStatus` | fn | — | — | — |
-| `opsCounters` | fn | GET /api/meta/metrics | — | — |
+| `opsCounters` | fn | GET /api/meta/metrics | — | lib/metrics-export.js |
 
 ## `server/lib/order-center.js`
 
@@ -935,6 +946,17 @@ HTTP 响应与错误归一：`ok` / `fail` / `wrap` 的**唯一实现**（统一
 | `logPriceChange` | fn | PUT /api/pricing/groups/:id/items | pricing.update_price | lib/agreement.js, mcp/tools.js |
 | `resolvePrice` | fn | GET /api/dms/agreements/explain<br>GET /api/pricing/resolve | — | lib/order-center.js, lib/quote.js |
 | `resolvePrices` | fn | POST /api/pricing/resolve-batch | — | — |
+
+## `server/lib/process-counters.js`
+
+进程级事件计数器（只增不减，进程重启归零）（ADR-0045）
+
+| 导出 | 类型 | 路由 | MCP 工具 | 被模块调用 |
+|---|---|---|---|---|
+| `COUNTER_DEFS` | const | — | — | lib/metrics-export.js |
+| `counterSnapshot` | fn | GET /api/meta/metrics | — | — |
+| `incCounter` | fn | — | — | lib/audit-trail.js, lib/login-throttle.js, mcp/server.js |
+| `resetCounters` | fn | — | — | — |
 
 ## `server/lib/profile.js`
 
@@ -1439,7 +1461,7 @@ HTTP 响应与错误归一：`ok` / `fail` / `wrap` 的**唯一实现**（统一
 | `resetWriteRetryStats` | fn | — | — | — |
 | `withWriteRetry` | fn | 8 条：ar.js×2, inventory.js×3, purchase.js×3 | — | — |
 | `writeRetryMaxFromEnv` | fn | — | — | — |
-| `writeRetryStats` | fn | — | — | — |
+| `writeRetryStats` | fn | GET /api/meta/metrics | — | — |
 
 ## `server/lib/warehouse.js`
 
