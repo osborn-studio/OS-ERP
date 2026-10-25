@@ -25,6 +25,13 @@
  *   ① 算出要删的旧备份与孤儿清单，记进报告条目（`pruned` / `pruned_orphans`，`prune_state=planned`）并把 `report_phase=pre-prune` 的报告持久化；② 才删除（备份先、清单后），再 fsync 目录；
  *   ③ 写 `report_phase=final` 终版报告（`prune_state=done|failed|skipped|none`）。pre-prune 报告写不下去 ⇒ 不删任何文件（`skipped`）。注入点 `backup.after-report-write-before-rename`、`backup.after-prune-delete-before-dirsync`。
  *
+ * 【孤儿成因，分别计数】（AH6）清理阶段（及报告写入）识别并清扫三种被打断后的遗留物，报告顶层 `orphan_causes` 给出各自的文件数与文件名：
+ *   A `prune_interrupted_manifest`：上一份报告把某备份列为“清理被打断”（planned/failed），而它已删、清单还在（注入点 `backup.prune-between-backup-and-manifest`）；
+ *   B `encrypt_interrupted_part`：加密在改名前被打断留下的 `<库>_<stamp>.db.enc.partial` / `….db.enc.audit-manifest.enc.partial`（注入点 `backup.encrypt-before-rename`；
+ *     只认本库命名规则的普通文件，且 mtime 早于 GML_BACKUP_PARTIAL_MIN_AGE_MS，默认 10 分钟，防止误删并发运行正在写的文件）；
+ *   C `report_write_interrupted_tmp`：写报告被打断遗留的 `.backup-report-*.tmp`（注入点 `backup.after-report-write-before-rename`）。
+ *   B、A 的名字同样先记进 pre-prune 报告（条目 `pruned_orphans` / `pruned_partials`）再删除。上一份报告没有解释的孤儿清单、别的库/用户的 `.partial` 一律不碰。
+ *
  * 【写入顺序】（AD6）无密钥时快照先写 `<终名>.partial`，校验通过、fsync 后才 rename 成终名 `.db`；注入点 `backup.{after-db-copy,before-sidecar,after-sidecar}`（GML_TEST_FS_FAULT，仅 test 模式）
  *   之后的状态与恢复见 docs/operations/audit-integrity.md §5b。
  *
@@ -364,7 +371,7 @@ for (const snap of snaps) {
   if (backupKey) {
     const t0 = performance.now()
     try {
-      const enc = encryptFile(out, finalOut, backupKey)
+      const enc = encryptFile(out, finalOut, backupKey, { beforeRename: () => faultPoint('backup.encrypt-before-rename') })
       decryptFile(finalOut, null, backupKey) // 回读认证：确认落盘密文能用当前密钥解开
       fsyncDir(dir) // 密文改名的目录项先落盘，再擦除明文（AF6）
       entry.encryption = { algorithm: 'AES-256-GCM', format_version: FORMAT_VERSION, kdf: 'HKDF-SHA256(per-file salt)', ms: Math.round(performance.now() - t0) }
@@ -468,6 +475,21 @@ function interruptedPrunes(dir, code) {
     return new Set(e && (e.prune_state === 'planned' || e.prune_state === 'failed') && Array.isArray(e.pruned) ? e.pruned : [])
   } catch { return new Set() }
 }
+const PARTIAL_MIN_AGE_MS = (() => {
+  const raw = process.env.GML_BACKUP_PARTIAL_MIN_AGE_MS
+  if (raw === undefined || raw === '') return 10 * 60 * 1000
+  const n = Number(raw)
+  if (!Number.isInteger(n) || n < 0) usageError(`GML_BACKUP_PARTIAL_MIN_AGE_MS 必须是不小于 0 的整数：${raw}`)
+  return n
+})()
+const escapeRe = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+function isEncPartial(dir, base, f) {
+  if (!new RegExp(`^${escapeRe(base)}_\\d{8}-\\d{6}(?:_\\d+)?\\.db\\.enc(?:\\.audit-manifest\\.enc)?\\.partial$`).test(f)) return false
+  try {
+    const st = fs.lstatSync(path.join(dir, f))
+    return st.isFile() && Date.now() - st.mtimeMs >= PARTIAL_MIN_AGE_MS
+  } catch { return false }
+}
 for (const { snap } of pending) {
   const { entry, cfg, dir, base } = snap
   if (entry.status !== 'ok') continue
@@ -489,10 +511,23 @@ for (const { snap } of pending) {
     const backup = f.slice(0, -sfx.length)
     return isBackupName(backup) && !names.includes(backup) && interrupted.has(backup)
   })
-  entry.prune_state = entry.pruned.length || entry.pruned_orphans.length ? 'planned' : 'none'
+  // AH6 成因 B：加密被打断遗留的 `<终名>.db.enc.partial` / `<终名>.db.enc.audit-manifest.enc.partial`（密文，不是备份）。
+  // 只认本库命名规则、普通文件（非符号链接），且最后修改早于最小年龄（默认 10 分钟，避免误删并发运行正在写的文件）。
+  entry.pruned_partials = names.filter((f) => isEncPartial(dir, base, f))
+  entry.prune_state = entry.pruned.length || entry.pruned_orphans.length || entry.pruned_partials.length ? 'planned' : 'none'
 }
 
 // ---- 报告：临时文件 → fsync → rename → 目录 fsync（AG6）。写到用到的每个备份目录；只有整次成功才顺带清理旧报告 ----
+const sweptReportTmps = [] // AH6 成因 C：被打断的报告临时文件（上次运行遗留），本次清扫并计数
+/** AH6：三种孤儿成因分别计数并列名（清单为空 ⇒ 0）。A=清理被打断的孤儿清单；B=加密被打断的 .partial；C=写报告被打断的临时文件 */
+const orphanCauses = () => {
+  const files = {
+    prune_interrupted_manifest: results.flatMap((r) => r.pruned_orphans ?? []),
+    encrypt_interrupted_part: results.flatMap((r) => r.pruned_partials ?? []),
+    report_write_interrupted_tmp: [...sweptReportTmps]
+  }
+  return { ...Object.fromEntries(Object.entries(files).map(([k, v]) => [k, v.length])), files }
+}
 const reportBody = (phase) => JSON.stringify({
   script: 'scripts/db-backup.mjs',
   generated_at: new Date().toISOString(),
@@ -503,6 +538,7 @@ const reportBody = (phase) => JSON.stringify({
   failed,
   encrypted: !!backupKey,
   consistency_stamp: consistency,
+  orphan_causes: orphanCauses(),
   results
 }, null, 2) + '\n'
 const sweptDirs = new Set()
@@ -515,7 +551,7 @@ function writeReport(dir, phase) {
     mkdirDurable(dir)
     if (!sweptDirs.has(dir)) {
       sweptDirs.add(dir)
-      for (const f of fs.readdirSync(dir)) if (/^\.backup-report-.*\.tmp$/.test(f)) fs.rmSync(path.join(dir, f), { force: true }) // 上次被打断遗留的报告临时文件
+      for (const f of fs.readdirSync(dir)) if (/^\.backup-report-.*\.tmp$/.test(f)) { fs.rmSync(path.join(dir, f), { force: true }); sweptReportTmps.push(f) } // 上次被打断遗留的报告临时文件（AH6：计数）
     }
     writeFileDurable(tmpFile, reportBody(phase), [], 0o666)
     faultPoint('backup.after-report-write-before-rename')
@@ -536,7 +572,7 @@ for (const dir of dirsUsed.keys()) {
   const planned = results.filter((r) => r.prune_state === 'planned' && path.dirname(r.file) === dir)
   if (!planned.length) continue
   if (!writeReport(dir, 'pre-prune')) {
-    for (const r of planned) { r.prune_state = 'skipped'; r.pruned = []; r.pruned_orphans = [] }
+    for (const r of planned) { r.prune_state = 'skipped'; r.pruned = []; r.pruned_orphans = []; r.pruned_partials = [] }
   }
 }
 // 2) 删除，然后 fsync 目录；被打断后 pruned 里的名字就是“已删或将删”，下一次运行按 keep 规则继续
@@ -545,9 +581,11 @@ for (const entry of results.filter((r) => r.prune_state === 'planned')) {
   try {
     for (const f of entry.pruned) {
       fs.unlinkSync(path.join(dir, f))
+      faultPoint('backup.prune-between-backup-and-manifest') // AH6：备份已删、清单未删 ⇒ 真实的孤儿清单（成因 A）
       for (const sfx of SIDECAR_SFX) fs.rmSync(path.join(dir, `${f}${sfx}`), { force: true }) // 清单随备份一起裁剪
     }
     for (const f of entry.pruned_orphans) fs.rmSync(path.join(dir, f), { force: true })
+    for (const f of entry.pruned_partials) fs.rmSync(path.join(dir, f), { force: true })
     faultPoint('backup.after-prune-delete-before-dirsync')
     fsyncDir(dir)
     entry.prune_state = 'done'

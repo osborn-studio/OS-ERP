@@ -123,6 +123,17 @@ node scripts/audit-archive.mjs --data-dir /abs/data --industry cosmetic --before
 
 注意 `.audit-manifest.json` 在加密模式下仍是明文，内容固定为 `format / industry / backup_file / backup_sha256 / created_at / audit_chain`（`audit_chain` 为链尾 id / 行哈希 / 行数与锚点明细，含锚点 reason 与时间戳；不含业务行数据；测试断言键集合），设计如此；需要机密性的离机副本用 `.audit-manifest.enc`。
 
+#### AH6：新增两个注入点、孤儿成因与 Linux 登记
+
+- `backup.encrypt-before-rename`：密文已写完并 fsync、尚未改名（经 `encryptFile` 的 `beforeRename` 回调触发；加密模式才会到达）。abort ⇒ 留下 0600 的 `<终名>.db.enc.partial`（密文）**以及**尚未擦除的 `.plain.tmp`（既有明文窗口的延伸）；throw ⇒ `encryptFile` 删除自己的 partial、明文被擦除，`BACKUP_ENCRYPT_FAILED`。恢复：见 restore-runbook 成因 B。
+- `backup.prune-between-backup-and-manifest`：旧备份已 `unlink`、其清单尚未删除。abort/throw ⇒ 真实的孤儿清单；pre-prune 报告已列出该备份名，下一次运行据此清扫（成因 A）。
+- 报告顶层 `orphan_causes` 把成因 A / B / C 分别计数（见 restore-runbook）。两个新点和成因 C 的既有点各有专用用例（`tests/fs-fault.test.mjs`，AH6 段），不进入通用的"每点 × 两种模式"循环。
+- CI 的 `fs-fault` job（`ci.yml` 末尾）在 ubuntu-latest 上跑 `tests/fs-fault.test.mjs` 与 `tests/db-backup.test.mjs`，并以 `GML_FS_FAULT_REPORT` 上传 `fs-fault-report.json`（每次注入的点名、模式、结果）。**该 job 尚未在 GitHub 上运行过**；运行后的结果填入 capacity-baseline.md 的 AH6 表。
+
+| 注入点族 | macOS（Mac mini，开发机） | Linux（hosted runner） |
+| --- | --- | --- |
+| 全部 `archive.*` / `backup.*`（含两个 AH6 新点）× throw/abort | 本机通过（见 capacity-baseline.md AF6/AG6/AH6 记录） | 待从 CI 产物 `fs-fault-report.json` 填写；**托管 runner，不是目标主机（dmserver）** |
+
 #### 持久性声明：进程崩溃 vs 断电（AF6）
 
 - **进程崩溃（kill -9 / SIGABRT / 异常退出，内核存活）**：上表即全部结论，由 abort 模式的注入测试逐点验证；页缓存里的数据不丢。

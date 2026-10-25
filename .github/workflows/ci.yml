@@ -428,3 +428,40 @@ jobs:
             ${{ runner.temp }}/dependency-review/audit-dev.json
           if-no-files-found: error
           retention-days: 30
+
+  # AH6: backup fault-injection matrix on a hosted Linux runner. Runs tests/fs-fault.test.mjs and tests/db-backup.test.mjs with
+  # GML_FS_FAULT_REPORT, which records every injection point, mode and outcome into fs-fault-report.json (uploaded as an artifact).
+  # The report is evidence from a GitHub-hosted ubuntu runner: it is not a result from the dmserver target host and not release
+  # acceptance. Isolated temp directories only; no secrets; read-only token.
+  fs-fault:
+    name: Backup fault injection (hosted Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install locked dependencies and selected native build hooks
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm rebuild better-sqlite3 --no-audit --no-fund
+      - name: Run the fault matrix and backup tests (writes fs-fault-report.json)
+        env:
+          GML_FS_FAULT_REPORT: ${{ runner.temp }}/fs-fault/fs-fault-report.json
+        run: |
+          set -euo pipefail
+          export GML_JWT_SECRET="$(openssl rand -hex 32)"
+          node --test --test-concurrency=1 tests/fs-fault.test.mjs tests/db-backup.test.mjs
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: os-erp-fs-fault-report-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/fs-fault/fs-fault-report.json
+          if-no-files-found: error
+          retention-days: 14
