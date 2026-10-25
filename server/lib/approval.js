@@ -44,6 +44,7 @@ import { setApprovalGate, effectOwnerOf } from './docflow.js'
 // 审批放行必须走正门那段代码，而 PO 的效果归属只有域侧知道。
 import { transitionPurchaseOrder, purchaseScopeSql } from './purchase.js'
 import { salesScopeSql } from './sales-order.js'
+import { readSetting } from './settings.js'
 import { ocScope } from './order-center.js'
 
 export class ApprovalError extends Error {
@@ -119,6 +120,17 @@ function isApprovalManager(db, actor) {
   return !!u?.is_super || u?.role === 'admin' || userPermissions(db, actor?.id, u?.role).includes('system:approval:manage')
 }
 
+/**
+ * 「管理员全见」是否对这次调用生效（Z9，设置 `approval_manager_global`）：
+ * 设置开（默认）⇒ 审批管理员全见（ADR-0015）；设置关 ⇒ 受限范围下管理员与普通账号同口径
+ * （范围内单据 ∪ 自己的审批队列）。全局范围 / 不传 scopeCtx 的调用不受此开关影响。
+ */
+function managerSeesAll(db, actor, scopeCtx) {
+  if (!isApprovalManager(db, actor)) return false
+  if (isGlobalCtx(scopeCtx)) return true
+  return readSetting(db, 'approval_manager_global') === true
+}
+
 const isGlobalCtx = (scopeCtx) => !scopeCtx || !scopeCtx.orgScope || scopeCtx.orgScope.scope === 'all'
 const stepOfInstance = (db, inst) =>
   db.prepare('SELECT * FROM approval_steps WHERE template_id=? AND step_no=?').get(inst.template_id, inst.current_step)
@@ -133,7 +145,7 @@ export function instanceVisibleTo(db, inst, actor, scopeCtx = null) {
   if (inst.status === 'pending') {
     if (canApproveStep(db, stepOfInstance(db, inst), actor)) return true
     // 审批管理员的"待我审批"全见（ADR-0015）是既有契约：pending 队列不受组织限制；非 pending 与决定仍按单据范围
-    if (scopeCtx._mgr === undefined) scopeCtx._mgr = isApprovalManager(db, actor)
+    if (scopeCtx._mgr === undefined) scopeCtx._mgr = managerSeesAll(db, actor, scopeCtx)
     if (scopeCtx._mgr) return true
   }
   return approvalDocScope(db, inst.doc_type, inst.doc_id, scopeCtx)
@@ -614,8 +626,8 @@ export function listInstances(db = getDb(), { status = null, docType = null, pag
  * 的审批管理员全见；其余只保留当前级指到本人头上的实例（`canApproveStep`）。
  * 「待我审批」列表与审批待办计数（ADR-0015）都从这里取，不各写一份过滤。
  */
-export function pendingInstancesFor(db = getDb(), actor) {
-  const seesAll = isApprovalManager(db, actor)
+export function pendingInstancesFor(db = getDb(), actor, scopeCtx = null) {
+  const seesAll = managerSeesAll(db, actor, scopeCtx)
   const rows = db
     .prepare(
       `SELECT i.*, t.name AS template_name
@@ -627,12 +639,17 @@ export function pendingInstancesFor(db = getDb(), actor) {
     .all()
   if (seesAll) return rows
   const stepOf = db.prepare('SELECT * FROM approval_steps WHERE template_id=? AND step_no=?')
-  return rows.filter((r) => canApproveStep(db, stepOf.get(r.template_id, r.current_step), actor))
+  const mine = (r) => canApproveStep(db, stepOf.get(r.template_id, r.current_step), actor)
+  // Z9：管理员全见被关掉时，受限范围的管理员 = 自己的审批队列 ∪ 范围内单据（与 instanceVisibleTo 同一判据）
+  if (!isGlobalCtx(scopeCtx) && isApprovalManager(db, actor)) {
+    return rows.filter((r) => mine(r) || approvalDocScope(db, r.doc_type, r.doc_id, scopeCtx))
+  }
+  return rows.filter(mine)
 }
 
 /** 「待我审批」：当前级指到我头上的 pending 实例（admin / 审批管理员全见） */
-export function pendingForMe(db = getDb(), actor, { page = 1, pageSize = 20 } = {}) {
-  const mine = pendingInstancesFor(db, actor)
+export function pendingForMe(db = getDb(), actor, { page = 1, pageSize = 20, scopeCtx = null } = {}) {
+  const mine = pendingInstancesFor(db, actor, scopeCtx)
   const total = mine.length
   const slice = mine.slice((page - 1) * pageSize, page * pageSize)
   return { list: slice.map((r) => ({ ...r, doc_title: docTitleOf(db, r.doc_type, r.doc_id) })), total, page, pageSize }
@@ -736,8 +753,8 @@ export function approvalTodos(db = getDb()) {
 }
 
 /** 审批待办（按人，ADR-0015）：只统计 `pendingInstancesFor` 认为调用者能处理的实例，形状与 `approvalTodos` 一致。 */
-export function approvalTodosFor(db = getDb(), actor) {
-  return { ...groupTodos(db, pendingInstancesFor(db, actor)), scope: 'mine' }
+export function approvalTodosFor(db = getDb(), actor, scopeCtx = null) {
+  return { ...groupTodos(db, pendingInstancesFor(db, actor, scopeCtx)), scope: 'mine' }
 }
 
 export default {

@@ -21,6 +21,7 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import { randomUUID } from 'node:crypto'
 import { runtimeMode } from '../runtime.js'
 import { redactValue, redactText } from './redact.js'
+import { isTrustedPeer } from './trust-proxy.js'
 
 const als = new AsyncLocalStorage()
 const LEVELS = { debug: 10, info: 20, warn: 30, error: 40 }
@@ -87,8 +88,7 @@ export const logger = {
 function inboundRequestId(req) {
   const raw = req.headers['x-request-id']
   if (typeof raw !== 'string' || !REQUEST_ID.test(raw)) return null
-  const trusts = req.app?.get?.('trust proxy fn')
-  return typeof trusts === 'function' && trusts(req.socket?.remoteAddress, 0) ? raw : null
+  return isTrustedPeer(req) ? raw : null
 }
 
 function routeOf(req) {

@@ -84,6 +84,20 @@ export function buildOpenApi() {
     '/api/meta/settings/audit/check': {
       get: { tags: ['系统参数'], summary: '配置变更链自证（重放日志==现状 / 键集合一致 / 危险项变更都写了理由 / 值域合法）', responses: { 200: jsonResp(null, '{ ok, problems, keys_checked, entries_checked, registered_keys }') } }
     },
+    '/api/meta/audit-logs': {
+      get: {
+        tags: ['系统'], summary: '审计日志查询（权限 system:audit:view；分页 + 模块/动作/用户/对象/日期/关键字过滤；detail 读取时再脱敏；附保留策略提示）',
+        parameters: [q('module', '模块（精确）'), q('action', '动作（精确）'), q('user', '操作人：纯数字按 user_id 或用户名精确，否则按用户名包含'), q('entity', '对象类型（精确）'), q('entity_id', '对象 ID（精确）'), q('from', '起始日期 YYYY-MM-DD（含）'), q('to', '截止日期 YYYY-MM-DD（含）'), q('keyword', '关键字（动作/模块/对象/操作人/明细包含）'), q('page', '页码'), q('pageSize', '每页条数，上限 200')],
+        responses: { 200: jsonResp(null, '{ list, total, page, pageSize, totalPages, retention, export_max_rows }'), 400: { description: '日期格式或区间不合法' }, 403: { description: '缺 system:audit:view' } }
+      }
+    },
+    '/api/meta/audit-logs/export.csv': {
+      get: {
+        tags: ['系统'], summary: '审计日志 CSV 导出（同一过滤；分批流式；行数封顶；公式注入安全；导出动作写严格审计 AUDIT_LOG_EXPORT）',
+        parameters: [q('module', '模块（精确）'), q('action', '动作（精确）'), q('user', '操作人'), q('entity', '对象类型'), q('entity_id', '对象 ID'), q('from', '起始日期'), q('to', '截止日期'), q('keyword', '关键字')],
+        responses: { 200: { description: 'text/csv（UTF-8 BOM；响应头 X-Export-Truncated 表示是否被行数上限截断）' }, 403: { description: '缺 system:audit:view' } }
+      }
+    },
     '/api/auth/login': {
       post: {
         tags: ['认证'], summary: '登录获取 Token', security: [],
@@ -124,6 +138,7 @@ export function buildOpenApi() {
     // `roles/{code}/permissions` 是**整体覆盖**（后端先删后插），调用方必须提交完整勾选集合。
     '/api/auth/permissions': { get: { tags: ['认证'], summary: '权限点字典（按模块分组，供角色权限矩阵渲染）', responses: { 200: jsonResp(null) } } },
     '/api/auth/my-permissions': { get: { tags: ['认证'], summary: '当前用户的有效权限点与数据范围（前端据此收敛按钮与数据）', responses: { 200: jsonResp(null) } } },
+    '/api/auth/my-scope': { get: { tags: ['认证'], summary: '**当前用户的有效数据范围**与白话解释（只读，仅描述调用者自己：角色、是否管理员、生效范围及来源、所属组织/门店/经销商、范围内组织数与前 20 个名称）', responses: { 200: jsonResp(null), 401: jsonResp(null) } } },
     '/api/auth/roles-permissions': { get: { tags: ['认证'], summary: '**角色与权限矩阵**：每个角色的权限点集合（仅管理员）', responses: { 200: jsonResp(null), 403: jsonResp(null) } } },
     '/api/auth/roles/{code}/permissions': {
       put: {
@@ -303,7 +318,7 @@ export function buildOpenApi() {
     '/api/sales/returns/{id}/complete': { post: { tags: ['销售'], summary: '退货完成（已确认 → 已完成；状态不对返回 409；组织范围外 404）', parameters: [idParam], responses: { 200: jsonResp(null), 404: jsonResp(null), 409: jsonResp(null) } } },
     '/api/sales/stats': { get: { tags: ['销售'], summary: '销售分析（渠道/趋势/商品/经销商/门店排行；内部账号只含组织范围内订单）', parameters: [q('days', '统计天数，默认 30')], responses: { 200: jsonResp(null) } } },
 
-    '/api/inventory/stocks': { get: { tags: ['存货'], summary: '库存明细（仓库/批次/效期/可用量）', parameters: [q('warehouse_id', '仓库'), q('sku_id', 'SKU'), q('batch_no', '批次'), q('keyword', '关键字'), q('expiring', 'N 天内临期')], responses: { 200: jsonResp(null) } } },
+    '/api/inventory/stocks': { get: { tags: ['存货'], summary: '库存明细（仓库/批次/效期/可用量）', parameters: [q('warehouse_id', '仓库'), q('sku_id', 'SKU'), q('batch_no', '批次'), q('keyword', '关键字'), q('expiring', 'N 天内临期'), q('pageSize', '每页条数，默认 50，上限 500'), q('after_id', '游标：上一页最后一行 id（按 id 升序；total/summary 仅首页返回）')], responses: { 200: jsonResp(null) } } },
     '/api/inventory/stocks/by-sku': { get: { tags: ['存货'], summary: '按 SKU 汇总库存（跨仓库）', responses: { 200: jsonResp(null) } } },
     '/api/inventory/transactions': { get: { tags: ['存货'], summary: '库存流水（收发明细）', parameters: [q('sku_id', 'SKU'), q('warehouse_id', '仓库'), q('doc_type', '单据类型'), q('startDate', '开始日期'), q('endDate', '结束日期')], responses: { 200: jsonResp(null) } } },
     '/api/inventory/ledger': { get: { tags: ['存货'], summary: '收发存台账（期初/入库/出库/期末）', parameters: [q('sku_id', 'SKU（必填）', true), q('warehouse_id', '仓库'), q('startDate', '开始日期'), q('endDate', '结束日期')], responses: { 200: jsonResp(null) } } },
@@ -346,11 +361,11 @@ export function buildOpenApi() {
     '/api/dealers/statements/{id}/close': { post: { tags: ['经销商'], summary: '结清对账单（须同主体同期间应收已收齐；force 手动结清须写理由）', parameters: [idParam], responses: { 200: jsonResp(null) } } },
     '/api/dealers/statements/{id}/void': { post: { tags: ['经销商'], summary: '作废对账单（只作废本凭证，不动底层应收台账；须写理由）', parameters: [idParam], responses: { 200: jsonResp(null) } } },
 
-    '/api/oms/platforms': { get: { tags: ['线上 OMS'], summary: '平台店铺列表（含订单数/GMV/最近同步）', responses: { 200: jsonResp(null) } } },
+    '/api/oms/platforms': { get: { tags: ['线上 OMS'], summary: '平台店铺列表（含订单数/GMV/最近同步）；受限范围只列履约仓归属组织在范围内的平台（ADR-0039）', responses: { 200: jsonResp(null) } } },
     '/api/qimen/platforms/{id}/secret': { post: { tags: ['线上 OMS'], summary: '签发/轮换奇门平台密钥（oms.platform.manage；明文仅此一次返回；已有密钥需 rotate:true，ADR-0033）', parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'integer' } }], responses: { 200: jsonResp(null), 403: jsonResp(null), 404: jsonResp(null), 409: jsonResp(null) } } },
     '/api/oms/sync/{platformId}': { post: { tags: ['线上 OMS'], summary: '从平台拉取订单（演示为模拟数据源；生产 503）。订单归平台绑定组织（履约仓所属组织）：平台未绑定 422 PLATFORM_ORG_UNBOUND，履约仓不在调用者组织范围内 403', parameters: [{ name: 'platformId', in: 'path', required: true, schema: { type: 'integer' } }], responses: { 200: jsonResp(null), 403: jsonResp(null), 404: jsonResp(null), 422: jsonResp(null) } } },
-    '/api/oms/orders': { get: { tags: ['线上 OMS'], summary: '线上订单列表', parameters: [q('platform_id', '平台'), q('status', '状态'), q('pending', '=1 只看待发货'), q('startDate', '开始日期'), q('endDate', '结束日期'), q('keyword', '关键字')], responses: { 200: jsonResp(null) } } },
-    '/api/oms/orders/{id}': { get: { tags: ['线上 OMS'], summary: '线上订单详情', parameters: [idParam], responses: { 200: jsonResp(null) } } },
+    '/api/oms/orders': { get: { tags: ['线上 OMS'], summary: '线上订单列表；按平台绑定组织（履约仓所属组织）过滤，未绑定平台的订单仅全局范围可见（ADR-0039）', parameters: [q('platform_id', '平台'), q('status', '状态'), q('pending', '=1 只看待发货'), q('startDate', '开始日期'), q('endDate', '结束日期'), q('keyword', '关键字')], responses: { 200: jsonResp(null) } } },
+    '/api/oms/orders/{id}': { get: { tags: ['线上 OMS'], summary: '线上订单详情；范围外与不存在同形 404（ADR-0039）', parameters: [idParam], responses: { 200: jsonResp(null), 404: jsonResp(null) } } },
     '/api/oms/orders/{id}/convert': { post: { tags: ['线上 OMS'], summary: '线上订单转销售订单（占库）；销售订单归平台绑定组织的履约仓，平台未绑定 422，平台范围外 404', parameters: [idParam], responses: { 200: jsonResp(null), 404: jsonResp(null), 422: jsonResp(null) } } },
     '/api/oms/orders/convert-batch': { post: { tags: ['线上 OMS'], summary: '批量转单（逐单同上：范围外按「订单不存在」、未绑定平台按原因计入 failed）', responses: { 200: jsonResp(null) } } },
     '/api/oms/orders/{id}/ship': { post: { tags: ['线上 OMS'], summary: '发货并回传平台（同时出库）', parameters: [idParam], responses: { 200: jsonResp(null) } } },
@@ -361,8 +376,8 @@ export function buildOpenApi() {
     //    别照 `meta.js` 里那条历史遗留的 `closed` 文案去写这个动作。
     '/api/oms/orders/{id}/complete': { post: { tags: ['线上 OMS'], summary: '完成线上订单（OM shipped → completed；纯状态，不动库存）', parameters: [idParam], responses: { 200: jsonResp(null), 404: jsonResp(null), 409: jsonResp(null) } } },
     '/api/oms/stock-push': { post: { tags: ['线上 OMS'], summary: '推送可售库存至平台', responses: { 200: jsonResp(null) } } },
-    '/api/oms/sync-logs': { get: { tags: ['线上 OMS'], summary: '同步日志', parameters: [q('platform_id', '平台'), q('sync_type', '类型 order/stock/shipment/refund/price')], responses: { 200: jsonResp(null) } } },
-    '/api/oms/stats': { get: { tags: ['线上 OMS'], summary: '线上经营分析（平台 GMV/趋势/热销）', parameters: [q('days', '统计天数')], responses: { 200: jsonResp(null) } } },
+    '/api/oms/sync-logs': { get: { tags: ['线上 OMS'], summary: '同步日志；只含范围内平台（ADR-0039）', parameters: [q('platform_id', '平台'), q('sync_type', '类型 order/stock/shipment/refund/price')], responses: { 200: jsonResp(null) } } },
+    '/api/oms/stats': { get: { tags: ['线上 OMS'], summary: '线上经营分析（平台 GMV/趋势/热销）；只统计范围内平台（ADR-0039）', parameters: [q('days', '统计天数')], responses: { 200: jsonResp(null) } } },
 
     '/api/dashboard/summary': { get: { tags: ['看板'], summary: '经营 KPI 总览', responses: { 200: jsonResp(null) } } },
     '/api/dashboard/trend': { get: { tags: ['看板'], summary: '销售/采购/线上趋势', parameters: [q('days', '统计天数')], responses: { 200: jsonResp(null) } } },
@@ -1170,7 +1185,7 @@ export function buildOpenApi() {
     openapi: '3.0.3',
     info: {
       title: 'GML 供应链协同系统 API',
-      version: '1.36.0',
+      version: '1.37.0',
       description:
         '化妆品 / 服装 双行业轻量级供应链协同系统接口文档。覆盖主数据、采购、销售、存货、经销商、门店要货、委外管理、计划与生产、生产制造（BOM / 领料 / 完工入库）、质量检验、线上 OMS 与经营看板。\n\n' +
         '**多行业**：登录 `POST /api/auth/login` 时传 `industry`（`cosmetic` / `apparel`）选择行业版本；' +

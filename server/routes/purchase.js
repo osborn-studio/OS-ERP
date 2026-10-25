@@ -17,13 +17,14 @@ import { Router } from 'express'
 import { localDate, addDays } from '../lib/dates.js'
 import { getDb } from '../db/index.js'
 import { ok, fail, wrap, pageParams, paged, failFromError } from '../lib/http.js'
-import { requireAuth, requireRole, requirePerm, currentUser, permContext } from '../middleware/auth.js'
+import { requireAuth, requireRole, requirePerm, attachOrgScope, currentUser, permContext } from '../middleware/auth.js'
 import { audit } from '../middleware/audit.js'
 import { withWriteRetry } from '../lib/tx.js'
 // 状态推进的**唯一入口**是内核（`applyTransition`）。本文件过去没有直接用过它，
 // 因为采购订单那条边有副作用、走的是 `transitionPurchaseOrder`；而下面补的三条边
 // （PRT.cancel / PRT.complete / GR.close）都是**零副作用的纯状态推进**，直接走内核即可。
 import { advanceStatus } from '../lib/docflow.js'
+import { assertWarehouseInScope } from '../lib/stock.js'
 import {
   createPurchaseReturn,
   // 采购订单的建单 / 收货 / 状态推进 / 详情重算 / 行级校验 —— 领域服务在 lib/purchase.js，
@@ -32,7 +33,7 @@ import {
   normalizePurchaseOrderLines,
   getPurchaseOrder as loadOrder,
   PURCHASE_ORDER_SELECT, PURCHASE_ORDER_FROM,
-  PurchaseError, DocFlowError, PO_READ_PERMS
+  PurchaseError, DocFlowError, PO_READ_PERMS, assertPurchaseDocInScope
 } from '../lib/purchase.js'
 
 const r = Router()
@@ -126,6 +127,7 @@ r.post(
   '/orders',
   requireAuth,
   requireRole(...W),
+  attachOrgScope,
   guard((req, res) => {
     const db = getDb()
     const u = currentUser(req)
@@ -133,6 +135,9 @@ r.post(
       supplier_id, warehouse_id, order_date, expect_date, items = [], remark, settle_type,
       fulfill_type = 'hq', target_store_id, target_warehouse_id, source_type = 'manual'
     } = req.body || {}
+    // ADR-0038：订单归属取自仓；入库仓与直运目标仓都必须在调用者范围内（403），否则建出的单会越过后续的单据范围闸。
+    if (warehouse_id != null) assertWarehouseInScope(db, warehouse_id, req.orgScope)
+    if (target_warehouse_id) assertWarehouseInScope(db, target_warehouse_id, req.orgScope)
     // 行级校验、单号、落库、汇总重算全在 `createPurchaseOrder` 里 ——
     // 与 MCP 工具 `purchase.create_order` 是同一段代码。
     const order = withWriteRetry(db, () => createPurchaseOrder(db, {
@@ -158,13 +163,15 @@ r.put(
   '/orders/:id',
   requireAuth,
   requireRole(...W),
+  attachOrgScope,
   guard((req, res) => {
     const db = getDb()
     const id = Number(req.params.id)
-    const order = db.prepare('SELECT * FROM purchase_orders WHERE id=?').get(id)
-    if (!order) return fail(res, '采购订单不存在', 404)
+    // ADR-0038：先判单据范围（404），再判改仓目标（403）；改仓不得把别组织的单挪进自己的范围
+    const order = assertPurchaseDocInScope(db, 'PO', id, req.orgScope)
     if (!['draft'].includes(order.status)) return fail(res, '只有草稿状态的订单可以修改')
     const { supplier_id, warehouse_id, order_date, expect_date, remark, items } = req.body || {}
+    if (warehouse_id != null) assertWarehouseInScope(db, warehouse_id, req.orgScope)
     // 修改草稿是与建单同形的写入口，校验必须同样严 —— 「只在 create 上拦」等于没拦。
     // 校验器与建单**同一份**（`normalizePurchaseOrderLines`），不再各写一遍。
     const lines = Array.isArray(items) ? normalizePurchaseOrderLines(db, items) : null
@@ -199,9 +206,12 @@ r.post(
   '/orders/:id/status',
   requireAuth,
   requireRole(...W),
+  attachOrgScope,
   guard((req, res) => {
     const db = getDb()
     const id = Number(req.params.id)
+    // ADR-0038：先判单据范围（订单经仓归属组织）再谈流转；范围外与不存在同形 404，不产生任何写。
+    assertPurchaseDocInScope(db, 'PO', id, req.orgScope)
     // 流转规则已从本文件搬进单据内核（doc_actions 表）：
     // 合法状态与合法动作是数据，不是这里的 if；非法流转由内核统一拦截，
     // 并自动写 doc_events 留痕（谁、何时、从哪到哪）。
@@ -232,9 +242,14 @@ r.post(
   '/orders/:id/receive',
   requireAuth,
   requireRole(...W),
+  attachOrgScope,
   guard((req, res) => {
     const db = getDb()
     const u = currentUser(req)
+    // ADR-0038：订单经 warehouse_id 判范围，范围外 404 且不入库。
+    const po = assertPurchaseDocInScope(db, 'PO', Number(req.params.id), req.orgScope)
+    // 直运订单实际入的是 target_warehouse_id（lib/purchase.js 的 inboundWhId），也必须在范围内
+    if (po.fulfill_type === 'direct' && po.target_warehouse_id) assertWarehouseInScope(db, po.target_warehouse_id, req.orgScope)
     const out = withWriteRetry(db, () => receivePurchaseOrder(db, {
       orderId: Number(req.params.id),
       items: req.body?.items || [],

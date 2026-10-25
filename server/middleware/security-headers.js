@@ -21,6 +21,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { runtimeMode } from '../runtime.js'
+import { isSecureRequest } from '../lib/trust-proxy.js'
 
 const MODES = new Set(['report', 'enforce', 'off'])
 const HSTS = 'max-age=15552000; includeSubDomains'
@@ -90,7 +91,7 @@ export function securityHeaders({ env = process.env, staticRoot } = {}) {
     res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin')
     res.setHeader('Permissions-Policy', PERMISSIONS_POLICY)
     res.setHeader('X-Frame-Options', 'DENY')
-    if (req.secure) res.setHeader('Strict-Transport-Security', HSTS)
+    if (isSecureRequest(req)) res.setHeader('Strict-Transport-Security', HSTS)
     if (mode !== 'off') {
       let csp = baseline
       if (root && (req.method === 'GET' || req.method === 'HEAD')) {

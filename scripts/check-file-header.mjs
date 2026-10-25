@@ -34,6 +34,7 @@ const DECLARED = [
   'server/index.js',
   'server/lib/audit-trail.js',
   'server/lib/logger.js',
+  'server/lib/trust-proxy.js',
   'server/lib/redact.js',
   'server/middleware/audit.js',
   'server/middleware/security-headers.js',
@@ -49,7 +50,9 @@ const DECLARED = [
   'server/lib/backup-crypto.js',
   'scripts/check-mcp-coverage.mjs',
   'scripts/gen-sbom.mjs',
+  'scripts/release-candidate.mjs',
   'scripts/gen-changelog.mjs',
+  'scripts/gen-codemap.mjs',
   'scripts/lib/runtime-closure.mjs',
   'scripts/gen-third-party-notices.mjs',
   'scripts/check-file-header.mjs',
@@ -71,11 +74,14 @@ const DECLARED = [
   'src/constants/brand.ts',
   'src/constants/capabilities.ts',
   'src/pages/system/McpCenter.tsx',
+  'src/pages/system/MyScope.tsx',
+  'tests/my-scope.test.mjs',
   'tailwind.config.js',
   // 授信释放台账（ADR-0013）：释放/逆向的唯一实现、建表迁移与守卫测试
   'server/lib/credit-release.js',
   'server/db/migrations/052_credit_release_ledger.cjs',
   'tests/credit-reversal.test.mjs',
+  'tests/release-candidate.test.mjs',
   'tests/credit-effect-format.test.mjs',
   'src/utils/credit-effect.ts',
   // 前端 403 / 空范围 / 功能关闭提示（W3）
@@ -93,6 +99,8 @@ const DECLARED = [
   // 待办范围与 Agent Token 有效状态（ADR-0015）
   'server/db/migrations/055_agent_token_revoke_reason.cjs',
   'server/db/migrations/059_indexes.cjs',
+  'server/db/migrations/061_hot_query_indexes.cjs',
+  'tests/hot-queries.test.mjs',
   'scripts/explain-audit.mjs',
   // 大库规模演练（Y10）
   'scripts/synth-data.mjs',
@@ -107,6 +115,7 @@ const DECLARED = [
   // 审批域组织范围（ADR-0037）
   'tests/approval-scope.test.mjs',
   'tests/purchase-action-scope.test.mjs',
+  'tests/inventory-scope.test.mjs',
   // 杂项授权缺口收口（ADR-0028）
   'tests/authz-misc.test.mjs',
   // 订货中心组织范围（ADR-0027）
@@ -115,6 +124,8 @@ const DECLARED = [
   'tests/sales-scope.test.mjs',
   // 单据流读接口按账号数据范围过滤（ADR-0032）
   'tests/docflow-scope.test.mjs',
+  // OMS 读接口与 MCP 单据历史按组织范围收口（ADR-0039）
+  'tests/oms-scope.test.mjs',
   'server/lib/doc-scope-registry.js',
   // 脚本数据目录卫生与单实例安装验收（ADR-0019）
   'scripts/check-data-paths.mjs',

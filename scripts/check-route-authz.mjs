@@ -361,7 +361,7 @@ group('qimen.js', 'public', '奇门网关模拟承接方：由 body.app_key + �
 // —— 只读自身 / 自身范围 ——
 group('auth.js', 'self', '返回/修改当前登录者自己的资料、权限或其数据范围内的组织树', [
   ['GET', '/me'], ['GET', '/roles'], ['POST', '/change-password'], ['POST', '/logout-all'],
-  ['GET', '/org-tree'], ['GET', '/permissions'], ['GET', '/my-permissions']
+  ['GET', '/org-tree'], ['GET', '/permissions'], ['GET', '/my-permissions'], ['GET', '/my-scope']
 ])
 group('approval.js', 'handler-scope', '撤回审批：cancelApproval 内判"提交人本人或管理员"且单据在组织范围内，范围外 404；发起审批：处理器内 assertCanRead 单据范围 + approvalDocScope 目标单据组织范围（ADR-0037，lib/approval.js 唯一判据；待 Y2 的 DOC_SCOPE_RESOLVERS 合入后换分发表）', [['POST', '/instances'], ['POST', '/instances/:id/cancel']])
 

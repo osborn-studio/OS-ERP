@@ -5,6 +5,7 @@
  * blocking 为真时调用方应不再渲染数据区，避免把 403 / 关闭画成"没有数据"。
  * ============================================================================
  */
+import { Link } from 'react-router-dom'
 import { getUser } from '../api/client'
 import { selectScopeNotice, type ScopeNoticeInput } from '../utils/scope-notice'
 
@@ -30,6 +31,9 @@ export default function ScopeNotice({ failure, rows, loading }: { failure: Fetch
       className={`rounded-lg border p-4 text-sm mb-3 ${blocking ? 'border-red-200 bg-red-50 text-red-700' : 'border-amber-200 bg-amber-50 text-amber-800'}`}>
       <p className="font-medium">{n.title}</p>
       <p className="mt-1">{n.message}</p>
+      {(n.kind === 'forbidden' || n.kind === 'empty_scope') && (
+        <p className="mt-1"><Link to="/system/my-scope" data-testid="scope-notice-why" className="underline">为什么看不到？查看我的数据范围</Link></p>
+      )}
     </div>
   )
 }

@@ -77,3 +77,17 @@
 | Y10 发现：`dash.todo_counts`、`stock.below_safe` 在大库上对 `product_skus`/`dealers` 全表扫描；`GET /api/inventory/stocks` 随库存行线性变慢 | 需索引/分页改造 | Y10 |
 | 反向代理下 HSTS/Cookie Secure 需 `trust proxy` 开关，当前未提供 | 配置项待加 | Y11 |
 | roadmap 规模（10 万 SKU/100 万流水）未跑：开发机磁盘不足，需在 dmserver 复跑 `scripts/synth-pipeline.mjs` | 目标主机 | Y10 |
+
+## 第九批后仍 open 的残留
+
+| 位置 | 残留 | 来源 |
+|---|---|---|
+| MCP `order.trace_document`、`doc.query` | 仍以 `dealer_id` 判归属，可读他组织仓库中的订单 | Z2 Codex 审计 |
+| `server/routes/oms.js` 写路由（ship/complete/refund/stock-push） | 未按组织范围（生产 503） | Z2 |
+| `POST /api/approval/templates` | 受限管理员可把自己设为审批人从而看到他组织待办 | Z9 Codex 审计 |
+| `lib/qc.js` 处置调拨、MCP 库存工具、主数据仓库路由、采购收货/退货路由、门店 POS 库存 | 未接入 ADR-0038 仓库范围谓词 | Z1 |
+| `metrics.js` 的 below_safe 口径、`routes/ai.js`、`mcp/tools.js` 各自的低库存查询 | 未切到 `listBelowSafe` | Z3 |
+| 看板 `/dashboard/summary` p95 仍约 400 ms | 瓶颈不在本批索引 | Z3 |
+| 夜间容量工作流首跑可能因 Y10 记录的 3 处全表扫描变红（Z3 已消除，需实跑确认） | 托管 runner | Z10 |
+| `release-candidate` 的焦点/回归结果字段默认 `not run`，CI run id 需人工传入 | 流程 | Z5 |
+| 审计日志导出的 COUNT/LIKE 在大库上的耗时未测 | 性能 | Z7 |

@@ -2,6 +2,10 @@
 
 更新：2026-10-22。全新公开仓库：[osborn-studio/OS-ERP](https://github.com/osborn-studio/OS-ERP)，采用 MIT，仅导入清理后的当前文件快照。旧仓库保留为私有归档，其 PR/Actions/历史对象不导入本仓库。未发布正式 Release、未部署。来源及旧 checkout 使用限制见 [PUBLICATION_HISTORY](../PUBLICATION_HISTORY.md)，MIT 决策不替代第三方权属核验。
 
+## 第九批当前状态（2026-10-23）
+
+按 [roadmap-v5](roadmap-v5.md) 的 Z1–Z12，12 路 Sonnet 5.5 subagent 并行实现并各自经 Codex（gpt-6.1-sol）审计后集成到 `batch-nine`（将作为 PR #5）：Z1 库存域与采购订单状态/收货按仓库组织范围（ADR-0038）；Z2 OMS 读接口与 MCP `doc.get` 走解析表（ADR-0039）；Z3 热点查询改造与库存列表键集分页（迁移 061，`/inventory/stocks` p95 2078→151 ms）；Z4 `GML_TRUST_PROXY` 统一受信代理（ADR-0040）；Z5 发行候选打包与证据包；Z6 `/api/auth/my-scope` 与"我的数据范围"页；Z7 审计日志查看器与 CSV 导出（迁移 062）；Z8 MCP 幂等/确认缓存命中前重验；Z9 `approval_manager_global` 开关（危险键 17→18）；Z10 夜间容量基线工作流；Z11 依赖补丁刷新（braces 链仍无修复）；Z12 代码地图与 ADR 索引生成并入 CI。集成时合并 Z1 与 Z3 在库存域的改动：`listBelowSafe`/`countBelowSafe` 叠加调用者组织范围。验证以托管 CI 为准。
+
 ## 第八批当前状态（2026-10-23）
 
 按 [roadmap-v4](roadmap-v4.md) 的 Y1–Y12，12 路 Sonnet 5.5 subagent 并行实现并各自经 Codex（gpt-6.1-sol）审计后集成到 `integration`（将作为 PR #4）：Y1 采购链动作路由/复核/MCP 结算付款单据范围（ADR-0031）；Y2 单据流读接口按 40 类单据类型解析范围（ADR-0032，`doc-scope-registry`）；Y3 奇门按平台密钥、HMAC-SHA256 签名、时间戳与 nonce 防重放、能力清单需管理权限（ADR-0033，迁移 060）；Y4 报价、MCP 销售工具、OMS 下单按组织（ADR-0034）；Y5 POS 前端按权限显示与自审禁用；Y6 MCP 文档读按门店/经销商绑定；Y7 写路径 SQLITE_BUSY 重试包装与写基线（ADR-0035）；Y8 个人信息擦除覆盖退款/订货快照/日志片段并出报告；Y9 版本 0.2.0-alpha.1、ADR 生成 CHANGELOG、发行包带 SBOM；Y10 合成大库演练（large：2 万 SKU/5 万单据/25 万流水，备份 3.8 s、加密 4.2 s、恢复 2.0 s）；Y11 安全响应头/CSP/可选 HttpOnly Cookie 会话（ADR-0036）；Y12 审批域组织范围（ADR-0037），并补 MCP 审批签字人范围。验证以托管 CI 为准。

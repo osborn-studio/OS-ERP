@@ -615,7 +615,7 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
 
-### body-parser@1.20.8
+### body-parser@1.20.9
 
 - Declared license (SPDX): `MIT`
 - Source: `LICENSE` from the installed package
@@ -2472,7 +2472,7 @@ TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
 
-### fast-equals@5.4.4
+### fast-equals@5.4.5
 
 - Declared license (SPDX): `MIT`
 - Distribution: bundled into the frontend build (declared as a devDependency in package.json)
@@ -4172,7 +4172,7 @@ TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
 
-### node-abi@3.98.0
+### node-abi@3.100.0
 
 - Declared license (SPDX): `MIT`
 - Source: `LICENSE` from the installed package
@@ -4265,7 +4265,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### on-finished@2.4.1
+### on-finished@2.4.2
 
 - Declared license (SPDX): `MIT`
 - Source: `LICENSE` from the installed package
@@ -4514,7 +4514,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ```
 
-### qs@6.16.0
+### qs@6.16.1
 
 - Declared license (SPDX): `BSD-3-Clause`
 - Source: `LICENSE.md` from the installed package
