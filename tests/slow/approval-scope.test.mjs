@@ -1,3 +1,4 @@
+// slow: 97 s: org x switch matrix over HTTP on a real server (scripts/test-timings.mjs, threshold 60 s)
 /**
  * ============================================================================
  * 文件标识：tests/approval-scope.test.mjs ｜ 测试：审批域组织范围（ADR-0037）
@@ -27,7 +28,7 @@ import { fileURLToPath } from 'node:url'
 import { setTimeout as delay } from 'node:timers/promises'
 import Database from 'better-sqlite3'
 
-const ROOT = fileURLToPath(new URL('../', import.meta.url))
+const ROOT = fileURLToPath(new URL('../../', import.meta.url))
 const secret = () => randomBytes(24).toString('base64url')
 
 async function server(t) {
@@ -300,7 +301,7 @@ test('approval instances are scoped to the org of the document they point at', {
 
 // Y12 审计跟进：MCP approval.approve 必须把人工确认人的组织范围传给 decideApproval（静态断言，守住接线）。
 test('MCP approval.approve passes the human signer org scope into decideApproval', () => {
-  const src = readFileSync(new URL('../server/mcp/tools.js', import.meta.url), 'utf8')
+  const src = readFileSync(new URL('../../server/mcp/tools.js', import.meta.url), 'utf8')
   assert.match(src, /resolveOrgScope\(db, \{ uid: signerRow\.id, role: signerRow\.role \}\)/)
   assert.match(src, /decideApproval\(db, \{[\s\S]*?scopeCtx: \{ orgScope: signerScope/)
 })
@@ -389,7 +390,7 @@ test('AA3: template maintenance needs system:approval:template AND global scope;
   })
 
   await t.test('lib: approver assignment is validated against the maintainer org scope; template visibility predicate', async () => {
-    const lib = await import('../server/lib/approval.js')
+    const lib = await import('../../server/lib/approval.js')
     const uA = id("INSERT INTO users (username,name,password_hash,role,org_id) VALUES ('aa3_ua','a','x','viewer',?)", whA.org_id)
     const uB = id("INSERT INTO users (username,name,password_hash,role,org_id) VALUES ('aa3_ub','b','x','viewer',?)", whB.org_id)
     const orgA = { scope: 'org', orgIds: [whA.org_id] }
@@ -412,7 +413,7 @@ test('AA3: template maintenance needs system:approval:template AND global scope;
 test('AC3: approval visibility honours account bindings under data_scope=all', { timeout: 300000 }, async (t) => {
   const f = await server(t)
   const { db } = f
-  const { approvalDocScope, instanceVisibleTo } = await import('../server/lib/approval.js')
+  const { approvalDocScope, instanceVisibleTo } = await import('../../server/lib/approval.js')
   const custs = db.prepare("SELECT c.id, c.source_id FROM oc_customers c WHERE c.source_type='dealer' AND EXISTS (SELECT 1 FROM oc_orders o WHERE o.customer_id=c.id) ORDER BY c.id LIMIT 2").all()
   assert.equal(custs.length, 2)
   const ord = (cid) => db.prepare('SELECT id FROM oc_orders WHERE customer_id=? LIMIT 1').get(cid).id

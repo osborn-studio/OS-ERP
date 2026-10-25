@@ -50,7 +50,7 @@ const DECLARED = [
   'scripts/lib/offbox-anchor.mjs',
   'tests/offbox-anchor.test.mjs',
   'scripts/lib/audit-chain-cli.mjs',
-  'tests/audit-chain.test.mjs',
+  'tests/slow/audit-chain.test.mjs',
   'server/lib/logger.js',
   'server/lib/profile.js',
   'server/lib/db-ttl-cache.js',
@@ -89,6 +89,10 @@ const DECLARED = [
   'scripts/check-metrics-scope.mjs',
   'tests/audit-allowlist.test.mjs',
   'scripts/check-lock-registry.mjs',
+  'scripts/test-timings.mjs',
+  'tests/test-timings.test.mjs',
+  'tests/test-tree-policy.test.mjs',
+  'tests/lib/load-tolerance.mjs',
   'tests/check-lock-registry.test.mjs',
   'tests/dependency-review-policy.test.mjs',
   'tests/release-candidate-policy.test.mjs',
@@ -133,7 +137,7 @@ const DECLARED = [
   'server/lib/credit-release.js',
   'server/db/migrations/052_credit_release_ledger.cjs',
   'tests/credit-reversal.test.mjs',
-  'tests/release-candidate.test.mjs',
+  'tests/slow/release-candidate.test.mjs',
   'tests/release-signing.test.mjs',
   'tests/credit-effect-format.test.mjs',
   'src/utils/credit-effect.ts',
@@ -145,7 +149,7 @@ const DECLARED = [
   'server/lib/qimen-auth.js',
   'server/db/migrations/060_qimen_secrets.cjs',
   'src/utils/qimen-sign.ts',
-  'tests/qimen-auth.test.mjs',
+  'tests/slow/qimen-auth.test.mjs',
   'tests/security-headers.test.mjs',
   // 授信投影（ADR-0014）：credit_hold 的唯一写入者与对账守卫
   'tests/credit-hold-projection.test.mjs',
@@ -165,16 +169,16 @@ const DECLARED = [
   'scripts/lib/safe-path.mjs',
   'scripts/lib/source-identity.mjs',
   'tests/synth-data.test.mjs',
-  'tests/authz-followups.test.mjs',
+  'tests/slow/authz-followups.test.mjs',
   // 采购链读接口范围收口（ADR-0017）
   'tests/purchase-chain-scope.test.mjs',
   'tests/purchase-chain-detail-scope.test.mjs',
   // 审批域组织范围（ADR-0037）
-  'tests/approval-scope.test.mjs',
+  'tests/slow/approval-scope.test.mjs',
   'tests/purchase-action-scope.test.mjs',
-  'tests/inventory-scope.test.mjs',
+  'tests/slow/inventory-scope.test.mjs',
   // 杂项授权缺口收口（ADR-0028）
-  'tests/authz-misc.test.mjs',
+  'tests/slow/authz-misc.test.mjs',
   // 订货中心组织范围（ADR-0027）
   'tests/order-center-scope.test.mjs',
   // 销售域组织范围收口（ADR-0026）

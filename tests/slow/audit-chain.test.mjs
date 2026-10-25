@@ -1,3 +1,4 @@
+// slow: 141 s: hash-chain backfill, archive, retention and anchor-intent cases on large fixtures (scripts/test-timings.mjs, threshold 60 s)
 /**
  * ============================================================================
  * 文件标识：tests/audit-chain.test.mjs ｜ AB6 审计日志哈希链（ADR-0049）：写入、规范化、并发、迁移回填、校验脚本、归档脚本、受控改链
@@ -13,12 +14,12 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import Database from 'better-sqlite3'
-import { runMigrations, MIGRATIONS_DIR } from '../server/db/migrations/runner.js'
-import { insertAuditRow, auditStrictRow, deleteAuditRowsAnchored, rehashAuditRow, GENESIS } from '../server/lib/audit-trail.js'
-import { verifyChain, verifyJsonlSegment } from '../server/lib/audit-chain-verify.js'
-import { applyPlan } from '../scripts/lib/privacy-common.mjs'
+import { runMigrations, MIGRATIONS_DIR } from '../../server/db/migrations/runner.js'
+import { insertAuditRow, auditStrictRow, deleteAuditRowsAnchored, rehashAuditRow, GENESIS } from '../../server/lib/audit-trail.js'
+import { verifyChain, verifyJsonlSegment } from '../../server/lib/audit-chain-verify.js'
+import { applyPlan } from '../../scripts/lib/privacy-common.mjs'
 
-const ROOT = fileURLToPath(new URL('../', import.meta.url))
+const ROOT = fileURLToPath(new URL('../../', import.meta.url))
 const SCHEMA = readFileSync(path.join(ROOT, 'server/db/schema.sql'), 'utf8')
 const envFor = (dir, extra = {}) => ({ PATH: process.env.PATH, HOME: dir, TMPDIR: dir, GML_RUNTIME_MODE: 'test', GML_DATA_DIR: dir, GML_DB: '', GML_JWT_SECRET: 'a'.repeat(48), ...extra })
 
@@ -899,7 +900,7 @@ test('AC7 hardening: --resume after a completed archive is idempotent even when 
 // AE5（ADR-0055 补充）：锚点操作对账——保留清理 / 归档 / 隐私抹除在新增锚点的同一事务里写 audit_anchor_intents 意图行，
 // 并在操作审计行里引用它；`--offbox` 校验要求已锚定范围内每个新锚点都有匹配意图且意图被审计行印证。迁移 072。
 // ============================================================================
-import { anchorMark, recordAnchorIntent, INTENT_FORMAT } from '../server/lib/audit-anchor-intent.js'
+import { anchorMark, recordAnchorIntent, INTENT_FORMAT } from '../../server/lib/audit-anchor-intent.js'
 
 const OFFBOX = 'scripts/offbox-anchor.mjs'
 const KEYGEN = 'scripts/release-keygen.mjs'

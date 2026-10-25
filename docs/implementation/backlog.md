@@ -170,6 +170,15 @@
 | 新浏览器场景（审计 FTS 状态、MCP 限速卡、指标隐藏说明）未执行 | Linux CI | AE11 |
 | `dmserver` 上的所有性能数字均未复测 | 目标主机 | 全批 |
 
+## 第十七批 AH1 后仍 open 的残留
+
+| 位置 | 残留 | 来源 |
+|---|---|---|
+| `slow-tests` job | 未在托管 runner 上跑过；ubuntu 上各文件耗时未知（`test-timings.json` 是 macOS Mac mini 参考值） | AH1 |
+| 负载常量 | 只迁移了 write-contention、release-signing 与两个 audit-fts slow 文件；其余测试里的零散超时/轮询未迁移 | AH1 |
+| `tests/fs-fault.test.mjs` | 62 s 刚超阈值，作为豁免留在 `tests/`（AH6 给它单独 job） | AH1 |
+| 基线失败 | `explain-plan-guard`（迁移 075 vs 074）与 `mcp-limits-readout`（`fallback_total` 键）在 macOS 参考机逐文件跑里各 1 个失败，托管 CI 结果未知 | AH1 |
+
 ## 第十六批后仍 open 的残留
 
 | 位置 | 残留 | 来源 |

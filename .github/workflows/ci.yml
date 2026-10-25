@@ -74,9 +74,7 @@ jobs:
       # AD2: docs/operations/role-matrix.md is generated from the permission dictionary, DOC_VIEW_PERMS, DOC_SCOPE_RESOLVERS and hq-roles.js; drift fails.
       - name: Role matrix is current
         run: node scripts/gen-role-matrix.mjs --check
-      # AC5: re-runs only the audit view tests with the FTS query path switched off (GML_AUDIT_FTS=0), so the no-FTS5 fallback is exercised for real.
-      - name: Audit view tests without FTS (GML_AUDIT_FTS=0)
-        run: GML_AUDIT_FTS=0 node --test --test-concurrency=1 tests/audit-logs-view.test.mjs
+      # AC5's GML_AUDIT_FTS=0 re-run of the audit view tests moved to the slow-tests job (AH1): that file is over 60 s and lives in tests/slow/.
       # AG2 (ADR-0057 supplement 2): every metric declares scopeAware or a written scopeless reason.
       - name: Metrics declare their scope semantics
         run: node scripts/check-metrics-scope.mjs
@@ -93,6 +91,7 @@ jobs:
         run: npx tsc --noEmit
       - name: Vite build
         run: npm run build
+      # AH1: tests/slow/ (files over 60 s) is NOT part of this glob; the slow-tests job runs it in parallel (see docs/implementation/testing.md).
       - name: Focused tests (tests/*.test.mjs)
         run: |
           set -euo pipefail
@@ -134,7 +133,7 @@ jobs:
           try { db.exec('CREATE VIRTUAL TABLE t USING fts5(x)'); console.error('fts5 table could be created'); process.exit(1) } catch { console.log('confirmed: no FTS5 in this SQLite build') }
           "
       - name: Audit view and FTS maintenance tests (no-FTS5 build)
-        run: node --test --test-concurrency=1 tests/audit-logs-view.test.mjs tests/audit-fts-maintain.test.mjs
+        run: node --test --test-concurrency=1 tests/slow/audit-logs-view.test.mjs tests/audit-fts-maintain.test.mjs
 
   docker:
     # Builds the ADR-0012 runtime image for linux/amd64 (no registry, no push, no login) and runs
@@ -427,4 +426,45 @@ jobs:
             ${{ runner.temp }}/dependency-review/audit-runtime.json
             ${{ runner.temp }}/dependency-review/audit-dev.json
           if-no-files-found: error
+          retention-days: 30
+
+  # AH1: test files that take more than 60 s live in tests/slow/ (each starts with a `// slow: <reason>` line) and run here, in parallel with
+  # the `checks` job, so the PR gate's critical path is shorter. Runs scripts/test-timings.mjs, which executes each file serially under the
+  # same env as the gate and writes per-file timings (uploaded as an artifact). Also re-runs the audit view tests with the FTS query path
+  # switched off (GML_AUDIT_FTS=0; moved here from `checks`). Timings are measurements on a shared hosted runner, not acceptance evidence.
+  # It has not been run on GitHub yet.
+  slow-tests:
+    name: Slow tests (tests/slow) with per-file timings
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Install locked dependencies and selected native build hooks
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm rebuild better-sqlite3 esbuild --no-audit --no-fund
+      - name: Audit view tests without FTS (GML_AUDIT_FTS=0)
+        run: |
+          set -euo pipefail
+          export GML_JWT_SECRET="$(node -e "process.stdout.write(require('node:crypto').randomBytes(32).toString('hex'))")"
+          GML_AUDIT_FTS=0 node --test --test-concurrency=1 tests/slow/audit-logs-view.test.mjs
+      - name: Slow tests with timings (tests/slow/*.test.mjs)
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/test-timings"
+          node scripts/test-timings.mjs --run --output "$RUNNER_TEMP/test-timings/test-timings-slow.json" tests/slow/*.test.mjs
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: os-erp-test-timings-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/test-timings/test-timings-slow.json
+          if-no-files-found: warn
           retention-days: 30

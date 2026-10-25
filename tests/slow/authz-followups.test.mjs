@@ -1,3 +1,4 @@
+// slow: 176 s: boots real servers and walks the permission matrix cell by cell over HTTP (scripts/test-timings.mjs, threshold 60 s)
 /**
  * ============================================================================
  * 文件标识：tests/authz-followups.test.mjs ｜ 测试：待办接口按权限与范围收口（ADR-0015）+ Agent Token 有效状态
@@ -32,9 +33,9 @@ import net from 'node:net'
 import { fileURLToPath } from 'node:url'
 import { setTimeout as delay } from 'node:timers/promises'
 import Database from 'better-sqlite3'
-import { createToken } from '../server/mcp/tokens.js'
+import { createToken } from '../../server/mcp/tokens.js'
 
-const ROOT = fileURLToPath(new URL('../', import.meta.url))
+const ROOT = fileURLToPath(new URL('../../', import.meta.url))
 const secret = () => randomBytes(24).toString('base64url')
 
 async function server(t) {
@@ -392,8 +393,8 @@ test('AF10: permContext ignores inactive roles (primary included); login disclos
   })
 
   await t.test('role-typed approval steps and MCP delegation use the same active-only rule', async () => {
-    const { canApproveStep } = await import('../server/lib/approval.js')
-    const { permContext, hasPerm } = await import('../server/middleware/auth.js')
+    const { canApproveStep } = await import('../../server/lib/approval.js')
+    const { permContext, hasPerm } = await import('../../server/middleware/auth.js')
     const step = { approver_type: 'role', approver_value: 'purchase' }
     assert.equal(canApproveStep(db, step, { id: extraOnly.id }), false, 'secondary inactive role cannot approve')
     assert.equal(canApproveStep(db, step, { id: lone.id }), false, 'primary inactive role cannot approve')
@@ -476,7 +477,7 @@ test('AG10: my-scope explanations come from active roles only; inactive primary 
   })
 
   await t.test('enforcement agrees with the explanation: an inactive primary role no longer lends its default scope', async () => {
-    const { resolveOrgScope } = await import('../server/middleware/auth.js')
+    const { resolveOrgScope } = await import('../../server/middleware/auth.js')
     const purchaseDefault = db.prepare("SELECT data_scope FROM roles WHERE code='purchase'").get().data_scope
     const org = db.prepare('SELECT id FROM orgs WHERE id<>0 ORDER BY id LIMIT 1').get().id
     db.prepare('UPDATE users SET org_id=?, data_scope=? WHERE id=?').run(org, '', lone.id)
@@ -498,7 +499,7 @@ test('AG10: my-scope explanations come from active roles only; inactive primary 
   })
 
   await t.test('a dealer-default primary role never widens to the org scope when deactivated (fail closed)', async () => {
-    const { resolveOrgScope } = await import('../server/middleware/auth.js')
+    const { resolveOrgScope } = await import('../../server/middleware/auth.js')
     const dealerId = Number(db.prepare("INSERT INTO dealers (code,name) VALUES ('AG10-D','ag10-dealer')").run().lastInsertRowid)
     const org = db.prepare('SELECT id FROM orgs WHERE id<>0 ORDER BY id LIMIT 1').get().id
     const dl = await f.account('ag10_dealer', 'dealer', { dealer_id: dealerId, org_id: org })

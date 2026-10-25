@@ -1,3 +1,4 @@
+// slow: 97 s: multi-session password change and reset flows over a real server with password hashing (scripts/test-timings.mjs, threshold 60 s)
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn, spawnSync } from 'node:child_process'
@@ -13,9 +14,9 @@ import net from 'node:net'
 import Database from 'better-sqlite3'
 import bcrypt from 'bcryptjs'
 import jwt from 'jsonwebtoken'
-import { createAccount, changePassword, updateAccount } from '../server/lib/account-security.js'
+import { createAccount, changePassword, updateAccount } from '../../server/lib/account-security.js'
 
-const ROOT = fileURLToPath(new URL('../', import.meta.url))
+const ROOT = fileURLToPath(new URL('../../', import.meta.url))
 const require = createRequire(import.meta.url)
 const secret = () => randomBytes(24).toString('base64url')
 async function fixture(t, overrides = {}) {
@@ -240,7 +241,7 @@ test('A11 rejects legacy/version/algorithm/industry tampering and preserves sign
 })
 
 test('A11 migration and repeated server startup never reset a nonzero auth_version', async t => {
-  const f = await fixture(t), migration = require('../server/db/migrations/050_user_auth_version.cjs')
+  const f = await fixture(t), migration = require('../../server/db/migrations/050_user_auth_version.cjs')
   f.db.prepare('UPDATE users SET auth_version=27 WHERE id=1').run()
   migration.up(f.db); assert.equal(migration.verify(f.db), true)
   await f.stop(); await f.start()

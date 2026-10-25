@@ -1,3 +1,4 @@
+// slow: 65 s: builds release candidates in temp copies of the tree (scripts/test-timings.mjs, threshold 60 s)
 /**
  * ============================================================================
  * 文件标识：tests/release-candidate.test.mjs ｜ 发行候选包（Z5）：干净树、命名、证据字段、说明提取
@@ -17,10 +18,10 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { unzipSync } from 'fflate'
-import { BATCHES } from '../scripts/gen-changelog.mjs'
-import { hashTestsTree } from '../scripts/lib/tests-tree.mjs'
+import { BATCHES } from '../../scripts/gen-changelog.mjs'
+import { hashTestsTree } from '../../scripts/lib/tests-tree.mjs'
 
-const ROOT = fileURLToPath(new URL('../', import.meta.url))
+const ROOT = fileURLToPath(new URL('../../', import.meta.url))
 const PATH = process.env.PATH
 
 function tempDir(t, prefix) {

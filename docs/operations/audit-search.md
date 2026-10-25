@@ -41,7 +41,7 @@ node scripts/audit-fts-maintain.mjs --data-dir /abs/path/to/data --industry cosm
 
 - 进程环境里 `GML_AUDIT_FTS` 恰为字符串 `0` 时，审计检索一律走 `LIKE`（`keywordUsesFts` 恒为 false）；其它取值（未设、空串、`1`、`false`）不关闭 FTS。代码每次查询时读取该变量；对已运行的服务进程，环境变量只能靠重启来改。
 - **只影响查询路径**：迁移 067 照常建表与触发器，写入照常维护索引，维护脚本照常可用。用途：FTS 索引被怀疑有问题时的**止血开关**（先切 LIKE，再 `--rebuild`），以及测试。
-- CI 的 checks job 有一步 `Audit view tests without FTS (GML_AUDIT_FTS=0)`，用该开关再跑一遍 `tests/audit-logs-view.test.mjs`：在带 FTS5 的构建上真实演练回退路径（此前只靠 `setFtsOverride` 模拟）。依赖"FTS 路径可用"的用例在该运行里按原因跳过，其余照跑。
+- CI 的 slow-tests job（AH1 起；此前在 checks job）有一步 `Audit view tests without FTS (GML_AUDIT_FTS=0)`，用该开关再跑一遍 `tests/slow/audit-logs-view.test.mjs`：在带 FTS5 的构建上真实演练回退路径（此前只靠 `setFtsOverride` 模拟）。依赖"FTS 路径可用"的用例在该运行里按原因跳过，其余照跑。
 - 代价：LIKE 路径在命中稀少的关键词上会读全表（100 万行约百毫秒级，见 capacity-baseline "AB3"）。
 
 ## 4. 完全关闭索引：设置 `audit_fts_enabled`（AD4，ADR-0054）
@@ -58,11 +58,11 @@ node scripts/audit-fts-maintain.mjs --data-dir /abs/path/to/data --industry cosm
 - **启动自愈规则**：只在设置这样说时才动索引——设置开且对象缺失 → 重建并回填；设置关且对象存在 → 删除；设置关且对象已不在 → 什么都不做（不会每次启动重建）。在界面 / API 里改设置不立即动索引，下次启动收敛；要立即生效用上面的脚本。
 - 在带 FTS5 的构建上建过索引的库，不要拿到无 FTS5 的构建上写入；要换构建，先 `--disable`。
 - 与 `GML_AUDIT_FTS=0` 的区别：后者只切查询路径、索引与触发器仍在并被维护；设置关闭是真正删除。
-- CI 的 `audit-no-fts5` job 用从源码重编译、去掉 `SQLITE_ENABLE_FTS5` 的 better-sqlite3 跑 `tests/audit-logs-view.test.mjs` 与 `tests/audit-fts-maintain.test.mjs`（真实无 FTS5 构建）。
+- CI 的 `audit-no-fts5` job 用从源码重编译、去掉 `SQLITE_ENABLE_FTS5` 的 better-sqlite3 跑 `tests/slow/audit-logs-view.test.mjs` 与 `tests/audit-fts-maintain.test.mjs`（真实无 FTS5 构建）。
 
 ## 5. 端到端运维闭环：关闭 → 检索仍可用 → 重启 → 重新开启（AE4，ADR-0054 补充）
 
-`tests/audit-fts-ops-loop.test.mjs` 在真实服务进程（随机 loopback 端口、临时数据目录）上演练下面整条链路；回填耗时见 capacity-baseline "AE4"。
+`tests/slow/audit-fts-ops-loop.test.mjs` 在真实服务进程（随机 loopback 端口、临时数据目录）上演练下面整条链路；回填耗时见 capacity-baseline "AE4"。
 
 | 步骤 | 操作 | 预期（可核对） |
 |---|---|---|

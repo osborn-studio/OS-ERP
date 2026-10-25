@@ -1,0 +1,3120 @@
+{
+  "generated_at": "2026-10-24T13:30:00.000Z",
+  "node": "v22.22.1",
+  "platform": "darwin-arm64",
+  "note": "Reference run on a macOS Mac mini (not a target platform, not CI): one node --test process per file, serial, wall-clock seconds rounded to whole seconds. Refresh with: node scripts/test-timings.mjs --run. Hosted-runner numbers are in the slow-tests job artifact.",
+  "threshold_s": 60,
+  "total_ms": 2898000,
+  "slow_files": [
+    "tests/fs-fault.test.mjs",
+    "tests/slow/approval-scope.test.mjs",
+    "tests/slow/audit-chain.test.mjs",
+    "tests/slow/audit-fts-ops-loop.test.mjs",
+    "tests/slow/audit-fts-races.test.mjs",
+    "tests/slow/audit-logs-view.test.mjs",
+    "tests/slow/auth-session.test.mjs",
+    "tests/slow/authz-followups.test.mjs",
+    "tests/slow/authz-misc.test.mjs",
+    "tests/slow/dashboard-perf.test.mjs",
+    "tests/slow/inventory-scope.test.mjs",
+    "tests/slow/mcp-doc-perms.test.mjs",
+    "tests/slow/metrics-export.test.mjs",
+    "tests/slow/qimen-auth.test.mjs",
+    "tests/slow/release-candidate.test.mjs"
+  ],
+  "exempt": {
+    "tests/fs-fault.test.mjs": "62 s on the macOS reference run, borderline; roadmap-v13 AH6 gives it its own fs-fault CI job at this exact path, so it is not moved"
+  },
+  "files": [
+    {
+      "file": "tests/admin-bootstrap.test.mjs",
+      "duration_ms": 16000,
+      "exit": 0,
+      "tests": 9,
+      "suites": 0,
+      "pass": 9,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "bootstrapped account logs into actual production API and accesses authenticated admin routes",
+          "duration_ms": 3157
+        },
+        {
+          "name": "repeat bootstrap never changes password or corporate data; marker survives account removal",
+          "duration_ms": 2378
+        },
+        {
+          "name": "audit failure rolls back organization, account, roles and one-time marker",
+          "duration_ms": 2002
+        },
+        {
+          "name": "preexisting users or corporate organization are never adopted",
+          "duration_ms": 1840
+        },
+        {
+          "name": "two concurrent bootstrap processes yield exactly one administrator and one successful result",
+          "duration_ms": 1422
+        }
+      ]
+    },
+    {
+      "file": "tests/audit-allowlist.test.mjs",
+      "duration_ms": 0,
+      "exit": 0,
+      "tests": 18,
+      "suites": 0,
+      "pass": 18,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "listed finding passes; low severity is ignored",
+          "duration_ms": 1
+        },
+        {
+          "name": "committed allowlist is structurally valid (expiry is time-dependent, so only shape is asserted)",
+          "duration_ms": 1
+        },
+        {
+          "name": "expired, today-expiring, malformed and too-far dates fail",
+          "duration_ms": 0
+        },
+        {
+          "name": "stale allowlist entry is reported but does not fail; bad allowlist shape fails",
+          "duration_ms": 0
+        },
+        {
+          "name": "dev mode: listed critical passes; high is below the dev threshold",
+          "duration_ms": 0
+        }
+      ]
+    },
+    {
+      "file": "tests/audit-bench.test.mjs",
+      "duration_ms": 6000,
+      "exit": 0,
+      "tests": 1,
+      "suites": 0,
+      "pass": 1,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "AA6 bench script: seeds through insertAuditRow, plans flip from rowid scans to the 065 indexes, export is capped",
+          "duration_ms": 4946
+        }
+      ]
+    },
+    {
+      "file": "tests/audit-error-hygiene.test.mjs",
+      "duration_ms": 10000,
+      "exit": 0,
+      "tests": 6,
+      "suites": 0,
+      "pass": 6,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "H01 query-string JWT is rejected with 401 while the Authorization header works",
+          "duration_ms": 3485
+        },
+        {
+          "name": "H04 HTTP 5xx in production returns a generic message with an incident id that appears in the server log",
+          "duration_ms": 3085
+        },
+        {
+          "name": "H06 strict audit fault injection: when the audit insert fails, the business row is not written",
+          "duration_ms": 2913
+        },
+        {
+          "name": "H03 bizFail/errorHandler hide internals for uncoded 5xx in production, keep them in demo/test, and log by incident id",
+          "duration_ms": 3
+        },
+        {
+          "name": "H02 redact helper masks credential keys deeply and strips token-like query values",
+          "duration_ms": 3
+        }
+      ]
+    },
+    {
+      "file": "tests/audit-fts-maintain.test.mjs",
+      "duration_ms": 18000,
+      "exit": 0,
+      "tests": 12,
+      "suites": 0,
+      "pass": 11,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 1,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "--out cannot overwrite the database or its sidecars, nor an existing file; a symlinked database and symlinked/nonexistent --out parents into repo data/ are refused before anything is opened",
+          "duration_ms": 3367
+        },
+        {
+          "name": "refuses the repository data/ directory, relative paths, missing arguments and ambiguous modes (nothing is opened)",
+          "duration_ms": 2840
+        },
+        {
+          "name": "AD4 --disable drops table + triggers and records the setting with a reason; idempotent; audit writes keep working; --enable rebuilds and backfills",
+          "duration_ms": 1829
+        },
+        {
+          "name": "rebuild while another connection holds the write lock: fails cleanly as busy after --busy-ms, index untouched, report says busy",
+          "duration_ms": 1711
+        },
+        {
+          "name": "--integrity-check: healthy index passes; an index that missed a row is reported and exits 1; --rebuild repairs it",
+          "duration_ms": 1634
+        }
+      ]
+    },
+    {
+      "file": "tests/bench-api.test.mjs",
+      "duration_ms": 17000,
+      "exit": 0,
+      "tests": 5,
+      "suites": 0,
+      "pass": 5,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "shortest profile runs against a freshly seeded demo DB and emits the fixed schema",
+          "duration_ms": 15497
+        },
+        {
+          "name": "refuses without explicit absolute data dir, with repository data/, or in production mode",
+          "duration_ms": 645
+        },
+        {
+          "name": "refuses data dir inside repo data/, symlinked db files and symlinked output",
+          "duration_ms": 291
+        },
+        {
+          "name": "summarize counts 4xx/5xx and network failures as errors",
+          "duration_ms": 1
+        },
+        {
+          "name": "percentile uses nearest-rank and handles tiny samples",
+          "duration_ms": 1
+        }
+      ]
+    },
+    {
+      "file": "tests/browser-ci-policy.test.mjs",
+      "duration_ms": 2000,
+      "exit": 0,
+      "tests": 18,
+      "suites": 0,
+      "pass": 18,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "driver registers every scenario file under tests/browser and each one parses",
+          "duration_ms": 1601
+        },
+        {
+          "name": "browser job exists, depends on checks, runs on ubuntu-latest and is time-boxed to 25 minutes",
+          "duration_ms": 2
+        },
+        {
+          "name": "AF11 scenarios are registered, assert real outcomes and the page hooks exist",
+          "duration_ms": 1
+        },
+        {
+          "name": "capacity-baseline has a hosted-runner section with the exact manual dispatch commands, without claiming a run",
+          "duration_ms": 1
+        },
+        {
+          "name": "AC11 scenarios assert the hint modes, the disabled/blocked query, the server verdicts, the stamp arithmetic and the 403 absence",
+          "duration_ms": 1
+        }
+      ]
+    },
+    {
+      "file": "tests/browser-scenario-contracts.test.mjs",
+      "duration_ms": 16000,
+      "exit": 0,
+      "tests": 4,
+      "suites": 0,
+      "pass": 4,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "AA8 scenario data contracts hold against a test-mode server",
+          "duration_ms": 16302
+        }
+      ]
+    },
+    {
+      "file": "tests/candidate-supply-chain-policy.test.mjs",
+      "duration_ms": 1000,
+      "exit": 0,
+      "tests": 5,
+      "suites": 0,
+      "pass": 5,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "AF7: the candidate job has a failing npm audit signatures step pinned to the npmjs registry",
+          "duration_ms": 1
+        },
+        {
+          "name": "AF7: README documents both steps, the npmmirror reason and the trust boundary",
+          "duration_ms": 1
+        },
+        {
+          "name": "AF7: the SBOM diff step downloads only trusted previous runs, never executes artifact content, and is informational",
+          "duration_ms": 0
+        },
+        {
+          "name": "AF7: the two steps sit after the self-verify step and before the upload, and the upload carries their outputs",
+          "duration_ms": 0
+        },
+        {
+          "name": "AF7: the job stays read-only and publish-free with the new steps",
+          "duration_ms": 0
+        }
+      ]
+    },
+    {
+      "file": "tests/capabilities.test.mjs",
+      "duration_ms": 29000,
+      "exit": 0,
+      "tests": 5,
+      "suites": 0,
+      "pass": 5,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "demo keeps explicit demo routes and MCP handshake available",
+          "duration_ms": 14002
+        },
+        {
+          "name": "test keeps explicit demo routes and MCP handshake available",
+          "duration_ms": 12081
+        },
+        {
+          "name": "authenticated admin cannot cause fake platform success; mall tokens cannot bypass disabled shop routes",
+          "duration_ms": 1575
+        },
+        {
+          "name": "production HTTP rejects entire restricted surfaces without data side effects",
+          "duration_ms": 1414
+        },
+        {
+          "name": "availability is default closed; unrelated enable flags cannot override production",
+          "duration_ms": 4
+        }
+      ]
+    },
+    {
+      "file": "tests/capacity-smoke-policy.test.mjs",
+      "duration_ms": 0,
+      "exit": 0,
+      "tests": 5,
+      "suites": 0,
+      "pass": 5,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "capacity-smoke exists, is dispatch-only, independent of other jobs, time-boxed to 30 minutes",
+          "duration_ms": 1
+        },
+        {
+          "name": "capacity-smoke actions are SHA-pinned and only the allowlisted summary is uploaded",
+          "duration_ms": 0
+        },
+        {
+          "name": "workflow permissions stay read-only and no trigger was added",
+          "duration_ms": 0
+        },
+        {
+          "name": "capacity paths are exported from a step, never from job-level env (runner context is unavailable there)",
+          "duration_ms": 0
+        },
+        {
+          "name": "capacity-smoke runs the medium profile with a 20 minute generation budget",
+          "duration_ms": 0
+        }
+      ]
+    },
+    {
+      "file": "tests/changelog.test.mjs",
+      "duration_ms": 1000,
+      "exit": 0,
+      "tests": 5,
+      "suites": 0,
+      "pass": 5,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "--check: exits 1 on drift with a clear message, 0 when current",
+          "duration_ms": 298
+        },
+        {
+          "name": "repo: CHANGELOG.md is current, every ADR is mapped to a batch, claims no readiness",
+          "duration_ms": 13
+        },
+        {
+          "name": "fixture: grouped by batch, ordered by ADR number, hand-written head preserved, idempotent",
+          "duration_ms": 3
+        },
+        {
+          "name": "extractDecision: first paragraph under the decision heading, markdown stripped, headings/tables skipped",
+          "duration_ms": 1
+        },
+        {
+          "name": "fixture: without an existing file the default head is used; unmapped ADR numbers go to an explicit group, not dropped",
+          "duration_ms": 1
+        }
+      ]
+    },
+    {
+      "file": "tests/check-lock-registry.test.mjs",
+      "duration_ms": 0,
+      "exit": 0,
+      "tests": 8,
+      "suites": 0,
+      "pass": 8,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "CLI: exit codes, report lines and summary file",
+          "duration_ms": 487
+        },
+        {
+          "name": "real lockfile: report runs and every host is allowed once the registry switch (AG7a) is in place",
+          "duration_ms": 72
+        },
+        {
+          "name": "all npmjs entries pass and are counted per host",
+          "duration_ms": 2
+        },
+        {
+          "name": "release-candidate.yml runs the guard once, without --allow, after the AF7 steps",
+          "duration_ms": 1
+        },
+        {
+          "name": "--allow host validation rejects wildcards, schemes and paths",
+          "duration_ms": 0
+        }
+      ]
+    },
+    {
+      "file": "tests/codemap.test.mjs",
+      "duration_ms": 26000,
+      "exit": 0,
+      "tests": 8,
+      "suites": 0,
+      "pass": 8,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "--check is green on the repository and red (exit 1, named) when any output drifts or is missing",
+          "duration_ms": 18460
+        },
+        {
+          "name": "repository outputs are current (run: node scripts/gen-codemap.mjs)",
+          "duration_ms": 2369
+        },
+        {
+          "name": "deterministic: two generations are byte-identical, no absolute paths or timestamps",
+          "duration_ms": 1915
+        },
+        {
+          "name": "scan semantics on a synthetic route: chain, handler file, lib functions, tables, migrations",
+          "duration_ms": 1225
+        },
+        {
+          "name": "the four outputs are declared and carry the generated marker",
+          "duration_ms": 931
+        }
+      ]
+    },
+    {
+      "file": "tests/credit-effect-format.test.mjs",
+      "duration_ms": 0,
+      "exit": 0,
+      "tests": 6,
+      "suites": 0,
+      "pass": 6,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "缺字段 / 零条目：标记 empty，摘要说明\"未触及授信\"，不编造行",
+          "duration_ms": 1
+        },
+        {
+          "name": "只有统一授信：逐行 doc_no / 类型 / 金额，totals 直接取后端 unified，oc 为 0",
+          "duration_ms": 0
+        },
+        {
+          "name": "混合：两条总额都在；作废口径措辞为\"恢复占用\"；无 doc_no 时退回 来源类型\\#id",
+          "duration_ms": 0
+        },
+        {
+          "name": "只有订货中心：ledger 映射为 oc，摘要只提订货中心",
+          "duration_ms": 0
+        },
+        {
+          "name": "legacy 作废：标 legacy、不算 empty、说明只回补订货中心占用且统一授信未恢复",
+          "duration_ms": 0
+        }
+      ]
+    },
+    {
+      "file": "tests/credit-hold-projection.test.mjs",
+      "duration_ms": 4000,
+      "exit": 0,
+      "tests": 9,
+      "suites": 0,
+      "pass": 9,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "occupy projects the hold onto the order without the caller writing credit_hold",
+          "duration_ms": 475
+        },
+        {
+          "name": "void restores the hold to the pre-receipt value",
+          "duration_ms": 436
+        },
+        {
+          "name": "partial, multi-invoice, multi-order receipts keep every order projection in step",
+          "duration_ms": 423
+        },
+        {
+          "name": "receipt confirmation lowers the hold of exactly the originating order",
+          "duration_ms": 351
+        },
+        {
+          "name": "prepay application lowers the hold per source like a confirmation",
+          "duration_ms": 327
+        }
+      ]
+    },
+    {
+      "file": "tests/credit-reversal.test.mjs",
+      "duration_ms": 4000,
+      "exit": 0,
+      "tests": 15,
+      "suites": 0,
+      "pass": 15,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "a receipt confirmed before the release ledger existed still restores OC occupancy by allocation and reports legacy",
+          "duration_ms": 411
+        },
+        {
+          "name": "void of a partial receipt restores the SO credit and AR balance to the pre-receipt state",
+          "duration_ms": 371
+        },
+        {
+          "name": "a restore that would exceed the source occupancy is rejected",
+          "duration_ms": 309
+        },
+        {
+          "name": "a capped release is recorded with the released amount and restored by exactly that amount",
+          "duration_ms": 295
+        },
+        {
+          "name": "cross-customer prepay application is rejected without releasing anything",
+          "duration_ms": 289
+        }
+      ]
+    },
+    {
+      "file": "tests/credit-settlement.test.mjs",
+      "duration_ms": 4000,
+      "exit": 0,
+      "tests": 8,
+      "suites": 0,
+      "pass": 8,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "settlement cannot release beyond remaining SO hold",
+          "duration_ms": 560
+        },
+        {
+          "name": "credit write failure rolls back receipt status, receivable allocations and earlier releases",
+          "duration_ms": 531
+        },
+        {
+          "name": "multiple invoices and multiple orders release exactly their allocated portions",
+          "duration_ms": 439
+        },
+        {
+          "name": "invoice ID colliding with another SO ID still resolves through invoice.order_id",
+          "duration_ms": 438
+        },
+        {
+          "name": "direct SO receivable continues to release the original SO source",
+          "duration_ms": 421
+        }
+      ]
+    },
+    {
+      "file": "tests/data-path-guard.test.mjs",
+      "duration_ms": 2000,
+      "exit": 0,
+      "tests": 4,
+      "suites": 0,
+      "pass": 4,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "an injected data/gml_*.db literal turns the guard red and is named",
+          "duration_ms": 674
+        },
+        {
+          "name": "a stale allowlist entry (file without any hit) turns the guard red",
+          "duration_ms": 368
+        },
+        {
+          "name": "a comment-only mention and a server/db/index.js definition are not violations",
+          "duration_ms": 317
+        },
+        {
+          "name": "the real repository passes the data-path guard",
+          "duration_ms": 208
+        }
+      ]
+    },
+    {
+      "file": "tests/db-backup.test.mjs",
+      "duration_ms": 17000,
+      "exit": 0,
+      "tests": 17,
+      "suites": 0,
+      "pass": 17,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "a held writer lock on a database makes the freeze fail cleanly: no files, non-zero exit",
+          "duration_ms": 5702
+        },
+        {
+          "name": "a corrupted new backup exits non-zero, prunes nothing and is not left as a valid-looking backup",
+          "duration_ms": 1362
+        },
+        {
+          "name": "every report carries one shared consistency_stamp with an honest approximate-consistency note",
+          "duration_ms": 1150
+        },
+        {
+          "name": "a successful backup is verified, smoke-restored, reported and only then pruned to keep",
+          "duration_ms": 1077
+        },
+        {
+          "name": "an unwritable backup directory fails before any pruning",
+          "duration_ms": 1037
+        }
+      ]
+    },
+    {
+      "file": "tests/dependency-review-policy.test.mjs",
+      "duration_ms": 0,
+      "exit": 0,
+      "tests": 7,
+      "suites": 0,
+      "pass": 7,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "dependency-review exists, is dispatch-only, independent and time-boxed",
+          "duration_ms": 1
+        },
+        {
+          "name": "one artifact, whitelisted to the two summaries, uploaded even on failure, kept 30 days",
+          "duration_ms": 1
+        },
+        {
+          "name": "no secrets, no tokens, no job-level permission widening, no checkout credentials",
+          "duration_ms": 0
+        },
+        {
+          "name": "it is a whole top-level block (later jobs are appended after it, never nested in it)",
+          "duration_ms": 0
+        },
+        {
+          "name": "actions are SHA-pinned with a version comment",
+          "duration_ms": 0
+        }
+      ]
+    },
+    {
+      "file": "tests/docflow-scope.test.mjs",
+      "duration_ms": 31000,
+      "exit": 0,
+      "tests": 15,
+      "suites": 0,
+      "pass": 15,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "docflow reads are filtered by the caller data scope",
+          "duration_ms": 18888
+        },
+        {
+          "name": "DOC_SCOPE_RESOLVERS covers every registered doc type exactly (guard)",
+          "duration_ms": 11833
+        }
+      ]
+    },
+    {
+      "file": "tests/docker-smoke-policy.test.mjs",
+      "duration_ms": 1000,
+      "exit": 0,
+      "tests": 6,
+      "suites": 0,
+      "pass": 6,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "smoke script refuses to run without --image (usage exit 2) and needs no npm dependencies",
+          "duration_ms": 65
+        },
+        {
+          "name": "every action in ci.yml is pinned to a full commit SHA with a version comment",
+          "duration_ms": 1
+        },
+        {
+          "name": "smoke script passes the random secret by environment name only and never prints it",
+          "duration_ms": 1
+        },
+        {
+          "name": "ci.yml has a docker job that depends on checks, runs on ubuntu-latest and is time-boxed",
+          "duration_ms": 1
+        },
+        {
+          "name": "docker job builds linux/amd64 with the commit SHA injected and runs the smoke script; never pushes or logs in",
+          "duration_ms": 0
+        }
+      ]
+    },
+    {
+      "file": "tests/dockerfile-policy.test.mjs",
+      "duration_ms": 0,
+      "exit": 0,
+      "tests": 8,
+      "suites": 0,
+      "pass": 8,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "Dockerfile is multi-stage and every stage starts from the digest-pinned base image",
+          "duration_ms": 1
+        },
+        {
+          "name": "dependency installs use the lockfile and the runtime image carries no dev dependencies",
+          "duration_ms": 0
+        },
+        {
+          "name": "the known unfixed braces advisory chain is development-only and therefore absent from the runtime install",
+          "duration_ms": 0
+        },
+        {
+          "name": ".env.example documents the required variables without real values",
+          "duration_ms": 0
+        },
+        {
+          "name": "compose publishes to loopback only, mounts a named data volume and keeps secrets out of the file",
+          "duration_ms": 0
+        }
+      ]
+    },
+    {
+      "file": "tests/evidence-log-ingest.test.mjs",
+      "duration_ms": 1000,
+      "exit": 0,
+      "tests": 5,
+      "suites": 0,
+      "pass": 5,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "ingest refuses and leaves the log byte-identical for every invalid line",
+          "duration_ms": 846
+        },
+        {
+          "name": "ingest into an empty or missing log needs the genesis prev",
+          "duration_ms": 136
+        },
+        {
+          "name": "ingest refuses while the log lock is held, and refuses a broken existing chain",
+          "duration_ms": 112
+        },
+        {
+          "name": "ingest requires --line and rejects unknown arguments",
+          "duration_ms": 110
+        },
+        {
+          "name": "ingest appends a hosted-ci line that extends the current tail, and the chain stays valid",
+          "duration_ms": 69
+        }
+      ]
+    },
+    {
+      "file": "tests/explain-audit.test.mjs",
+      "duration_ms": 2000,
+      "exit": 0,
+      "tests": 13,
+      "suites": 0,
+      "pass": 13,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "the declared statements are clean on the fully migrated schema, and the same guard is red without migration 059",
+          "duration_ms": 498
+        },
+        {
+          "name": "every declared statement prepares against the current schema and names the lib function it mirrors",
+          "duration_ms": 291
+        },
+        {
+          "name": "migration 059 is recorded with a checksum and a re-run of the runner changes nothing",
+          "duration_ms": 234
+        },
+        {
+          "name": "AF3 (Codex) expectSearch: an unrelated constrained SEARCH of the same index does not excuse a full scan of that index elsewhere in the statement",
+          "duration_ms": 233
+        },
+        {
+          "name": "migration 059 applies idempotently, verifies, and adds only non-UNIQUE indexes",
+          "duration_ms": 221
+        }
+      ]
+    },
+    {
+      "file": "tests/explain-plan-guard.test.mjs",
+      "duration_ms": 2000,
+      "exit": 1,
+      "tests": 16,
+      "suites": 0,
+      "pass": 15,
+      "fail": 1,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "CLI: --snapshot writes a file, --compare is green on it and red (exit 1) after an index is dropped from a copy",
+          "duration_ms": 1703
+        },
+        {
+          "name": "this repository has no ANALYZE / PRAGMA optimize in server or scripts (allowlist reasons present)",
+          "duration_ms": 316
+        },
+        {
+          "name": "the committed docs/implementation/explain-plans.json matches the current statements on a freshly migrated database",
+          "duration_ms": 245
+        },
+        {
+          "name": "scanTree skips tests, node_modules and non-source files; allow entries need a reason and may not be stale",
+          "duration_ms": 8
+        },
+        {
+          "name": "fingerprints are deterministic, keep nesting depth, and ignore bound parameter values",
+          "duration_ms": 6
+        }
+      ]
+    },
+    {
+      "file": "tests/frontend-session.test.mjs",
+      "duration_ms": 1000,
+      "exit": 0,
+      "tests": 22,
+      "suites": 0,
+      "pass": 22,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "top-level business code survives a detail object without its own code",
+          "duration_ms": 19
+        },
+        {
+          "name": "JSON: 401 revokes current backend session and preserves mall session",
+          "duration_ms": 1
+        },
+        {
+          "name": "rawPost: a stale 401 cannot erase a later login, even if its token string is identical",
+          "duration_ms": 1
+        },
+        {
+          "name": "download: 401 revokes current backend session and preserves mall session",
+          "duration_ms": 1
+        },
+        {
+          "name": "JSON: a stale 401 cannot erase a later login, even if its token string is identical",
+          "duration_ms": 0
+        }
+      ]
+    },
+    {
+      "file": "tests/fs-fault.test.mjs",
+      "duration_ms": 62000,
+      "exit": 0,
+      "tests": 63,
+      "suites": 0,
+      "pass": 63,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "db-backup fault (encrypted): report/prune points leave no plaintext and the .enc backups + manifests stay decryptable",
+          "duration_ms": 4173
+        },
+        {
+          "name": "db-backup fault backup.before-sidecar (encrypted, all three industries): abort leaves NO plaintext for any database; throw leaves none",
+          "duration_ms": 2817
+        },
+        {
+          "name": "db-backup fault backup.after-manifest-fsync (encrypted, all three industries): abort leaves NO plaintext for any database; throw leaves none",
+          "duration_ms": 2813
+        },
+        {
+          "name": "db-backup fault backup.after-sidecar (encrypted, all three industries): abort leaves NO plaintext for any database; throw leaves none",
+          "duration_ms": 2673
+        },
+        {
+          "name": "db-backup fault backup.after-enc-rename-fsync (encrypted, all three industries): abort leaves NO plaintext for any database; throw leaves none",
+          "duration_ms": 2593
+        }
+      ]
+    },
+    {
+      "file": "tests/funds-maker-checker.test.mjs",
+      "duration_ms": 29000,
+      "exit": 0,
+      "tests": 9,
+      "suites": 0,
+      "pass": 9,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "HTTP: receipt confirm/review routes enforce evidence, permission, self-review and settings",
+          "duration_ms": 14259
+        },
+        {
+          "name": "HTTP: payment pay is gated and the generic action route cannot bypass the review",
+          "duration_ms": 12160
+        },
+        {
+          "name": "evidence is required on confirm by default and may be relaxed by setting",
+          "duration_ms": 348
+        },
+        {
+          "name": "review disabled: confirm applies directly but evidence is still required",
+          "duration_ms": 308
+        },
+        {
+          "name": "self-review is rejected and leaves the document pending",
+          "duration_ms": 286
+        }
+      ]
+    },
+    {
+      "file": "tests/hot-queries.test.mjs",
+      "duration_ms": 14000,
+      "exit": 0,
+      "tests": 4,
+      "suites": 0,
+      "pass": 4,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "GET /inventory/stocks: default 50, max 500, keyset cursor covers the set exactly once, total only on page one",
+          "duration_ms": 12884
+        },
+        {
+          "name": "the three scale-only scans are violations without migration 061 and clean with it",
+          "duration_ms": 480
+        },
+        {
+          "name": "migration 061 applies idempotently, verifies, adds only non-UNIQUE indexes and is checksummed",
+          "duration_ms": 327
+        },
+        {
+          "name": "rewritten below-safe queries return the same rows as the original SQL",
+          "duration_ms": 227
+        }
+      ]
+    },
+    {
+      "file": "tests/hq-roles.test.mjs",
+      "duration_ms": 14000,
+      "exit": 0,
+      "tests": 11,
+      "suites": 0,
+      "pass": 11,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "docflow strict store binding: both switch states, HQ exemption, bound accounts",
+          "duration_ms": 14697
+        },
+        {
+          "name": "hq-roles: union of the two historical lists, per-surface lists unchanged",
+          "duration_ms": 1
+        },
+        {
+          "name": "pos.js / requisitions.js take their lists from hq-roles.js (no literal role lists)",
+          "duration_ms": 1
+        },
+        {
+          "name": "docflow_strict_store_binding is a registered danger setting defaulting to on",
+          "duration_ms": 0
+        }
+      ]
+    },
+    {
+      "file": "tests/local-instance.test.mjs",
+      "duration_ms": 5000,
+      "exit": 0,
+      "tests": 2,
+      "suites": 0,
+      "pass": 2,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "two production instances on one code copy stay fully separate",
+          "duration_ms": 4969
+        },
+        {
+          "name": "GML_LOCAL_INSTANCE must be absolute and the default stays the code root",
+          "duration_ms": 258
+        }
+      ]
+    },
+    {
+      "file": "tests/logger.test.mjs",
+      "duration_ms": 1000,
+      "exit": 0,
+      "tests": 10,
+      "suites": 0,
+      "pass": 10,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "request id: generated and echoed; untrusted inbound id is ignored",
+          "duration_ms": 34
+        },
+        {
+          "name": "request id: trusted proxy inbound id is propagated; malformed id is replaced",
+          "duration_ms": 9
+        },
+        {
+          "name": "health check logs at debug only; query strings never reach the access line",
+          "duration_ms": 6
+        },
+        {
+          "name": "unmatched paths never log raw path segments (PII / credentials)",
+          "duration_ms": 3
+        },
+        {
+          "name": "5xx: log line carries incident_id and req_id matching the response and header; no secrets",
+          "duration_ms": 3
+        }
+      ]
+    },
+    {
+      "file": "tests/login-throttle.test.mjs",
+      "duration_ms": 1000,
+      "exit": 0,
+      "tests": 24,
+      "suites": 0,
+      "pass": 24,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "database contention fails closed without partially consuming a budget",
+          "duration_ms": 1067
+        },
+        {
+          "name": "independent simultaneous processes atomically share the same account budget",
+          "duration_ms": 195
+        },
+        {
+          "name": "route API maps missing data directory and invalid environment policy to 503",
+          "duration_ms": 130
+        },
+        {
+          "name": "default limits apply in test mode and unsettled reservations count (fail closed)",
+          "duration_ms": 11
+        },
+        {
+          "name": "X7 many successful logins never lock the account",
+          "duration_ms": 7
+        }
+      ]
+    },
+    {
+      "file": "tests/mcp-delegation.test.mjs",
+      "duration_ms": 11000,
+      "exit": 0,
+      "tests": 16,
+      "suites": 0,
+      "pass": 16,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "MCP tokens are delegations of their human owner",
+          "duration_ms": 11064
+        }
+      ]
+    },
+    {
+      "file": "tests/mcp-limits-readout.test.mjs",
+      "duration_ms": 23000,
+      "exit": 1,
+      "tests": 3,
+      "suites": 0,
+      "pass": 2,
+      "fail": 1,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "GET /api/mcp/limits: admin sees the configured limits, quota and the 429 counter; others get 403; no token material leaks",
+          "duration_ms": 11761
+        },
+        {
+          "name": "GET /api/meta/audit-logs carries fts state: setting, index presence and the effective verdict",
+          "duration_ms": 11026
+        },
+        {
+          "name": "mcpRatePolicy mirrors the limiter policy: defaults, valid env, invalid env falls back",
+          "duration_ms": 1
+        }
+      ]
+    },
+    {
+      "file": "tests/mcp-limits-tokens.test.mjs",
+      "duration_ms": 22000,
+      "exit": 0,
+      "tests": 4,
+      "suites": 0,
+      "pass": 4,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "GET /api/mcp/limits/tokens: db mode lists per-token recent ceiling hits to admins only; no token material",
+          "duration_ms": 12894
+        },
+        {
+          "name": "GET /api/mcp/limits/tokens: memory mode (default) returns an empty list",
+          "duration_ms": 9208
+        },
+        {
+          "name": "recentLimitedByToken: counts current+previous windows at the ceiling, per token, scoped, never older",
+          "duration_ms": 4
+        },
+        {
+          "name": "recentLimitedByToken: memory mode and a missing table yield an empty map, never throw",
+          "duration_ms": 0
+        }
+      ]
+    },
+    {
+      "file": "tests/mcp-quota-denied.test.mjs",
+      "duration_ms": 22000,
+      "exit": 0,
+      "tests": 11,
+      "suites": 0,
+      "pass": 11,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "live server: migration 075 applied; 429s are counted exactly in /limits/tokens",
+          "duration_ms": 11167
+        },
+        {
+          "name": "GET /api/mcp/limits/quota: empty when quota is off; per active token used/remaining when on; admin only; no token material",
+          "duration_ms": 10845
+        },
+        {
+          "name": "migration 075: fresh up allows denied; idempotent; verify matches up; 073 table with old CHECK needs the rebuild",
+          "duration_ms": 3
+        },
+        {
+          "name": "db mode: the denied write restores busy_timeout and returns quickly",
+          "duration_ms": 3
+        },
+        {
+          "name": "db mode: a refused call records one denied row increment per refusal; allowed calls record none; admission is unchanged",
+          "duration_ms": 2
+        }
+      ]
+    },
+    {
+      "file": "tests/mcp-rate-limit.test.mjs",
+      "duration_ms": 37000,
+      "exit": 0,
+      "tests": 16,
+      "suites": 0,
+      "pass": 16,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "integration: daily quota (off by default), per token, rollover by local day",
+          "duration_ms": 9463
+        },
+        {
+          "name": "integration: read limit -> 429 MCP_RATE_LIMITED, JSON-RPC envelope kept, counter incremented, no leak to other tokens",
+          "duration_ms": 9351
+        },
+        {
+          "name": "integration: write limit refuses with zero writes, read budget unaffected, idempotent replay still counts",
+          "duration_ms": 9052
+        },
+        {
+          "name": "integration: rate limit is keyed by the verified token, not by anything the caller controls",
+          "duration_ms": 8999
+        },
+        {
+          "name": "defaults: 600 all calls / 60 writes per minute; invalid env falls back to defaults",
+          "duration_ms": 1
+        }
+      ]
+    },
+    {
+      "file": "tests/mcp-rate-store-db.test.mjs",
+      "duration_ms": 25000,
+      "exit": 0,
+      "tests": 22,
+      "suites": 0,
+      "pass": 22,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "AF9 live server: the real purge timer removes expired buckets within seconds (shortened window + period, test mode only)",
+          "duration_ms": 12515
+        },
+        {
+          "name": "two server processes on one data dir share the limit; it survives restart; store failure fails closed",
+          "duration_ms": 11045
+        },
+        {
+          "name": "AF9 contention: waiting for a held write lock lands in the slow buckets",
+          "duration_ms": 867
+        },
+        {
+          "name": "Codex medium: purge never waits long for a held write lock, restores busy_timeout, and takes no lock when nothing is expired",
+          "duration_ms": 277
+        },
+        {
+          "name": "AF9 server refuses test knobs outside test mode at startup",
+          "duration_ms": 174
+        }
+      ]
+    },
+    {
+      "file": "tests/mcp-tool-matrix.test.mjs",
+      "duration_ms": 29000,
+      "exit": 0,
+      "tests": 3,
+      "suites": 0,
+      "pass": 3,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "AC1: purchase.list_orders / report.dashboard_kpi admit a purchase order by warehouse org only, like HTTP",
+          "duration_ms": 9910
+        },
+        {
+          "name": "MCP delegation matrix: every tool x {owner inactive, permission removed, scope excluded}",
+          "duration_ms": 9903
+        },
+        {
+          "name": "AD1: report.dashboard_kpi omits sub-items the token owner may not view",
+          "duration_ms": 9263
+        }
+      ]
+    },
+    {
+      "file": "tests/metrics-perms.test.mjs",
+      "duration_ms": 57000,
+      "exit": 0,
+      "tests": 28,
+      "suites": 0,
+      "pass": 28,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "AF2: restricted callers get values computed over their scope (sales / OMS / order centre / POS), hide no longer removes them",
+          "duration_ms": 13248
+        },
+        {
+          "name": "AE1: metrics_global_for_restricted hides scope-less metrics from restricted callers by default; label restores ADR-0053 behaviour",
+          "duration_ms": 12630
+        },
+        {
+          "name": "AG2: payable_open follows the purchase-settlement org predicate for restricted callers",
+          "duration_ms": 11151
+        },
+        {
+          "name": "AE1: metrics are filtered by business view permission (absent, not 403)",
+          "duration_ms": 10459
+        },
+        {
+          "name": "AE1: every metric registers a non-empty perms list of known permission codes",
+          "duration_ms": 9683
+        }
+      ]
+    },
+    {
+      "file": "tests/migration-checksum.test.mjs",
+      "duration_ms": 3000,
+      "exit": 0,
+      "tests": 7,
+      "suites": 0,
+      "pass": 7,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "a tampered applied migration only warns in demo and test mode and does not re-run it",
+          "duration_ms": 483
+        },
+        {
+          "name": "a tampered applied migration fails closed in production and leaves the database untouched",
+          "duration_ms": 287
+        },
+        {
+          "name": "explicit adoption re-records a mismatched checksum and lets production start again",
+          "duration_ms": 261
+        },
+        {
+          "name": "the default runtime mode comes from the environment and is production when unset",
+          "duration_ms": 257
+        },
+        {
+          "name": "healing a structurally broken migration records the checksum of the file that was re-run",
+          "duration_ms": 238
+        }
+      ]
+    },
+    {
+      "file": "tests/migration-permission-policy.test.mjs",
+      "duration_ms": 0,
+      "exit": 0,
+      "tests": 3,
+      "suites": 0,
+      "pass": 3,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "normal migration recheck preserves an administrator-reduced SCM role",
+          "duration_ms": 285
+        },
+        {
+          "name": "normal migration recheck preserves removal of MCP approval permission",
+          "duration_ms": 239
+        },
+        {
+          "name": "normal migration recheck respects an explicitly customized SCM permission set",
+          "duration_ms": 236
+        }
+      ]
+    },
+    {
+      "file": "tests/my-scope.test.mjs",
+      "duration_ms": 13000,
+      "exit": 0,
+      "tests": 11,
+      "suites": 0,
+      "pass": 11,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "GET /api/auth/my-scope describes only the caller",
+          "duration_ms": 12891
+        }
+      ]
+    },
+    {
+      "file": "tests/nightly-capacity-policy.test.mjs",
+      "duration_ms": 1000,
+      "exit": 0,
+      "tests": 16,
+      "suites": 0,
+      "pass": 16,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "workflow triggers on a daily schedule and manual dispatch with a scale choice; read-only permissions",
+          "duration_ms": 1
+        },
+        {
+          "name": "buildSummary: clean inputs pass; each failure condition is reported; unknown and hostile strings are dropped",
+          "duration_ms": 1
+        },
+        {
+          "name": "job runs on ubuntu-latest with a 60 minute timeout (355 only for the AB11 large-ci scale)",
+          "duration_ms": 1
+        },
+        {
+          "name": "failure gate: only failed pipeline step, failed write bench, or a non-successful summary step turn the job red",
+          "duration_ms": 0
+        },
+        {
+          "name": "summary script prints only its own allowlisted object and fixed codes; never paths, env, or raw error text",
+          "duration_ms": 0
+        }
+      ]
+    },
+    {
+      "file": "tests/notify-hardening.test.mjs",
+      "duration_ms": 16000,
+      "exit": 0,
+      "tests": 9,
+      "suites": 0,
+      "pass": 9,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "F08/F09 test mode: local listener receives signed payloads, redirects fail, logs never contain secrets",
+          "duration_ms": 9383
+        },
+        {
+          "name": "F05 digest endpoints require an internal role, a notify permission and global data scope",
+          "duration_ms": 3984
+        },
+        {
+          "name": "F09 channel secrets are never returned, are sealed at rest, and legacy plaintext is upgraded on write",
+          "duration_ms": 1466
+        },
+        {
+          "name": "F08 channel URLs are validated on save and the push path refuses policy violations without connecting",
+          "duration_ms": 1445
+        },
+        {
+          "name": "F08 outbound request refuses redirects, caps the body, enforces a total timeout, and production never connects",
+          "duration_ms": 417
+        }
+      ]
+    },
+    {
+      "file": "tests/notify-tls.test.mjs",
+      "duration_ms": 4000,
+      "exit": 0,
+      "tests": 6,
+      "suites": 0,
+      "pass": 6,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "redirect refused, body cap and total timeout (slow body) over TLS",
+          "duration_ms": 406
+        },
+        {
+          "name": "pinned address + SNI = hostname, self-signed accepted via test CA only",
+          "duration_ms": 20
+        },
+        {
+          "name": "self-signed certificate is rejected without the test CA",
+          "duration_ms": 3
+        },
+        {
+          "name": "certificate hostname verification: wrong name is rejected even with the CA trusted",
+          "duration_ms": 3
+        },
+        {
+          "name": "test CA is refused outside test runtime mode (before any lookup or connection)",
+          "duration_ms": 1
+        }
+      ]
+    },
+    {
+      "file": "tests/offbox-anchor.test.mjs",
+      "duration_ms": 12000,
+      "exit": 0,
+      "tests": 17,
+      "suites": 0,
+      "pass": 17,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "ssh destination: hostile aliases and paths are rejected before any ssh/scp is spawned",
+          "duration_ms": 1671
+        },
+        {
+          "name": "signature: edited body, wrong key, stripped or malformed signature all fail on both verifiers",
+          "duration_ms": 1537
+        },
+        {
+          "name": "ssh destination: uploads through ssh/scp with an existing alias, write-once, read-back verified; the remote copy verifies",
+          "duration_ms": 1281
+        },
+        {
+          "name": "ssh destination: unknown alias, missing remote directory, a failing scp, and OS_ERP_SSH without OS_ERP_SCP all fail without a partial anchor",
+          "duration_ms": 1161
+        },
+        {
+          "name": "anchor refuses: broken audit chain, invalid log, relative / missing dest, dest inside the data dir, weak or in-repo key",
+          "duration_ms": 914
+        }
+      ]
+    },
+    {
+      "file": "tests/oms-scope.test.mjs",
+      "duration_ms": 24000,
+      "exit": 0,
+      "tests": 14,
+      "suites": 0,
+      "pass": 14,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "OMS read routes and MCP doc history follow the org scope",
+          "duration_ms": 12110
+        },
+        {
+          "name": "OMS write routes follow the platform-bound org scope (ADR-0042)",
+          "duration_ms": 11439
+        }
+      ]
+    },
+    {
+      "file": "tests/oms-sql.test.mjs",
+      "duration_ms": 2000,
+      "exit": 0,
+      "tests": 11,
+      "suites": 0,
+      "pass": 11,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "AF3 random two-decimal amounts over many rows: float columns agree with the old SQL within 1e-9 relative; integer columns and row order are identical",
+          "duration_ms": 297
+        },
+        {
+          "name": "AE3 /stats statements: new range SQL returns exactly the rows of the old date(order_time) SQL (windows x scopes x boundary data)",
+          "duration_ms": 231
+        },
+        {
+          "name": "AF3 dyadic amounts: every statement equals the old SQL bit for bit (grouping, filtering and row order are structurally identical)",
+          "duration_ms": 211
+        },
+        {
+          "name": "AF3 byPlatform keeps platforms without orders (zeros) and ties in platform id order; invalid window yields one zero row per in-scope platform",
+          "duration_ms": 211
+        },
+        {
+          "name": "AE3 mutation: dropping the date() recheck changes results (the fixture would catch it)",
+          "duration_ms": 208
+        }
+      ]
+    },
+    {
+      "file": "tests/ops-health.test.mjs",
+      "duration_ms": 11000,
+      "exit": 0,
+      "tests": 10,
+      "suites": 0,
+      "pass": 10,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "health: anonymous gets status only (+version contract); admin gets database and ops; metrics is admin-only",
+          "duration_ms": 9425
+        },
+        {
+          "name": "db-backup alert hook: success is silent, failure reports a missing channel and keeps exit code 1",
+          "duration_ms": 743
+        },
+        {
+          "name": "db-backup alert hook goes through notify: a blocked/unreachable webhook is logged as a failed push, nothing leaks",
+          "duration_ms": 462
+        },
+        {
+          "name": "lastBackupStatus reads the newest report and exposes only at/result/encrypted/age_seconds",
+          "duration_ms": 6
+        },
+        {
+          "name": "alert content carries only industry code, error code and data-dir name",
+          "duration_ms": 2
+        }
+      ]
+    },
+    {
+      "file": "tests/order-center-scope.test.mjs",
+      "duration_ms": 13000,
+      "exit": 0,
+      "tests": 9,
+      "suites": 0,
+      "pass": 9,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "order center: internal org/subtree scope follows the customer owning org; external self-views unchanged",
+          "duration_ms": 13301
+        }
+      ]
+    },
+    {
+      "file": "tests/payment-reversal.test.mjs",
+      "duration_ms": 4000,
+      "exit": 0,
+      "tests": 15,
+      "suites": 0,
+      "pass": 15,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "a ledger row pointing at another supplier settlement is refused",
+          "duration_ms": 258
+        },
+        {
+          "name": "ledger row redirected to another settlement of the same supplier cannot restore more than released",
+          "duration_ms": 233
+        },
+        {
+          "name": "a failure in order statistics refresh rolls the void back too",
+          "duration_ms": 232
+        },
+        {
+          "name": "a payment effective before migration 057 (no rows) falls back to recompute and is flagged legacy",
+          "duration_ms": 227
+        },
+        {
+          "name": "migration 057 creates the payment release ledger",
+          "duration_ms": 223
+        }
+      ]
+    },
+    {
+      "file": "tests/pos-actions.test.mjs",
+      "duration_ms": 0,
+      "exit": 0,
+      "tests": 10,
+      "suites": 0,
+      "pass": 10,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "each permission shows exactly its own actions",
+          "duration_ms": 1
+        },
+        {
+          "name": "permissions not loaded or empty -> every action hidden",
+          "duration_ms": 1
+        },
+        {
+          "name": "daily close gate disables with reason but keeps visible",
+          "duration_ms": 0
+        },
+        {
+          "name": "AA9: void order needs pos.refund, settle variance needs pos.shift.settle; each hidden without it",
+          "duration_ms": 0
+        },
+        {
+          "name": "own shift -> approve / reject visible but disabled with POS_SELF_APPROVE reason; admin not exempt",
+          "duration_ms": 0
+        }
+      ]
+    },
+    {
+      "file": "tests/pos-authz.test.mjs",
+      "duration_ms": 54000,
+      "exit": 0,
+      "tests": 7,
+      "suites": 0,
+      "pass": 7,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "HTTP: settle-variance requires pos.shift.settle (role name no longer decides), void requires pos.refund",
+          "duration_ms": 11256
+        },
+        {
+          "name": "HTTP: shift approve / reject refuse the person who opened or declared it (POS_SELF_APPROVE)",
+          "duration_ms": 10860
+        },
+        {
+          "name": "HTTP: every POS store route requires its permission point",
+          "duration_ms": 10687
+        },
+        {
+          "name": "HTTP: store accounts cannot touch another store's shifts or cash drops (404, no state change)",
+          "duration_ms": 10268
+        },
+        {
+          "name": "HTTP: admin bound to a store passes the gates and can check a shift opened by someone else",
+          "duration_ms": 9699
+        }
+      ]
+    },
+    {
+      "file": "tests/privacy-tools.test.mjs",
+      "duration_ms": 12000,
+      "exit": 0,
+      "tests": 23,
+      "suites": 0,
+      "pass": 23,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "export refuses: no --out, relative --out, --out inside the repository, existing file, bad phone, unknown number",
+          "duration_ms": 963
+        },
+        {
+          "name": "pseudonyms are keyed: a different secret yields different values",
+          "duration_ms": 765
+        },
+        {
+          "name": "erase pseudonymizes personal columns, keeps finance fields and ids, writes one audit row without the raw phone, and is replay safe",
+          "duration_ms": 641
+        },
+        {
+          "name": "--report needs neither --confirm nor --actor; --dry-run applies the real checks and still writes nothing",
+          "duration_ms": 624
+        },
+        {
+          "name": "a subject that exists only as an order-center customer is found, erased once and then reported as already erased",
+          "duration_ms": 620
+        }
+      ]
+    },
+    {
+      "file": "tests/purchase-action-scope.test.mjs",
+      "duration_ms": 10000,
+      "exit": 0,
+      "tests": 9,
+      "suites": 0,
+      "pass": 9,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "purchase action routes and MCP purchase tools respect document org scope",
+          "duration_ms": 10503
+        }
+      ]
+    },
+    {
+      "file": "tests/purchase-chain-detail-scope.test.mjs",
+      "duration_ms": 13000,
+      "exit": 0,
+      "tests": 6,
+      "suites": 0,
+      "pass": 6,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "purchase chain detail and auxiliary reads share the read gate and per-document org scope",
+          "duration_ms": 12350
+        }
+      ]
+    },
+    {
+      "file": "tests/purchase-chain-scope.test.mjs",
+      "duration_ms": 12000,
+      "exit": 0,
+      "tests": 5,
+      "suites": 0,
+      "pass": 5,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "purchase chain read routes share the todos gate and org scope; overview totals follow the scoped set",
+          "duration_ms": 12305
+        }
+      ]
+    },
+    {
+      "file": "tests/python-runtime.test.mjs",
+      "duration_ms": 0,
+      "exit": 0,
+      "tests": 4,
+      "suites": 0,
+      "pass": 4,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "explicit Python failure is visible and cannot silently select a different interpreter",
+          "duration_ms": 1
+        },
+        {
+          "name": "existing Python without openpyxl is not sufficient; implicit discovery may try the next interpreter",
+          "duration_ms": 0
+        },
+        {
+          "name": "explicit Python module import failure and timeout are failures, not skips",
+          "duration_ms": 0
+        },
+        {
+          "name": "success exit without valid version metadata is rejected",
+          "duration_ms": 0
+        }
+      ]
+    },
+    {
+      "file": "tests/quote-scope.test.mjs",
+      "duration_ms": 13000,
+      "exit": 0,
+      "tests": 13,
+      "suites": 0,
+      "pass": 13,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "quotes, MCP sales tools and OMS order creation follow the org scope",
+          "duration_ms": 12232
+        }
+      ]
+    },
+    {
+      "file": "tests/release-candidate-policy.test.mjs",
+      "duration_ms": 0,
+      "exit": 0,
+      "tests": 19,
+      "suites": 0,
+      "pass": 19,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "AG1: dry-run evidence is never log-eligible in the scripts either (static)",
+          "duration_ms": 1
+        },
+        {
+          "name": "release-candidate.yml triggers only on v* tag pushes and workflow_dispatch",
+          "duration_ms": 1
+        },
+        {
+          "name": "AF1: ci.yml has no tag trigger, no ref-based job skips and no candidate job",
+          "duration_ms": 1
+        },
+        {
+          "name": "no workflow job has a publish, release, tag or push-back step (ci.yml and release-candidate.yml)",
+          "duration_ms": 0
+        },
+        {
+          "name": "docs/release/README.md states hosted candidates are unsigned and need a key-holder re-sign",
+          "duration_ms": 0
+        }
+      ]
+    },
+    {
+      "file": "tests/release-package.test.mjs",
+      "duration_ms": 16000,
+      "exit": 0,
+      "tests": 7,
+      "suites": 0,
+      "pass": 7,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "minimal package carries baseCommit and notices, and passes production acceptance end-to-end",
+          "duration_ms": 6463
+        },
+        {
+          "name": "verify-release requires CHANGELOG.md and a parseable CycloneDX SBOM that are listed and hash-checked",
+          "duration_ms": 2331
+        },
+        {
+          "name": "verify-release rejects a package without baseCommit, notices, or with database files listed",
+          "duration_ms": 2259
+        },
+        {
+          "name": "AF7: verify-release --sbom-diff prints the component diff, exits 0 on differences, and fails only on a malformed previous SBOM",
+          "duration_ms": 1837
+        },
+        {
+          "name": "package-release leaves database-like files out of the archive",
+          "duration_ms": 1363
+        }
+      ]
+    },
+    {
+      "file": "tests/release-signing.test.mjs",
+      "duration_ms": 41000,
+      "exit": 0,
+      "tests": 18,
+      "suites": 0,
+      "pass": 18,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "hosted CI candidates record built_by hosted-ci and signature null; a signed one records the signature digest and passes --require-signature with --pubkey",
+          "duration_ms": 13947
+        },
+        {
+          "name": "candidate signs EVIDENCE.json when GML_RELEASE_SIGN_KEY is set; verify-release --pubkey accepts it and rejects tamper, key swap and downgrade",
+          "duration_ms": 8199
+        },
+        {
+          "name": "candidate --log appends a chained entry; verify-release --log checks chain and presence; unsigned candidates get a loud warning; --require-signature fails them",
+          "duration_ms": 7884
+        },
+        {
+          "name": "without GML_RELEASE_SIGN_KEY the candidate still builds with signature null and no EVIDENCE.sig; --pubkey then fails the unsigned evidence",
+          "duration_ms": 7126
+        },
+        {
+          "name": "a configured but unusable signing key aborts the build and writes no candidate (never a silent unsigned fallback)",
+          "duration_ms": 945
+        }
+      ]
+    },
+    {
+      "file": "tests/restore-drill.test.mjs",
+      "duration_ms": 11000,
+      "exit": 0,
+      "tests": 8,
+      "suites": 0,
+      "pass": 8,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "an empty production backup without accounts gets a drill admin in the restored copy only",
+          "duration_ms": 2282
+        },
+        {
+          "name": "restore drill transparently decrypts an encrypted backup, restores, logs in and matches probes",
+          "duration_ms": 1788
+        },
+        {
+          "name": "restore drill verifies sha256, restores, migrates, starts production server, logs in and matches probes end to end",
+          "duration_ms": 1755
+        },
+        {
+          "name": "a probe mismatch after restore is reported and exits non-zero",
+          "duration_ms": 1730
+        },
+        {
+          "name": "refuses a non-empty target, the live data directory of the backup source and the caller GML_DATA_DIR",
+          "duration_ms": 919
+        }
+      ]
+    },
+    {
+      "file": "tests/retention.test.mjs",
+      "duration_ms": 3000,
+      "exit": 0,
+      "tests": 8,
+      "suites": 0,
+      "pass": 8,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "refuses the repository data directory, a missing data directory and bad arguments",
+          "duration_ms": 593
+        },
+        {
+          "name": "--execute deletes only eligible rows and writes exactly one audit summary in the same transaction",
+          "duration_ms": 426
+        },
+        {
+          "name": "honours configured retention windows from settings",
+          "duration_ms": 355
+        },
+        {
+          "name": "default is a dry run: counts per table and industry, nothing deleted",
+          "duration_ms": 354
+        },
+        {
+          "name": "industries without a database file are reported as absent, not created",
+          "duration_ms": 351
+        }
+      ]
+    },
+    {
+      "file": "tests/role-matrix.test.mjs",
+      "duration_ms": 31000,
+      "exit": 0,
+      "tests": 17,
+      "suites": 0,
+      "pass": 17,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "AE2: custom roles, scope-override distribution (counts only), multi-role union, generator parity",
+          "duration_ms": 10842
+        },
+        {
+          "name": "AF10: role-matrix union, endpoint and permContext agree on a fixture with one inactive role",
+          "duration_ms": 10116
+        },
+        {
+          "name": "GET /api/meta/role-matrix",
+          "duration_ms": 10037
+        }
+      ]
+    },
+    {
+      "file": "tests/route-authz-guard.test.mjs",
+      "duration_ms": 1000,
+      "exit": 0,
+      "tests": 9,
+      "suites": 0,
+      "pass": 9,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "a bare requireAuth route and a no-auth route turn the guard red and are named",
+          "duration_ms": 308
+        },
+        {
+          "name": "a method-limited inline r.use does not gate other verbs",
+          "duration_ms": 177
+        },
+        {
+          "name": "a renamed or removed route leaves its allowlist entry stale",
+          "duration_ms": 176
+        },
+        {
+          "name": "router-level, mount-level and spread-array gates are not false positives",
+          "duration_ms": 175
+        },
+        {
+          "name": "an r.route() registration the parser cannot read fails instead of passing silently",
+          "duration_ms": 175
+        }
+      ]
+    },
+    {
+      "file": "tests/runtime-isolation.test.mjs",
+      "duration_ms": 10000,
+      "exit": 0,
+      "tests": 18,
+      "suites": 0,
+      "pass": 18,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "actual server refuses missing or public secret before listening or creating data",
+          "duration_ms": 2036
+        },
+        {
+          "name": "test database supports seed and reset while retaining its classification",
+          "duration_ms": 1901
+        },
+        {
+          "name": "direct seed/reset and demo boot reject production before changing business data",
+          "duration_ms": 966
+        },
+        {
+          "name": "actual HTTP entrypoint defaults to production and leaves empty business tables",
+          "duration_ms": 962
+        },
+        {
+          "name": "changing environment to demo/test cannot reclassify production data",
+          "duration_ms": 939
+        }
+      ]
+    },
+    {
+      "file": "tests/sales-scope.test.mjs",
+      "duration_ms": 13000,
+      "exit": 0,
+      "tests": 15,
+      "suites": 0,
+      "pass": 15,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "sales reads and writes follow the caller org scope; dealer / store bindings are unchanged",
+          "duration_ms": 13052
+        }
+      ]
+    },
+    {
+      "file": "tests/sbom-diff.test.mjs",
+      "duration_ms": 0,
+      "exit": 0,
+      "tests": 12,
+      "suites": 0,
+      "pass": 12,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "CLI: exit 0 with a diff, writes json/table outputs; exit 1 for a malformed previous file",
+          "duration_ms": 153
+        },
+        {
+          "name": "identical SBOMs produce an empty diff",
+          "duration_ms": 1
+        },
+        {
+          "name": "loadSbomFile rejects unreadable, non-JSON and oversized files",
+          "duration_ms": 1
+        },
+        {
+          "name": "the table neutralises control characters and workflow-command prefixes from component names",
+          "duration_ms": 0
+        },
+        {
+          "name": "added, removed and version-changed components are classified and sorted",
+          "duration_ms": 0
+        }
+      ]
+    },
+    {
+      "file": "tests/schema-snapshot.test.mjs",
+      "duration_ms": 13000,
+      "exit": 0,
+      "tests": 6,
+      "suites": 0,
+      "pass": 6,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "upgrade-rehearsal --from=58 on a snapshot set skips truncation and replays genuinely new structure",
+          "duration_ms": 5659
+        },
+        {
+          "name": "--synth tiny loads business data into the OLD structure and keeps the seed invariants green",
+          "duration_ms": 1965
+        },
+        {
+          "name": "a snapshot whose registered checksum was altered is still refused before any migration runs (no checksum bypass)",
+          "duration_ms": 1698
+        },
+        {
+          "name": "very old baselines work too (no setting_audit_log before 038): --upto=1 and --upto=37",
+          "duration_ms": 1019
+        },
+        {
+          "name": "--upto 58 builds the three industry DBs from schema.sql + migrations <= 58 and backs them up",
+          "duration_ms": 945
+        }
+      ]
+    },
+    {
+      "file": "tests/scope-notice.test.mjs",
+      "duration_ms": 0,
+      "exit": 0,
+      "tests": 7,
+      "suites": 0,
+      "pass": 7,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "403 -> forbidden and blocking, even with rows or scoped meta",
+          "duration_ms": 1
+        },
+        {
+          "name": "no notice for admin / data_scope=all / org-bound / non-empty / unknown rows / loading",
+          "duration_ms": 0
+        },
+        {
+          "name": "401 -> unauthenticated and blocking",
+          "duration_ms": 0
+        },
+        {
+          "name": "isUnscopedAccount edge cases",
+          "duration_ms": 0
+        },
+        {
+          "name": "empty list + unscoped account -> empty_scope, non-blocking",
+          "duration_ms": 0
+        }
+      ]
+    },
+    {
+      "file": "tests/security-headers.test.mjs",
+      "duration_ms": 38000,
+      "exit": 0,
+      "tests": 17,
+      "suites": 0,
+      "pass": 16,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 1,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "cookie mode: login sets HttpOnly session + readable CSRF cookie, token not in body; CSRF double submit on writes; logout clears",
+          "duration_ms": 10216
+        },
+        {
+          "name": "cookie mode: tampered/garbage session cookie is a 401 and gets cleared; no cookie is a plain 401",
+          "duration_ms": 9323
+        },
+        {
+          "name": "test mode defaults to report-only (not enforced)",
+          "duration_ms": 9090
+        },
+        {
+          "name": "bearer mode (default) is unchanged: token in body, no cookies, cookies never authenticate",
+          "duration_ms": 9050
+        },
+        {
+          "name": "static html: inline script hashes are added per file (and follow edits); the SPA index without inline script gets the baseline",
+          "duration_ms": 30
+        }
+      ]
+    },
+    {
+      "file": "tests/slow/approval-scope.test.mjs",
+      "duration_ms": 97000,
+      "exit": 0,
+      "tests": 21,
+      "suites": 0,
+      "pass": 21,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "AC3: approval visibility honours account bindings under data_scope=all",
+          "duration_ms": 33245
+        },
+        {
+          "name": "AA3: template maintenance needs system:approval:template AND global scope; the Z9 self-assignment escape fails",
+          "duration_ms": 33158
+        },
+        {
+          "name": "approval instances are scoped to the org of the document they point at",
+          "duration_ms": 29957
+        },
+        {
+          "name": "MCP approval.approve passes the human signer org scope into decideApproval",
+          "duration_ms": 1
+        }
+      ]
+    },
+    {
+      "file": "tests/slow/audit-chain.test.mjs",
+      "duration_ms": 141000,
+      "exit": 0,
+      "tests": 67,
+      "suites": 0,
+      "pass": 67,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "AC7 --resume refuses an export that is not exactly the db segment, an altered digest, and an incomplete export",
+          "duration_ms": 6830
+        },
+        {
+          "name": "AF5 --against-backup: a forged bridge anchor inside the backed-up range without an intent is a rewrite, even though it is only \"listed\" by --strict-anchors",
+          "duration_ms": 5134
+        },
+        {
+          "name": "AF5 --against-backup: a legitimate archive after the backup passes through its intent without any flag, and signatures are checked with --intent-pubkey",
+          "duration_ms": 4238
+        },
+        {
+          "name": "AE5 an intent without a corroborating audit-log row is a rewrite (forged intent, wrong action, wrong hash, row predating the offbox anchor)",
+          "duration_ms": 4193
+        },
+        {
+          "name": "AE5 an audit row that predates the offbox anchor cannot corroborate a later anchor",
+          "duration_ms": 3745
+        }
+      ]
+    },
+    {
+      "file": "tests/slow/audit-fts-ops-loop.test.mjs",
+      "duration_ms": 103000,
+      "exit": 0,
+      "tests": 3,
+      "suites": 0,
+      "pass": 3,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "AE4 --disable / --enable refuse to run without --reason (nothing changes) and --enable on a no-FTS5 build reports unsupported",
+          "duration_ms": 36467
+        },
+        {
+          "name": "AE4 --enable while another connection holds the write lock: busy, the index stays absent, the setting stays off, and a retry after the lock is released backfills",
+          "duration_ms": 34006
+        },
+        {
+          "name": "AE4 operator loop on a real server: disable -> LIKE answers -> restart keeps it off -> enable backfills -> FTS path again",
+          "duration_ms": 32206
+        }
+      ]
+    },
+    {
+      "file": "tests/slow/audit-fts-races.test.mjs",
+      "duration_ms": 186000,
+      "exit": 0,
+      "tests": 12,
+      "suites": 0,
+      "pass": 12,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "AF4 overlap: server healing decided on a stale read; --disable commits first -> the server must not undo it",
+          "duration_ms": 59731
+        },
+        {
+          "name": "AF4 two maintenance runs: the loser of an --enable overlap re-reads under BEGIN IMMEDIATE and reports already_in_state",
+          "duration_ms": 42442
+        },
+        {
+          "name": "AF4 overlap: server healing decided on a stale read; --enable commits first -> the server re-reads under the write lock and does nothing",
+          "duration_ms": 38232
+        },
+        {
+          "name": "AF4 in-flight request: --disable lands between \"choose FTS\" and \"execute\" -> 200 via LIKE, counter moves, identical rows (list and export)",
+          "duration_ms": 36048
+        },
+        {
+          "name": "AF4 query plan: table dropped between prepare and execute -> exactly one LIKE re-run, same rows, counter +1",
+          "duration_ms": 2057
+        }
+      ]
+    },
+    {
+      "file": "tests/slow/audit-logs-view.test.mjs",
+      "duration_ms": 337000,
+      "exit": 0,
+      "tests": 35,
+      "suites": 0,
+      "pass": 34,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 1,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "AA6 export cursor follows the list order: every row once, newest first, ties on created_at, filter + snapshot respected",
+          "duration_ms": 41115
+        },
+        {
+          "name": "Z7 permission: 401 anonymous, 403 without system:audit:view, 200 with it; admin ok; migration grants admin",
+          "duration_ms": 37827
+        },
+        {
+          "name": "AB3 action-only filter needs a module: unit + bizcode over HTTP (list and export), module+action still works",
+          "duration_ms": 33961
+        },
+        {
+          "name": "Z7 CSV export is row-capped and marks truncation",
+          "duration_ms": 30637
+        },
+        {
+          "name": "Z7 filters + pagination + redaction",
+          "duration_ms": 30109
+        }
+      ]
+    },
+    {
+      "file": "tests/slow/auth-session.test.mjs",
+      "duration_ms": 97000,
+      "exit": 0,
+      "tests": 17,
+      "suites": 0,
+      "pass": 17,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "A08 login errors are identical and account limits apply before password work",
+          "duration_ms": 10214
+        },
+        {
+          "name": "A05 role permission changes revoke primary and secondary members but not unrelated users",
+          "duration_ms": 9695
+        },
+        {
+          "name": "X7 successful logins never lock; success clears failures; failures still lock",
+          "duration_ms": 7979
+        },
+        {
+          "name": "A02 admin resets target without revoking self, then self reset revokes own session",
+          "duration_ms": 7558
+        },
+        {
+          "name": "A06 concurrent changes and admin reset use compare-and-swap instead of overwriting newer credentials",
+          "duration_ms": 7301
+        }
+      ]
+    },
+    {
+      "file": "tests/slow/authz-followups.test.mjs",
+      "duration_ms": 176000,
+      "exit": 0,
+      "tests": 49,
+      "suites": 0,
+      "pass": 49,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "AG10: my-scope explanations come from active roles only; inactive primary is called out; caller-only disclosure",
+          "duration_ms": 34061
+        },
+        {
+          "name": "role matrix cells match real /api/docflow/events behaviour (10 sampled role x type cells)",
+          "duration_ms": 32422
+        },
+        {
+          "name": "purchase chain todos require an internal purchase-reading role and are scoped to the caller",
+          "duration_ms": 30734
+        },
+        {
+          "name": "approval todos require an approval permission and only count instances the caller can act on",
+          "duration_ms": 28382
+        },
+        {
+          "name": "AF10: permContext ignores inactive roles (primary included); login discloses roles_inactive + ROLE_INACTIVE_NOTICE; no cache",
+          "duration_ms": 24788
+        }
+      ]
+    },
+    {
+      "file": "tests/slow/authz-misc.test.mjs",
+      "duration_ms": 94000,
+      "exit": 0,
+      "tests": 8,
+      "suites": 0,
+      "pass": 8,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "doc type to create-permission mapping is total and points at real permissions",
+          "duration_ms": 23461
+        },
+        {
+          "name": "no-issue requires the create permission of the doc type; dry runs are exempt",
+          "duration_ms": 19551
+        },
+        {
+          "name": "auth orgs list is trimmed by org scope for non-admin accounts",
+          "duration_ms": 18873
+        },
+        {
+          "name": "qimen gateway never passes through unauthenticated or badly signed calls",
+          "duration_ms": 16300
+        },
+        {
+          "name": "payment auto-allocation and settlement source selection follow the caller org scope",
+          "duration_ms": 16198
+        }
+      ]
+    },
+    {
+      "file": "tests/slow/dashboard-perf.test.mjs",
+      "duration_ms": 204000,
+      "exit": 0,
+      "tests": 34,
+      "suites": 0,
+      "pass": 34,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "GET /dashboard/summary: profile log only with GML_PROFILE=1, never in the body; AI stock_alert matches the original SQL",
+          "duration_ms": 27890
+        },
+        {
+          "name": "AC4 /channel and /recent: silent profiler by default; restricted callers are rejected before the handler and never warm the cache",
+          "duration_ms": 23741
+        },
+        {
+          "name": "dashboard summary is never stale: reflects writes made through another connection immediately, and repeated reads are cache hits",
+          "duration_ms": 13983
+        },
+        {
+          "name": "AB2 two processes on one DB file: another process's commit drops this process's cache for all four endpoints (data_version)",
+          "duration_ms": 13022
+        },
+        {
+          "name": "AB2 cache never serves a global payload to a scope-restricted caller (route gate runs before the cache), and reads do not warm for them",
+          "duration_ms": 12294
+        }
+      ]
+    },
+    {
+      "file": "tests/slow/inventory-scope.test.mjs",
+      "duration_ms": 81000,
+      "exit": 0,
+      "tests": 35,
+      "suites": 0,
+      "pass": 35,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "AA4: QC disposition, warehouse master, purchase receipts/returns and POS store stock stay inside the scope",
+          "duration_ms": 15295
+        },
+        {
+          "name": "inventory domain and purchase status/receive follow warehouse org scope",
+          "duration_ms": 14599
+        },
+        {
+          "name": "AC1: MCP purchase tools, dealer summary and master aggregates follow the warehouse-org scope (ADR-0050)",
+          "duration_ms": 13298
+        },
+        {
+          "name": "AB1: master options warehouses, purchase order list/detail and QC overview/audit follow the warehouse-org scope (ADR-0046)",
+          "duration_ms": 12750
+        },
+        {
+          "name": "AD1: /api/metrics values / catalog / dictionary follow the warehouse-org scope and flag global-only metrics (ADR-0053)",
+          "duration_ms": 12478
+        }
+      ]
+    },
+    {
+      "file": "tests/slow/mcp-doc-perms.test.mjs",
+      "duration_ms": 93000,
+      "exit": 0,
+      "tests": 49,
+      "suites": 0,
+      "pass": 49,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "AC3 MCP matrix: PS PSF DR OC OCS DS RB x {bound-own, bound-other, unbound, admin} through doc.get / doc.query / order.trace_document, zero writes",
+          "duration_ms": 12834
+        },
+        {
+          "name": "Y6 bound doc types: owner without binding is denied; with binding sees only its own store/dealer/subject",
+          "duration_ms": 12008
+        },
+        {
+          "name": "AB7 RC/YQ/SH binding rules live in DOC_SCOPE_RESOLVERS and use the shared store-binding predicate",
+          "duration_ms": 11915
+        },
+        {
+          "name": "doc.query / doc.get / doc.list_types honour the owner view permission per doc type",
+          "duration_ms": 11659
+        },
+        {
+          "name": "Y6 binding table is declared exactly once, in doc-perms, and its columns exist",
+          "duration_ms": 11146
+        }
+      ]
+    },
+    {
+      "file": "tests/slow/metrics-export.test.mjs",
+      "duration_ms": 73000,
+      "exit": 0,
+      "tests": 22,
+      "suites": 0,
+      "pass": 22,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "metrics token unset or too short disables the token path",
+          "duration_ms": 18022
+        },
+        {
+          "name": "login throttle rejections reach the scrape end to end",
+          "duration_ms": 9331
+        },
+        {
+          "name": "GML_METRICS_TOKEN: Bearer token reads the prometheus format only; wrong/short/unset tokens never do; token is never logged",
+          "duration_ms": 9159
+        },
+        {
+          "name": "AB10 HTTP: metrics throttled per IP (429 + bizcode + Retry-After), bad tokens count, accepted rotation tokens, new series present",
+          "duration_ms": 9088
+        },
+        {
+          "name": "AC9 HTTP: a real MCP tools/call increments os_erp_mcp_tool_calls_total{tool,code} as scraped from /metrics",
+          "duration_ms": 9005
+        }
+      ]
+    },
+    {
+      "file": "tests/slow/qimen-auth.test.mjs",
+      "duration_ms": 94000,
+      "exit": 0,
+      "tests": 13,
+      "suites": 0,
+      "pass": 13,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "capabilities needs the manage permission and no read surface exposes secret material",
+          "duration_ms": 9817
+        },
+        {
+          "name": "issue and rotate: permission, once-only plaintext, sealed storage, immediate invalidation",
+          "duration_ms": 9679
+        },
+        {
+          "name": "issuance CLI is the only way to obtain a usable secret",
+          "duration_ms": 9501
+        },
+        {
+          "name": "migration 060 is idempotent, verifies, and only the demo platform starts with a secret",
+          "duration_ms": 9386
+        },
+        {
+          "name": "nonce table is pruned on accept and survives as the replay authority",
+          "duration_ms": 9311
+        }
+      ]
+    },
+    {
+      "file": "tests/slow/release-candidate.test.mjs",
+      "duration_ms": 65000,
+      "exit": 0,
+      "tests": 17,
+      "suites": 0,
+      "pass": 17,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "--run-tests --ci-run auto records produced results bound to the package tests tree; gh stand-in supplies the run id",
+          "duration_ms": 17409
+        },
+        {
+          "name": "candidate builds RC-<version>-<sha>.zip with sha256, EVIDENCE.json and notes, and verifies on a fresh extraction",
+          "duration_ms": 8594
+        },
+        {
+          "name": "--ci-run=auto on hosted CI without a successful ci.yml run records the current run as hosted-ci-self; verify-release accepts it with a warning and rejects forgeries",
+          "duration_ms": 8077
+        },
+        {
+          "name": "AG1: a hosted --skip-focused build records dry_run, skipped-dry-run focused tests; verify-release warns, is never log-eligible and rejects forgeries",
+          "duration_ms": 7673
+        },
+        {
+          "name": "outside hosted CI a missing successful run stays null (no self record is invented locally)",
+          "duration_ms": 7263
+        }
+      ]
+    },
+    {
+      "file": "tests/synth-data.test.mjs",
+      "duration_ms": 40000,
+      "exit": 0,
+      "tests": 17,
+      "suites": 0,
+      "pass": 17,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "pipeline runs generate, plain+encrypted backup, both restore drills, explain-audit and bench end to end",
+          "duration_ms": 15058
+        },
+        {
+          "name": "AB11 pipeline with a tiny time budget exits 0, stays ok and reports partial honestly",
+          "duration_ms": 14754
+        },
+        {
+          "name": "same seed twice gives the same business digest; a different seed differs",
+          "duration_ms": 2230
+        },
+        {
+          "name": "AB11 batching checkpoints+VACUUMs between batches, keeps invariants and the same business digest",
+          "duration_ms": 1572
+        },
+        {
+          "name": "digest does not depend on the machine time zone",
+          "duration_ms": 1503
+        }
+      ]
+    },
+    {
+      "file": "tests/third-party-notices.test.mjs",
+      "duration_ms": 1000,
+      "exit": 0,
+      "tests": 8,
+      "suites": 0,
+      "pass": 8,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "sbom: generated runtime SBOM covers every lock runtime package, is deterministic, has no absolute paths",
+          "duration_ms": 618
+        },
+        {
+          "name": "repo: every runtime dependency is present, marker preserved once, head intact, output deterministic",
+          "duration_ms": 55
+        },
+        {
+          "name": "every bare package imported from src/ is covered by the distributed set",
+          "duration_ms": 19
+        },
+        {
+          "name": "repo: committed THIRD_PARTY_NOTICES.md matches the generator output",
+          "duration_ms": 12
+        },
+        {
+          "name": "fixture: license text included, missing LICENSE gets fallback marker, dev excluded, head preserved",
+          "duration_ms": 4
+        }
+      ]
+    },
+    {
+      "file": "tests/trust-proxy.test.mjs",
+      "duration_ms": 0,
+      "exit": 0,
+      "tests": 15,
+      "suites": 0,
+      "pass": 15,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "server refuses to start on invalid GML_TRUST_PROXY, naming TRUST_PROXY_INVALID",
+          "duration_ms": 177
+        },
+        {
+          "name": "off: spoofed X-Forwarded-For / -Proto / X-Request-Id are ignored; no HSTS, cookies not Secure",
+          "duration_ms": 31
+        },
+        {
+          "name": "login throttle IP key: XFF ignored under off, used only when the peer is trusted",
+          "duration_ms": 17
+        },
+        {
+          "name": "loopback: headers from the loopback peer are honoured (client IP, https, HSTS, Secure cookies, request id)",
+          "duration_ms": 5
+        },
+        {
+          "name": "CIDR not covering the peer behaves like off; CIDR covering the peer (incl. mapped/v6 loopback rules) honours headers",
+          "duration_ms": 3
+        }
+      ]
+    },
+    {
+      "file": "tests/upgrade-rehearsal.test.mjs",
+      "duration_ms": 24000,
+      "exit": 0,
+      "tests": 11,
+      "suites": 0,
+      "pass": 11,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "an injected failing migration fails the rehearsal, exercises rollback (in-process + ADR-0016 drill) and leaves the previous version restorable",
+          "duration_ms": 3434
+        },
+        {
+          "name": "a migration whose verify() disagrees with its up() is not silently healed by the follow-up check",
+          "duration_ms": 3413
+        },
+        {
+          "name": "checksum protection is not bypassed: a tampered registry checksum fails before any write, for rows below and above the baseline",
+          "duration_ms": 3007
+        },
+        {
+          "name": "synthetic database directory: copied, backed up, restored and rehearsed through the same path",
+          "duration_ms": 2610
+        },
+        {
+          "name": "a synthetic database whose settings point backup_dir elsewhere cannot make the rehearsal write or prune outside the target",
+          "duration_ms": 2511
+        }
+      ]
+    },
+    {
+      "file": "tests/upgrade-rollback-drill.test.mjs",
+      "duration_ms": 3000,
+      "exit": 0,
+      "tests": 3,
+      "suites": 0,
+      "pass": 3,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "a failing upgrade migration leaves the restored copy at the previous version, checksums intact, and the backup restores and starts",
+          "duration_ms": 1893
+        },
+        {
+          "name": "refuses a non-empty target directory and unknown flags without touching anything",
+          "duration_ms": 950
+        },
+        {
+          "name": "a tampered backup set cannot start the drill and exits non-zero with a report",
+          "duration_ms": 902
+        }
+      ]
+    },
+    {
+      "file": "tests/upstream-provenance.test.mjs",
+      "duration_ms": 1000,
+      "exit": 0,
+      "tests": 9,
+      "suites": 0,
+      "pass": 9,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "similarity script: CLI runs and prints JSON",
+          "duration_ms": 52
+        },
+        {
+          "name": "similarity script: fixtures",
+          "duration_ms": 1
+        },
+        {
+          "name": "medusa: SOURCE.json complete and consistent",
+          "duration_ms": 1
+        },
+        {
+          "name": "medusa: LICENSE files are non-empty and match the recorded hash",
+          "duration_ms": 1
+        },
+        {
+          "name": "casbin: LICENSE files are non-empty and match the recorded hash",
+          "duration_ms": 0
+        }
+      ]
+    },
+    {
+      "file": "tests/user-form-contract.test.mjs",
+      "duration_ms": 0,
+      "exit": 0,
+      "tests": 11,
+      "suites": 0,
+      "pass": 11,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "DOM select strings restore only the exact numeric option identity; enum fields stay strings",
+          "duration_ms": 1
+        },
+        {
+          "name": "existing numeric bindings and explicitly cleared controls preserve intended identity/null semantics",
+          "duration_ms": 1
+        },
+        {
+          "name": "every selectable data_scope is accepted by the real server validation; unsupported ones are not offered",
+          "duration_ms": 0
+        },
+        {
+          "name": "explicit API password:null remains rejected before any write or hashing",
+          "duration_ms": 0
+        },
+        {
+          "name": "unknown, noncanonical, unsafe and nonnumeric selections fail instead of arbitrary Number coercion",
+          "duration_ms": 0
+        }
+      ]
+    },
+    {
+      "file": "tests/version-contract.test.mjs",
+      "duration_ms": 18000,
+      "exit": 0,
+      "tests": 3,
+      "suites": 0,
+      "pass": 3,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "/api, /api/meta/health, the AI manifest and MCP serverInfo report one version and build SHA",
+          "duration_ms": 9070
+        },
+        {
+          "name": "mall order cancel returns the persisted status",
+          "duration_ms": 9054
+        },
+        {
+          "name": "server/version.js is the single version source and validates the build SHA",
+          "duration_ms": 1
+        }
+      ]
+    },
+    {
+      "file": "tests/write-contention.test.mjs",
+      "duration_ms": 13000,
+      "exit": 0,
+      "tests": 14,
+      "suites": 0,
+      "pass": 14,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "slowest": [
+        {
+          "name": "multi-process writers on one DB: no lost writes, no duplicates, retries recorded",
+          "duration_ms": 10190
+        },
+        {
+          "name": "bench-api --profile=write: fixed schema, integrity verified, retries counted, bad flags refused",
+          "duration_ms": 1974
+        },
+        {
+          "name": "BEGIN IMMEDIATE contention: retries until the other writer releases, fn runs once",
+          "duration_ms": 5
+        },
+        {
+          "name": "BUSY thrown after fn already wrote: the write is rolled back, retry commits exactly once",
+          "duration_ms": 2
+        },
+        {
+          "name": "non-BUSY errors are never retried and leave no rows behind",
+          "duration_ms": 1
+        }
+      ]
+    }
+  ]
+}

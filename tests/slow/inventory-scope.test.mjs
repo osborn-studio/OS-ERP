@@ -1,3 +1,4 @@
+// slow: 81 s: org-scoped inventory and purchase routes over HTTP, many cases (scripts/test-timings.mjs, threshold 60 s)
 /**
  * ============================================================================
  * 文件标识：tests/inventory-scope.test.mjs ｜ 测试：库存域与采购订单状态/收货路由按组织范围收口（ADR-0038）
@@ -23,9 +24,9 @@ import net from 'node:net'
 import { fileURLToPath } from 'node:url'
 import { setTimeout as delay } from 'node:timers/promises'
 import Database from 'better-sqlite3'
-import { METRICS } from '../server/lib/metrics.js'
+import { METRICS } from '../../server/lib/metrics.js'
 
-const ROOT = fileURLToPath(new URL('../', import.meta.url))
+const ROOT = fileURLToPath(new URL('../../', import.meta.url))
 const secret = () => randomBytes(24).toString('base64url')
 
 async function server(t) {
@@ -360,8 +361,8 @@ test('MCP inventory tools follow the owner warehouse-org scope (ADR-0042)', { ti
   const f = await server(t)
   const { db } = f
   process.env.GML_RUNTIME_MODE = 'test'
-  const { TOOLS } = await import('../server/mcp/tools.js')
-  const engine = await import('../server/lib/stock.js')
+  const { TOOLS } = await import('../../server/mcp/tools.js')
+  const engine = await import('../../server/lib/stock.js')
   const tool = (name) => TOOLS.find((x) => x.name === name)
   const call = (name, args, scope, extra = {}) => tool(name).handler({ db, args, ctx: { scope, tokenName: 'aa2', orgId: null, engine, ...extra } })
   const codeOf = (fn) => { try { fn(); return null } catch (e) { return e.code ?? `ERR:${e.message}` } }
@@ -826,9 +827,9 @@ test('AC1: MCP purchase tools, dealer summary and master aggregates follow the w
   const f = await server(t)
   const { db, api } = f
   process.env.GML_RUNTIME_MODE = 'test'
-  const { TOOLS } = await import('../server/mcp/tools.js')
-  const { purchaseOrderScopeSql } = await import('../server/lib/purchase.js')
-  const engine = await import('../server/lib/stock.js')
+  const { TOOLS } = await import('../../server/mcp/tools.js')
+  const { purchaseOrderScopeSql } = await import('../../server/lib/purchase.js')
+  const engine = await import('../../server/lib/stock.js')
   const call = (name, args, scope) => TOOLS.find((x) => x.name === name).handler({ db, args, ctx: { scope, tokenName: 'ac1', orgId: null, engine } })
   const whA = db.prepare("SELECT id, org_id FROM warehouses WHERE code='WH01'").get()
   const whB = db.prepare("SELECT id, org_id FROM warehouses WHERE code='WH03'").get()

@@ -32,7 +32,9 @@
     "test:runtime": "node --test tests/runtime-isolation.test.mjs",
     "bootstrap:admin": "node scripts/bootstrap-admin.mjs",
     "test:bootstrap": "node --test tests/admin-bootstrap.test.mjs",
-    "test:focused": "node --test --test-concurrency=1 tests/*.test.mjs"
+    "test:focused": "node --test --test-concurrency=1 tests/*.test.mjs",
+    "test:slow": "node --test --test-concurrency=1 tests/slow/*.test.mjs",
+    "test:timings": "node scripts/test-timings.mjs --run"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

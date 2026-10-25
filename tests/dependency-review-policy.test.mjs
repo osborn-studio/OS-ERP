@@ -27,9 +27,11 @@ test('dependency-review exists, is dispatch-only, independent and time-boxed', (
   assert.ok(Number(code.match(/^\s+timeout-minutes:\s*(\d+)\s*$/m)?.[1]) <= 15)
 })
 
-test('it is the last job in the file (appended as a whole block)', () => {
+test('it is a whole top-level block (later jobs are appended after it, never nested in it)', () => {
+  // AH1: new jobs (slow-tests, ...) are appended at the END of ci.yml, so dependency-review is no longer required to be last.
   const names = [...workflow.matchAll(/^  ([a-z][a-z0-9-]*):\n(?=    )/gm)].map((x) => x[1])
-  assert.equal(names[names.length - 1], 'dependency-review')
+  assert.ok(names.includes('dependency-review'))
+  assert.doesNotMatch(job, /^  (?!dependency-review:)[a-z][a-z0-9-]*:\n/m, 'the job block must not swallow a following job')
 })
 
 test('actions are SHA-pinned with a version comment', () => {
