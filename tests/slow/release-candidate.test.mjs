@@ -214,6 +214,8 @@ test('candidate builds RC-<version>-<sha>.zip with sha256, EVIDENCE.json and not
   // 证据绑定真实 zip：hash/名字不符即红
   const bound = spawnSync(process.execPath, ['scripts/verify-release.mjs', `--evidence=${evFile}`, `--artifact=${zip}`], { cwd: pkg, env: { PATH }, encoding: 'utf8' })
   assert.equal(bound.status, 0, bound.stderr)
+  const spaced = spawnSync(process.execPath, ['scripts/verify-release.mjs', '--evidence', evFile, '--artifact', zip], { cwd: pkg, env: { PATH }, encoding: 'utf8' })
+  assert.equal(spaced.status, 0, spaced.stderr)
   const other = path.join(dir, `RC-other.zip`)
   writeFileSync(other, 'not the archive')
   const unbound = spawnSync(process.execPath, ['scripts/verify-release.mjs', `--evidence=${evFile}`, `--artifact=${other}`], { cwd: pkg, env: { PATH }, encoding: 'utf8' })

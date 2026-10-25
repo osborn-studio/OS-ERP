@@ -559,13 +559,16 @@ test('AH2: approval_pending follows the approval-centre visibility predicate for
   assert.equal(m.values.approval_pending, g.values.approval_pending, 'manager sees the whole pending queue, as in the approval centre (ADR-0015)')
   // The same already-issued token must immediately lose global visibility when the setting is disabled.
   okData(await api('/api/meta/settings', { token: f.admin, method: 'PUT', body: { key: 'approval_manager_global', value: false, reason: 'final review: restricted approval metric' } }))
-  const restrictedManager = await get(mgr)
-  const restrictedOverview = okData(await api('/api/approval/overview', { token: mgr }))
-  assert.equal(restrictedManager.values.approval_pending, a.values.approval_pending, 'disabled manager override keeps own-scope documents and own submissions only')
-  assert.equal(restrictedManager.values.approval_pending, restrictedOverview.pending, 'disabled override: metric and overview remain consistent')
-  assert.ok(restrictedManager.values.approval_pending < g.values.approval_pending, 'other-organisation pending rows must not leak')
-  assert.equal((await get(f.admin)).values.approval_pending, g.values.approval_pending, 'global admin is unaffected')
+  try {
+    const restrictedManager = await get(mgr)
+    const restrictedOverview = okData(await api('/api/approval/overview', { token: mgr }))
+    assert.equal(restrictedManager.values.approval_pending, a.values.approval_pending, 'disabled manager override keeps own-scope documents and own submissions only')
+    assert.equal(restrictedManager.values.approval_pending, restrictedOverview.pending, 'disabled override: metric and overview remain consistent')
+    assert.ok(restrictedManager.values.approval_pending < g.values.approval_pending, 'other-organisation pending rows must not leak')
+    assert.equal((await get(f.admin)).values.approval_pending, g.values.approval_pending, 'global admin is unaffected')
+  } finally {
   okData(await api('/api/meta/settings', { token: f.admin, method: 'PUT', body: { key: 'approval_manager_global', value: true, reason: 'restore approval metric fixture' } }))
+  }
   assert.equal((await get(mgr)).values.approval_pending, g.values.approval_pending, 'restoring the switch restores the documented manager view')
   db.prepare("DELETE FROM role_permissions WHERE role_code='warehouse' AND perm_code='system:approval:manage'").run()
   // 空范围失败关闭：没有组织、没有自己的提交、没有审批队列 ⇒ 不增加

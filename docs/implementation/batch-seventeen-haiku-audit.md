@@ -88,3 +88,22 @@ Superseded head `678d513911f641a88968d09b7ceed5ae6caddda8`, run [40168500810](ht
 - Exclude the measurement CLI `scripts/test-timings.mjs` only from legacy no-argument business-test discovery. Its node:test tests and dedicated slow CI execution remain. Register its absent legacy helpers as null/null so the shape scan still examines it: guard78/78 pass after reproducing the missing-entry failure.
 - Policy/tree106/106 and all static/generated checks pass. No local Python or full Linux acceptance is claimed. New current-head hosted regression is required before ready-for-review.
 - Claude CLI `claude-haiku-5-5` supplied-diff review (`is_error=false`) assessed this as correct/minimal with no security regression. Verified its conditions: `test-timings.test.mjs` exists and passed, CI slow job calls `--run`, null helper entries pass the live scan, and extraction uses `wx` plus mode0644 with no chmod. Retained ambient umask assertions and explicitly ran077 rather than pinning022, which would miss the regression environment that exposed this failure.
+
+## 2026-10-25 用户要求的最终遗漏/回归审查（原 HEAD a628d38）
+
+本次以 GitHub 实际 base main `3ac0b8c87c65cd395d86fa0fd0501de2e7e22f82` 为基线，累计运行时代码差异分六个文件边界块交给 Claude CLI **claude-haiku-5-5**；随后两轮修复复审。全部禁用工具、只读给定文本，JSON `is_error=false`、modelUsage 确认为指定模型。模型的猜测逐条对照完整源码和测试，不直接当成漏洞。审查工作与原始响应由 osstack 工作区 `/tmp/osstack/erp-final-review` 管理；初次120秒执行超时被记录为失败，恢复收齐六份响应后验证成功，不把采集成功当作代码通过。
+
+确认并修复：
+
+1. **MCP trace 库存流水遗漏仓库范围交集。** 原处理仅过滤货主，同一货主的其他组织仓库流水可泄露。最低受监控批九修复并向后传递；复用 `warehouseInScope`，保留后续批次已有单据权限、绑定、同号歧义保护。新增实际 handler 复现覆盖异组织货主/仓库、NULL/缺失仓库、无单据流水、空范围和全范围。修前失败，修后通过。
+2. **release verifier 空格参数被静默忽略。** `--evidence path` / `--artifact path` 现与等号形式一致，缺值/空值/重复值拒绝；仅指定 artifact 未指定 evidence 也拒绝，不能退化为 manifest-only 检查。批九修复并传递。负向复现和正向真实候选包绑定均验证。
+3. **备份报告 sweep 删除其他存活写者临时文件。** 批十六开始修复：新临时名记录 PID，仅清扫已退出的本机 PID 普通文件；存活、EPERM、PID复用和旧格式无法确认归属时保留人工检查。第十七批保留 AH6 清理计数；故障注入验证退出后的清扫与存活时的保留。此方案针对本机备份目录，不声称跨主机锁或并发备份全流程互斥。
+4. **AH2 遗漏负向覆盖已补。** 既有管理员令牌在 approval_manager_global 关闭后立即收窄，指标与 overview 一致，普通全局管理员不变，重新开启恢复；finally 恢复开关。这是既有行为的测试补充，未改权限政策。
+
+复审取舍：unsigned anchor intent 的信任边界及 strict 模式已明确记录；metrics 自定义鉴权有运行时覆盖；SBOM 读取已有32MiB限制；safe-path 已做真实路径解析；admin 在 permContext 映射为 isSuper；MCP 严格绑定为既有契约；限速满容量拒绝为 fail-closed。其余 malformed-server-output、worker-level crash、扫描路径等假设没有复现为本次阻断，不以猜测改动安全策略。独立审查不是无遗漏保证。
+
+本机 Node 22 开发验证：批九新回归5/5、candidate6/6；批十六报告定向6/6；批十七修复及完整 fs-fault80/80、完整 MCP 文档权限49/49、候选包与相关策略45/45、全部 policy/tree106/106、helper-shape78/78、AH2负向1/1、真实候选包空格参数绑定1/1。静态文件头、路由鉴权、数据路径、API契约、metrics范围及生成文档检查通过；全新隔离 seed 后 MCP覆盖29/29、库存字典25/25通过（未启用已知另有失败的 strict 档）。新增行号变化的 codemap 由生成器重生成。
+
+如实记录本机修复过程：一次合并文本编辑残留分隔符导致测试语法失败，推送前修正并重跑80/80；首次守卫未配置/创建 seed 数据库导致拒绝运行，配置独立 `/tmp/osstack` 数据后重跑通过。没有运行本机 Python，没有使用客户数据。
+
+PR #13 已恢复 draft。以上均非 Linux 验收；新 HEAD 必须重新通过托管 CI 的全部适用检查及隔离回归才可恢复 ready。原 a628d38 的全绿不代替新结果；不合并、不改变 auto-merge、不发布部署。
