@@ -113,7 +113,7 @@ r.get(
  * 用量与 `dailyQuotaState` 同口径（本地日历日的 `mcp_call_logs` 行数）；配额关闭时 `tokens` 为空（没有可剩余的额度，不披露调用节奏）。
  * 只含令牌 id / 名称与数字，不含前缀、哈希、明文；在用 = active 且未过期。
  * 游标分页（AH9）：`limit`（1..500，默认 100，超过 500 取 500；非整数 / <1 ⇒ 400）+ `cursor`（上一页返回的 `next_cursor`，不合规 ⇒ 400）；
- * 次序固定 `used DESC, id ASC`；`next_cursor` 为 null 表示没有更多页；`truncated` 保留旧字段，含义改为「还有后续页」（= next_cursor 非空）。
+ * 次序固定 `used DESC, id ASC`；游标绑定生成时的本地日期，跨过本地午夜即作废（400）；`next_cursor` 为 null 表示没有更多页；`truncated` 保留旧字段，含义改为「还有后续页」（= next_cursor 非空）。
  * 审计表读不到时 `usage_unavailable=true`、`tokens` 为空（不报「剩余全部额度」，因为限流此时 fail closed）。
  */
 const singleParam = (v) => (Array.isArray(v) ? undefined : v)
@@ -137,6 +137,7 @@ r.get(
     const quota = dailyQuotaConfigured(db)
     if (!(quota > 0)) return ok(res, { daily_quota: 0, enabled: false, usage_unavailable: false, truncated: false, next_cursor: null, tokens: [] })
     const page = dailyQuotaPage(db, { limit, after })
+    if (page?.expired) return fail(res, 'cursor 已过期（已跨过本地午夜，用量已归零），请从第一页重新开始', 400, 400)
     // 审计表读不到：限流此时 fail closed，所以不能报"还剩全部额度"——如实标 usage_unavailable
     if (!page) return ok(res, { daily_quota: quota, enabled: true, usage_unavailable: true, truncated: false, next_cursor: null, tokens: [] })
     const tokens = page.rows.map((t) => ({ id: t.id, name: t.name, used: t.used, remaining: Math.max(0, quota - t.used) }))

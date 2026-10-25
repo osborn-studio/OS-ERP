@@ -23,7 +23,7 @@
  *   （所有者改密 / 停用 / 过期时不再是 active），两列都来自服务端，页面不自己推断。
  * ============================================================================
  */
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Card, SectionTitle, StatCard, Table, Tabs, useFetch, toast } from '../../components/ui'
 import api from '../../api/client'
 import { PRODUCT_NAME } from '../../constants/brand'
@@ -405,21 +405,24 @@ function McpQuotaBlock({ nonce }: { nonce: number }) {
   const [cursor, setCursor] = useState<string | null>(null)
   const [loadingMore, setLoadingMore] = useState(false)
   const [moreFailed, setMoreFailed] = useState(false)
-  useEffect(() => { setExtra([]); setCursor(data?.next_cursor ?? null); setMoreFailed(false) }, [data])
+  const generation = useRef(0) // 刷新后到达的旧「加载更多」响应必须丢弃，否则会把已清空的行又塞回来并推进新列表的游标
+  useEffect(() => { generation.current += 1; setExtra([]); setCursor(data?.next_cursor ?? null); setMoreFailed(false); setLoadingMore(false) }, [data])
   if (!data || error || !data.enabled) return null
   if (data.usage_unavailable) return <div data-testid="mcp-quota" data-quota={data.daily_quota} data-unavailable="1" className="mt-3 text-[12px] text-amber-700">今日配额用量暂时读不到（审计表不可读）；此时调用会被安全拒绝，不代表还有剩余额度。</div>
   const rows = [...data.tokens, ...extra.filter((t) => !data.tokens.some((d) => d.id === t.id))]
   const low = rows.filter((t) => t.remaining === 0).length
   const loadMore = async () => {
     if (!cursor || loadingMore) return
+    const mine = generation.current
     setLoadingMore(true); setMoreFailed(false)
     try {
       const res = await api.get('/mcp/limits/quota', { cursor, limit: 100 })
+      if (mine !== generation.current) return
       const page: McpQuota = res.data
       if (page.usage_unavailable) { setMoreFailed(true); return }
       setExtra((prev) => [...prev, ...page.tokens.filter((t) => !prev.some((p) => p.id === t.id))])
       setCursor(page.next_cursor ?? null)
-    } catch { setMoreFailed(true) } finally { setLoadingMore(false) }
+    } catch { if (mine === generation.current) setMoreFailed(true) } finally { if (mine === generation.current) setLoadingMore(false) }
   }
   return (
     <div data-testid="mcp-quota" data-quota={data.daily_quota} data-exhausted={low} data-loaded={rows.length} data-has-more={cursor ? '1' : '0'} className="mt-3">

@@ -16,7 +16,7 @@ import Database from 'better-sqlite3'
 import { createToken } from '../server/mcp/tokens.js'
 import { createMcpRateLimiter, dailyQuotaPage, encodeQuotaCursor, decodeQuotaCursor, deniedRowCount } from '../server/lib/mcp-rate-limit.js'
 import { renderPrometheus } from '../server/lib/metrics-export.js'
-import { counterSnapshot, histogramSnapshot, resetCounters } from '../server/lib/process-counters.js'
+import { counterSnapshot, histogramSnapshot, resetCounters, registerMcpTools, incMcpToolCall } from '../server/lib/process-counters.js'
 
 const require = createRequire(import.meta.url)
 const M073 = require('../server/db/migrations/073_mcp_rate_buckets.cjs')
@@ -110,20 +110,32 @@ test('cardinality guard: exporter label NAMES are a closed constant set; no fami
   assert.ok(Object.keys(seen).includes('mcp_rate_denied_rows') && Object.keys(seen).includes('mcp_rate_store_wait_seconds'))
 })
 
-test('cardinality guard: 300 distinct tokens being refused and counted change neither the series set nor any label value', () => {
+test('cardinality guard: 300 distinct tokens refused, counted and tool-called change neither the series set nor any label value', () => {
   resetCounters()
+  registerMcpTools(['org.tree', 'org.list'])
   const render = (denied) => renderPrometheus({ ops: OPS, retry: {}, counters: counterSnapshot(), histograms: histogramSnapshot(), version: 'v', mcpDeniedRows: denied })
   const seriesOf = (text) => text.split('\n').filter((l) => l && !l.startsWith('#')).map((l) => l.slice(0, l.lastIndexOf(' ')))
+  // 暖机：把每种「折叠后的」序列各制造一次（登记工具 × 受限码、未登记工具 → unknown、未登记码 → other），之后再多的令牌也不许产生新序列
+  incMcpToolCall('org.tree', 'MCP_RATE_LIMITED'); incMcpToolCall('org.list', 'ok'); incMcpToolCall('tok-warm', 'E-warm'); incMcpToolCall('org.tree-warm', 'MCP_RATE_LIMITED')
   const before = seriesOf(render(0))
+  assert.ok(before.some((x) => x.startsWith('os_erp_mcp_tool_calls_total{')), 'the tool-call series are populated, so the comparison covers their labels')
   const db = rateDb()
   const l = createMcpRateLimiter({ env: DB_ENV, now: () => T0 })
   const ids = []
-  for (let i = 0; i < 300; i++) { const id = 910_000 + i; ids.push(id); for (let k = 0; k < 4; k++) l.consume(id, 'read', 'cosmetic', db) }
+  for (let i = 0; i < 300; i++) {
+    const id = 910_000 + i
+    ids.push(id)
+    for (let k = 0; k < 4; k++) l.consume(id, 'read', 'cosmetic', db)
+    // 攻击者可控的字符串：以令牌 id 命名的工具 / 结果码 —— 必须折叠，不能长出新序列
+    incMcpToolCall(`tok-${id}`, `E${id}`); incMcpToolCall(`org.tree${id}`, 'MCP_RATE_LIMITED'); incMcpToolCall('org.tree', 'MCP_RATE_LIMITED')
+  }
   const after = render(deniedRowCount(db))
   assert.equal(deniedRowCount(db), 300)
-  assert.deepEqual(seriesOf(after), before, 'series names and label values are identical regardless of how many tokens were refused')
+  assert.deepEqual(seriesOf(after), before, 'series names and label values are identical regardless of how many tokens were refused or tool-called')
   for (const id of ids.slice(0, 5)) assert.ok(!after.includes(String(id)), 'a token id leaked into the exposition')
   assert.ok(!/cosmetic\|/.test(after), 'bucket keys leaked into the exposition')
+  const labelValues = new Set([...after.matchAll(/="([^"]*)"/g)].map((m) => m[1]))
+  assert.ok(![...labelValues].some((v) => /tok-|E9\d{5}|9\d{5}/.test(v)), 'no label value carries a token-derived string')
   db.close()
 })
 
@@ -137,12 +149,13 @@ test('cardinality guard (static): metrics-export.js interpolates labels only fro
 
 // ------------------------------------------------------------ (2) pagination (unit)
 test('cursor codec: round-trips, opaque, and rejects anything that is not exactly <used>.<id>', () => {
-  const c = encodeQuotaCursor({ used: 17, id: 5 })
+  const c = encodeQuotaCursor({ day: '2026-10-24', used: 17, id: 5 })
   assert.match(c, /^[A-Za-z0-9_-]+$/)
-  assert.deepEqual(decodeQuotaCursor(c), { used: 17, id: 5 })
-  assert.deepEqual(decodeQuotaCursor(encodeQuotaCursor({ used: 0, id: 1 })), { used: 0, id: 1 })
+  assert.deepEqual(decodeQuotaCursor(c), { day: '2026-10-24', used: 17, id: 5 })
+  assert.deepEqual(decodeQuotaCursor(encodeQuotaCursor({ day: '2026-01-01', used: 0, id: 1 })), { day: '2026-01-01', used: 0, id: 1 })
   const b64 = (s) => Buffer.from(s).toString('base64url')
-  for (const bad of ['', 'x', '!!!', b64('1'), b64('1.'), b64('.1'), b64('-1.2'), b64('1.-2'), b64('1.2.3'), b64('1.2 OR 1=1'), b64("1.2'; DROP TABLE agent_tokens;--"), b64('1.0'), b64('01.2'), b64('1e3.2'), b64('9007199254740993.1'), b64(`1.${'9'.repeat(30)}`), 'a'.repeat(500), null, undefined, 42, {}]) {
+  const D = '2026-10-24'
+  for (const bad of ['', 'x', '!!!', b64('1.2'), b64(`${D}`), b64(`${D}.1`), b64(`${D}.1.`), b64(`${D}..1`), b64(`${D}.-1.2`), b64(`${D}.1.-2`), b64(`${D}.1.2.3`), b64(`${D}.1.2 OR 1=1`), b64(`${D}.2.3'; DROP TABLE agent_tokens;--`), b64(`${D}.1.0`), b64(`${D}.01.2`), b64(`${D}.1e3.2`), b64(`${D}.9007199254740993.1`), b64(`${D}.1.${'9'.repeat(30)}`), b64('2026-1-4.1.2'), b64('yesterday.1.2'), 'a'.repeat(500), null, undefined, 42, {}]) {
     assert.equal(decodeQuotaCursor(bad), null, `cursor ${String(bad).slice(0, 30)} must be rejected`)
   }
 })
@@ -168,7 +181,11 @@ test('dailyQuotaPage: used desc then id asc; pages tile the full list exactly on
     assert.deepEqual(got, full.rows, `limit=${limit} tiles the list with no gap or duplicate`)
   }
   assert.equal(dailyQuotaPage(db, { limit: 23 }).next, null, 'exactly one full page: no phantom next')
-  assert.deepEqual(dailyQuotaPage(db, { limit: 5, after: { used: 0, id: 99999 } }).rows, [], 'cursor past the end => empty, no next')
+  const today = db.prepare("SELECT date('now','localtime') d").get().d
+  assert.deepEqual(dailyQuotaPage(db, { limit: 5, after: { day: today, used: 0, id: 99999 } }), { rows: [], next: null }, 'cursor past the end => empty, no next, not expired')
+  // 跨午夜：日期不是今天的游标作废（用量已归零，旧位置没有意义），既不重复也不静默给错页
+  assert.deepEqual(dailyQuotaPage(db, { limit: 5, after: { day: '2000-01-01', used: 9, id: 4 } }), { rows: [], next: null, expired: true })
+  assert.deepEqual(dailyQuotaPage(db, { limit: 5, after: { day: '2999-01-01', used: 9, id: 4 } }), { rows: [], next: null, expired: true }, 'a future-dated cursor is equally invalid')
   db.close()
 })
 
@@ -188,7 +205,7 @@ test('dailyQuotaPage: a row whose usage grows between pages cannot be duplicated
 test('dailyQuotaPage: injection-shaped inputs are bound as numbers; unreadable tables => null', () => {
   const db = quotaDb(3, () => 1)
   assert.equal(dailyQuotaPage(db, { limit: '3; DROP TABLE agent_tokens' }).rows.length, 3, 'a non-numeric limit falls back to the default instead of reaching SQL')
-  assert.equal(dailyQuotaPage(db, { limit: 1, after: { used: '1 OR 1=1', id: 0 } }).rows.length, 1, 'bad cursor object degrades to first page')
+  assert.equal(dailyQuotaPage(db, { limit: 1, after: { day: '2026-10-24', used: '1 OR 1=1', id: 0 } }).rows.length, 1, 'bad cursor object degrades to first page')
   assert.equal(db.prepare('SELECT COUNT(*) c FROM agent_tokens').get().c, 3)
   assert.equal(dailyQuotaPage(new Database(':memory:'), { limit: 5 }), null)
   db.close()
@@ -279,6 +296,10 @@ test('live: /limits/quota paginates by cursor (default 100, max 500), keeps the 
     const r = await f.get(`/api/mcp/limits/quota?${q}`, admin)
     assert.equal(r.status, 400, `${q} => 400`)
   }
+  const stale = encodeQuotaCursor({ day: '2000-01-01', used: 5, id: 1 })
+  const expired = await f.get(`/api/mcp/limits/quota?cursor=${stale}`, admin)
+  assert.equal(expired.status, 400, 'a cursor from another local day is refused')
+  assert.match(expired.body.message, /过期/)
   assert.equal(f.db.prepare('SELECT COUNT(*) c FROM agent_tokens').get().c, tokenCount, 'tables intact')
   // 配额关闭：形状不变，next_cursor=null，且不校验游标也不读审计表
   setQuota(f.db, 0)

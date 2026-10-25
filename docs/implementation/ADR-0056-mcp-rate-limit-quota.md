@@ -123,7 +123,7 @@ MCP 令牌除了"近 1 小时调用数"这一条粗粒度上限（`agent_tokens.
 
 **决定。**
 - **denied 行进入清理周期。** 清理线本来按 `window_start` 删，与 `kind` 无关，所以 `denied` 行早已在 `purge` 的范围内；本批不改清理语句，改为**用测试钉死**（线上的行保留、线下的 denied/all 一并删）并导出体量：gauge `os_erp_mcp_rate_denied_rows`（无 label，`SELECT COUNT(*) … WHERE kind='denied'`，读失败 -1，`memory` 模式 0）。**范围语义**：运维/进程级 gauge，数的是本次抓取所服务的行业库，不按调用者数据范围收窄，也不含令牌信息；它不属于业务指标字典 `METRICS`（那里每条要声明 `scopeAware`/`scopeless`），所以 `scripts/check-metrics-scope.mjs` 不受影响，范围声明写在 gauge 的 HELP 与本节。每令牌每窗口至多一行、随清理被删，正常应在「令牌数 × 2」量级，持续增长 ⇒ 清理没跑。
-- **游标分页。** `GET /api/mcp/limits/quota?limit=&cursor=`：`limit` 默认 100、上限 500（超过取 500，非整数/<1 ⇒ 400）；次序固定 `used DESC, id ASC`（id 唯一 ⇒ 全序，并列不重复不遗漏）；**keyset**（`used < ? OR (used = ? AND id > ?)`，全部绑定参数，不用 OFFSET、不拼 SQL）；多取 1 行判断是否还有下一页，恰好一页时不给空翻页。响应保留 `daily_quota/enabled/usage_unavailable/truncated/tokens`，新增 `next_cursor`；`truncated` 保留旧字段，含义改为"还有后续页"（= `next_cursor` 非空）。游标是不透明的 base64url(`<used>.<id>`)，只认规范形式（非负整数 used 无前导零、正整数 id、安全整数、重新编码后逐字符相同、≤ 64 字符），不合规 ⇒ 400。**稳定性取舍**：游标是位置不是快照——翻页期间用量变大的令牌只会往前挪（可能被后续页漏掉，但绝不会重复出现），因为用量在本地日历日内只增不减；需要一致快照的场景应一次取满。`dailyQuotaUsage`（先排序后截断的旧函数）保留给既有测试与调用方，接口改用新函数 `dailyQuotaPage`。授权不变（登录 + `system.mcp.manage`），披露不变（id / 名称 / 数字）。该查询不在 `explain-audit` 登记的语句里（AG9 的 `dailyQuotaUsage` 同样未登记），所以计划快照不变；表与迁移未动。
+- **游标分页。** `GET /api/mcp/limits/quota?limit=&cursor=`：`limit` 默认 100、上限 500（超过取 500，非整数/<1 ⇒ 400）；次序固定 `used DESC, id ASC`（id 唯一 ⇒ 全序，并列不重复不遗漏）；**keyset**（`used < ? OR (used = ? AND id > ?)`，全部绑定参数，不用 OFFSET、不拼 SQL）；多取 1 行判断是否还有下一页，恰好一页时不给空翻页。响应保留 `daily_quota/enabled/usage_unavailable/truncated/tokens`，新增 `next_cursor`；`truncated` 保留旧字段，含义改为"还有后续页"（= `next_cursor` 非空）。游标是不透明的 base64url(`<本地日期>.<used>.<id>`)，只认规范形式（YYYY-MM-DD、非负整数 used 无前导零、正整数 id、安全整数、重新编码后逐字符相同、≤ 96 字符），不合规 ⇒ 400；日期不是今天（跨过本地午夜，用量已归零）⇒ 同样 400「游标已过期」。**稳定性取舍**：游标是位置不是快照——翻页期间用量变大的令牌只会往前挪（可能被后续页漏掉，但绝不会重复出现），因为用量在本地日历日内只增不减；需要一致快照的场景应一次取满。`dailyQuotaUsage`（先排序后截断的旧函数）保留给既有测试与调用方，接口改用新函数 `dailyQuotaPage`。授权不变（登录 + `system.mcp.manage`），披露不变（id / 名称 / 数字）。该查询不在 `explain-audit` 登记的语句里（AG9 的 `dailyQuotaUsage` 同样未登记），所以计划快照不变；表与迁移未动。
 - **前端。** `McpQuotaBlock`（`data-testid="mcp-quota"`）首屏取第一页，`next_cursor` 非空时出现「加载更多」按钮（`data-testid="mcp-quota-more"`），按它取下一页追加（按 id 去重）；失败只显示提示、不清已加载的行；刷新回到首页。旧的"仅列出前 500 张"提示去掉。改动限定在该组件内（AH11 也改 `McpCenter.tsx` 的布局，合并时保留双方）。
 - **标签基数守卫。** 测试（`tests/mcp-quota-paging.test.mjs`）把导出的每个指标族允许的 label **名**写成常量并与实际输出逐族比较（新增带 label 的指标必须在测试里显式登记）；label 名不得像 token / id / key / user / ip / path；300 个不同令牌被拒绝并记数前后，导出的序列集合逐条相同、输出里不含令牌 id 或桶键；源码静态扫描 label 插值不引用令牌变量。
 - **校准脚本。** `scripts/mcp-rate-calibrate.mjs`：读 Prometheus 文本导出（文件，或仅限回环地址的 URL：http(s)、无 userinfo、不跟随重定向、10 s 超时、5 MB 上限；抓取令牌取 `GML_METRICS_TOKEN`，只发往回环地址、永不打印），按 monitoring.md 同一规则输出判定与推导：样本 < 1000 ⇒ `insufficient_samples`；p99.9 落进 +Inf ⇒ `investigate`；p99.9 ≤ 20 ms ⇒ `keep`（100 ms）；否则 `max(50 ms, 4 × p99.9)`，高于 100 ms 才 `raise`，否则 `keep`。**只读**：不写文件、不改告警规则/环境变量/设置、不起子进程（测试用源码扫描钉住）。解析严格（桶值非有限非负数、桶不单调、缺 +Inf、桶边界重复 ⇒ 退出 2）。边界：直方图是启动以来的累计分布，分位数由桶边界线性插值；单次导出看不到流量速率与 15 分钟持续条件，这两项仍在 Prometheus 里按周复核（`monitoring.md` 写了五步）。脚本只会建议保持或调高，不建议调低。
@@ -134,4 +134,11 @@ MCP 令牌除了"近 1 小时调用数"这一条粗粒度上限（`agent_tokens.
 
 ### Codex 审计（AH9，gpt-6.1-sol，只读）
 
-（待填：见本批合并说明。）
+对提交 8245ce2 的审计结果（无 high；无授权绕过、无注入、无新增无界 label——游标与 limit 全部走 SQL 绑定参数，端点仍要求登录 + `system.mcp.manage`）：
+
+| 级别 | 发现 | 处理 |
+|---|---|---|
+| high | 无 | — |
+| medium (P2) | 游标只含 `used.id`，跨过本地午夜后用量归零，旧游标会在新的一天里重复返回已见过的行（审计复现：翻页前 `[1,2]`，过午夜后第二页又是 `[1,2]`） | 已修：游标绑定生成时的本地日期（`<日期>.<used>.<id>`），日期谓词与分页谓词在同一条语句里；日期不是今天 ⇒ `expired`，接口答 400「游标已过期」让调用方回到首页；单测（过去 / 未来日期）与活服务用例覆盖 |
+| medium (P2) | 前端「加载更多」的响应晚于一次刷新到达时，会把已清空的行重新塞回并推进新列表的游标 | 已修：`useRef` 代际计数，刷新使旧请求作废，其响应与失败都被丢弃；未补浏览器场景（本机只做 tsc / vite build / 策略测试，浏览器场景为 Linux 专属） |
+| medium (P2) | 基数测试没有填充 `mcp_tool_calls_total`，漏掉 `tool/code` 两个 label | 已修：登记工具、暖机各类折叠序列后，用 300 个以令牌 id 命名的工具名 / 结果码攻击，断言序列集合逐条相同且没有任何 label 值带令牌派生字符串 |
