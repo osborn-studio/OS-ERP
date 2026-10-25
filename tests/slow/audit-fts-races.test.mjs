@@ -43,6 +43,7 @@ function tmpDb(t, rows = 12) {
   const dir = mkdtempSync(path.join(tmpdir(), 'os-af4-'))
   const file = path.join(dir, 'gml_cosmetic.db')
   const db = new Database(file)
+  db.pragma('journal_mode=WAL') // Match the service: readers pin a snapshot while maintenance commits.
   const other = new Database(file)
   db.pragma('foreign_keys=ON')
   db.exec(readFileSync(new URL('../../server/db/schema.sql', import.meta.url), 'utf8'))
@@ -61,7 +62,7 @@ test('AF4 isFtsMissingError: only a SQLITE_ERROR naming audit_logs_fts counts', 
   assert.equal(isFtsMissingError(new Error('no such table: audit_logs_fts')), false, 'plain Error without the sqlite code is not ours')
 })
 
-test('AF4 query plan: table dropped between prepare and execute -> exactly one LIKE re-run, same rows, counter +1', needsFts, (t) => {
+test('AF4 query plan: table dropped during a read preserves the snapshot; the next read falls back once', needsFts, (t) => {
   resetCounters()
   const { db, other } = tmpDb(t)
   assert.equal(keywordUsesFts(db, 'RAREWORDONE'), true)
@@ -75,8 +76,11 @@ test('AF4 query plan: table dropped between prepare and execute -> exactly one L
     if (calls === 1) m071.dropFts(other) // ……另一个连接（维护脚本的位置）删掉索引
     return st.all(...args)
   })
-  assert.equal(calls, 2, 'one retry, no more')
+  assert.equal(calls, 1, 'the in-flight read uses its pinned snapshot')
   assert.equal(rows.length, 1)
+  assert.equal(fallbackCount('query'), 0)
+  const nextRows = plan.run(({ where, args }) => db.prepare(`SELECT id FROM audit_logs ${where} ORDER BY id DESC`).all(...args))
+  assert.deepEqual(nextRows, rows, 'the subsequent read sees the dropped table and returns the same rows via LIKE')
   assert.doesNotMatch(plan.where, /audit_logs_fts/, 'plan switched to LIKE for the rest of the request')
   assert.equal(fallbackCount('query'), 1)
   assert.equal(objects(db).length, 0)

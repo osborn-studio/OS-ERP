@@ -107,8 +107,12 @@ try {
     assert.equal((await adminPage.getByTestId('role-inactive-primary-count').innerText()).trim(), '1')
     await adminPage.getByTestId('role-reassign-primary').click()
     await adminPage.waitForURL((u) => u.pathname === '/system/users')
-    await adminPage.getByTestId('primary-role-inactive-tag').first().waitFor()
-    assert.ok((await adminPage.getByTestId('primary-role-inactive-tag').count()) >= 1)
+    // Earlier scenarios may leave more than one page of accounts; locate this exact fixture.
+    await adminPage.getByPlaceholder('关键词搜索').fill(primary.username)
+    await adminPage.getByRole('button', { name: '查询', exact: true }).click()
+    const primaryRow = adminPage.getByRole('row').filter({ has: adminPage.getByRole('cell', { name: primary.username, exact: true }) })
+    await primaryRow.getByTestId('primary-role-inactive-tag').waitFor()
+    assert.equal(await primaryRow.getByTestId('primary-role-inactive-tag').count(), 1)
   })
 
   await step('enabling the role from the roles page restores it', async () => {
