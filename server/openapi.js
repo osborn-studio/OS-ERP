@@ -630,9 +630,9 @@ export function buildOpenApi() {
     '/api/approval/instances/{id}/cancel': { post: { tags: ['审批中心'], summary: '撤回审批（提交人本人或管理员）', parameters: [idParam], responses: { 200: jsonResp(null) } } },
     '/api/approval/templates': {
       get: { tags: ['审批中心'], summary: '审批模板列表（含级次）', responses: { 200: jsonResp(null) } },
-      post: { tags: ['审批中心'], summary: '新建 / 修改审批模板（级次整体重建；需 system:approval:manage）', responses: { 200: jsonResp(null) } }
+      post: { tags: ['审批中心'], summary: '新建 / 修改审批模板（级次整体重建；需 system:approval:template 且全局数据范围；指定人员须存在，AA3）', responses: { 200: jsonResp(null) } }
     },
-    '/api/approval/templates/{id}/toggle': { post: { tags: ['审批中心'], summary: '启用 / 停用模板（未标记需审批的动作不允许启用）', parameters: [idParam], responses: { 200: jsonResp(null) } } },
+    '/api/approval/templates/{id}/toggle': { post: { tags: ['审批中心'], summary: '启用 / 停用模板（未标记需审批的动作不允许启用；需 system:approval:template 且全局数据范围）', parameters: [idParam], responses: { 200: jsonResp(null) } } },
     '/api/approval/todos': { get: { tags: ['审批中心'], summary: '审批待办（按单据类型分组）。门：审批中心任一权限点；只统计当前级指到本人的 pending 实例，admin / system:approval:manage 全见（ADR-0015）', responses: { 200: jsonResp(null), 403: jsonResp(null) } } },
 
     // —— 模块 23 数据口径字典 ——
@@ -1185,7 +1185,7 @@ export function buildOpenApi() {
     openapi: '3.0.3',
     info: {
       title: 'GML 供应链协同系统 API',
-      version: '1.37.0',
+      version: '1.38.0',
       description:
         '化妆品 / 服装 双行业轻量级供应链协同系统接口文档。覆盖主数据、采购、销售、存货、经销商、门店要货、委外管理、计划与生产、生产制造（BOM / 领料 / 完工入库）、质量检验、线上 OMS 与经营看板。\n\n' +
         '**多行业**：登录 `POST /api/auth/login` 时传 `industry`（`cosmetic` / `apparel`）选择行业版本；' +
