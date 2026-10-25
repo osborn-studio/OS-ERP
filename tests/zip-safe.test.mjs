@@ -192,7 +192,7 @@ test('verify-release --extract-to extracts a matching archive and reports the li
   const dest = path.join(out, 'x')
   const r = verify(pkg, [`--artifact=${z}`, `--extract-to=${dest}`, '--zip-max-entries', '500'])
   assert.equal(r.status, 0, r.stdout + r.stderr)
-  assert.match(r.stdout, /archive extracted safely.*"maxEntries":500/)
+  assert.match(r.stdout, /archive extracted safely.*content matches MANIFEST\.json.*"maxEntries":500/)
   assert.ok(fs.existsSync(path.join(dest, 'MANIFEST.json')))
 })
 
@@ -214,6 +214,36 @@ test('verify-release --extract-to fails on limits, traversal, a different MANIFE
   r = verify(pkg, ['--zip-max-entries=5']); assert.equal(r.status, 1); assert.match(r.stderr, /only make sense/)
   r = verify(pkg, [`--artifact=${z}`, `--extract-to=${path.join(out, 'f')}`, '--zip-max-entries=0']); assert.equal(r.status, 1); assert.match(r.stderr, /positive integer/)
   r = verify(pkg, [`--artifact=${z}`, `--extract-to=${path.join(out, 'g')}`, '--zip-max-entries=1e3']); assert.equal(r.status, 1); assert.match(r.stderr, /positive integer/)
+})
+
+test('verify-release --extract-to checks the extracted tree against MANIFEST: tampered, missing and unlisted files fail (Codex P1)', (t) => {
+  const pkg = fixturePackage(t), out = tmp(t)
+  const top = 'RC-0.0.0-aaaaaaa/'
+  const build = (mutate) => {
+    const files = JSON.parse(JSON.stringify({}))
+    const walk = (dir, pre = '') => { for (const e of fs.readdirSync(dir, { withFileTypes: true })) { const rel = pre ? `${pre}/${e.name}` : e.name; if (e.isDirectory()) walk(path.join(dir, e.name), rel); else files[top + rel] = new Uint8Array(fs.readFileSync(path.join(dir, e.name))) } }
+    walk(pkg); mutate(files)
+    return mk(files)
+  }
+  const cases = [
+    ['tampered', (f) => { f[top + 'CHANGELOG.md'] = strToU8('<!-- generated -->\nevil\n') }, /CHANGELOG\.md: hash mismatch/],
+    ['missing', (f) => { delete f[top + 'THIRD_PARTY_NOTICES.md'] }, /THIRD_PARTY_NOTICES\.md: listed in MANIFEST\.json but missing/],
+    ['unlisted', (f) => { f[top + 'extra.js'] = strToU8('x') }, /extra\.js: file in the archive is not listed/]
+  ]
+  for (const [name, mutate, re] of cases) {
+    const z = write(out, `${name}.zip`, build(mutate))
+    const r = verify(pkg, [`--artifact=${z}`, `--extract-to=${path.join(out, name)}`])
+    assert.equal(r.status, 1, name + r.stdout); assert.match(r.stderr, re, name); assert.doesNotMatch(r.stdout, /extracted safely/)
+  }
+})
+
+test('verify-release does not touch the filesystem when a limit argument is invalid (Codex P2)', (t) => {
+  const pkg = fixturePackage(t), out = tmp(t)
+  const z = write(out, 'RC-0.0.0-aaaaaaa.zip', zipOf(pkg))
+  const dest = path.join(out, 'never')
+  const r = verify(pkg, [`--artifact=${z}`, `--extract-to=${dest}`, '--zip-max-total-bytes=0'])
+  assert.equal(r.status, 1); assert.match(r.stderr, /not extracting/)
+  assert.ok(!fs.existsSync(dest))
 })
 
 test('verify-release without --extract-to behaves as before', (t) => {

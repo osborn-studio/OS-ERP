@@ -208,19 +208,27 @@ artifact 名 `os-erp-dependency-review-<run id>-<attempt>`，保留 30 天，含
 | 总解压字节 | 512 MiB | `--zip-max-total-bytes` |
 | zip 文件本身 | 256 MiB | `--zip-max-archive-bytes` |
 
-另外一律拒绝：绝对路径（`/`、盘符）、反斜杠、`..` 与 `.` 段、NUL、重复条目（大小写不敏感）、Unix 符号链接与其他特殊文件类型、加密条目、zip64、分卷、除 stored / deflate 以外的压缩方式、非空目标目录。文件以 `wx` 创建、权限固定 0644（不沿用 zip 里的 setuid 位）。解压后要求 zip 内的 `MANIFEST.json` 与当前包的逐字节一致。默认值不是从真实候选包量出来的容量预算，只是保守的有限值；正式使用前应以候选包实际大小的数倍收紧。
+另外一律拒绝：绝对路径（`/`、盘符）、反斜杠、`..` 与 `.` 段、NUL、重复条目（大小写不敏感）、Unix 符号链接与其他特殊文件类型、加密条目、zip64、分卷、除 stored / deflate 以外的压缩方式、非空目标目录。文件以 `wx` 创建、权限固定 0644（不沿用 zip 里的 setuid 位）。解压后要求 zip 内的 `MANIFEST.json` 与当前包的逐字节一致，并按它逐文件核对解压出的树：哈希不符、清单里有而 zip 里缺失、zip 里有而清单外的文件都失败（Codex 审计 P1 修复）；任一 `--zip-max-*` 参数无效时不会解压。核对失败时已解压的目录仍留在磁盘上，应当整个丢弃。`--evidence --artifact` 读入 zip 前也先检查其不超过 256 MiB 的上限。默认值不是从真实候选包量出来的容量预算，只是保守的有限值；正式使用前应以候选包实际大小的数倍收紧。
 
 **未覆盖**：`scripts/release-candidate.mjs` 内部的 `extractZip`（用 `fflate.unzipSync`，有路径越界检查但没有条目 / 字节上限，且没有符号链接判断）以及 `release-candidate.yml` 里的 `unzip -p … | head -c`（已有 32 MiB 上限）没有改动；前者属于后续工作。
 
-**3. `scripts/check-install-registry.mjs`**：逐包比较 `node_modules/.package-lock.json`（npm 安装后写下的隐藏锁文件）与 `package-lock.json` 的 `version`、`resolved`、`integrity`，不同、多装了锁文件里没有的包、文件缺失或为空则失败。本机的共享 `node_modules` 是 AG7 之前用镜像装的，该脚本对它正确地报告了 `resolved` 不一致（`npm ci` 重装后才会通过）；在用本地回环 registry 装出来的最小项目上通过。
+**3. `scripts/check-install-registry.mjs`**：这是**元数据**一致性检查，不检查 node_modules 里的实际文件。逐包比较 `node_modules/.package-lock.json`（npm 安装后写下的隐藏锁文件）与 `package-lock.json` 的 `version`、`resolved`、`integrity`，不同、多装了锁文件里没有的包、文件缺失或为空则失败。本机的共享 `node_modules` 是 AG7 之前用镜像装的，该脚本对它正确地报告了 `resolved` 不一致（`npm ci` 重装后才会通过）；在用本地回环 registry 装出来的最小项目上通过。
 
 **大陆部署路径：`npm ci --registry <镜像>` 的真实行为（本机用回环 HTTP 镜像实测，npm 10.9.4）**
 
 - npm 默认 `replace-registry-host=npmjs`：锁文件里 `registry.npmjs.org` 的 tarball 请求被改发到 `--registry` 指定的镜像（路径保持不变）。实测请求确实只到了镜像。
-- **下载来源会变，隐藏锁文件不变**：安装后的 `node_modules/.package-lock.json` 仍写着 `registry.npmjs.org`。因此 `check-install-registry` **无法**看出字节来自哪台主机；它只证明 node_modules 是按这份锁文件装的。
+- **下载来源会变，隐藏锁文件不变**：安装后的 `node_modules/.package-lock.json` 仍写着 `registry.npmjs.org`。因此 `check-install-registry` **无法**看出字节来自哪台主机；它只证明 npm 写下的隐藏锁文件记录与这份锁文件一致（已装的每个包的 version / resolved / integrity 都相同，没有锁文件之外的包）；**不**证明锁文件里的每个包都装上了（缺失的包只计数不失败），也不证明磁盘上的文件没被事后改动。
 - **integrity 仍按锁文件校验**：镜像返回内容不同的 tarball 时 `npm ci` 以 `EINTEGRITY` 失败（实测；npm 会先重试两次，约 1 分钟），没有留下 node_modules。保证来自 `npm ci` 对锁文件 `integrity` 的校验，前提是锁文件每个条目都有 integrity（`check-lock-registry` 检查）；`--registry` 本身不削弱它。
 - **不保证**：镜像上的元数据 / 签名（`npm audit signatures` 要访问 npmjs 与其密钥，在大陆可能很慢或不可达）；镜像是否及时同步；`npm ci` 以外的命令（`npm install` 会重新解析并可能改写锁文件，不要在部署里用）；镜像对 `.npmrc` 里 `registry=` 的覆盖由命令行参数决定，不要把镜像写进仓库 `.npmrc`（`check-lock-registry` 守的是锁文件，不是 `.npmrc`）。
-- 建议流程：在能访问 npmjs 的机器上跑 CI（已含签名核验）；大陆服务器上用 `npm ci --ignore-scripts --registry <镜像>`，装完跑 `node scripts/check-install-registry.mjs`。docs 里没有为镜像速度做任何评估（未测）。
+- 建议流程：在能访问 npmjs 的机器上跑 CI（已含签名核验）；大陆服务器上用 `npm ci --ignore-scripts --registry <镜像>`，再 `npm rebuild better-sqlite3 esbuild --registry <镜像>`（`--ignore-scripts` 会跳过原生模块的构建，不重建数据库起不来，与 `ci.yml` 的 checks job 一致；rebuild 可能需要下载预编译二进制或编译工具链，来源不由锁文件 integrity 约束），最后跑 `node scripts/check-install-registry.mjs`。docs 里没有为镜像速度做任何评估（未测）。
 
-**验证与未验证**：`tests/zip-safe.test.mjs`（17 条，现场生成的小 zip）、`tests/check-install-registry.test.mjs`（7 条）、`tests/dependency-review-policy.test.mjs`（10 条）；`dependency-review` 新步骤尚未在 GitHub 托管 runner 上运行过（本机没有触发 workflow）。
+**验证与未验证**：`tests/zip-safe.test.mjs`（19 条，现场生成的小 zip）、`tests/check-install-registry.test.mjs`（7 条）、`tests/dependency-review-policy.test.mjs`（10 条）；`dependency-review` 新步骤尚未在 GitHub 托管 runner 上运行过（本机没有触发 workflow）。
+
+**Codex 审计（`codex exec -m gpt-6.1-sol --sandbox read-only`，对 `batch-sixteen...HEAD`，只读）**：5 条发现，无直接路径穿越。
+- P1 高：`--extract-to` 只比对 MANIFEST.json，解压树的内容未核对（篡改 / 缺失 / 清单外文件仍退出码 0，Codex 用内存文件系统复现）。**已修复**：按 MANIFEST 逐文件核对，三种情形各有测试。
+- P2：`--evidence --artifact` 在大小检查前整包读入内存。**已修复**：先检查不超过 256 MiB；仍是整包读入内存而非流式哈希（未做）。
+- P2：无效 `--zip-max-*` 仍会按默认上限解压。**已修复**：参数无效时不解压，有测试。
+- P2：安装检查的说法过强。**已修复**：改写为“隐藏锁文件元数据一致性”，写明缺失的包与磁盘文件改动不在其覆盖范围。
+- P2：大陆路径遗漏原生模块重建。**已修复**：文档补 `npm rebuild better-sqlite3 esbuild`。
+- 以上修复后没有再跑第二轮 Codex 审计，修复只由本机测试验证。
 
