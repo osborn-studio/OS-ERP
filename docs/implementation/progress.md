@@ -2,6 +2,12 @@
 
 更新：2026-10-22。全新公开仓库：[osborn-studio/OS-ERP](https://github.com/osborn-studio/OS-ERP)，采用 MIT，仅导入清理后的当前文件快照。旧仓库保留为私有归档，其 PR/Actions/历史对象不导入本仓库。未发布正式 Release、未部署。来源及旧 checkout 使用限制见 [PUBLICATION_HISTORY](../PUBLICATION_HISTORY.md)，MIT 决策不替代第三方权属核验。
 
+## 第十七批当前状态（2026-10-24，续接）
+
+按 [roadmap-v13](roadmap-v13.md) 集成 AH1–AH12：慢测试移入 `tests/slow/` 与独立耗时 job；指标 scopeless 逐项分类；大库查询计划指纹与默认关闭的启动 optimize；FTS 分批重建及断点续跑；production 意图 key_id 生效日期；Linux 备份故障注入 job；供应链签名门禁与受限 ZIP 解压；托管首跑状态复核；MCP 配额分页与限流指标；角色停用影响预览及事务内重算；审计意图、429 与备份报告卡；操作手册同步。OpenAPI 1.45.0。
+
+续接时解决 AH1 与既有工作在 CI、文件头清单、策略测试、审计链测试迁移上的冲突，保留 fs-fault 与 slow-tests 两个独立 job，以及 AH5 新增密钥用例。慢套件仍由必需的隔离回归覆盖。109 项策略检查、七项静态守卫、TypeScript、Vite 构建已在 Mac mini 通过；全套焦点/慢测试与托管 Linux 回归尚在验证，不能声明候选已验证。Claude CLI `claude-haiku-5-5` 的独立挑战审计正在进行；实际结果和复核记录见后续验证记录。
+
 ## 第十六批当前状态（2026-10-24）
 
 按 [roadmap-v12](roadmap-v12.md) 的 AG1–AG12，12 路 Sonnet 5.5 subagent 并行实现并各自经 Codex（gpt-6.1-sol）审计后集成到 `batch-sixteen`（将作为 PR #12）：AG1 `release-candidate.yml` 增 `dry_run` 派发输入，`release-candidate.mjs --skip-focused` 仅在 `GITHUB_ACTIONS` 下允许、写进证据、产物名带 `-dry-run`、永不可作为正式候选；AG2 `check-metrics-scope` 要求每个指标声明 `scopeAware: true` 或带理由的 `scopeless`，`payable_open` 改按结算组织计算（ADR-0057 补充 2）；AG3 `explain-audit --snapshot/--compare` 以规范化计划指纹（`docs/implementation/explain-plans.json`，120 条语句）守卫计划漂移，白名单条目绑定哈希与理由，并扫描源码中的 `ANALYZE`/`PRAGMA optimize`（ADR-0044 补充 6）；AG4 `bench-audit-toggle-under-write` 写入者进程 + K 轮 `--disable/--enable` 并对账行数、哈希链与 FTS 索引，未发现缺陷，秒级缩小版进 `audit-fts-races`；AG5 锚点意图按 `key_id` 在公钥集合中选公钥，`release-keygen --rotate` 生成指纹命名的新对并保留旧公钥，无 `key_id` 的历史意图有过渡规则（`--require-intent-key-id` 结束过渡），公钥目录拒绝符号链接（ADR-0055 补充 3）；AG6 备份报告 write-fsync-rename、清理删除后 fsync 目录、只清扫能被中断的 prune 解释的孤儿清单，`fs-fault` 增两个注入点；AG7 `.npmrc` 与锁文件全部 377 个解析地址改为 npmjs（版本与 integrity 不变），`check-lock-registry` 对其他源红，发行工作流跑一次；AG8 复查：main 上仍无可派发的工作流；AG9 迁移 075 给 `mcp_rate_buckets.kind` 增 `denied` 行，`rate_limited_recent` 改为精确 429 数，新增 `GET /api/mcp/limits/quota`（每令牌今日用量/剩余，最多 500 张、用量多者优先，审计表不可读时诚实标 `usage_unavailable`），`OsErpMcpRateStoreWaitHigh` 阈值推导写进 monitoring.md（ADR-0056 补充 3）；AG10 停用角色横幅、"我的数据范围"说明按活跃角色计算、主角色停用时范围置空（fail closed）、一个浏览器场景（ADR-0051 补充 4）；AG11 指标页 `scoped` 标记接 `/api/metrics` 的 `scope_restricted`、审计页回退槽位接 `fallback_total`、两个浏览器场景；AG12 手册第 52–56 章与第 36、45–51 章就地更新，第 57 章列出第十六批未成文项。集成修复：AG9 的真实配额块替换 AG11 预留槽位（策略测试改指 `data-testid="mcp-quota"`）；`ci.yml` 同时保留 AG2 与 AG3 的两步；`query-planner.md` AG3 小节编号顺延；OpenAPI 1.44.0。验证以托管 CI 为准。

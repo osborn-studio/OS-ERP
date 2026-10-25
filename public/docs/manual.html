@@ -365,7 +365,7 @@
 <a class="toc-l3" data-depth="3" href="#642-我的数据范围页">64.2 &quot;我的数据范围&quot;页</a>
 <a class="toc-l3" data-depth="3" href="#643-主角色停用时的数据范围失败即收紧">64.3 主角色停用时的数据范围：失败即收紧</a>
 <a class="toc-l3" data-depth="3" href="#644-如实边界">64.4 如实边界</a>
-<a class="toc-l2" data-depth="2" href="#六十五-第十六批之后仍未成文或未实现的事项">六十五 第十六批之后仍未成文或未实现的事项</a>
+<a class="toc-l2" data-depth="2" href="#六十五-第十七批集成后的实现与验证边界">六十五 第十七批集成后的实现与验证边界</a>
   </nav>
   <main id="doc">
 <h1 id="伴圆ai原生erp-操作手册">伴圆AI原生ERP 操作手册</h1>
@@ -1323,7 +1323,7 @@ node scripts/release-keygen.mjs --out /abs/intent-keys --purpose anchor-intent -
   --require-signed-intents --require-intent-key-id --archive-dir /abs/archive-dir</code></pre>
 <ul><li>集合按 <code>key_id</code>（公钥 SPKI 的 SHA-256）去重。<code>--intent-pubkey</code> 集合为空、没有 <code>*.pub.pem</code> 的目录、某个文件其实是私钥或不是 Ed25519，都是用法错误（退出 2）；<code>--offbox</code> 配的 <code>--pubkey</code> 集合有同样问题时则报 <code>OFFBOX-INVALID</code>（退出 1）。</li><li><strong>选钥而不是逐把试。</strong> 离机锚点按其签名元数据里的 <code>key_id</code> 在 <code>--pubkey</code> 集合里选那一把验，集合里没有 ⇒ <code>OFFBOX-INVALID</code>（<code>offbox-anchor</code> 出锚点时会打印 <code>key_id</code> 前 16 位）。意图按它自己记录的 <code>key_id</code> 在 <code>--intent-pubkey</code> 集合里选：在集合里 ⇒ 用它验，验不过 ⇒ <code>intent-signature-invalid</code>；明确给了 <code>--intent-pubkey</code> 而 <code>key_id</code> 不在其中 ⇒ <code>intent-key-unknown</code>（<code>rewrite</code>，退出 1，不论是否带 <code>--require-signed-intents</code>）。<strong>撤销</strong>一把泄露的旧钥 = 把它的公钥从集合里拿掉。</li><li>没给 <code>--intent-pubkey</code>、<code>--offbox</code> 模式回落用 <code>--pubkey</code> 当意图公钥时，<code>key_id</code> 对不上不算 <code>intent-key-unknown</code>，沿用旧口径（默认跳过，带 <code>--require-signed-intents</code> 则 <code>intent-signature-unverifiable</code>）。所以带意图签名时<strong>总是显式给 <code>--intent-pubkey</code> 并带 <code>--require-signed-intents</code></strong>（53.2）。</li><li><code>--require-intent-key-id</code>（新）要求每条带签名的意图都记录了 <code>key_id</code>；没有的判 <code>intent-key-id-missing</code>（<code>rewrite</code>）。和 <code>--intent-pubkey</code> 一样，只能与 <code>--offbox</code> 或 <code>--against-backup</code> 一起用，否则退出 2。输出的 JSON 报告多一个 <code>intent_keys</code>（集合里每把钥的前 16 位 <code>key_id</code>）。</li></ul>
 <h3 id="603-过渡规则与何时开---require-intent-key-id">60.3 过渡规则与何时开 <code>--require-intent-key-id</code></h3>
-<p>升级前写的带签名意图可能没有 <code>key_id</code>。规则：带签名而 <code>key_id</code> 为空的意图，对集合里<strong>每一把</strong>试，任何一把验过就通过。风险：<code>key_id</code> 不在被签内容里，能写库的人可以把它清空；所以撤销泄露的钥必须把公钥拿出集合，不能只靠 <code>key_id</code>。结束过渡的条件和检查 SQL 见 <code>audit-integrity.md</code> 8c；满足后把 <code>--require-intent-key-id</code> 写进日常复核命令。<strong>它目前默认关闭，也没有强制结束过渡的日期</strong>（backlog 保留）。</p>
+<p>升级前写的带签名意图可能没有 <code>key_id</code>。规则：带签名而 <code>key_id</code> 为空的意图，对集合里<strong>每一把</strong>试，任何一把验过就通过。风险：<code>key_id</code> 不在被签内容里，能写库的人可以把它清空；所以撤销泄露的钥必须把公钥拿出集合，不能只靠 <code>key_id</code>。结束过渡的条件和检查 SQL 见 <code>audit-integrity.md</code> 8c；满足后把 <code>--require-intent-key-id</code> 写进日常复核命令。第十七批起，production 模式默认从 <strong>2026-12-01（UTC）</strong> 强制要求 <code>key_id</code>，可用 <code>GML_ANCHOR_INTENT_KEY_ID_REQUIRED_AFTER</code> 设置生效日期；demo/test 默认不强制，显式 <code>--require-intent-key-id</code> 始终强制。详见 <code>audit-integrity.md</code>。</p>
 <h3 id="604-轮换后的收尾">60.4 轮换后的收尾</h3>
 <p>轮换后做一份新的离机锚点（<code>offbox-anchor … --key &lt;新私钥&gt;</code>），并用新集合复核一遍，确认退出码 0；复核更早的基线仍用包含旧公钥的集合。签名不覆盖 <code>key_id</code>，它只是选钥提示，不是信任来源；信任来源只有复核方带外保管的公钥集合。能直接写库的人伪造<strong>未签名</strong>意图的边界不变（53.1、安装手册 6.7）。</p>
 <h2 id="六十一-备份报告与清理的持久性被打断后的处置ag6">六十一 备份报告与清理的持久性、被打断后的处置（AG6）</h2>
@@ -1377,16 +1377,16 @@ node scripts/check-lock-registry.mjs --allow mirror.example.internal:8443</code>
 <h3 id="642-我的数据范围页">64.2 &quot;我的数据范围&quot;页</h3>
 <ul><li>有停用角色时，页面上方多一块&quot;你有已停用的角色&quot;，列出角色码与 <code>notice_message</code>。</li><li>&quot;这对你意味着什么&quot;的说明现在由<strong>生效（启用）的角色</strong>生成，页面上有一行说明&quot;以下说明由生效（启用）的角色生成；已停用的角色不参与&quot;。说明里会列出当前生效角色、已停用的角色，主角色已停用时说明它的默认数据范围不再计入；附加角色只贡献功能权限、不改变数据范围。<code>GET /api/auth/my-scope</code> 的响应新增 <code>roles_effective</code>（生效角色码）。</li><li>数据范围来源多了一种 <code>role_inactive</code>（页面文字&quot;主角色已停用，未采用角色默认&quot;）。</li></ul>
 <h3 id="643-主角色停用时的数据范围失败即收紧">64.3 主角色停用时的数据范围：失败即收紧</h3>
-<ul><li>主角色已停用、而账号<strong>没有</strong>单独设置数据范围时，生效范围是<strong>空范围</strong>（<code>none</code>，按组织划分的列表返回 200 与空列表，不是报错），不再回落到 <code>self</code>——<code>self</code> 按所属组织过滤，可能比原先的默认范围更宽。账号单独设置过数据范围的，仍按该设置。库里没有该角色行时保持原行为。<code>admin</code> 与超级管理员不受影响。</li><li>排查&quot;他能登录、也看到提示条，但列表都是空的&quot;：先看&quot;我的数据范围&quot;页的来源是不是 <code>role_inactive</code>；处置是请管理员恢复该角色，或为账号单独设置数据范围。提示条与该页<strong>只告诉他&quot;哪个角色被停用&quot;，没有恢复指引</strong>（backlog 保留）。</li></ul>
+<ul><li>主角色已停用、而账号<strong>没有</strong>单独设置数据范围时，生效范围是<strong>空范围</strong>（<code>none</code>，按组织划分的列表返回 200 与空列表，不是报错），不再回落到 <code>self</code>——<code>self</code> 按所属组织过滤，可能比原先的默认范围更宽。账号单独设置过数据范围的，仍按该设置。库里没有该角色行时保持原行为。<code>admin</code> 与超级管理员不受影响。</li><li>排查&quot;他能登录、也看到提示条，但列表都是空的&quot;：先看&quot;我的数据范围&quot;页的来源是不是 <code>role_inactive</code>；处置是请管理员恢复该角色，或为账号单独设置数据范围。第十七批起，页面提示联系管理员；管理员可从角色页进入重新指派主角色流程。</li></ul>
 <h3 id="644-如实边界">64.4 如实边界</h3>
-<ul><li>提示条文案固定，不含权限点；停用某角色前，系统不会提示受影响的用户数。</li><li>其他直接用 <code>req.user.role</code> 做业务分支（不是闸）的代码仍按主角色字段，见 56.5。</li><li>新增的浏览器场景只在测试驱动里断言过，没有在目标环境实机验收。</li></ul>
-<h2 id="六十五-第十六批之后仍未成文或未实现的事项">六十五 第十六批之后仍未成文或未实现的事项</h2>
-<p>第四十五至六十四章覆盖了第十六批（<code>batch-sixteen</code>）的功能。下列事项<strong>手册没有描述其行为</strong>，原因各异，请勿按其他文档里的计划描述操作：</p>
-<div class="table-wrap"><table><thead><tr><th>事项</th><th>状态</th><th>原因与去向</th></tr></thead><tbody><tr><td>审计写路径与 FTS 开关的并发压测脚本（AG4）<code>scripts/bench-audit-toggle-under-write.mjs</code></td><td>脚本存在；运维结论在 <code>docs/operations/audit-search.md</code> 第 6 节</td><td>它是开发 / 评审用基准（参数只认空格写法，建库在临时目录），不是客户实例的运维步骤，本手册只在 54.3 指向结论；表中数值取自节奏修复前的脚本版本，修复后未重跑</td></tr>
-<tr><td>审计链页显示意图 <code>key_id</code>、令牌列表显示精确 429 数、备份报告状态页面</td><td>未实现</td><td>见 backlog；目前只能读脚本 JSON / 接口响应</td></tr>
-<tr><td><code>--require-intent-key-id</code> 默认开启与过渡结束日期</td><td>未实现</td><td>目前是手动开关（60.3）</td></tr>
+<ul><li>第十七批起，停用前会显示受影响用户数与其中主角色人数。提交停用时在事务内重算，人数与确认值不一致则返回 <code>ROLE_IMPACT_CHANGED</code>，需重新预览确认。</li><li>其他直接用 <code>req.user.role</code> 做业务分支（不是闸）的代码仍按主角色字段，见 56.5。</li><li>新增的浏览器场景只在测试驱动里断言过，没有在目标环境实机验收。</li></ul>
+<h2 id="六十五-第十七批集成后的实现与验证边界">六十五 第十七批集成后的实现与验证边界</h2>
+<p>第四十五至六十四章覆盖了第十六批（<code>batch-sixteen</code>）的功能。下表记录第十七批集成后的实现与验证边界，已实现不代表目标主机验收完成：</p>
+<div class="table-wrap"><table><thead><tr><th>事项</th><th>状态</th><th>原因与去向</th></tr></thead><tbody><tr><td>审计写路径与 FTS 开关的并发压测脚本（AG4）<code>scripts/bench-audit-toggle-under-write.mjs</code></td><td>脚本存在；运维结论在 <code>docs/operations/audit-search.md</code> 第 6 节</td><td>它是开发 / 评审用基准（参数只认空格写法，建库在临时目录），不是客户实例的运维步骤，本手册只在 54.3 指向结论；AH4 已用修复后的脚本重跑；数字仍是 Mac mini 开发参考值</td></tr>
+<tr><td>审计页意图密钥摘要、令牌列表 429 数、系统设置备份报告卡</td><td>AH11 已实现，Linux 浏览器验证待 CI</td><td>密钥仅显示指纹前 16 位；429 数据截断时显示未知；prune 未完成显示未确认</td></tr>
+<tr><td><code>--require-intent-key-id</code> 默认开启与过渡结束日期</td><td>AH5 已实现</td><td>production 默认从 2026-12-01 UTC 强制，见 60.3</td></tr>
 <tr><td>备份真实掉电实验、Linux 上的 fs-fault 结果</td><td>未做</td><td>61.5；没有目标主机数据</td></tr>
-<tr><td>托管 runner 上的 <code>release-candidate.yml</code>（含 <code>dry_run</code>）、<code>capacity-smoke</code>、<code>dependency-review</code>、<code>audit-no-fts5</code>、夜间工作流、<code>npm audit signatures</code></td><td>从未实际运行</td><td>PR 未合并，<code>main</code> 上没有这些文件（backlog）</td></tr>
+<tr><td>托管发行与夜间工作流、容量手动检查、依赖签名门禁</td><td>按工作流分别核验，不能统称从未运行</td><td>PR #9–#12 的 no-FTS5 检查已有成功记录；发行/夜间默认分支首跑与 AH7 签名门禁仍须对应运行证据</td></tr>
 <tr><td><code>dmserver</code> 目标主机上的所有性能数字</td><td>未复测</td><td>全批</td></tr></tbody></table></div>
 <p>这些落地后，对应章节需要随代码一起补写。</p>
   </main>
