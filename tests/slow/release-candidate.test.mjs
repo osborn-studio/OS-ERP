@@ -71,6 +71,9 @@ function minimalSource(t) {
   symlinkSync(path.join(ROOT, 'node_modules'), path.join(src, 'node_modules'), 'dir')
   put(src, '.gitignore', 'node_modules\nrelease/\ndist/\n')
   assert.equal(git(src, 'init', '-q').status, 0)
+  // Disposable repositories must not spawn detached maintenance that races teardown.
+  assert.equal(git(src, 'config', 'gc.auto', '0').status, 0)
+  assert.equal(git(src, 'config', 'maintenance.auto', 'false').status, 0)
   assert.equal(git(src, 'add', '-A').status, 0)
   assert.equal(git(src, 'commit', '-q', '-m', 'stub').status, 0)
   return src
