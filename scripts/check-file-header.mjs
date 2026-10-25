@@ -31,6 +31,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
 /** 已登记「文件标识块」的文件。补一个加一行。 */
 const DECLARED = [
+  'tests/mcp-trace-ledger-scope.test.mjs',
   'server/index.js',
   'server/lib/audit-trail.js',
   'server/lib/logger.js',

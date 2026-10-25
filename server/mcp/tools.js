@@ -23,7 +23,7 @@
 // 设计原则：工具直接复用五维库存引擎与组织数据权限，而不是另写一套取数逻辑 ——
 //          这样 AI 看到的数据与人在界面上看到的永远一致，不会出现「AI 说还有 10 件、页面显示 0 件」。
 
-import { pickBatches, queryBalance, costOf, getInvParam, resolveOwnerOrg, applyStockGain } from '../lib/stock.js'
+import { pickBatches, queryBalance, costOf, getInvParam, resolveOwnerOrg, applyStockGain, stockScopeSql, warehouseInScope, listBelowSafe } from '../lib/stock.js'
 import { localDate, localNow } from '../lib/dates.js'
 // D5：MCP 工具不再"平行实现"业务 —— 有领域服务的一律调领域服务
 import { decideApproval, ApprovalError } from '../lib/approval.js'
@@ -44,7 +44,7 @@ import {
   assertNotParamOnly
 } from '../lib/purchase.js'
 import {
-  DocFlowError, getDocType, assertEdgePermitted, dispatchTransition, docInScope
+  DocFlowError, getDocType, assertEdgePermitted, dispatchTransition, docInScope, docScopeOf
 } from '../lib/docflow.js'
 // 金额/数量与权限点的**唯一判据**（与 HTTP 入口同一个）
 import { numAmount, numQty, permContext, hasPerm, resolveOrgScope } from '../middleware/auth.js'
@@ -111,6 +111,18 @@ function orgFilter(ctx, alias, column = 'org_id') {
   return { sql: ` AND ${alias}.${column} IN (${ids.map(() => '?').join(',')}) `, params: [...ids] }
 }
 
+/**
+ * 库存读工具的范围谓词（ADR-0042）：货主过滤（`orgFilter`，A03）**叠加**仓库组织范围（`stockScopeSql`，ADR-0038）。
+ * 货主是 A 组织、货却放在 B 组织（或无组织）的仓里，HTTP `/api/inventory/*` 对 A 不可见，MCP 也不得因货主命中而放行。
+ * `warehouseCol` 是库存行上的仓库列（缺省 `warehouse_id`）。
+ */
+function invFilter(ctx, alias, ownerCol = 'owner_org_id', warehouseCol = 'warehouse_id') {
+  const o = orgFilter(ctx, alias, ownerCol)
+  if (!ctx.scope || ctx.scope.scope === 'all') return o
+  const w = stockScopeSql(ctx.scope, alias, warehouseCol)
+  return { sql: `${o.sql} AND ${w.sql} `, params: [...o.params, ...w.params] }
+}
+
 // ---------------------------------------------------------------------------
 // 写路径的组织归属校验（A03）
 //
@@ -162,6 +174,14 @@ function assertWarehouseInScope(ctx, db, warehouseId, { ownerOrgId = null, label
     throw e
   }
   assertOrgInScope(ctx, wh.org_id, `${label} #${warehouseId} 所属组织`)
+  // ADR-0042：仓库没有组织归属（org_id 为 NULL）对受限范围同样不可达 —— 与 HTTP 的 `assertWarehouseInScope`（stock.js）同一判据
+  if (!warehouseInScope(db, warehouseId, ctx.scope)) {
+    const e = new Error(`${label} #${warehouseId} 不在本令牌的组织范围内`)
+    e.code = 'ORG_OUT_OF_SCOPE'
+    e.status = 403
+    e.detail = { warehouseId: Number(warehouseId), label }
+    throw e
+  }
   const explicit = ownerOrgId != null
   const target = explicit ? Number(ownerOrgId) : resolveOwnerOrg(db, warehouseId, null)
   assertOrgInScope(
@@ -468,6 +488,15 @@ function docTypeOrThrow(db, code) {
 }
 
 /**
+ * AA1（ADR-0041）：通用单据读工具的「范围上下文」——docflow `DOC_SCOPE_RESOLVERS` 的入参。
+ * 令牌范围 ∩ 所有者当前范围（`ctx.scope`）+ 所有者的 store_id（`store` 型解析器用）；无主令牌 user=null。
+ */
+function docScopeCtx(db, ctx) {
+  const user = ctx.ownerUserId != null ? db.prepare('SELECT id, store_id, dealer_id FROM users WHERE id=?').get(Number(ctx.ownerUserId)) : null
+  return { db, user, orgScope: ctx.scope || { scope: 'all', orgIds: null } }
+}
+
+/**
  * 归属列推断（**与 `catalog.js` 的 `ownershipColumns` 同一份口径**）。
  * 为什么不 import：见上面"双向依赖"的说明。两边都改的时候要一起改 ——
  * `scripts/check-mcp-coverage.mjs` 会断言两边推断出的列集合一致。
@@ -660,7 +689,7 @@ export const TOOLS = [
       if (args.owner_org_id) { where.push('s.owner_org_id=?'); params.push(args.owner_org_id) }
       if (args.currency) { where.push('s.currency=?'); params.push(args.currency) }
       if (args.only_available) where.push('(s.qty_on_hand - s.qty_reserved) > 0')
-      const f = orgFilter(ctx, 's', 'owner_org_id')
+      const f = invFilter(ctx, 's', 'owner_org_id')
       const rows = db.prepare(`
         SELECT s.id, s.sku_id, k.sku_code, k.name AS sku_name, p.name AS product_name,
                s.warehouse_id, w.name AS warehouse_name, s.batch_no,
@@ -698,7 +727,7 @@ export const TOOLS = [
       const days = Number(args.days) || 90
       const now = new Date()
       const until = localNow(new Date(now.getTime() + days * 86400000))
-      const f = orgFilter(ctx, 's', 'owner_org_id')
+      const f = invFilter(ctx, 's', 'owner_org_id')
       const batchScope = f.sql ? `AND EXISTS (SELECT 1 FROM inventory_stocks s WHERE s.sku_id=b.sku_id AND s.batch_no=b.batch_no ${f.sql})` : ''
       const where = ["b.expire_at IS NOT NULL", "b.expire_at <> ''"]
       const params = []
@@ -796,7 +825,7 @@ export const TOOLS = [
       if (args.doc_type) { where.push('t.doc_type=?'); params.push(args.doc_type) }
       if (args.start_date) { where.push('t.biz_date >= ?'); params.push(args.start_date) }
       if (args.end_date) { where.push('t.biz_date <= ?'); params.push(args.end_date) }
-      const f = orgFilter(ctx, 't', 'owner_org_id')
+      const f = invFilter(ctx, 't', 'owner_org_id')
       const rows = db.prepare(`
         SELECT t.biz_date, t.biz_time, t.doc_type, t.doc_no, t.direction, t.qty, t.unit_cost, t.amount,
                t.balance_qty, t.currency, t.owner_org_id, o.name AS owner_name,
@@ -821,13 +850,10 @@ export const TOOLS = [
     },
     handler({ db, args, ctx }) {
       const days = Number(args.expiring_days) || Number(getInvParam(db, 'expire_warn_days', 90))
-      const f = orgFilter(ctx, 's', 'owner_org_id')
-      const below = db.prepare(`
-        SELECT s.sku_id, k.sku_code, k.name AS sku_name, k.safe_stock, SUM(s.qty_on_hand) AS qty_on_hand
-        FROM inventory_stocks s JOIN product_skus k ON k.id=s.sku_id
-        WHERE k.safe_stock > 0 ${f.sql}
-        GROUP BY s.sku_id HAVING SUM(s.qty_on_hand) < k.safe_stock
-        ORDER BY (SUM(s.qty_on_hand) - k.safe_stock) LIMIT 100`).all(...f.params)
+      const f = invFilter(ctx, 's', 'owner_org_id')
+      // AA5：低库存与看板 / 预警页同一口径（lib/stock.js listBelowSafe，按仓库所属组织收口，ctx.scope 即令牌范围）；
+      // 输出字段保持原来的五个键。口径差异见 ADR-0044（全局范围含无库存行的 SKU、只算 active、并列按 sku id；受限范围只列范围内有库存行的 SKU）。
+      const below = listBelowSafe(db, 100, ctx.scope, { visibleOnly: true }).map(({ sku_id, sku_code, sku_name, safe_stock, qty_on_hand }) => ({ sku_id, sku_code, sku_name, safe_stock, qty_on_hand }))
       const expiring = db.prepare(`
         SELECT s.sku_id, k.name AS sku_name, s.batch_no, s.warehouse_id, w.name AS warehouse_name,
                COALESCE(s.expire_at, s.expire_date) AS expire_at, s.qty_on_hand
@@ -919,35 +945,36 @@ export const TOOLS = [
     handler({ db, args, ctx }) {
       const no = String(args.doc_no).trim()
       const e = scopeEntityIds(ctx, db)
-      // 库存流水按货主过滤；单据按各自归属列过滤（拿不到归属列的表 = 受限令牌看不到）
+      // AA1（ADR-0041）：单据归属走 docflow 的 DOC_SCOPE_RESOLVERS（与 doc.get、/api/docflow/history 同一份），
+      // 不再按 dealer_id 等列名推断；类型级查看权限与绑定规则（doc-perms.js）叠加。
+      // 库存流水取货主与仓库范围交集（流水不是单据，复用库存仓库判据）。
+      const scopeCtx = docScopeCtx(db, ctx)
       const txns = db
         .prepare('SELECT * FROM inventory_transactions WHERE doc_no=? ORDER BY id')
         .all(no)
         .filter((t) => !e || e.orgIds.includes(Number(t.owner_org_id)))
+        .filter((t) => warehouseInScope(db, t.warehouse_id, ctx.scope))
       const hits = []
-      const owns = {
-        purchase_orders: { stores: ['target_store_id'], warehouses: ['warehouse_id'] },
-        sales_orders: { stores: ['store_id'], dealers: ['dealer_id'], warehouses: ['warehouse_id'] },
-        stock_transfers: { warehouses: ['from_warehouse_id', 'to_warehouse_id'] },
-        production_orders: { warehouses: ['warehouse_id'] },
-        outsourcing_orders: { warehouses: ['warehouse_id', 'material_warehouse_id'] }
-      }
-      const probe = (t, label) => {
+      let existing = 0 // 库里确有此单号的单据行数（不论是否可见；探测**全部**已登记类型（含停用），不只是几类常用单据）
+      const LABELS = { PO: '采购订单', SO: '销售订单', TF: '调拨单', MO: '生产/组装单', WW: '委外单' }
+      for (const type of db.prepare("SELECT * FROM doc_types ORDER BY code").all()) {
         try {
-          const row = db.prepare(`SELECT * FROM ${t} WHERE doc_no=?`).get(no)
+          const row = db.prepare(`SELECT * FROM ${safeTable(type.table_name)} WHERE ${type.doc_no_field || 'doc_no'}=?`).get(no)
+          if (!row) continue
+          existing++
           // 越界单据**不报"无权查看"**，直接当作不存在 —— 报 403 等于确认"这张单存在但不是你的"
-          if (row && entityRowVisible(e, row, owns[t] || {})) hits.push({ table: t, label, row })
-        } catch { /* 表不存在则跳过 */ }
+          if (!canViewDocType(db, ctx, type)) continue
+          if (!docInScope(scopeCtx, type.code, row.id) || !rowInBinding(db, ctx, type, row)) continue
+          hits.push({ table: type.table_name, label: LABELS[type.code] || type.name, row })
+        } catch { /* 表 / 列不存在则跳过 */ }
       }
-      probe('purchase_orders', '采购订单')
-      probe('sales_orders', '销售订单')
-      probe('stock_transfers', '调拨单')
-      probe('production_orders', '生产/组装单')
-      probe('outsourcing_orders', '委外单')
-      if (!txns.length && !hits.length) {
+      // 单据存在却没有一张可见：连同它的库存流水一起当作不存在（不让流水泄露越界单据的存在与内容）
+      if (!hits.length && (existing > 0 || !txns.length)) {
         const err = new Error(`未找到单据 ${no}`); err.code = 'NOT_FOUND'; err.status = 404; throw err
       }
-      return ok({ doc_no: no, documents: hits, inventory_transactions: txns }, `找到 ${hits.length} 张单据、${txns.length} 条库存流水`)
+      // 单号跨表不唯一、流水又只记单号：同号单据里只要有一张不可见，就无法证明流水属于可见的那张 ⇒ 不返回流水
+      const ledger = existing > hits.length ? [] : txns
+      return ok({ doc_no: no, documents: hits, inventory_transactions: ledger }, `找到 ${hits.length} 张单据、${ledger.length} 条库存流水`)
     }
   },
 
@@ -2095,24 +2122,28 @@ export const TOOLS = [
         params.push(...bw.params)
       }
       if (args.status) {
-        where.push(`${statusField}=?`)
+        where.push(`t.${statusField}=?`)
         params.push(String(args.status))
       }
       if (args.keyword) {
-        where.push(`${docNoField} LIKE ?`)
+        where.push(`t.${docNoField} LIKE ?`)
         params.push(like(args.keyword))
       }
-      const sql = `SELECT * FROM ${table}${where.length ? ` WHERE ${where.join(' AND ')}` : ''} ORDER BY id DESC LIMIT ?`
-      // 多取 3 倍再按范围过滤：受限令牌下"过滤后不够 limit 条"比"返回越界数据"好得多
-      const raw = db.prepare(sql).all(...params, limit * 3)
-      const e = scopeEntityIds(ctx, db)
-      const owns = ownershipColumnsOf(db, table)
-      const rows = raw.filter((r) => entityRowVisible(e, r, owns)).slice(0, limit)
+      // AA1（ADR-0041）：范围判据 = DOC_SCOPE_RESOLVERS（docScopeOf），谓词写在别名 t 上、直接嵌进 SQL，
+      // 不再「多取 3 倍再按列名推断过滤」——limit 即命中条数，越界行不出库。
+      const sc = docScopeOf(docScopeCtx(db, ctx), type.code)
+      if (!sc) where.push('1=0') // 该类型对此范围完全不可见（全局类 / 未登记 / 空范围）
+      else if (!sc.all) {
+        where.push(sc.sql)
+        params.push(...sc.params)
+      }
+      const sql = `SELECT t.* FROM ${table} t${where.length ? ` WHERE ${where.join(' AND ')}` : ''} ORDER BY t.id DESC LIMIT ?`
+      const rows = db.prepare(sql).all(...params, limit)
       return ok(
         {
           doc_type: type.code,
           doc_type_name: type.name,
-          total_scanned: raw.length,
+          total_scanned: rows.length,
           returned: rows.length,
           rows: rows.map((r) => ({
             id: r.id,
