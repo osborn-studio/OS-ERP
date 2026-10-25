@@ -6,7 +6,7 @@
 
 按 [roadmap-v13](roadmap-v13.md) 集成 AH1–AH12：慢测试移入 `tests/slow/` 与独立耗时 job；指标 scopeless 逐项分类；大库查询计划指纹与默认关闭的启动 optimize；FTS 分批重建及断点续跑；production 意图 key_id 生效日期；Linux 备份故障注入 job；供应链签名门禁与受限 ZIP 解压；托管首跑状态复核；MCP 配额分页与限流指标；角色停用影响预览及事务内重算；审计意图、429 与备份报告卡；操作手册同步。OpenAPI 1.45.0。
 
-续接时解决 AH1 与既有工作在 CI、文件头清单、策略测试、审计链测试迁移上的冲突，保留 fs-fault 与 slow-tests 两个独立 job，以及 AH5 新增密钥用例。慢套件仍由必需的隔离回归覆盖。109 项策略检查、七项静态守卫、TypeScript、Vite 构建已在 Mac mini 通过；全套焦点/慢测试与托管 Linux 回归尚在验证，不能声明候选已验证。Claude CLI `claude-haiku-5-5` 的独立挑战审计正在进行；实际结果和复核记录见后续验证记录。
+续接时解决 AH1 与既有工作在 CI、文件头清单、策略测试、审计链测试迁移上的冲突，保留 fs-fault 与 slow-tests 两个独立 job，以及 AH5 新增密钥用例。慢套件仍由必需的隔离回归覆盖。109 项策略检查、七项静态守卫、TypeScript、Vite 构建已在 Mac mini 通过；全套焦点/慢测试与托管 Linux 回归尚在验证，不能声明候选已验证。Claude CLI `claude-haiku-5-5` 完成两轮挑战与一轮修复复审；修复 FTS 末批完整性/读快照、timing 子进程隔离/失败诊断、slow/no-FTS 门禁传递。修复后专项 43 通过/1 跳过，强制无 FTS 审计页 30 通过/5 跳过；详见 [Haiku 审计与验证设计](batch-seventeen-haiku-audit.md)。PR #13 已开草稿，未启用 auto-merge。
 
 ## 第十六批当前状态（2026-10-24）
 
