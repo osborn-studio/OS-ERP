@@ -33,6 +33,7 @@ type MyScopeData = {
   explanations: string[]
   roles_effective?: string[]
   roles_inactive?: string[]
+  primary_role_inactive?: boolean
   notice_code?: string | null
   notice_message?: string | null
 }

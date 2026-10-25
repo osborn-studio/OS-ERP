@@ -11,14 +11,14 @@
 // 【注意】本文件由脚本写出：**文件标识块也必须由脚本输出**，否则下次 gen:api 会把它冲掉 ——
 //   "登记了不等于守住了"。改格式请改 scripts/gen-api-types.mjs。
 // ============================================================================
-// 路径 526 条 ｜ 标签 34 个
+// 路径 529 条 ｜ 标签 34 个
 //
 // 用法：
 //   import { typedGet, typedPost } from '../api/typed'
 //   typedGet('/api/purchase/chain/overview')   // 路径写错编译期就报
 
 export const OPENAPI_VERSION = '1.44.0'
-export const API_ROUTE_COUNT = 526
+export const API_ROUTE_COUNT = 529
 
 /** 全部已登记的接口路径 */
 export type ApiRoute =
@@ -85,6 +85,9 @@ export type ApiRoute =
   | '/api/auth/my-scope'
   | '/api/auth/permissions'
   | '/api/auth/roles-permissions'
+  | '/api/auth/roles/{code}/activate'
+  | '/api/auth/roles/{code}/deactivate'
+  | '/api/auth/roles/{code}/deactivation-impact'
   | '/api/auth/roles/{code}/permissions'
   | '/api/auth/users'
   | '/api/costing/adjustments'
@@ -614,6 +617,9 @@ export type ApiRouteMap = {
   '/api/auth/my-scope': { get: true }
   '/api/auth/permissions': { get: true }
   '/api/auth/roles-permissions': { get: true }
+  '/api/auth/roles/{code}/activate': { post: true }
+  '/api/auth/roles/{code}/deactivate': { post: true }
+  '/api/auth/roles/{code}/deactivation-impact': { get: true }
   '/api/auth/roles/{code}/permissions': { put: true }
   '/api/auth/users': { get: true; post: true }
   '/api/costing/adjustments': { get: true; post: true }
@@ -1152,6 +1158,9 @@ export const API_ROUTES: readonly ApiRoute[] = [
   '/api/auth/my-scope',
   '/api/auth/permissions',
   '/api/auth/roles-permissions',
+  '/api/auth/roles/{code}/activate',
+  '/api/auth/roles/{code}/deactivate',
+  '/api/auth/roles/{code}/deactivation-impact',
   '/api/auth/roles/{code}/permissions',
   '/api/auth/users',
   '/api/costing/adjustments',
@@ -1682,6 +1691,9 @@ export const ROUTE_METHODS: Record<ApiRoute, string[]> = {
   '/api/auth/my-scope': ['get'],
   '/api/auth/permissions': ['get'],
   '/api/auth/roles-permissions': ['get'],
+  '/api/auth/roles/{code}/activate': ['post'],
+  '/api/auth/roles/{code}/deactivate': ['post'],
+  '/api/auth/roles/{code}/deactivation-impact': ['get'],
   '/api/auth/roles/{code}/permissions': ['put'],
   '/api/auth/users': ['get', 'post'],
   '/api/costing/adjustments': ['get', 'post'],

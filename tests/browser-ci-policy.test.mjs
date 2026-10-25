@@ -141,6 +141,15 @@ test('AG10 inactive-role-notice asserts banner, dismissal, my-scope text and res
   assert.ok(driver.includes("'inactive-role-notice'"))
 })
 
+test('AH10 role-deactivate-preview asserts the preview numbers, the stale re-confirm, the primary-role banner, the reassign entry and cleans up', () => {
+  const src = read('tests/browser/role-deactivate-preview.mjs')
+  for (const needle of ['deactivation-impact', 'role-deactivate-stale', 'role-impact-affected', 'role-impact-primary', 'data-primary-role-inactive', '联系管理员', '重新指派主角色', 'role-reassign-primary', 'primary-role-inactive-tag', 'ROLE_DEACTIVATE', 'affectedUsers', 'GML_TEST_DATA_DIR', 'role-activate']) {
+    assert.ok(src.includes(needle), `role-deactivate-preview must assert ${needle}`)
+  }
+  assert.match(src, /finally \{[\s\S]*DELETE FROM roles WHERE code=\?/, 'the scenario role must be removed even when the scenario fails')
+  assert.ok(driver.includes("'role-deactivate-preview'"))
+})
+
 test('AA8 scenarios assert API outcomes and observable page results, not only text', () => {
   const myScope = read('tests/browser/my-scope.mjs')
   for (const needle of ["'/api/auth/my-scope'", 'expectOrgScoped', 'expectAdminScope', 'data.explanations', 'tr[data-current="true"]', 'status, 200']) {

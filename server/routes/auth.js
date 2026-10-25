@@ -20,7 +20,7 @@ import { ok, fail, bizFail, wrap, pageParams, paged, failFromError } from '../li
 import { issueSessionCookies, clearSessionCookies, sessionTransport, crossSiteBrowserRequest } from '../middleware/session-transport.js'
 import { signToken, JWT_SECRET, requireAuth, requireRole, ROLES, userPermissions, resolveOrgScope, permContext, roleInactiveNotice, splitRolesByStatus } from '../middleware/auth.js'
 import { audit } from '../middleware/audit.js'
-import { createAccount, updateAccount, changePassword, logoutAll, replaceRolePermissions } from '../lib/account-security.js'
+import { createAccount, updateAccount, changePassword, logoutAll, replaceRolePermissions, roleDeactivationImpact, deactivateRole, activateRole } from '../lib/account-security.js'
 import { consumeLoginAttempt } from '../lib/login-throttle.js'
 
 const r = Router()
@@ -155,7 +155,8 @@ r.get(
     const rows = db
       .prepare(
         `SELECT u.id,u.username,u.name,u.role,u.dept,u.phone,u.dealer_id,u.store_id,u.status,u.last_login_at,u.created_at,
-                d.name AS dealer_name, s.name AS store_name
+                d.name AS dealer_name, s.name AS store_name,
+                CASE WHEN u.role='admin' OR EXISTS (SELECT 1 FROM roles rr WHERE rr.code=u.role AND rr.status='active') THEN 'active' ELSE 'inactive' END AS role_status
          FROM users u LEFT JOIN dealers d ON d.id=u.dealer_id LEFT JOIN stores s ON s.id=u.store_id
          ${where}
          ORDER BY u.id LIMIT ? OFFSET ?`
@@ -402,6 +403,30 @@ r.put(
   requireAuth,
   requireRole('admin'),
   wrap((req, res) => ok(res, replaceRolePermissions(getDb(), req.user, req.params.code, req.body?.permissions, { ip: req.ip })))
+)
+
+/** 停用角色的影响预告（管理员；AH10）：受影响账号数 N 与其中主角色为此角色的 M，只含编号不含账号名 */
+r.get(
+  '/roles/:code/deactivation-impact',
+  requireAuth,
+  requireRole('admin'),
+  wrap((req, res) => ok(res, roleDeactivationImpact(getDb(), req.params.code)))
+)
+
+/** 停用角色（管理员；AH10）：必须带 confirm_affected，与事务内现算的受影响人数一致，否则 409 ROLE_IMPACT_CHANGED */
+r.post(
+  '/roles/:code/deactivate',
+  requireAuth,
+  requireRole('admin'),
+  wrap((req, res) => ok(res, deactivateRole(getDb(), req.user, req.params.code, req.body?.confirm_affected, { ip: req.ip })))
+)
+
+/** 启用角色（管理员；AH10） */
+r.post(
+  '/roles/:code/activate',
+  requireAuth,
+  requireRole('admin'),
+  wrap((req, res) => ok(res, activateRole(getDb(), req.user, req.params.code, { ip: req.ip })))
 )
 
 /**
