@@ -392,7 +392,7 @@ jobs:
         if: always()
         run: rm -rf "$CAP_RUN" "$CAP_REPORTS"
 
-  # AE7/AH7: dependency review. Runs on pull_request (gate) and workflow_dispatch. Steps: (1) lock-registry guard (every resolved
+  # AE7/AH7: dependency review. Runs on every ci.yml event (pull_request gate, push to main, workflow_dispatch) with no job-level `if`, so it is a valid required check (AF1: no conditional skips). Steps: (1) lock-registry guard (every resolved
   # host must be registry.npmjs.org; offline), (2) `npm ci --ignore-scripts` from the lockfile (no lifecycle scripts run), (3)
   # install-vs-lockfile check (node_modules/.package-lock.json equals package-lock.json; it does not show which host served the
   # downloads), (4) `npm audit signatures` against registry.npmjs.org (verifies the registry's signature over its own metadata for each
@@ -402,7 +402,6 @@ jobs:
   # artifact. Read-only token; no secrets; fork PRs are fine (plain pull_request, not the privileged-token variant). Needs network access to
   # registry.npmjs.org. It has not run on GitHub yet.
   dependency-review:
-    if: github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

@@ -2,7 +2,7 @@
  * ============================================================================
  * 文件标识：tests/dependency-review-policy.test.mjs ｜ ci.yml 的 dependency-review job 静态守卫（roadmap-v10 AE7）
  * ============================================================================
- * 便宜、诚实的文本断言：job 只在 pull_request / workflow_dispatch 触发、Actions 按 SHA 固定、不引用 secrets、权限只读、
+ * 便宜、诚实的文本断言：job 对 ci.yml 的每个事件都运行（含 pull_request，不带 job 级 if，满足 AF1 的 required-check 语义）、Actions 按 SHA 固定、不引用 secrets、权限只读、
  * 步骤顺序（锁文件 registry 守卫 → npm ci --ignore-scripts → 安装树核对 → npm audit signatures → 审计）、
  * 两种审计模式都运行、摘要写到 $RUNNER_TEMP、只上传白名单内的两个 JSON、保留 30 天。不证明它在 GitHub 上能跑通
  * （它尚未运行过，AH7）。不联网。
@@ -20,9 +20,9 @@ const m = workflow.match(/^  dependency-review:\n([\s\S]*?)(?=^  \S|(?![\s\S]))/
 const job = m ? m[0] : ''
 const code = job.replace(/^\s*#.*$/gm, '')
 
-test('dependency-review exists, runs on PRs and manual dispatch only, independent and time-boxed', () => {
+test('dependency-review exists, runs on every ci.yml event without a conditional skip, independent and time-boxed', () => {
   assert.ok(job, 'jobs.dependency-review must exist')
-  assert.match(code, /^\s+if:\s*github\.event_name == 'workflow_dispatch' \|\| github\.event_name == 'pull_request'\s*$/m)
+  assert.doesNotMatch(code.split('steps:')[0], /^\s+if:/m, 'no job-level if: a conditional skip breaks required-check semantics (AF1)')
   assert.doesNotMatch(code, /^\s+needs:/m)
   assert.match(code, /^\s+runs-on:\s*ubuntu-latest\s*$/m)
   assert.ok(Number(code.match(/^\s+timeout-minutes:\s*(\d+)\s*$/m)?.[1]) <= 15)

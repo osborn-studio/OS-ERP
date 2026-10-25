@@ -120,7 +120,7 @@ os-erp@0.2.0-alpha.1
 | 模式 | 命令 | 门槛 | 白名单段 | 何时跑 |
 |---|---|---|---|---|
 | 运行依赖（默认） | `node scripts/check-audit-allowlist.mjs` | high 及以上 | `allow` | 每次 CI 的 checks job |
-| 开发依赖 | `node scripts/check-audit-allowlist.mjs --include-dev` | 仅 critical | `dev` | `dependency-review` job（AH7 起：每个 PR 与手动 `workflow_dispatch`），本地可随时跑 |
+| 开发依赖 | `node scripts/check-audit-allowlist.mjs --include-dev` | 仅 critical | `dev` | `dependency-review` job（AH7 起：每个 PR、push 到 main 与手动 `workflow_dispatch`），本地可随时跑 |
 
 - 两段白名单互不通用：`allow` 里的条目不能豁免开发模式，`dev` 里的条目也不能豁免运行模式。条目格式相同（`advisory` GHSA 编号、`reason` 至少 20 字符、`expires` 晚于今天且不超过 180 天）；`dev` 段缺失或不是数组时，开发模式失败（失败即关闭）。
 - 开发依赖只以 critical 为门槛：它们不进客户运行进程、不进发行包，high 级公告只会出现在审计输出里，不挡 CI。这是策略选择，不是"开发依赖安全"的结论。
@@ -184,7 +184,7 @@ artifact 名 `os-erp-dependency-review-<run id>-<attempt>`，保留 30 天，含
 
 ## 12. 签名核验进 PR 门禁、zip 解压硬上限、大陆安装路径（AH7，2026-10-24）
 
-**1. `ci.yml` 的 `dependency-review` job 现在在每个 PR 上运行（也保留手动触发）**，只读令牌、无 secrets、`pull_request`（不是特权变体）。步骤顺序：
+**1. `ci.yml` 的 `dependency-review` job 对 `ci.yml` 的每个事件都运行（PR、push 到 main、手动触发；不带 job 级 `if`，所以可以设为 required check）**，只读令牌、无 secrets、`pull_request`（不是特权变体）。步骤顺序：
 
 1. `node scripts/check-lock-registry.mjs`（离线；锁文件每个 `resolved` 必须是 `registry.npmjs.org`，不传 `--allow`）；
 2. `npm ci --ignore-scripts --no-audit --no-fund`（不运行任何生命周期脚本）；
