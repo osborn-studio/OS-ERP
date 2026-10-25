@@ -132,3 +132,26 @@ Codex 审计（gpt-6.1-sol，只读，防御性审查，针对 AG5 提交 04d95f
 - 中（部分修）：`--rotate` 校验目录后仍按路径写入，祖先目录被替换可重定向写入 ⇒ 保管目录本身是符号链接时拒绝；祖先目录可被他人替换属于“能写祖先目录的人已经控制了保管目录”，不在防护范围，手册要求保管目录放在 0700 的自有路径下。
 - 中（已修）：写到一半失败（如磁盘满）会残留半截密钥文件，且残留的损坏 `*.pub.pem` 会阻止后续轮换与目录校验 ⇒ 改为 `openSync(..., 'wx')` 成功后立刻登记再写内容，失败时清理；`EEXIST` 不登记，不会误删别人的文件。未单独造“磁盘满”的测试（需要故障注入接缝），由读码与既有失败清理测试覆盖。
 - 审计确认：显式意图公钥下按 key_id 选钥没有绕过（伪造成另一把受信 key_id 验签失败）；离机锚点的 key_id 在被签元数据里；重复公钥去重；`*.pub.pem` 里放私钥内容被拒绝。审计方没有跑仓库测试（沙箱 Node 版本不同）。
+
+## 补充 4（AH5）：过渡期结束的日期规则与“能写库者”威胁模型边界
+
+状态：开发实现，尚非产品上线验收｜相关：roadmap-v13 AH5、`docs/operations/audit-integrity.md` §8d
+
+### 决定
+1. **`--require-intent-key-id` 的有效值随运行模式**（`resolveKeyIdRequirement`，`server/lib/audit-anchor-intent.js`）：显式开关永远强制（没有“显式关闭”，所以不存在被环境变量放松的路径）；否则 `demo` / `test` 不强制；`production`（`GML_RUNTIME_MODE` 未设按 production，与 `runtimeMode()` 一致）在当前 **UTC** 时间 ≥ 截止日零点（含当天）起强制。截止日取 `GML_ANCHOR_INTENT_KEY_ID_REQUIRED_AFTER`，缺省 **2026-12-01**。
+2. **失败闭合的解析**：日期必须是严格 `YYYY-MM-DD` 且经 `setUTCFullYear` 往返核对是真实日历日（拒绝 `2026-02-30`、`2026-12-1`、带时间 / 空白 / 换行、`20261201`）；空串视为未设；非法值抛 `INTENT_KEY_ID_AFTER_INVALID`，非法运行模式抛 `RUNTIME_MODE_INVALID`，复核命令退出 2，绝不回落到“不强制”。时钟不可用同样抛错。时钟没有环境变量或参数接缝（生产路径上不留可伪造“现在”的入口）；测试用显式的过去 / 未来日期，函数级单测注入 `now`。demo / test 下日期不读取也不校验。
+3. **只在会对账意图的模式里求值**（`--offbox` / `--against-backup`），结果写进输出：文本第一行 `intent key_id: …`，JSON 顶层 `intent_key_id_rule`，说明用了 `flag` / `mode-not-enforcing` / `production-date-not-reached` / `production-date-reached` 哪条。
+4. **`baseline-anchor-list-missing` 有了测试**：用同一把钥给“去掉 `anchors` 清单”的离机锚点条目重新签名（签名有效，走到对账而不是 `OFFBOX-INVALID`），断言 `unverifiable/baseline-anchor-list-missing`、退出 1，且叠加伪造桥锚点时仍不放行；带清单的对照通过。`--against-backup` 路径上清单缺锚点明细在 `loadBackupManifest` 就以 `manifest-mismatch` 失败，不会走到该分支。
+5. **安装检查**（`scripts/lib/data-separation.mjs`，`local-manage doctor` 的 `dataSeparation`）：对数据目录与 `gml_*.db`（含 -wal / -shm）lstat（不跟随符号链接），按世界可写 ⇒ `exposed`、组可写 ⇒ `group-shared`、符号链接 / stat 失败 ⇒ `unknown`、属另一账号且当前账号不可写 ⇒ `separated`、其余 ⇒ `single-account`；Windows 或取不到账号 id ⇒ `skipped`（明确消息，不当作通过）；目录不存在 ⇒ `not-created`。**只报告，不强制**：`enforced:false`，退出码与文件权限都不动。
+
+### 威胁模型边界（诚实声明）
+- **能直接写数据库的人可以伪造未签名的意图。** 他能同时写业务行、审计行（重算哈希链）、`audit_chain_anchors` 与 `audit_anchor_intents`，造出自洽的“意图 + 审计行”；`key_id`、本补充的日期规则、意图哈希都不挡他——它们是格式与过渡管理，不是信任来源。唯一实质的缓解有两层：① **签名**：私钥在业务主机之外（`GML_ANCHOR_INTENT_KEY`），复核方带 `--intent-pubkey` + `--require-signed-intents`；写库者没有私钥就造不出有效签名，只能让复核失败；② **OS 级账号隔离**：库文件只属于运维账号、不对组 / 其他开放写权限，应用账号不具备伪造所需的写权限。
+- **文件级隔离的实际上限**：当前是单个 SQLite 文件，应用账号为写业务数据必然能写这个文件，所以“意图表仅 CLI 账号可写、应用账号只读”在文件级**做不到**（SQLite 没有表级权限）。真正做到需要把意图表（与相关锚点写入）挪到只有 CLI 账号可写的独立库或服务——未实现，列入后续。本补充的安装检查只能如实报告现状（谁拥有、谁能写、是否对外开放），并不制造隔离。
+- 同一账号既运行服务又做维护（本机单用户安装的常态）= `single-account`：此时只有离机签名能抵抗“服务被攻破后伪造意图”。
+- 日期规则的环境变量由复核方自己的环境提供；能改复核环境的人可以把截止日推迟，所以输出打印生效规则与日期，变更应记入运维记录。
+
+### 审计记录（AH5）
+Codex 审计（gpt-6.1-sol，只读，针对 `batch-sixteen...97e6c28`）：无高 / 严重发现；日期解析、UTC 含当天比较、未设模式按 production、非法模式抛错、显式开关强制均确认无 fail-open。
+- 中（已修）：`separated` 未考虑上一级目录可写（可改名替换整个 data 目录）⇒ 上一级目录当前账号可写时降为 `single-account` 并给 `parent-writable-by-this-account` 发现，回归测试已加。更高层祖先目录被替换仍不在检查范围。
+- 低（已修）：日期规则测试只覆盖 `--offbox` ⇒ 补 `--against-backup` 路径的前 / 后用例。
+- 审计方沙箱只读，未跑 CLI 集成测试；这些由本地测试覆盖。

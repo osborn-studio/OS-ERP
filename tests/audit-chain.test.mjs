@@ -17,6 +17,9 @@ import { runMigrations, MIGRATIONS_DIR } from '../server/db/migrations/runner.js
 import { insertAuditRow, auditStrictRow, deleteAuditRowsAnchored, rehashAuditRow, GENESIS } from '../server/lib/audit-trail.js'
 import { verifyChain, verifyJsonlSegment } from '../server/lib/audit-chain-verify.js'
 import { applyPlan } from '../scripts/lib/privacy-common.mjs'
+import { resolveKeyIdRequirement } from '../server/lib/audit-anchor-intent.js'
+import { buildSignedAnchor } from '../scripts/lib/offbox-anchor.mjs'
+import { loadSigningKey } from '../scripts/lib/evidence-sign.mjs'
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url))
 const SCHEMA = readFileSync(path.join(ROOT, 'server/db/schema.sql'), 'utf8')
@@ -1490,5 +1493,138 @@ test('AG5 a key directory only contributes *.pub.pem files; empty directories, p
   assert.equal(s.status, 2)
   assert.match(s.stderr, /private key/)
   assert.equal(w.verify(pubs(path.join(empty, 'nope'))).status, 2)
+  w.db.close()
+})
+
+// ============================================================================
+// AH5（ADR-0055 补充 4）：--require-intent-key-id 的默认随运行模式；baseline-anchor-list-missing 分支
+// ============================================================================
+test('AH5 resolveKeyIdRequirement: the flag always wins; demo/test never enforce by date; production enforces from the (validated) date, inclusive, in UTC', () => {
+  const at = (s) => new Date(s)
+  const R = (o) => resolveKeyIdRequirement(o)
+  assert.deepEqual([R({ flag: true, env: { GML_RUNTIME_MODE: 'test' } }).required, R({ flag: true, env: { GML_RUNTIME_MODE: 'test' } }).rule], [true, 'flag'])
+  assert.equal(R({ flag: true, env: { GML_RUNTIME_MODE: 'production', GML_ANCHOR_INTENT_KEY_ID_REQUIRED_AFTER: '2999-01-01' } }).required, true, 'flag beats a future date')
+  for (const mode of ['demo', 'test']) {
+    const r = R({ env: { GML_RUNTIME_MODE: mode, GML_ANCHOR_INTENT_KEY_ID_REQUIRED_AFTER: '2000-01-01' }, now: at('2030-01-01T00:00:00Z') })
+    assert.deepEqual([r.required, r.rule, r.mode], [false, 'mode-not-enforcing', mode], 'a date in the environment does not turn enforcement on in demo/test')
+  }
+  // 缺省日期 2026-12-01（UTC 零点，含当天）
+  const prod = { GML_RUNTIME_MODE: 'production' }
+  assert.equal(R({ env: prod, now: at('2026-11-30T23:59:59Z') }).required, false)
+  const on = R({ env: prod, now: at('2026-12-01T00:00:00Z') })
+  assert.deepEqual([on.required, on.rule, on.after], [true, 'production-date-reached', '2026-12-01'])
+  assert.equal(R({ env: {}, now: at('2027-01-01T00:00:00Z') }).required, true, 'GML_RUNTIME_MODE unset means production, as in runtimeMode()')
+  assert.equal(R({ env: { ...prod, GML_ANCHOR_INTENT_KEY_ID_REQUIRED_AFTER: '2027-06-01' }, now: at('2027-05-31T23:59:59Z') }).required, false)
+  assert.equal(R({ env: { ...prod, GML_ANCHOR_INTENT_KEY_ID_REQUIRED_AFTER: '2027-06-01' }, now: at('2027-06-01T00:00:00Z') }).required, true)
+  assert.equal(R({ env: { ...prod, GML_ANCHOR_INTENT_KEY_ID_REQUIRED_AFTER: '' }, now: at('2027-01-01T00:00:00Z') }).after, '2026-12-01', 'empty means unset')
+  // 非法值一律抛错（失败闭合，不回落到“不强制”）
+  for (const bad of ['tomorrow', '2026-13-01', '2026-02-30', '2026-12-1', '2026-12-01T00:00:00Z', ' 2026-12-01', '20261201', '0000-00-00', '2026-12-01\n']) {
+    assert.throws(() => R({ env: { ...prod, GML_ANCHOR_INTENT_KEY_ID_REQUIRED_AFTER: bad }, now: at('2030-01-01T00:00:00Z') }), { code: 'INTENT_KEY_ID_AFTER_INVALID' }, JSON.stringify(bad))
+  }
+  assert.throws(() => R({ env: { GML_RUNTIME_MODE: 'staging' } }), { code: 'RUNTIME_MODE_INVALID' })
+  assert.throws(() => R({ env: prod, now: new Date('nope') }), { code: 'INTENT_KEY_ID_AFTER_INVALID' }, 'an unusable clock does not silently disable enforcement')
+})
+
+/** 一条已签名但没有 key_id 的过渡期意图 + 对应基线 */
+function ah5World(t) {
+  const w = ae5World(t)
+  const k = ae5Keys(t)
+  assert.equal(w.archive({ GML_ANCHOR_INTENT_KEY: k.priv }).status, 0)
+  w.db.prepare('UPDATE audit_anchor_intents SET key_id=NULL').run()
+  const intentArgs = ['--intent-pubkey', k.pub, '--require-signed-intents']
+  return { ...w, ik: k, intentArgs }
+}
+const rule = (r) => JSON.parse(r.stdout).intent_key_id_rule
+
+test('AH5 production enforces key_id from GML_ANCHOR_INTENT_KEY_ID_REQUIRED_AFTER; before that date (and in demo/test) the transition rule still applies; the output says which rule applied', (t) => {
+  const w = ah5World(t)
+  const prod = (after) => ({ GML_RUNTIME_MODE: 'production', ...(after ? { GML_ANCHOR_INTENT_KEY_ID_REQUIRED_AFTER: after } : {}) })
+  // 缺省日期（2026-12-01）在此刻之前或之后都由日期决定，测试用显式日期避免与时钟耦合
+  let v = w.verify(w.intentArgs, prod('2000-01-01'))
+  assert.deepEqual([v.status, off(v).kind], [1, 'intent-key-id-missing'])
+  assert.deepEqual([rule(v).required, rule(v).rule, rule(v).mode, rule(v).after], [true, 'production-date-reached', 'production', '2000-01-01'])
+  v = w.verify(w.intentArgs, prod('2999-12-31'))
+  assert.equal(v.status, 0, v.stdout)
+  assert.deepEqual([rule(v).required, rule(v).rule, rule(v).after], [false, 'production-date-not-reached', '2999-12-31'])
+  // demo / test：日期被忽略
+  for (const mode of ['test', 'demo']) {
+    v = w.verify(w.intentArgs, { GML_RUNTIME_MODE: mode, GML_ANCHOR_INTENT_KEY_ID_REQUIRED_AFTER: '2000-01-01' })
+    assert.equal(v.status, 0, v.stdout)
+    assert.deepEqual([rule(v).required, rule(v).rule, rule(v).mode], [false, 'mode-not-enforcing', mode])
+  }
+  // 显式开关永远生效：test 模式、production 的未来日期都一样
+  for (const env of [{ GML_RUNTIME_MODE: 'test' }, prod('2999-12-31')]) {
+    v = w.verify(['--require-intent-key-id', ...w.intentArgs], env)
+    assert.deepEqual([v.status, off(v).kind, rule(v).rule], [1, 'intent-key-id-missing', 'flag'])
+  }
+  // 带 key_id 的意图在强制下通过
+  w.db.prepare('UPDATE audit_anchor_intents SET key_id=?').run(createHash('sha256').update(createPublicKey(readFileSync(w.ik.pub)).export({ type: 'spki', format: 'der' })).digest('hex'))
+  v = w.verify(w.intentArgs, prod('2000-01-01'))
+  assert.equal(v.status, 0, v.stdout)
+  assert.equal(rule(v).required, true)
+  w.db.close()
+})
+
+test('AH5 an invalid GML_ANCHOR_INTENT_KEY_ID_REQUIRED_AFTER or runtime mode is a usage error (exit 2) in production, never a silent pass; plain-text output states the rule', (t) => {
+  const w = ah5World(t)
+  for (const bad of ['soon', '2026-02-30', '2026-12-1']) {
+    const v = w.verify(w.intentArgs, { GML_RUNTIME_MODE: 'production', GML_ANCHOR_INTENT_KEY_ID_REQUIRED_AFTER: bad })
+    assert.equal(v.status, 2, bad)
+    assert.match(v.stderr, /INTENT_KEY_ID_AFTER_INVALID/)
+  }
+  assert.equal(w.verify(w.intentArgs, { GML_RUNTIME_MODE: 'staging' }).status, 2)
+  // 在 test 模式下日期没用到，所以不校验（避免无关配置挡住测试环境）
+  assert.equal(w.verify(w.intentArgs, { GML_RUNTIME_MODE: 'test', GML_ANCHOR_INTENT_KEY_ID_REQUIRED_AFTER: 'soon' }).status, 0)
+  // 文本输出
+  const text = cli(VERIFY, ['--data-dir', w.dir, '--industry', 'cosmetic', '--offbox', w.file, '--pubkey', w.k.pub, '--archive-dir', w.out, ...w.intentArgs], w.dir, { GML_RUNTIME_MODE: 'production', GML_ANCHOR_INTENT_KEY_ID_REQUIRED_AFTER: '2999-12-31' })
+  assert.equal(text.status, 0, text.stdout)
+  assert.match(text.stdout, /intent key_id: not enforced \(production-date-not-reached, after 2999-12-31, mode production\)/)
+  w.db.close()
+})
+
+test('AH5 the key_id rule is not evaluated (and not reported) for plain chain verification without --offbox / --against-backup', (t) => {
+  const w = ah5World(t)
+  const v = cli(VERIFY, ['--data-dir', w.dir, '--industry', 'cosmetic', '--json'], w.dir, { GML_RUNTIME_MODE: 'production', GML_ANCHOR_INTENT_KEY_ID_REQUIRED_AFTER: 'soon' })
+  assert.equal(v.status, 0, v.stdout + v.stderr)
+  assert.equal(JSON.parse(v.stdout).intent_key_id_rule, undefined)
+  w.db.close()
+})
+
+test('AH5 baseline-anchor-list-missing: an offbox anchor entry that has a chain tip but no anchor list fails closed (unverifiable), never silently passes', (t) => {
+  const w = ae5World(t)
+  assert.equal(w.verify().status, 0, 'baseline with the anchor list is fine')
+  // 旧格式 / 精简的锚点：同一份内容去掉 entry.anchors，用同一把钥重新签名（签名有效，所以走到的是对账分支而不是 OFFBOX-INVALID）
+  const doc = JSON.parse(readFileSync(w.file, 'utf8'))
+  const { signature, ...base } = doc.anchor
+  const entry = { ...base.audit.cosmetic }
+  assert.equal(entry.status, 'chain')
+  delete entry.anchors
+  const stripped = path.join(w.dest, 'anchor-stripped.json')
+  writeFileSync(stripped, buildSignedAnchor({ createdAt: base.created_at, log: base.log, audit: { ...base.audit, cosmetic: entry } }, loadSigningKey(w.k.priv)))
+  const run = (file) => cli(VERIFY, ['--data-dir', w.dir, '--industry', 'cosmetic', '--offbox', file, '--pubkey', w.k.pub, '--archive-dir', w.out, '--json'], w.dir)
+  const r = run(stripped)
+  assert.equal(r.status, 1, r.stdout)
+  assert.deepEqual([off(r).status, off(r).kind], ['unverifiable', 'baseline-anchor-list-missing'])
+  assert.match(off(r).message, /锚点清单/)
+  // 对照：同样的库、带清单的锚点通过
+  assert.equal(run(w.file).status, 0)
+  // 即使库里什么都没变，缺清单也不放行；伪造的桥锚点在缺清单时同样无法被放过
+  forgeBridge(w.db)
+  const r2 = run(stripped)
+  assert.deepEqual([r2.status, off(r2).kind], [1, 'baseline-anchor-list-missing'])
+  w.db.close()
+})
+
+test('AH5 the key_id date rule also applies on the --against-backup path', (t) => {
+  const k = ae5Keys(t)
+  const w = af5World(t)
+  assert.equal(w.archive({ GML_ANCHOR_INTENT_KEY: k.priv }).status, 0)
+  w.db.prepare('UPDATE audit_anchor_intents SET key_id=NULL').run()
+  const args = ['--require-signed-intents', '--intent-pubkey', k.pub]
+  let v = w.verify(args, { GML_RUNTIME_MODE: 'production', GML_ANCHOR_INTENT_KEY_ID_REQUIRED_AFTER: '2000-01-01' })
+  assert.deepEqual([v.status, ab(v).kind, rule(v).rule], [1, 'intent-key-id-missing', 'production-date-reached'])
+  v = w.verify(args, { GML_RUNTIME_MODE: 'production', GML_ANCHOR_INTENT_KEY_ID_REQUIRED_AFTER: '2999-12-31' })
+  assert.equal(v.status, 0, v.stdout)
+  assert.equal(rule(v).rule, 'production-date-not-reached')
   w.db.close()
 })

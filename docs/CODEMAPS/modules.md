@@ -198,12 +198,15 @@
 | 导出 | 类型 | 路由 | MCP 工具 | 被模块调用 |
 |---|---|---|---|---|
 | `INTENT_FORMAT` | const | — | — | — |
+| `KEY_ID_AFTER_DEFAULT` | const | — | — | — |
+| `KEY_ID_AFTER_ENV` | const | — | — | — |
 | `OPERATION_ACTIONS` | const | — | — | — |
 | `anchorMark` | fn | — | — | — |
 | `intentHash` | fn | — | — | — |
 | `intentRef` | fn | — | — | — |
 | `linkIntentAuditRow` | fn | — | — | — |
 | `recordAnchorIntent` | fn | — | — | — |
+| `resolveKeyIdRequirement` | fn | — | — | — |
 | `verifyAnchorIntents` | fn | — | — | — |
 
 ## `server/lib/audit-anchor-manifest.js`

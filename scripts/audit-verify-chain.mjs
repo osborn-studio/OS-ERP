@@ -26,6 +26,8 @@
  *     AG5（ADR-0055 补充 3）：`--pubkey` / `--intent-pubkey` 可重复，参数也可以是目录（取其中的 `*.pub.pem`）——轮换后的公钥集合；离机锚点按其签名元数据的 key_id 选 `--pubkey`，
  *     意图按记录的 key_id 选 `--intent-pubkey`（明确给了集合而 key_id 不在其中 ⇒ `intent-key-unknown` ⇒ rewrite）。没有 key_id 的旧签名意图按过渡规则对集合里每把试；
  *     `--require-intent-key-id` 结束过渡（此类意图判 `intent-key-id-missing`）。见 docs/operations/audit-integrity.md §8c。
+ *     AH5（ADR-0055 补充 4）：`--require-intent-key-id` 的缺省随运行模式（`GML_RUNTIME_MODE`，未设 = production）：production 从 `GML_ANCHOR_INTENT_KEY_ID_REQUIRED_AFTER`
+ *     （YYYY-MM-DD，UTC，含当天；缺省 2026-12-01；非法 ⇒ 退出 2）起强制，demo/test 不按日期强制；显式开关永远强制。输出的 `intent_key_id_rule` / “intent key_id:” 行说明用了哪条规则。
  *     `--require-signed-intents`：意图必须带可验证的签名（公钥取 `--intent-pubkey`，缺省同 `--pubkey`；签名密钥见 `GML_ANCHOR_INTENT_KEY`，生成见 `release-keygen --purpose anchor-intent`）。
  *   退出码：0 全部 OK；1 有断点（或库未迁移到 068、`--against-backup` 非 ok）；2 参数 / 环境错误。
  * 【边界】不改库、不创建缺失的行业库；不覆盖 user_name / module / ip 三列（规格如此，见 ADR-0049「限制」）。
@@ -52,7 +54,7 @@ const { loadBackupManifest, compareLiveToBackup, openArchiveIndex, archiveEviden
 const { loadBackupKey } = await import('../server/lib/backup-crypto.js')
 const { loadPublicKeySet, publicKeyId } = await import('./lib/evidence-sign.mjs')
 const { loadAnchor, asManifest } = await import('./lib/offbox-anchor.mjs')
-const { verifyAnchorIntents } = await import('../server/lib/audit-anchor-intent.js')
+const { verifyAnchorIntents, resolveKeyIdRequirement } = await import('../server/lib/audit-anchor-intent.js')
 
 /**
  * 基线（离机锚点 / 备份清单）之后在“已锚定范围内”（at_row_id ≤ 基线链尾 id）新增的锚点逐个做操作意图对账（--offbox 与 --against-backup 共用）。
@@ -87,7 +89,7 @@ function reconcileInRange(db, code, cmp, base, notes) {
   cmp.anchors_added_in_range = inRange.length
   if (archived.length) cmp.archived_anchors_in_range = archived.length
   if (!inRange.length) return
-  const iv = verifyAnchorIntents(db, inRange, { publicKeys: intentKeys, explicitKeys: !!args['intent-pubkey'], requireSigned: !!args['require-signed-intents'], requireKeyId: !!args['require-intent-key-id'], minAuditRowId: lastId, archivedRow: ev.needed ? archivedRowLookup(ev.chain, index) : null })
+  const iv = verifyAnchorIntents(db, inRange, { publicKeys: intentKeys, explicitKeys: !!args['intent-pubkey'], requireSigned: !!args['require-signed-intents'], requireKeyId: keyIdRule.required, minAuditRowId: lastId, archivedRow: ev.needed ? archivedRowLookup(ev.chain, index) : null })
   cmp.intents_checked = iv.checked
   if (!intentKeys.length) cmp.notes = [...(notes || []), '意图签名未验证：没有给公钥（--intent-pubkey）；未签名的意图只能挡住只改了锚点表的伪造']
   if (iv.ok) return
@@ -108,6 +110,12 @@ if (args.offbox) {
     process.exit(1)
   }
   offbox = loaded
+}
+
+// AH5（ADR-0055 补充 4）：key_id 要求的有效值——显式开关 > production 的日期规则 > demo/test 不强制；只在会对账意图的模式里取（非法配置 ⇒ 退出 2，不静默）
+let keyIdRule = { required: false, rule: 'not-applicable', mode: null, after: null }
+if (args.offbox || args['against-backup']) {
+  try { keyIdRule = resolveKeyIdRequirement({ flag: !!args['require-intent-key-id'] }) } catch (e) { die(e.code || 'USAGE', e.message) }
 }
 
 // 意图公钥集合（AG5）：明确给的 --intent-pubkey（可多次 / 目录）；没给时 --offbox 模式回落到 --pubkey 的集合（此时 key_id 对不上不算 key-unknown，沿用 AE5 口径）
@@ -134,7 +142,7 @@ if (args['against-backup']) {
 }
 
 const { targets, absent } = await locateDatabases(args)
-const report = { ok: true, industries: {}, ...(offbox ? { offbox: { file: path.resolve(args.offbox), created_at: offbox.anchor.created_at, key_id: offbox.key_id } } : {}), ...(intentKeys.length ? { intent_keys: intentKeys.map((k) => publicKeyId(k).slice(0, 16)) } : {}) }
+const report = { ok: true, industries: {}, ...(offbox ? { offbox: { file: path.resolve(args.offbox), created_at: offbox.anchor.created_at, key_id: offbox.key_id } } : {}), ...(args.offbox || args['against-backup'] ? { intent_key_id_rule: keyIdRule } : {}), ...(intentKeys.length ? { intent_keys: intentKeys.map((k) => publicKeyId(k).slice(0, 16)) } : {}) }
 for (const code of absent) {
   report.industries[code] = { status: 'absent' }
   if (offbox?.anchor.audit[code]?.status === 'chain') { report.ok = false; report.industries[code].status = 'absent'; report.industries[code].offbox = { status: 'missing', message: '锚点记录该行业有审计链，但现在没有该行业库（库被删除 / 换了数据目录？）' } }
@@ -182,6 +190,10 @@ if (backupCheck && !Object.values(report.industries).some((r) => r.against_backu
 
 if (args.json) console.log(JSON.stringify(report, null, 2))
 else {
+  if (report.intent_key_id_rule) {
+    const k = report.intent_key_id_rule
+    console.log(`intent key_id: ${k.required ? 'enforced' : 'not enforced'} (${k.rule}${k.after ? `, after ${k.after}` : ''}${k.mode ? `, mode ${k.mode}` : ''})`)
+  }
   for (const [code, r] of Object.entries(report.industries)) {
     if (r.status === 'ok') console.log(`OK    ${code}: ${r.rows} 行，id ${r.first_id ?? '-'}..${r.last_id ?? '-'}，锚点 ${r.anchors_used}，tip=${r.tip_hash ?? '(空表)'}`)
     if (r.against_backup) {
