@@ -239,7 +239,7 @@ test('AF11 scenarios are registered, assert real outcomes and the page hooks exi
   assert.ok(read('src/pages/system/AuditLogs.tsx').includes('fts.fallback_total'), 'AuditLogs.tsx reads the real fts.fallback_total field')
   // AG11：标记只认服务端 scope_restricted，不再从行上推断；AG9 配额槽位只在端点 200 时渲染
   assert.ok(read('src/api/metrics.ts').includes('scope_restricted') && !read('src/api/metrics.ts').includes('AF2-ADAPTER'), 'metrics api reads scope_restricted and has no inference adapter')
-  assert.ok(mcp.includes('mcp-quota-slot') && mcp.includes("'/mcp/limits/quota'"), 'McpCenter.tsx reserves the AG9 quota slot')
+  assert.ok(mcp.includes('data-testid="mcp-quota"') && mcp.includes("'/mcp/limits/quota'"), 'McpCenter.tsx renders the AG9 quota block')
   assert.ok(!existsSync(path.join(ROOT, 'tests/browser/metrics-scoped-marker.mjs')), 'the AF11 marker scenario is replaced by metrics-scoped-real')
   assert.match(read('server/mcp/admin.js'), /'\/limits\/tokens',\s*requireAuth,\s*requirePerm\('system\.mcp\.manage'\)/)
 })
