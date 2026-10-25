@@ -78,6 +78,7 @@ export function runOne(rel, { root = ROOT, timeoutMs = 1500000 } = {}) {
     PATH: process.env.PATH, HOME: process.env.HOME,
     GML_RUNTIME_MODE: 'test', HOST: '127.0.0.1', GML_DB: '', GML_JWT_SECRET: randomBytes(32).toString('hex')
   }
+  if (process.env.GML_TEST_LOAD_FACTOR) env.GML_TEST_LOAD_FACTOR = process.env.GML_TEST_LOAD_FACTOR
   const t0 = Date.now()
   const r = spawnSync(process.execPath, ['--test', '--test-concurrency=1', '--test-reporter=tap', rel], {
     cwd: root, env, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 256 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe']

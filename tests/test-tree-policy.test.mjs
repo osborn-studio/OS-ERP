@@ -77,3 +77,24 @@ test('docs/implementation/testing.md exists and names the slow directory, the ti
   const md = fs.readFileSync(path.join(ROOT, 'docs/implementation/testing.md'), 'utf8')
   for (const needle of ['tests/slow', 'scripts/test-timings.mjs', 'GML_TEST_LOAD_FACTOR', 'tests/lib/load-tolerance.mjs']) assert.ok(md.includes(needle), needle)
 })
+
+test('every relative import in tests/slow and tests/lib resolves to an existing file (a moved file with a stale ../ path fails here, not in CI)', () => {
+  const files = [...slowEntries.map((f) => path.join(SLOW_DIR, f)), ...fs.readdirSync(path.join(ROOT, 'tests/lib')).map((f) => path.join(ROOT, 'tests/lib', f)), path.join(ROOT, 'tests/write-contention.test.mjs'), path.join(ROOT, 'tests/release-signing.test.mjs')]
+  for (const file of files) {
+    const text = fs.readFileSync(file, 'utf8')
+    // only `../` specifiers (a `./` inside a fixture string is not an import) at the start of a statement or call: `from '…'`, `import('…')`, `require('…')`
+    for (const m of text.matchAll(/(?:\bfrom\s+|\bimport\(\s*|\brequire\(\s*)(['"])(\.\.\/[^'"]+)\1/g)) {
+      const target = path.resolve(path.dirname(file), m[2])
+      assert.ok(fs.existsSync(target), `${path.relative(ROOT, file)}: ${m[2]} does not resolve (${path.relative(ROOT, target)})`)
+    }
+  }
+})
+
+test('the isolated regression runner (regress-all) discovers tests/slow as well as tests/', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'scripts/regress-all.mjs'), 'utf8')
+  assert.match(src, /\['tests', 'tests\/slow'\]/)
+})
+
+test('the timing runner forwards GML_TEST_LOAD_FACTOR to the test processes', () => {
+  assert.match(fs.readFileSync(path.join(ROOT, 'scripts/test-timings.mjs'), 'utf8'), /env\.GML_TEST_LOAD_FACTOR = process\.env\.GML_TEST_LOAD_FACTOR/)
+})

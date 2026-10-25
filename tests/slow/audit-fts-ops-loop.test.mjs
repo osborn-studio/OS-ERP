@@ -20,7 +20,7 @@ import Database from 'better-sqlite3'
 import bcrypt from 'bcryptjs'
 import { ftsAvailable, keywordUsesFts } from '../../server/lib/audit-view.js'
 import * as m067 from '../../server/db/migrations/067_audit_fts.cjs'
-import { CASE_TIMEOUT_FAST_MS, CASE_TIMEOUT_MEDIUM_MS, FETCH_TIMEOUT_MS, READY_POLL_ATTEMPTS, READY_POLL_INTERVAL_MS, SPAWN_TIMEOUT_SHORT_MS } from '../lib/lib/load-tolerance.mjs'
+import { CASE_TIMEOUT_FAST_MS, CASE_TIMEOUT_MEDIUM_MS, FETCH_TIMEOUT_MS, READY_POLL_ATTEMPTS, READY_POLL_INTERVAL_MS, SPAWN_TIMEOUT_SHORT_MS } from '../lib/load-tolerance.mjs'
 
 const ROOT = fileURLToPath(new URL('../../', import.meta.url))
 const NO_FTS5 = !m067.ftsSupported(new Database(':memory:'))

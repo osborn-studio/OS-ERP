@@ -26,7 +26,7 @@ import m071 from '../../server/db/migrations/071_audit_fts_optional.cjs'
 import { insertAuditRow } from '../../server/lib/audit-trail.js'
 import { verifyChain } from '../../server/lib/audit-chain-verify.js'
 import { spawnWriter, classifyError, parseFallbackTotal, percentile, WRITER_ACTION } from '../../scripts/lib/audit-toggle-writer.mjs'
-import { CASE_TIMEOUT_FAST_MS, CASE_TIMEOUT_MEDIUM_MS, READY_POLL_ATTEMPTS, READY_POLL_INTERVAL_MS, SPAWN_TIMEOUT_SHORT_MS, UNTIL_POLL_ATTEMPTS, UNTIL_POLL_INTERVAL_MS, scaleMs } from '../lib/lib/load-tolerance.mjs'
+import { CASE_TIMEOUT_FAST_MS, CASE_TIMEOUT_MEDIUM_MS, READY_POLL_ATTEMPTS, READY_POLL_INTERVAL_MS, SPAWN_TIMEOUT_SHORT_MS, UNTIL_POLL_ATTEMPTS, UNTIL_POLL_INTERVAL_MS, scaleMs } from '../lib/load-tolerance.mjs'
 
 const ROOT = fileURLToPath(new URL('../../', import.meta.url))
 const NO_FTS5 = !m067.ftsSupported(new Database(':memory:'))
