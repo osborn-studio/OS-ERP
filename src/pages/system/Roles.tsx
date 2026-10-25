@@ -28,7 +28,7 @@
  *   · `admin` 角色不给改（后端也拒）：管理员权限被误删会让系统再也进不去设置页。
  * ============================================================================
  */
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { ShieldCheck, Lock, Eye, Save, RotateCcw } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { Card, SectionTitle, Modal, useFetch, toast } from '../../components/ui'
@@ -85,9 +85,11 @@ export default function Roles() {
   const [saving, setSaving] = useState(false)
   const navigate = useNavigate()
   // AH10：停用确认弹窗（impact 为打开时取到的预告；confirming 防重复提交）
-  const [dlg, setDlg] = useState<{ impact: { affected_users: number; primary_users: number }; stale: boolean } | null>(null)
+  const [dlg, setDlg] = useState<{ code: string; impact: { affected_users: number; primary_users: number }; stale: boolean } | null>(null)
   const [confirming, setConfirming] = useState(false)
+  const activeRef = useRef('')
 
+  activeRef.current = active
   const list: any[] = roles || []
   const current = list.find((r) => r.code === active) || null
   const byModule: Record<string, any[]> = permMeta?.byModule || {}
@@ -117,19 +119,22 @@ export default function Roles() {
 
   async function openDeactivate() {
     if (!current || isAdmin) return
+    const code = current.code
     try {
-      const r: any = await api.get(`/auth/roles/${current.code}/deactivation-impact`)
-      setDlg({ impact: r.data, stale: false })
+      const r: any = await api.get(`/auth/roles/${code}/deactivation-impact`)
+      // 预告响应回来时若管理员已切到别的角色，丢弃：弹窗的数字必须属于弹窗标题里的那个角色
+      if (activeRef.current !== code) return
+      setDlg({ code, impact: r.data, stale: false })
     } catch (e: any) {
       toast(e?.message || '读取影响预告失败', 'error')
     }
   }
 
   async function confirmDeactivate() {
-    if (!current || !dlg) return
+    if (!current || !dlg || dlg.code !== current.code) return
     setConfirming(true)
     try {
-      await api.post(`/auth/roles/${current.code}/deactivate`, { confirm_affected: dlg.impact.affected_users })
+      await api.post(`/auth/roles/${dlg.code}/deactivate`, { confirm_affected: dlg.impact.affected_users, confirm_primary: dlg.impact.primary_users })
       toast(`「${current.name}」已停用（受影响 ${dlg.impact.affected_users} 人）`, 'success')
       setDlg(null)
       reload()
@@ -137,7 +142,7 @@ export default function Roles() {
     } catch (e: any) {
       if (e?.detail?.code === 'ROLE_IMPACT_CHANGED') {
         // 预告过期：用服务端给的当前人数刷新弹窗，要求管理员重新确认（不自动重试）
-        setDlg({ impact: { affected_users: e.detail.affected_users, primary_users: e.detail.primary_users }, stale: true })
+        setDlg({ code: dlg.code, impact: { affected_users: e.detail.affected_users, primary_users: e.detail.primary_users }, stale: true })
       } else {
         toast(e?.message || '停用失败', 'error')
         setDlg(null)
@@ -394,7 +399,7 @@ export default function Roles() {
       </div>
       <Modal
         open={!!dlg}
-        title={`停用角色「${current?.name || ''}」`}
+        title={`停用角色「${list.find((r) => r.code === dlg?.code)?.name || ''}」`}
         onClose={() => !confirming && setDlg(null)}
         width={520}
         footer={

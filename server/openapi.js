@@ -1732,7 +1732,7 @@ export function buildOpenApi() {
         RoleDeactivate: {
           type: 'object',
           required: ['confirm_affected'],
-          properties: { confirm_affected: { type: 'integer', minimum: 0, description: '影响预告里的 affected_users；与停用时事务内现算的人数不一致即拒绝（409 ROLE_IMPACT_CHANGED）' } }
+          properties: { confirm_primary: { type: 'integer', minimum: 0, description: '可选：影响预告里的 primary_users；给了就必须与停用时现算的一致（总数不变而主角色人数变了同样 409 ROLE_IMPACT_CHANGED）' }, confirm_affected: { type: 'integer', minimum: 0, description: '影响预告里的 affected_users；与停用时事务内现算的人数不一致即拒绝（409 ROLE_IMPACT_CHANGED）' } }
         },
         LoginRequest: {
           type: 'object',

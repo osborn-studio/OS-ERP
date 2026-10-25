@@ -418,7 +418,7 @@ r.post(
   '/roles/:code/deactivate',
   requireAuth,
   requireRole('admin'),
-  wrap((req, res) => ok(res, deactivateRole(getDb(), req.user, req.params.code, req.body?.confirm_affected, { ip: req.ip })))
+  wrap((req, res) => ok(res, deactivateRole(getDb(), req.user, req.params.code, req.body?.confirm_affected, { ip: req.ip, confirmPrimary: req.body?.confirm_primary })))
 )
 
 /** 启用角色（管理员；AH10） */

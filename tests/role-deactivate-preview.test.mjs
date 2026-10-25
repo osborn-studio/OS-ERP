@@ -210,6 +210,54 @@ test('AH10: deactivate needs a matching confirm_affected (TOCTOU between preview
   })
 })
 
+test('AH10: a changed primary-user count with an unchanged total is stale too; a failed audit write rolls the change back', { timeout: 300000 }, async (t) => {
+  const f = await server(t)
+  const { db } = f
+  mkRole(db, 'ah10_mix', 'AH10混合')
+  const a = await f.account('ah10_m1', 'ah10_mix')
+  const b = await f.account('ah10_m2', 'sales')
+  addRole(db, b.id, 'ah10_mix') // N=2, M=1
+  const preview = okData(await impactOf(f, 'ah10_mix'))
+  assert.deepEqual([preview.affected_users, preview.primary_users], [2, 1])
+  // 总数不变，但 b 的主角色改成了此角色：M 变成 2（改主角色会把 b 的数据范围默认也换成此角色的）
+  db.prepare("UPDATE users SET role='ah10_mix' WHERE id=?").run(b.id)
+
+  await t.test('confirm_primary mismatch -> 409 ROLE_IMPACT_CHANGED with the current numbers, nothing changed', async () => {
+    const r = await deactivate(f, 'ah10_mix', { confirm_affected: preview.affected_users, confirm_primary: preview.primary_users })
+    assert.equal(r.status, 409)
+    assert.equal(r.body.error, 'ROLE_IMPACT_CHANGED')
+    assert.deepEqual([r.body.detail.affected_users, r.body.detail.primary_users], [2, 2])
+    assert.equal(statusOf(db, 'ah10_mix'), 'active')
+    assert.equal(auditRows(db, 'ROLE_DEACTIVATE').length, 0)
+  })
+
+  await t.test('malformed confirm_primary is rejected before anything is read', async () => {
+    for (const confirm_primary of ['2', -1, 1.5, null]) {
+      const r = await deactivate(f, 'ah10_mix', { confirm_affected: 2, confirm_primary })
+      assert.equal(r.status, 400, JSON.stringify(confirm_primary))
+      assert.equal(r.body.error, 'ROLE_CONFIRM_REQUIRED')
+    }
+  })
+
+  await t.test('audit write failure rolls back both transitions (503, role status unchanged)', async () => {
+    db.exec("CREATE TRIGGER ah10_audit_fail BEFORE INSERT ON audit_logs WHEN NEW.action IN ('ROLE_DEACTIVATE','ROLE_ACTIVATE') BEGIN SELECT RAISE(ABORT, 'ah10 injected audit failure'); END")
+    try {
+      const d = await deactivate(f, 'ah10_mix', { confirm_affected: 2, confirm_primary: 2 })
+      assert.equal(d.status, 503, JSON.stringify(d.body))
+      assert.equal(statusOf(db, 'ah10_mix'), 'active', 'the deactivation must not survive a failed audit write')
+    } finally { db.exec('DROP TRIGGER IF EXISTS ah10_audit_fail') }
+    okData(await deactivate(f, 'ah10_mix', { confirm_affected: 2, confirm_primary: 2 }))
+    db.exec("CREATE TRIGGER ah10_audit_fail BEFORE INSERT ON audit_logs WHEN NEW.action IN ('ROLE_DEACTIVATE','ROLE_ACTIVATE') BEGIN SELECT RAISE(ABORT, 'ah10 injected audit failure'); END")
+    try {
+      const e = await activate(f, 'ah10_mix')
+      assert.equal(e.status, 503, JSON.stringify(e.body))
+      assert.equal(statusOf(db, 'ah10_mix'), 'inactive', 'the activation must not survive a failed audit write')
+    } finally { db.exec('DROP TRIGGER IF EXISTS ah10_audit_fail') }
+    assert.equal(auditRows(db, 'ROLE_ACTIVATE').length, 0)
+    assert.equal(a.id > 0, true)
+  })
+})
+
 test('AH10: only administrators may deactivate or enable; the admin role is protected; unknown role is 404', { timeout: 300000 }, async (t) => {
   const f = await server(t)
   const { db } = f

@@ -213,17 +213,21 @@ export function roleDeactivationImpact(db, role) {
  * 停用角色。`confirmAffected` 必须是非负整数且**等于事务内现算的受影响人数**：预告与停用之间有人被加入 / 移出角色，
  * 管理员看到的数字就过期了，此时 409 `ROLE_IMPACT_CHANGED` 并带当前人数，由界面重新确认。
  * 现算与写入同在一个 BEGIN IMMEDIATE 事务里，所以"校验通过后、写入前"没有别的写者能改成员。
+ * `confirmPrimary`（对应请求体 `confirm_primary`）可选；给了必须是非负整数且与现算的 M 一致，否则同样 409。
  * 不递增 auth_version：权限上下文逐请求回库（ADR-0051 补充 3），旧令牌下一次请求即按新状态判。
  */
-export function deactivateRole(db, actor, role, confirmAffected, { ip } = {}) {
+export function deactivateRole(db, actor, role, confirmAffected, { ip, confirmPrimary } = {}) {
   if (typeof role !== 'string' || !role) throw error('ROLE_NOT_FOUND', '角色不存在', 404)
   if (!Number.isSafeInteger(confirmAffected) || confirmAffected < 0) throw error('ROLE_CONFIRM_REQUIRED', '停用角色需提供 confirm_affected（先查看影响预告并确认受影响人数）')
+  if (confirmPrimary !== undefined && (!Number.isSafeInteger(confirmPrimary) || confirmPrimary < 0)) throw error('ROLE_CONFIRM_REQUIRED', 'confirm_primary 需为非负整数')
   return atomic(db, () => {
     const currentActor = actorInTransaction(db, actor, true)
     const impact = roleDeactivationImpact(db, role)
     if (role === 'admin') throw error('ROLE_ADMIN_PROTECTED', '管理员角色不可停用', 409)
     if (impact.status !== 'active') throw error('ROLE_ALREADY_INACTIVE', '角色已是停用状态', 409)
-    if (impact.affected_users !== confirmAffected) {
+    // confirm_primary 可选：给了就也必须一致（总数不变但"主角色为此角色"的人数变了，同样算预告过期）
+    const primaryMoved = confirmPrimary !== undefined && confirmPrimary !== impact.primary_users
+    if (impact.affected_users !== confirmAffected || primaryMoved) {
       throw Object.assign(error('ROLE_IMPACT_CHANGED', '受影响人数已变化，请重新查看影响预告后再确认', 409), {
         detail: { affected_users: impact.affected_users, primary_users: impact.primary_users }
       })
