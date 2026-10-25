@@ -40,7 +40,17 @@ export default function Users() {
       options: roles,
       required: true,
       default: 'viewer',
-      render: (r) => roles.find((x) => x.value === r.role)?.label || r.role
+      render: (r) => (
+        <span>
+          {roles.find((x) => x.value === r.role)?.label || r.role}
+          {/* AH10：主角色已停用的账号 —— 点该行"编辑"改上面的角色字段即为"重新指派主角色"（不另建编辑器） */}
+          {r.role_status === 'inactive' && (
+            <span className="ml-1 text-[11px] text-amber-700" data-testid="primary-role-inactive-tag" title="主角色已停用：点编辑，在角色字段重新指派主角色">
+              （已停用·请重新指派主角色）
+            </span>
+          )}
+        </span>
+      )
     },
     { key: 'dept', label: '部门', width: 110 },
     { key: 'phone', label: '手机', width: 130 },

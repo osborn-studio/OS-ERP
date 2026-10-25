@@ -574,13 +574,27 @@ export function permContext(db, user) {
   return { perms: new Set(permsOfRoles(db, splitRolesByStatus(db, u.uid, u.role).active)), isSuper: false }
 }
 
-/** 登录 / me / my-scope 共用的停用角色披露：只含**调用者自己**被授予且已停用的角色码 */
+/**
+ * 登录 / me / my-scope 共用的停用角色披露：只含**调用者自己**被授予且已停用的角色码。
+ * AH10：`primary_role_inactive` 标出"主角色本身被停用"（此时账号的角色默认数据范围为空，必须由管理员重新指派主角色），
+ * 文案点明"联系管理员 / 重新指派主角色"；只停用了附加角色时仍是通用提示。管理员 / 超管的权限不看角色状态，不标主角色停用。
+ */
 export function roleInactiveNotice(db, userId, primary) {
   const { inactive } = splitRolesByStatus(db, userId, primary)
+  const row = userId ? db.prepare('SELECT is_super FROM users WHERE id=?').get(userId) : null
+  const primaryInactive = !!primary && primary !== 'admin' && !row?.is_super && inactive.includes(primary)
+  let message = null
+  if (primaryInactive) {
+    const name = db.prepare('SELECT name FROM roles WHERE code=?').get(primary)?.name || primary
+    message = `你的主角色「${name}」已停用：其权限与默认数据范围不再生效，数据范围可能为空。请联系管理员重新指派主角色。`
+  } else if (inactive.length) {
+    message = '你的账号被授予的部分角色已停用，其权限不再生效；如需恢复请联系管理员。'
+  }
   return {
     roles_inactive: inactive,
+    primary_role_inactive: primaryInactive,
     notice_code: inactive.length ? ROLE_INACTIVE_NOTICE : null,
-    notice_message: inactive.length ? '你的账号被授予的部分角色已停用，其权限不再生效；如需恢复请联系管理员。' : null
+    notice_message: message
   }
 }
 

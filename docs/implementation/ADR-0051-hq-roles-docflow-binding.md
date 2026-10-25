@@ -177,3 +177,42 @@ ADR-0011 AB7 补充登记过一条既有的高危发现：`/api/docflow/*` 的�
 - **medium，已修**：管理员 / 超管的说明不应声称"没有生效角色就没有权限"或"默认范围不再计入"；这些行现在仅对非管理员输出，并有"管理员说明不含失权措辞"用例。
 - **low，已修**：场景清理——数据库与浏览器改为嵌套 `finally`（浏览器在受保护的 `try` 内启动），角色状态恢复为场景开始时记录的原值而不是写死 `active`。
 - 调用者自己披露：未发现跨账号 / 未授予角色的披露（`my-scope` / `login` / `me`）；场景无选择器竞态。
+
+
+## AH10 补充 5：角色停用的影响预告、二次确认与恢复指引（第十七批）
+
+### 决定
+
+- **此前没有"启停角色"的 HTTP 路由**（补充 3、补充 4 都记载"状态由库 / 种子 / 运维脚本改"），所以本次一并补上启停路由，且启停与预告同批交付，不存在"能停用但没有预告"的窗口。三条路由都在 `routes/auth.js`，与角色权限编辑同口径：`requireAuth` + `requireRole('admin')`（角色管理本来就是管理员专属，没有新增权限点，角色矩阵不变）：
+  - `GET /api/auth/roles/:code/deactivation-impact`：返回 `{ role, status, affected_users: N, primary_users: M, primary_user_ids, primary_user_ids_truncated }`。N = 被授予该角色（`user_roles` 或主角色字段）的**启用中、非管理员、非超管**账号数，M = 其中主角色为此角色的账号数。管理员 / 超管的权限不看角色状态，停用账号登录不了，所以都不计入。响应只含账号编号（最多 100 个），不含账号名 / 姓名。
+  - `POST /api/auth/roles/:code/deactivate`，体 `{ confirm_affected: N, confirm_primary?: M }`：`confirm_primary` 可选，给了也必须与现算的 M 一致（总数不变而主角色人数变了同样算过期；界面两个数字都带）；缺失或不是非负整数 -> 400 `ROLE_CONFIRM_REQUIRED`；与**事务内现算**的 N 不一致 -> 409 `ROLE_IMPACT_CHANGED`（响应 `detail` 带当前 `affected_users` / `primary_users`，界面据此刷新数字并要求重新确认，不自动重试）；`admin` 角色 -> 409 `ROLE_ADMIN_PROTECTED`；已停用 -> 409 `ROLE_ALREADY_INACTIVE`；角色不存在 -> 404 `ROLE_NOT_FOUND`。
+  - `POST /api/auth/roles/:code/activate`：无需确认；已启用 -> 409 `ROLE_ALREADY_ACTIVE`。
+- **预告与停用之间的竞态（TOCTOU）**：预告是只读快照，不持锁；停用在 `BEGIN IMMEDIATE` 事务里**重新计数后再比较**并写入，比较与写入之间没有别的写者能改成员，所以"校验通过后人数又变了"不可能发生；预告之后人数变了的情形由 `confirm_affected` 不符拒绝。同一事务内复核操作人仍是启用中的管理员且 `auth_version` 未变（`actorInTransaction`，与角色权限编辑同口径）。
+- **审计**：停用 / 启用都用严格审计（`auditStrict`，写不进即回滚整笔变更）：`ROLE_DEACTIVATE` / `ROLE_ACTIVATE`，`entity=role`，明细 `{ affectedUsers, primaryUsers }`。启用审计里的人数是启用时刻的当前持有人数，便于核对"停用期间成员变过没有"。
+- **不递增 `auth_version`**：与补充 3 的缓存审计结论一致，权限上下文逐请求回库，旧令牌下一次请求即按新状态判；会话不被踢下线，持有者能看到提示并联系管理员（若踢下线反而看不到提示）。
+- **主角色停用的恢复指引**：`roleInactiveNotice`（登录 / `me` / `my-scope` 共用）新增 `primary_role_inactive`（调用者自己的主角色已停用且非管理员 / 超管）；此时 `notice_message` 点名主角色并写明"请联系管理员重新指派主角色"，只停用了附加角色时仍是原来的通用提示。`GET /auth/users` 每行新增 `role_status`（主角色是否启用；`admin` 恒 `active`），用户页在该账号的角色后标"已停用·请重新指派主角色"，管理员点编辑改**已有的角色字段**即重新指派（不新建编辑器；更换角色走 `updateAccount`，会话随之吊销，登录后提示消失）。
+- **前端**：角色页新增"停用角色 / 启用角色"；停用先取预告，弹窗写"受影响用户 N 人（其中主角色为此角色 M 人）"，确认按钮把 N 原样带回；收到 `ROLE_IMPACT_CHANGED` 时弹窗显示"人数已变化"并刷新数字。已停用的角色在详情里提示"仍有 M 个账号以它为主角色"并给"重新指派主角色"入口（跳用户页）。
+- **浏览器场景** `tests/browser/role-deactivate-preview.mjs`（已登记到 `browser-ci.mjs`，策略测试覆盖）：场景自己往驱动给的一次性数据目录里插一个专用角色（仍没有"建角色"路由），走真实登录表单，覆盖预告数字、预告过期后的重新确认、主角色横幅、用户页标记与启用，`finally` 里清理角色与关系。
+
+### 诚实边界
+
+- 预告数字是"此刻"的值，不冻结；防过期靠确认字段而不是锁。两个管理员几乎同时停用同一角色时，后到者得到 `ROLE_ALREADY_INACTIVE`。
+- N 只统计启用中的非管理员账号；停用账号之后被重新启用时，会落到已停用的角色上（它们属于重新启用账号的审计范围，不在本次预告里）。
+- 横幅 / 用户页标记依赖 `roles.status`，没有新增"停用原因"字段。`roles_inactive` 仍不区分主 / 附加，区分靠新增的 `primary_role_inactive`。
+- 浏览器场景本机未执行（Linux 托管 CI 才跑）；本机只做 `tsc`、`vite build`、`node --check`、策略测试与服务端测试。
+
+### 验收
+
+- `tests/role-deactivate-preview.test.mjs`（21 项：4 个顶层用例含子用例）：预告数字精确（主角色 / 附加角色 / 已停用账号 / 管理员，不含账号名）；非管理员与匿名 403 / 401；缺失 / 畸形确认 400；预告后有人加入 / 退出 -> 409 且不改状态、不写审计；匹配确认 -> 停用、审计带人数、`auth_version` 不变、旧令牌仍可用；重复停用 / 重复启用 409；`admin` 角色受保护；主角色持有者的 login / me / my-scope 带 `primary_role_inactive` 与"联系管理员 / 重新指派主角色"，附加角色持有者没有；用户列表 `role_status`；经已有用户编辑器重新指派后提示消失。
+- `tests/my-scope.test.mjs` 的精确键集合加入 `primary_role_inactive`。
+- 同文件另含：总数不变而主角色人数变了 -> 409；畸形 `confirm_primary` -> 400；用触发器注入审计写失败，停用与启用都回滚（503，状态不变）。
+
+### Codex 审计（AH10）
+
+`gpt-6.1-sol`（只读，`batch-sixteen...HEAD`）：无 high；三条 medium、一条 low。
+
+- **medium，已修**：确认只比较总数 N，预告后把一个附加角色持有者改成以此为主角色（N 不变、M 变）仍能通过 -> 新增可选 `confirm_primary`（界面总是带），不一致 409；有测试。
+- **medium，已修**：角色页预告请求在途时管理员切换角色，弹窗会显示 B 的标题却带 A 的数字、确认打到 B -> 弹窗记录预告对应的角色码，响应回来时若已切换则丢弃，确认只提交弹窗记录的角色码。（前端竞态本机无浏览器场景覆盖：未新增延迟响应场景，见下。）
+- **medium，接受并记录**：`ROLE_DEACTIVATE` / `ROLE_ACTIVATE` 审计明细里的人数，持有 `system.audit` 查看权限且全局数据范围的非管理员可经审计列表 / 导出看到。这是需求（审计记录受影响人数）的直接后果，与既有 `ROLE_PERM_UPDATE.revokedUsers` 同一类（权限点 + 全局数据范围门，明细读取时脱敏凭据键）；预告 / 停用 / 启用路由本身仅管理员，响应与审计都不含账号名，只有人数。如需对审计读者隐藏，应作为审计明细分级的通用改动另议，不在本补充内。
+- **low，部分已修**：审计写失败回滚已用触发器注入覆盖（停用 / 启用）；并发写者的对抗性用例未加——事务边界由 `BEGIN IMMEDIATE` + 事务内重算保证，顺序用例（预告后加人 / 退人 / 改主角色）已覆盖其可观察结果，真并发需要多连接时序控制，留作 backlog。
+- 确认无问题：预告 / 停用 / 启用路由均 `requireRole('admin')`，停用在事务内重新鉴权操作人并重算影响。

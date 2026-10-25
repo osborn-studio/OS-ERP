@@ -3,7 +3,7 @@
 <!-- generated -->
 <!-- 由 `node scripts/gen-codemap.mjs` 生成，勿手改；CI 校验不漂移 -->
 
-共 644 条路由（含 8 条子路由器挂载），39 个路由文件。路由、分类与中间件链来自 `node scripts/check-route-authz.mjs --list`（只显示中间件名，权限码以源码为准）。“调用的 lib 函数”只列 server/lib 与 server/mcp 的函数（`lib/http.js` 的响应工具不列）；“处理器内 SQL 表”含本文件内辅助函数；“经 lib 触达的表”为跨文件可能触达的上界。
+共 647 条路由（含 8 条子路由器挂载），39 个路由文件。路由、分类与中间件链来自 `node scripts/check-route-authz.mjs --list`（只显示中间件名，权限码以源码为准）。“调用的 lib 函数”只列 server/lib 与 server/mcp 的函数（`lib/http.js` 的响应工具不列）；“处理器内 SQL 表”含本文件内辅助函数；“经 lib 触达的表”为跨文件可能触达的上界。
 
 ## 扫描边界（必读）
 
@@ -97,19 +97,22 @@
 | `auth.js:96` | GET | `/api/auth/industries` | NO_AUTH | （无） | — | — | — |
 | `auth.js:100` | GET | `/api/auth/me` | AUTH_ONLY | requireAuth | — | orgs, users | permissions, role_permissions, roles, user_roles |
 | `auth.js:138` | GET | `/api/auth/roles` | AUTH_ONLY | requireAuth | — | — | users |
-| `auth.js:144` | GET | `/api/auth/users` | GATED | requireAuth → requireRole | — | dealers, stores, users | roles |
-| `auth.js:168` | POST | `/api/auth/users` | GATED | requireAuth → requireRole | lib/account-security.js: createAccount | — | audit_logs, roles, user_orgs, user_roles, users |
-| `auth.js:175` | PUT | `/api/auth/users/:id` | GATED | requireAuth → requireRole | lib/account-security.js: updateAccount | — | agent_tokens, audit_logs, roles, user_orgs, user_roles, users |
-| `auth.js:182` | POST | `/api/auth/change-password` | AUTH_ONLY | requireAuth | lib/account-security.js: changePassword | — | audit_logs, users |
-| `auth.js:192` | POST | `/api/auth/logout-all` | AUTH_ONLY | requireAuth | lib/account-security.js: logoutAll | — | audit_logs, users |
-| `auth.js:202` | GET | `/api/auth/audit-logs` | GATED | requireAuth → requireRole | — | audit_logs | roles, users |
-| `auth.js:220` | GET | `/api/auth/org-tree` | AUTH_ONLY | requireAuth | — | dealers, orgs | roles, users |
-| `auth.js:262` | GET | `/api/auth/permissions` | AUTH_ONLY | requireAuth | — | permissions | users |
-| `auth.js:274` | GET | `/api/auth/my-permissions` | AUTH_ONLY | requireAuth | — | — | orgs, permissions, role_permissions, roles, user_roles, users |
-| `auth.js:377` | GET | `/api/auth/my-scope` | AUTH_ONLY | requireAuth | — | dealers, orgs, roles, stores, users | role_permissions, user_roles |
-| `auth.js:384` | GET | `/api/auth/roles-permissions` | GATED | requireAuth → requireRole | — | role_permissions, roles | users |
-| `auth.js:400` | PUT | `/api/auth/roles/:code/permissions` | GATED | requireAuth → requireRole | lib/account-security.js: replaceRolePermissions | — | audit_logs, permissions, role_permissions, roles, user_roles, users |
-| `auth.js:413` | GET | `/api/auth/orgs` | AUTH_ONLY | requireAuth | — | dealers, orgs | roles, users |
+| `auth.js:144` | GET | `/api/auth/users` | GATED | requireAuth → requireRole | — | dealers, roles, stores, users | — |
+| `auth.js:169` | POST | `/api/auth/users` | GATED | requireAuth → requireRole | lib/account-security.js: createAccount | — | audit_logs, roles, user_orgs, user_roles, users |
+| `auth.js:176` | PUT | `/api/auth/users/:id` | GATED | requireAuth → requireRole | lib/account-security.js: updateAccount | — | agent_tokens, audit_logs, roles, user_orgs, user_roles, users |
+| `auth.js:183` | POST | `/api/auth/change-password` | AUTH_ONLY | requireAuth | lib/account-security.js: changePassword | — | audit_logs, users |
+| `auth.js:193` | POST | `/api/auth/logout-all` | AUTH_ONLY | requireAuth | lib/account-security.js: logoutAll | — | audit_logs, users |
+| `auth.js:203` | GET | `/api/auth/audit-logs` | GATED | requireAuth → requireRole | — | audit_logs | roles, users |
+| `auth.js:221` | GET | `/api/auth/org-tree` | AUTH_ONLY | requireAuth | — | dealers, orgs | roles, users |
+| `auth.js:263` | GET | `/api/auth/permissions` | AUTH_ONLY | requireAuth | — | permissions | users |
+| `auth.js:275` | GET | `/api/auth/my-permissions` | AUTH_ONLY | requireAuth | — | — | orgs, permissions, role_permissions, roles, user_roles, users |
+| `auth.js:378` | GET | `/api/auth/my-scope` | AUTH_ONLY | requireAuth | — | dealers, orgs, roles, stores, users | role_permissions, user_roles |
+| `auth.js:385` | GET | `/api/auth/roles-permissions` | GATED | requireAuth → requireRole | — | role_permissions, roles | users |
+| `auth.js:401` | PUT | `/api/auth/roles/:code/permissions` | GATED | requireAuth → requireRole | lib/account-security.js: replaceRolePermissions | — | audit_logs, permissions, role_permissions, roles, user_roles, users |
+| `auth.js:409` | GET | `/api/auth/roles/:code/deactivation-impact` | GATED | requireAuth → requireRole | lib/account-security.js: roleDeactivationImpact | — | roles, user_roles, users |
+| `auth.js:417` | POST | `/api/auth/roles/:code/deactivate` | GATED | requireAuth → requireRole | lib/account-security.js: deactivateRole | — | audit_logs, roles, user_roles, users |
+| `auth.js:425` | POST | `/api/auth/roles/:code/activate` | GATED | requireAuth → requireRole | lib/account-security.js: activateRole | — | audit_logs, roles, user_roles, users |
+| `auth.js:438` | GET | `/api/auth/orgs` | AUTH_ONLY | requireAuth | — | dealers, orgs | roles, users |
 
 ## server/routes/costing.js
 
