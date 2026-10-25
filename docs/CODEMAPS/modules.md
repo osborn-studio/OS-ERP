@@ -145,6 +145,8 @@
 | `pendingInstancesFor` | fn | — | — | — |
 | `stepsOfTemplate` | fn | GET /api/approval/check | — | — |
 | `submitApproval` | fn | POST /api/approval/instances | — | — |
+| `templateIsGlobal` | fn | — | — | — |
+| `validateApproverScope` | fn | POST /api/approval/templates | — | — |
 
 ## `server/lib/ar.js`
 

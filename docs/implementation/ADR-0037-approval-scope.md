@@ -66,3 +66,24 @@ Y2 在 `server/lib/docflow.js` 建 `DOC_SCOPE_RESOLVERS`；本工作流不得改
 验证：`tests/approval-scope.test.mjs`（组织 A/B/无组织管理员 × 开关 1/0，覆盖 pending / todos / instances / 详情 404 / overview / decide 404，审批人队列与全局账号不变）、`tests/authz-followups.test.mjs`（todos 口径，两种设置各断言）、`scripts/test-setting-audit.mjs`（危险键集合 17 → 18）。
 
 **Codex 审计（Z9）与已知边界**：审计提出 P1——受限范围的审批管理员可经 `POST /api/approval/templates`（同样要求 `system:approval:manage`）把自己设为现有模板的审批人，使他组织的 pending 实例变成"自己的队列"而重新可见。这是任务给定的"审批人自己的队列不受组织限制"口径与"模板维护归审批管理员"两条既有契约叠加的结果，不是新增路由漏洞：**决定与撤回仍由单据范围拦截（404、零写）**，且模板修改有审计。开关为 0 并不能把 `system:approval:manage` 变成"无法自授权可见性"的角色；要达到该强度，需另行限制模板写入（例如仅全局范围账号可改模板、或审批人队列也按单据范围），留作后续项，未在本工作流实现。
+
+## 补充（AA3，批次十）：模板维护权限与审批人范围，关闭 Z9 的模板自授权逃逸
+
+Z9 的 Codex 审计 P1（受限范围的审批管理员经 `POST /api/approval/templates` 把自己设为审批人，使他组织的 pending 实例变成"自己的队列"）在本补充中关闭：
+
+- **新权限点 `system:approval:template`**（迁移 063，沿用 ADR-0007：只在权限点第一次出现时授 admin，`verify()` 只查字典）。`POST /api/approval/templates` 与 `POST /api/approval/templates/:id/toggle` 改要该权限点，**不再接受 `system:approval:manage`**；`manage` 仍是"审批管理员全见"（ADR-0015 / Z9 开关）的权限点，两件事从此分开。路由没有 `DELETE`，模板只能新建 / 覆盖 / 启停，三者同门。
+- **全局数据范围**：同两条路由再叠加 `requireGlobalData`（`attachOrgScope` 之后），受限范围（`org` / `subtree` / `dealer` / `self` / 无组织）即使持有新权限点也 403（`GLOBAL_DATA_FORBIDDEN`）。`approval_templates` **没有组织列**，所以没有"组织本地模板"这条放行路径；若日后加 `org_id`，`templateIsGlobal`（`lib/approval.js`，判据只此一处）已按 `org_id == null` 判全局。
+- **审批人范围校验**：`validateApproverScope(db, steps, orgScope)`。指定人员必须是存在的用户（不存在 400 `APPROVER_NOT_FOUND`）；维护者范围受限时，该用户的组织必须在维护者 `orgIds` 内（否则 403 `APPROVER_OUT_OF_SCOPE`），角色 / 权限点型审批人覆盖面无法按组织验证，受限维护者一律拒绝。路由层已要求全局范围，这一道是第二层防线（以及将来放宽路由门时的底线）。
+- **审批人队列可见性**：`instanceVisibleTo` 与 `pendingInstancesFor` 里"当前级审批人是我"的命中改为 `canApproveStep ∧ (模板为全局 ∨ 目标单据在范围内)`（`inQueueScope`）。当前所有模板均为全局，所以对既有数据行为不变；它让"组织本地模板的审批人队列不外溢"成为不变量，而不是靠路由门单独保证。全局范围账号 / 不传 `scopeCtx` 的调用不受影响。
+
+### 仍然成立的边界
+
+- 角色 / 权限型审批人"看得到、批不了"的口径不变（全局模板的队列本来就跨组织）。
+- Z9 开关 `approval_manager_global=1`（默认）下的审批管理员 pending 全见是显式设置，不是模板逃逸，不在本补充范围。
+- **存量**：升级前受限管理员已写入的"自己为审批人"的模板级次不会被自动清理；运维应在升级后用全局账号复核 `approval_steps` 中 `approver_type='user'` 的指派（`GET /api/approval/templates`），并把 `system:approval:manage` 收回给不需要它的受限账号。
+- 模板读取（`GET /templates`、`/meta`）仍是全局配置，沿用原门。
+- 非审计目标：MCP `approval.approve` 的签字人范围口径不变。
+
+### 验证
+
+`tests/approval-scope.test.mjs` 末尾的 AA3 用例：迁移 063 仅 admin 持有；受限管理员（`manage` ± `template`，开关 0）写模板 / 启停均 403 且 `approval_steps` 不变、他组织 pending 在队列 / 详情 / 待办中仍不可见（修复前该用例红）；全局账号只有 `manage` 仍 403，加 `template` 后可写；admin 可写，不存在的审批人 400 且零写；`validateApproverScope` / `templateIsGlobal` 的单元断言。Mac mini Node 22 本地验证，不等于目标平台验收。
