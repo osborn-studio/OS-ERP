@@ -102,10 +102,10 @@ test('driver isolates the server (random secret, temp data dir, loopback random 
 
 test('driver registers every scenario file under tests/browser and each one parses', () => {
   const declared = driver.match(/const SCENARIOS = \[([^\]]+)\]/)[1].split(',').map((s) => s.trim().replace(/'/g, ''))
-  const helpers = new Set(['lib.mjs', 'session-switch.mjs'])
+  const helpers = new Set(['lib.mjs', 'session-switch.mjs', 'scenario-data.mjs'])
   const files = readdirSync(path.join(ROOT, 'tests/browser')).filter((f) => f.endsWith('.mjs') && !helpers.has(f)).map((f) => f.replace(/\.mjs$/, ''))
   assert.deepEqual([...declared].sort(), files.sort())
-  for (const need of ['funds-review', 'scope-notice']) assert.ok(declared.includes(need))
+  for (const need of ['funds-review', 'scope-notice', 'my-scope', 'audit-logs', 'inventory-paging']) assert.ok(declared.includes(need))
   for (const f of readdirSync(path.join(ROOT, 'tests/browser')).filter((x) => x.endsWith('.mjs'))) {
     const r = spawnSync(process.execPath, ['--check', path.join(ROOT, 'tests/browser', f)], { encoding: 'utf8' })
     assert.equal(r.status, 0, `${f}: ${r.stderr}`)
@@ -128,6 +128,26 @@ test('scenarios stay Linux/loopback-only, honour the sandbox switch, and the two
   for (const needle of ["'empty_scope'", "'forbidden'", 'status, 403', 'overviewStatus, 403', 'overviewStatus, 200', 'count(), 0']) {
     assert.ok(scope.includes(needle), `scope-notice must assert ${needle}`)
   }
+})
+
+test('AA8 scenarios assert API outcomes and observable page results, not only text', () => {
+  const myScope = read('tests/browser/my-scope.mjs')
+  for (const needle of ["'/api/auth/my-scope'", 'expectOrgScoped', 'expectAdminScope', 'data.explanations', 'tr[data-current="true"]', 'status, 200']) {
+    assert.ok(myScope.includes(needle), `my-scope must assert ${needle}`)
+  }
+  const audit = read('tests/browser/audit-logs.mjs')
+  for (const needle of ["'content-type'", "'x-export-truncated'", 'waitForEvent(\'download\')', 'AUDIT_LOG_EXPORT', 'before + 1', 'detail.rows', "'forbidden'", '.status(), 403', 'records.every', 'requests, []']) {
+    assert.ok(audit.includes(needle), `audit-logs must assert ${needle}`)
+  }
+  const paging = read('tests/browser/inventory-paging.mjs')
+  for (const needle of ['assertExactlyOnce', "'total' in secondData, false", 'next_after_id', 'has_more', 'new Set([...page1, ...page2]).size', '上一页', '下一页']) {
+    assert.ok(paging.includes(needle), `inventory-paging must assert ${needle}`)
+  }
+  const data = read('tests/browser/scenario-data.mjs')
+  for (const needle of ["'total' in d, first", "'summary' in d, first", 'new Set(all).size, all.length']) {
+    assert.ok(data.includes(needle), `scenario-data must assert ${needle}`)
+  }
+  assert.match(read('tests/browser-scenario-contracts.test.mjs'), /scenario-data\.mjs/)
 })
 
 test('ci.md documents the browser job and states the scenarios are unexecuted until hosted CI runs', () => {
