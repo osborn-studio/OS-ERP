@@ -11,14 +11,14 @@
 // 【注意】本文件由脚本写出：**文件标识块也必须由脚本输出**，否则下次 gen:api 会把它冲掉 ——
 //   "登记了不等于守住了"。改格式请改 scripts/gen-api-types.mjs。
 // ============================================================================
-// 路径 525 条 ｜ 标签 34 个
+// 路径 526 条 ｜ 标签 34 个
 //
 // 用法：
 //   import { typedGet, typedPost } from '../api/typed'
 //   typedGet('/api/purchase/chain/overview')   // 路径写错编译期就报
 
 export const OPENAPI_VERSION = '1.43.0'
-export const API_ROUTE_COUNT = 525
+export const API_ROUTE_COUNT = 526
 
 /** 全部已登记的接口路径 */
 export type ApiRoute =
@@ -265,6 +265,7 @@ export type ApiRoute =
   | '/api/mcp/confirmations/{token}/approve'
   | '/api/mcp/confirmations/{token}/reject'
   | '/api/mcp/limits'
+  | '/api/mcp/limits/quota'
   | '/api/mcp/limits/tokens'
   | '/api/mcp/logs'
   | '/api/mcp/scopes'
@@ -793,6 +794,7 @@ export type ApiRouteMap = {
   '/api/mcp/confirmations/{token}/approve': { post: true }
   '/api/mcp/confirmations/{token}/reject': { post: true }
   '/api/mcp/limits': { get: true }
+  '/api/mcp/limits/quota': { get: true }
   '/api/mcp/limits/tokens': { get: true }
   '/api/mcp/logs': { get: true }
   '/api/mcp/scopes': { get: true }
@@ -1330,6 +1332,7 @@ export const API_ROUTES: readonly ApiRoute[] = [
   '/api/mcp/confirmations/{token}/approve',
   '/api/mcp/confirmations/{token}/reject',
   '/api/mcp/limits',
+  '/api/mcp/limits/quota',
   '/api/mcp/limits/tokens',
   '/api/mcp/logs',
   '/api/mcp/scopes',
@@ -1859,6 +1862,7 @@ export const ROUTE_METHODS: Record<ApiRoute, string[]> = {
   '/api/mcp/confirmations/{token}/approve': ['post'],
   '/api/mcp/confirmations/{token}/reject': ['post'],
   '/api/mcp/limits': ['get'],
+  '/api/mcp/limits/quota': ['get'],
   '/api/mcp/limits/tokens': ['get'],
   '/api/mcp/logs': ['get'],
   '/api/mcp/scopes': ['get'],

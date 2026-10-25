@@ -747,6 +747,7 @@ MCP 按令牌的速率限制与日配额（ADR-0056 / AD9）
 | `createMcpRateLimiter` | fn | — | — | mcp/server.js |
 | `dailyQuotaConfigured` | fn | — | — | — |
 | `dailyQuotaState` | fn | — | — | — |
+| `dailyQuotaUsage` | fn | — | — | — |
 | `mcpRatePolicy` | fn | — | — | — |
 | `rateStoreFromEnv` | fn | — | — | — |
 | `recentLimitedByToken` | fn | — | — | — |

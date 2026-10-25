@@ -1,5 +1,5 @@
 // AF11：GET /api/mcp/limits/tokens（仅 system.mcp.manage）与 db 模式桶表的近期触顶统计 recentLimitedByToken。
-// 桶表只记**已放行**的调用（被拒的只读不写），所以这里的 `rate_limited_recent` = 当前+上一窗口里该令牌触及上限的窗口数（0..2），不是 429 的精确次数。
+// AG9：`rate_limited_recent` = 当前+上一窗口里该令牌被速率额度拒绝（429）的精确次数，来自迁移 075 的 denied 行（精确值的专项用例在 mcp-quota-denied.test.mjs）。
 // 集成部分在全新临时数据目录 + 随机回环端口上起服务（GML_RUNTIME_MODE=test）。
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -19,27 +19,24 @@ import { recentLimitedByToken, mcpRatePolicy } from '../server/lib/mcp-rate-limi
 
 const require = createRequire(import.meta.url)
 const M073 = require('../server/db/migrations/073_mcp_rate_buckets.cjs')
+const M075 = require('../server/db/migrations/075_mcp_rate_denied_kind.cjs')
 const ROOT = fileURLToPath(new URL('../', import.meta.url))
 const W = 60_000
 
 test('recentLimitedByToken: counts current+previous windows at the ceiling, per token, scoped, never older', () => {
   const db = new Database(':memory:')
-  M073.up(db)
+  M073.up(db); M075.up(db)
   const t = 2_000_000_000 - (2_000_000_000 % W) + 5_000
   const ws = t - (t % W)
   const p = mcpRatePolicy({ GML_MCP_RATE_STORE: 'db', GML_MCP_TOKEN_RPM: '3', GML_MCP_WRITE_RPM: '2' })
   const put = db.prepare('INSERT INTO mcp_rate_buckets (token_key, window_start, kind, count) VALUES (?,?,?,?)')
-  put.run('cosmetic|1', ws, 'all', 3) // 当前窗口触顶
-  put.run('cosmetic|1', ws - W, 'write', 2) // 上一窗口写额度触顶
-  put.run('cosmetic|2', ws, 'all', 2) // 未触顶
-  put.run('cosmetic|3', ws - 2 * W, 'all', 99) // 太旧
-  put.run('other|4', ws, 'all', 99) // 别的库
+  put.run('cosmetic|1', ws, 'denied', 3) // 当前窗口 3 次被拒
+  put.run('cosmetic|1', ws - W, 'denied', 2) // 上一窗口 2 次
+  put.run('cosmetic|2', ws, 'all', 2) // 只有放行行：不算
+  put.run('cosmetic|3', ws - 2 * W, 'denied', 99) // 太旧
+  put.run('other|4', ws, 'denied', 99) // 别的库
   const m = recentLimitedByToken(db, { scope: 'cosmetic', policy: p, now: () => t })
-  assert.deepEqual([...m.entries()], [[1, 2]])
-  // 同一窗口 all 与 write 同时触顶只算一次
-  put.run('cosmetic|5', ws, 'all', 3)
-  put.run('cosmetic|5', ws, 'write', 2)
-  assert.equal(recentLimitedByToken(db, { scope: 'cosmetic', policy: p, now: () => t }).get(5), 1)
+  assert.deepEqual([...m.entries()], [[1, 5]])
   db.close()
 })
 
@@ -112,7 +109,7 @@ test('GET /api/mcp/limits/tokens: db mode lists per-token recent ceiling hits to
   assert.deepEqual(Object.keys(d).sort(), ['store', 'tokens', 'truncated', 'window_seconds'])
   const byName = Object.fromEntries(d.tokens.map((x) => [x.name, x]))
   assert.deepEqual(Object.keys(byName['tok-busy']).sort(), ['id', 'name', 'rate_limited_recent'])
-  assert.ok(byName['tok-busy'].rate_limited_recent >= 1)
+  assert.equal(byName['tok-busy'].rate_limited_recent, 1)
   assert.equal(byName['tok-quiet'].rate_limited_recent, 0)
   const raw = JSON.stringify(r.body)
   assert.ok(!raw.includes(busy.token) && !raw.includes(quiet.token), 'no token plaintext')
