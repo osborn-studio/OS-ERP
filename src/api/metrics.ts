@@ -56,6 +56,8 @@ export interface MetricsDictResponse {
   total: number
   modules: string[]
   hidden_count?: number
+  /** AH2：`hidden_count` 中「有权限、只因没有范围口径（hide 模式）而被折叠」的条数；其余是缺业务权限 */
+  hidden_scopeless?: number
   /** 调用者是否受限（含绑定主体）；受限时 `scoped: true` 的行显示「按范围计算」 */
   scope_restricted?: boolean
 }
@@ -77,6 +79,15 @@ export function showsScopedMarker(m: Pick<MetricItem, 'scoped'>, restricted: boo
 export function hiddenMetricsNote(hidden?: number | null): string | null {
   const n = Number(hidden) || 0
   return n > 0 ? `另有 ${n} 项指标未显示：当前账号缺少对应业务查看权限，或其数据范围下该指标没有范围口径（见设置「受限账号可见的全局口径指标」）` : null
+}
+
+/**
+ * AH2：hide 模式下受限账号的页面不整页隐藏——有范围口径的指标照常显示，无范围口径的只折叠成一句「已隐藏 N 项」。
+ * 返回追加在隐藏说明后的原因句；没有被折叠项时返回 undefined（沿用服务端 `hidden_reason` 或默认文案）。
+ */
+export function scopelessHiddenReason(hiddenScopeless?: number | null): string | undefined {
+  const n = Math.floor(Number(hiddenScopeless)) || 0
+  return n > 0 ? `其中已隐藏 ${n} 项全局口径指标（没有可按你的组织范围计算的口径），其余有范围口径的指标照常显示；管理员可在设置「受限账号可见的全局口径指标」中改为标注后显示。` : undefined
 }
 
 export const METRICS_PATH = '/system/metrics'

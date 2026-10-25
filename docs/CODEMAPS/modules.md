@@ -137,7 +137,7 @@
 | `decideApproval` | fn | POST /api/approval/instances/:id/decide | approval.approve | lib/im-sync.js, mcp/tools.js |
 | `describeApprover` | fn | — | — | — |
 | `getInstance` | fn | GET /api/approval/instances/:id | — | — |
-| `instanceVisibleTo` | fn | GET /api/approval/instances/:id | — | — |
+| `instanceVisibleTo` | fn | GET /api/approval/instances/:id | — | lib/metrics.js |
 | `listInstances` | fn | GET /api/approval/instances | — | — |
 | `listTemplates` | fn | GET /api/approval/templates<br>POST /api/approval/templates<br>POST /api/approval/templates/:id/toggle | — | — |
 | `matchTemplate` | fn | — | — | — |

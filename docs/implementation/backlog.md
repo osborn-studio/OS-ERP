@@ -170,12 +170,24 @@
 | 新浏览器场景（审计 FTS 状态、MCP 限速卡、指标隐藏说明）未执行 | Linux CI | AE11 |
 | `dmserver` 上的所有性能数字均未复测 | 目标主机 | 全批 |
 
+## 第十七批 scopeless 指标评估结论 AH2
+
+AH2 逐条评估了字典里**全部**仍为 `scopeless` 的指标（评估时只剩 3 条，不是路线图预期的"至少再接入 5 条"；其余 22 条在 AD1/AF2/AG2 已接入）。`node scripts/check-metrics-scope.mjs --report` 随时重列。
+
+| 指标 | 结论 | 分类 | 残留 |
+|---|---|---|---|
+| `approval_pending` | **已接入范围**：受限范围下对 pending 实例套 `instanceVisibleTo`（与审批中心概览同一判据），`bound: 'deny'` | — | — |
+| `credit_usage` | 不接：`dealers` 无组织列（经销商是客户，ADR-0026）；用"有订单的经销商"反推归属是派生关系不是归属 | `no_org_column` | 若产品要给经销商指定归属组织：需迁移加列 + 档案路由补谓词 + 指标复用，另开工作流 |
+| `over_credit_dealers` | 同上 | `no_org_column` | 同上 |
+
+`pending` 分类目前为 0 条；守卫在 `pending` 超过阈值（默认 2）时在 CI 上 `::warning::`，不失败。
+
 ## 第十六批后仍 open 的残留
 
 | 位置 | 残留 | 来源 |
 |---|---|---|
 | `release-candidate.yml`（含 `dry_run`）、`capacity-smoke`、`dependency-review`、`audit-no-fts5`、夜间工作流 | 均未在托管 runner 上实跑（PR #4–#11 未合并，main 上没有这些文件） | AG1/AG8 |
-| 仍声明为 `scopeless` 的指标 | 每条有理由但未逐条评估是否可接入范围；`hide` 模式下受限账号整体隐藏 | AG2 |
+| 仍声明为 `scopeless` 的指标 | ~~未逐条评估~~：AH2 已评估（见上节），剩 2 条 `no_org_column`；`hide` 模式只折叠它们并给"已隐藏 N 项"说明 | AG2 → AH2 |
 | `explain-plans.json` | 指纹取自默认小合成库；大数据量下的计划（如 OMS 密集窗口）未入快照；`ANALYZE` 政策仍只在文档 | AG3/AF3 |
 | AG4 基准表 | 数值取自节奏修复前的脚本版本；修复后未重跑 | AG4 |
 | 锚点意图 | `--require-intent-key-id` 默认关闭，过渡何时结束无计划；`baseline-anchor-list-missing` 分支仍无测试；能写库者可伪造未签名意图 | AG5/AF5 |

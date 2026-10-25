@@ -135,3 +135,36 @@
 ### Codex 审计（AG2）
 
 `codex exec -m gpt-6.1-sol --sandbox read-only`，静态审查加只读 mock 校验（32 种可见性组合、12 个应付谓词 / 参数用例），对象为 AG2 提交。结论：**无高 / 中项**。谓词与结算单 / 应付台账路由同源（含 `voided` 排除、NULL 组织与空 / none / dealer 范围）；守卫、`hide` 过滤与 `scoped` 标记共用严格的 `isScopeAware`，无重复 key 或漏声明；`values` / `catalog` / 字典 / `keys` 过滤 / 空 `allow` 均无全局数绕过；绑定主体在 `label` 下也看不到 `payable_open`。其余两点是已记录的边界：守卫只验声明不验谓词；`label` 下受限账号仍可取三条 scopeless 指标的全局数（带 `scoped:false`，既定语义）。
+
+## 补充 3：scopeless 清单逐条评估、可机读分类与 `hide` 模式的"已隐藏 N 项"（AH2）
+
+日期：2026-10-24。AG2 之后还剩 3 条 `scopeless` 指标，理由是自由文本；`hide` 模式下它们与"缺业务权限"的指标一起笼统计入 `hidden_count`。本补充逐条评估、把理由变成可机读分类，并让页面把"折叠的全局口径指标"与"缺权限"分开说明。
+
+### 评估结果（与路线图预期不同）
+
+路线图预期"至少再接入 5 个"，但评估时字典 25 条里只剩 3 条 `scopeless`（其余 22 条已在 AD1 / AF2 / AG2 接入），没有 5 个可接。实际：
+
+| 指标 | 结论 | 理由 |
+|---|---|---|
+| `approval_pending` | **接入范围**（`scopeAware: true`、`bound: 'deny'`） | 审批中心概览 / 列表在受限范围下用 `instanceVisibleTo`（提交人 ∪ 当前级审批人 ∪ 管理员全见 ∪ 范围内单据，ADR-0015 / 0037）。指标对 pending 实例逐条套同一个函数，不另写第二份判据；只扫 pending（概览会扫全表）。AG2 当时"按单据类型逐一套范围会得到与列表不一致的第二套口径"的顾虑，用"直接复用 `instanceVisibleTo`"消解。全局范围仍是一条 `COUNT(*)`；绑定主体一律 0 且不可见 |
+| `credit_usage` / `over_credit_dealers` | 保持 `scopeless`，分类 `no_org_column` | `dealers` 没有组织列（经销商是客户而非本方组织，ADR-0026）。用"有订单的经销商"反推归属是派生关系，同一经销商可同时挂在多个组织的订单上，会得到与档案路由不一致的口径。登记 backlog：若产品要给经销商指定归属组织，需迁移加列 + 档案路由补谓词 + 指标复用 |
+
+### 契约
+
+- `scopeless` 改为对象 `{ category, reason, backlog? }`：`category` ∈ `global_by_nature`（口径天然全公司）/ `no_org_column`（业务上有归属但没有可用组织列）/ `pending`（能接入、尚未做）；`reason` trim 后 ≥ 20 字；**`pending` 必须带 `backlog`**（`docs/…` 路径或 http(s) 链接），其余分类可选。旧的字符串写法一律红。
+- `check-metrics-scope.mjs --report`（`--json` 机读）：只列 scopeless 指标的 key / 分类 / 模块 / 权限点 / backlog / 理由，并按分类汇总。
+- `pending` 超过阈值（默认 2，`--max-pending N` / `METRICS_MAX_PENDING`）时**只告警不失败**：CI 上输出 `::warning ::` 注解，本机输出 `warning:` 行，退出码不变。当前 `pending` 为 0。
+- `GET /api/metrics`、`/values`、`/catalog` 新增 `hidden_scopeless`：`hidden_count` 中"调用者有权限、只因无范围语义被 `hide` 折叠"的条数（`label` 模式与全局调用者为 0；`/values?keys=` 按所请求 key 统计）。旧字段不变。
+- 页面：受限账号在 `hide` 模式下**从不整页隐藏**——有范围口径的指标照常显示、标"按范围计算"，无范围口径的折叠成顶部说明里的一句"其中已隐藏 N 项全局口径指标…"（`Metrics.tsx` 只改说明块的 `reason` 入参，版式与 `data-count` 钩子不变）。
+- 审批管理员（`admin` / 超管 / 持 `system:approval:manage`）在受限范围下按审批中心既有契约（ADR-0015，设置 `approval_manager_global` 默认开）仍见全部 pending，指标与其概览一致；关掉该设置后与普通账号同口径。这不是新泄漏：同一数字本来就在其审批中心概览里。
+- 受限范围账号（持有 `approval.instance.view` / `system:approval:view` / `system:approval:manage` 任一）在默认 `hide` 下多收到 `approval_pending`，值与其审批中心概览的"待审批"一致，`scoped: true`；绑定门店 / 经销商账号不可见。`label` 与 `hide` 数值相同。
+
+### 测试
+
+`tests/metrics-scopeless-report.test.mjs`（先红后绿）：分类 / 理由 / `pending` 需 backlog / 旧字符串被拒；`--report` 与 `--json`；阈值只告警不失败。`tests/metrics-perms.test.mjs`：`approval_pending` 受限值 = 范围内单据 + 本人提交（他组织、无解析器类型、非 pending 均不计）、等于同账号审批概览、空范围不增加、绑定账号不可见；`hide` 下 `hidden_scopeless` 与"缺权限"分开计数。`tests/inventory-scope.test.mjs` 里 `approval_pending` 的 `scoped` 断言由 `false` 改为 `true`。
+
+### 仍 open / 边界
+
+- 经销商信用两条仍是全局口径（`no_org_column`）。
+- 本机未跑浏览器：说明块文案变化未被场景覆盖（既有场景只断言 testid / `data-count`）；Linux CI 验证。
+- 校验在 Mac mini Node 22 上，不等于 Linux / 目标平台验收。

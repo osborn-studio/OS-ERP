@@ -41,6 +41,7 @@ import { readSetting } from './settings.js'
 import { salesScopeSql, omsOrderScopeSql } from './sales-order.js'
 import { ocScope, selfCustomerIdReadOnly } from './order-center.js'
 import { boundStoreId, isExternalSubject } from './store-binding.js'
+import { instanceVisibleTo } from './approval.js'
 
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100
 const num = (v) => Number(v) || 0
@@ -53,7 +54,7 @@ const days = (p, dflt = 30) => {
 
 // AD1（ADR-0053）：范围参数。`compute(db, { days, orgScope })`；不传 orgScope = 全局（内部调用 / 看板口径不变）。
 // 库存类走 `stockScopeSql`（仓库所属组织），采购订单类走 `purchaseOrderScopeSql`（入库仓所属组织），判据各只有一份。
-// 带 `scopeAware: true` 的指标才会按范围收窄；其余指标必须带 `scopeless: '<理由>'`（AG2，`scripts/check-metrics-scope.mjs` 守卫），
+// 带 `scopeAware: true` 的指标才会按范围收窄；其余指标必须带 `scopeless: { category, reason, backlog? }`（AH2 起可机读，category ∈ global_by_nature / no_org_column / pending）（AG2，`scripts/check-metrics-scope.mjs` 守卫），
 // 对受限调用者仍是全局口径，由 `metricScopedFlags` 标 `scoped: false`，前端据此标注「全局口径」。
 // 绑定主体（门店 / 经销商账号）对库存 / 采购订单类同样失败关闭（Codex AF2 高项：此前 data_scope=all 的绑定账号会拿全局数）
 const stockSc = (p, alias = 'st') => stockScopeSql(p?.subjectBound ? { scope: 'none' } : p?.orgScope, alias)
@@ -568,7 +569,12 @@ export const METRICS = [
     source: 'dealers',
     note: '整体口径。单客户超限请用 dealer 维度看明细 —— 整体 60% 里可能藏着几个 120%。' +
       '无范围语义（AF2）：经销商档案路由本身没有组织谓词，指标不另造；受限范围下默认隐藏',
-    scopeless: '经销商是客户而非本方组织（ADR-0026），dealers 表与经销商档案路由都没有组织归属谓词，指标不另造第二套口径',
+    // AH2：逐条评估结论——dealers 表没有组织列（经销商是客户，ADR-0026）；用"有订单的经销商"反推归属是派生关系而非归属，不接
+    scopeless: {
+      category: 'no_org_column',
+      reason: '经销商是客户而非本方组织（ADR-0026），dealers 表与经销商档案路由都没有组织归属列或谓词，指标不另造第二套口径',
+      backlog: 'docs/implementation/backlog.md#第十七批-scopeless-指标评估结论-ah2'
+    },
     compute: (db) => {
       const r = db.prepare(
         `SELECT COALESCE(SUM(credit_used),0) u, COALESCE(SUM(credit_limit),0) l
@@ -588,7 +594,11 @@ export const METRICS = [
     exclusions: '仅统计授信额度 > 0 的经销商',
     source: 'dealers',
     note: '「占用率」是整体视角，这个才是能直接催办的名单长度',
-    scopeless: '与 credit_usage 同源：经销商档案没有组织归属谓词（经销商是客户而非本方组织），名单长度无从按组织收窄',
+    scopeless: {
+      category: 'no_org_column',
+      reason: '与 credit_usage 同源：dealers 表没有组织归属列（经销商是客户而非本方组织），名单长度无从按组织收窄',
+      backlog: 'docs/implementation/backlog.md#第十七批-scopeless-指标评估结论-ah2'
+    },
     compute: (db) =>
       num(db.prepare(
         `SELECT COUNT(*) v FROM dealers
@@ -608,9 +618,19 @@ export const METRICS = [
     exclusions: '不含已通过 / 已驳回 / 已撤回',
     source: 'approval_instances',
     note: '这是「卡住的工作流」规模。与采购待办数不是一回事：待办是「该做」，待审批是「等着别人放行」',
-    scopeless: '审批实例按提交人 / 当前审批人 / 管理员全见可见（ADR-0015），不是单一组织维度，没有可复用的组织谓词',
-    compute: (db) =>
-      num(db.prepare(`SELECT COUNT(*) v FROM approval_instances WHERE status='pending'`).get().v)
+    // AH2：改为按范围计算——受限范围下对 pending 实例逐条套 `instanceVisibleTo`（审批中心列表 / 概览用的同一份可见性判据：
+    // 提交人 ∪ 当前级审批人 ∪ 管理员全见 ∪ 范围内单据，ADR-0015 / 0037），不另写第二份；只扫 pending（概览会扫全表）。全局范围一条 COUNT。
+    scopeAware: true,
+    bound: 'deny',
+    compute: (db, p) => {
+      if (p?.subjectBound) return 0
+      if (!isScopeRestricted(p?.orgScope)) return num(db.prepare(`SELECT COUNT(*) v FROM approval_instances WHERE status='pending'`).get().v)
+      const u = p?.user || {}
+      const actor = { id: u.id || u.uid || null, name: u.name || u.username || null }
+      const scopeCtx = { orgScope: p.orgScope, user: p.user || {} }
+      return db.prepare(`SELECT * FROM approval_instances WHERE status='pending'`).all()
+        .filter((r) => instanceVisibleTo(db, r, actor, scopeCtx)).length
+    }
   },
   {
     key: 'closed_order_ratio',
@@ -679,7 +699,8 @@ export const METRICS_GLOBAL_MODE_KEY = 'metrics_global_for_restricted'
  * @param {boolean} [p.subjectBound] 账号绑定了门店 / 经销商或是外部订货主体（视同受限，即使数据范围为全部）
  * @param {object|null} [p.user] 调用者（绑定主体对声明了 `bound` 的指标需要看 role / store_id，见 `boundAllows`）
  * @param {string[]|null} [p.keys] 只对这些 key 计数（`/values?keys=`）；不传 = 全部
- * @returns {{ allow: Set<string>, hidden: number }} hidden = 在统计范围内被隐藏的已知指标数
+ * @returns {{ allow: Set<string>, hidden: number, hiddenScopeless: number }} hidden = 在统计范围内被隐藏的已知指标数；
+ *   hiddenScopeless = 其中"调用者有权限、仅因无范围语义（hide 模式）而被折叠"的条数（AH2）
  */
 export function metricVisibility(db, { canPerm, orgScope = null, keys = null, subjectBound = false, user = null } = {}) {
   // 绑定了门店 / 经销商的账号即使 data_scope=all 也是受限调用者（其余模块各自按绑定收口，指标没有）
@@ -688,14 +709,22 @@ export function metricVisibility(db, { canPerm, orgScope = null, keys = null, su
   const hideScopeless = restricted && readSetting(db, METRICS_GLOBAL_MODE_KEY) !== 'label'
   const allow = new Set()
   let hidden = 0
+  let hiddenScopeless = 0
   const considered = Array.isArray(keys) && keys.length ? keys.filter((k) => METRIC_BY_KEY[k]) : METRICS.map((m) => m.key)
   for (const m of METRICS) {
     const ok = (m.perms || []).some((c) => canPerm(c)) && !(hideScopeless && !isScopeAware(m)) &&
       !(subjectBound && !boundAllows(m, user))
     if (ok) allow.add(m.key)
   }
-  for (const k of new Set(considered)) if (!allow.has(k)) hidden++
-  return { allow, hidden }
+  for (const k of new Set(considered)) {
+    if (allow.has(k)) continue
+    hidden++
+    // AH2：其中"只因无范围语义被折叠"的条数——调用者有权限（且绑定主体规则放行），但 hide 模式把全局口径指标收起来了。
+    // 前端据此给"已隐藏 N 项全局口径指标"的说明，而不是把它们混在"缺权限"里。
+    const m = METRIC_BY_KEY[k]
+    if (hideScopeless && !isScopeAware(m) && (m.perms || []).some((c) => canPerm(c)) && !(subjectBound && !boundAllows(m, user))) hiddenScopeless++
+  }
+  return { allow, hidden, hiddenScopeless }
 }
 
 /** 取指标值。keys 不传则算全部；返回 { key: value } */

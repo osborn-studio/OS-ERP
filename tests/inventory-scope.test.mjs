@@ -968,7 +968,7 @@ test('AD1: /api/metrics values / catalog / dictionary follow the warehouse-org s
     // AF2：销售 / OMS 已按范围计算（scoped:true）；应付 / 审批仍是全局口径
     for (const k of ['sales_amount', 'gmv']) assert.equal(a.scoped[k], true, k)
     assert.equal(a.scoped.payable_open, true, 'AG2: payable_open is scope-aware')
-    assert.equal(a.scoped.approval_pending, false)
+    assert.equal(a.scoped.approval_pending, true, 'AH2: approval_pending is scope-aware')
     const g = await vals(f.admin)
     assert.ok(Object.values(g.scoped).every((x) => x === true), 'a global caller sees every metric as scoped:true')
   })
@@ -990,7 +990,7 @@ test('AD1: /api/metrics values / catalog / dictionary follow the warehouse-org s
     const dict = okData(await api('/api/metrics?days=30', { token: A.token })).groups.flatMap((g) => g.items)
     assert.equal(dict.find((x) => x.key === 'purchase_amount').scoped, true)
     assert.equal(dict.find((x) => x.key === 'gmv').scoped, true)
-    assert.equal(dict.find((x) => x.key === 'approval_pending').scoped, false)
+    assert.equal(dict.find((x) => x.key === 'approval_pending').scoped, true)
     const adm = okData(await api('/api/metrics/catalog', { token: f.admin })).items
     assert.ok(adm.every((x) => x.scoped === true))
   })

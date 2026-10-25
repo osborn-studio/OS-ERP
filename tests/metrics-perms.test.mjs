@@ -183,9 +183,11 @@ test('AE1: metrics_global_for_restricted hides scope-less metrics from restricte
     assert.deepEqual(Object.keys(v.values).sort(), [...SCOPE_AWARE].sort())
     assert.ok(Object.values(v.scoped).every((x) => x === true))
     assert.equal(v.hidden_count, GLOBAL_ONLY.length)
+    assert.equal(v.hidden_scopeless, GLOBAL_ONLY.length, 'AH2: the caller holds every permission, so all hidden ones are the scope-less collapse')
     // AF2：销售 / OMS / 订货中心 / POS 不再被 hide 摘掉
     for (const k of ['sales_amount', 'gmv', 'oc_order_amount', 'pos_sales']) assert.ok(k in v.values, `${k} is scope-aware now`)
-    for (const k of ['approval_pending', 'credit_usage', 'over_credit_dealers']) assert.ok(!(k in v.values), `${k} stays hidden`)
+    for (const k of ['credit_usage', 'over_credit_dealers']) assert.ok(!(k in v.values), `${k} stays hidden`)
+    assert.ok('approval_pending' in v.values, 'AH2: approval_pending is scope-aware now')
     assert.ok('payable_open' in v.values, 'AG2: payable_open is scope-aware now')
     const cat = okData(await api('/api/metrics/catalog', { token: A.token }))
     assert.deepEqual(cat.items.map((x) => x.key).sort(), [...SCOPE_AWARE].sort())
@@ -194,6 +196,8 @@ test('AE1: metrics_global_for_restricted hides scope-less metrics from restricte
     assert.equal(dict.total, SCOPE_AWARE.length)
     assert.strictEqual(dict.scope_restricted, true, 'AG11: restricted caller is flagged on the dictionary response')
     assert.equal(dict.hidden_count, GLOBAL_ONLY.length)
+    assert.equal(dict.hidden_scopeless, GLOBAL_ONLY.length)
+    assert.equal(cat.hidden_scopeless, GLOBAL_ONLY.length)
   })
 
   await t.test('label: scope-less metrics return with scoped:false (ADR-0053 behaviour)', async () => {
@@ -202,6 +206,7 @@ test('AE1: metrics_global_for_restricted hides scope-less metrics from restricte
     assert.equal(Object.keys(v.values).length, METRICS.length)
     for (const k of GLOBAL_ONLY) assert.equal(v.scoped[k], false, k)
     assert.equal(v.hidden_count, 0)
+    assert.equal(v.hidden_scopeless, 0, 'AH2: label mode collapses nothing')
     assert.equal(okData(await api('/api/metrics/catalog', { token: A.token })).items.length, METRICS.length)
   })
 
@@ -256,9 +261,9 @@ const AF2_GROUPS = {
   oc: ['oc_order_amount', 'oc_fill_rate'],
   pos: ['pos_sales']
 }
-const AF2_SCOPELESS = ['approval_pending', 'credit_usage', 'over_credit_dealers'] // AG2: payable_open moved to scope-aware
+const AF2_SCOPELESS = ['credit_usage', 'over_credit_dealers'] // AG2: payable_open, AH2: approval_pending moved to scope-aware
 
-test('AF2: sales / OMS / order-centre / POS metrics are scope-aware; credit / payable / approval stay scope-less', () => {
+test('AF2: sales / OMS / order-centre / POS metrics are scope-aware; credit stays scope-less', () => {
   for (const k of Object.values(AF2_GROUPS).flat()) assert.equal(METRIC_BY_KEY[k].scopeAware, true, k)
   for (const k of AF2_SCOPELESS) assert.notEqual(METRIC_BY_KEY[k].scopeAware, true, k)
   for (const k of [...AF2_GROUPS.sales, ...AF2_GROUPS.oms]) assert.equal(METRIC_BY_KEY[k].bound, 'deny', k)
@@ -366,7 +371,7 @@ test('AF2: restricted callers get values computed over their scope (sales / OMS 
     assert.ok(a.values.pos_sales >= 7 && a.values.pos_sales < g.values.pos_sales)
   })
 
-  await t.test('hide mode keeps them; label mode gives the same numbers; credit / payable / approval stay scope-less', async () => {
+  await t.test('hide mode keeps them; label mode gives the same numbers; credit stays scope-less', async () => {
     for (const k of Object.values(AF2_GROUPS).flat()) assert.ok(k in a.values, `${k} present under hide`)
     for (const k of AF2_SCOPELESS) assert.ok(!(k in a.values), `${k} hidden under hide`)
     const set = (value) => api('/api/meta/settings', { token: f.admin, method: 'PUT', body: { key: 'metrics_global_for_restricted', value, reason: 'af2 test' } })
@@ -433,8 +438,11 @@ test('AF2: restricted callers get values computed over their scope (sales / OMS 
 test('AG2: every metric declares scopeAware:true xor scopeless:<reason>; remaining scope-less ones carry a written reason', () => {
   assert.deepEqual(classifyMetrics(METRICS).problems, [])
   const scopeless = METRICS.filter((m) => !isScopeAware(m)).map((m) => m.key).sort()
-  assert.deepEqual(scopeless, ['approval_pending', 'credit_usage', 'over_credit_dealers'])
-  for (const k of scopeless) assert.ok(String(METRIC_BY_KEY[k].scopeless).length >= 20, k)
+  assert.deepEqual(scopeless, ['credit_usage', 'over_credit_dealers'])
+  for (const k of scopeless) {
+    assert.ok(METRIC_BY_KEY[k].scopeless.reason.trim().length >= 20, k)
+    assert.equal(METRIC_BY_KEY[k].scopeless.category, 'no_org_column', k)
+  }
   assert.equal(METRIC_BY_KEY.payable_open.scopeAware, true)
   assert.equal(METRIC_BY_KEY.payable_open.bound, 'deny')
   assert.equal(METRIC_BY_KEY.payable_open.scopeless, undefined)
@@ -444,13 +452,14 @@ test('AG2: classifyMetrics rejects undeclared, short-reason, double-declared and
   const base = { key: 'x', perms: ['a'] }
   const bad = (m) => classifyMetrics([{ ...base, ...m }]).problems.map((x) => x.key)
   assert.deepEqual(bad({}), ['x'], 'undeclared')
-  assert.deepEqual(bad({ scopeless: 'too short' }), ['x'], 'reason < 20 chars')
-  assert.deepEqual(bad({ scopeless: '   ' + 'x'.repeat(10) }), ['x'], 'trimmed length counts')
-  assert.deepEqual(bad({ scopeAware: true, scopeless: 'a long enough written reason' }), ['x'], 'both')
+  const sl = (reason) => ({ category: 'global_by_nature', reason })
+  assert.deepEqual(bad({ scopeless: sl('too short') }), ['x'], 'reason < 20 chars')
+  assert.deepEqual(bad({ scopeless: sl('   ' + 'x'.repeat(10)) }), ['x'], 'trimmed length counts')
+  assert.deepEqual(bad({ scopeAware: true, scopeless: sl('a long enough written reason') }), ['x'], 'both')
   assert.deepEqual(bad({ scopeAware: 'yes' }), ['x'], 'truthy is not true')
   assert.deepEqual(bad({ scopeAware: false }), ['x'], 'false is not a declaration')
   assert.deepEqual(bad({ scopeAware: true }), [])
-  assert.deepEqual(bad({ scopeless: 'a long enough written reason' }), [])
+  assert.deepEqual(bad({ scopeless: sl('a long enough written reason') }), [])
 })
 
 test('AG2: the guard script exits 0, --list agrees with the runtime visibility flag', () => {
@@ -499,4 +508,85 @@ test('AG2: payable_open follows the purchase-settlement org predicate for restri
   const B = await f.account('ag2_bound', 'warehouse', { data_scope: 'all' })
   db.prepare('UPDATE users SET data_scope=?, store_id=? WHERE id=?').run('all', store.id, B.id)
   assert.ok(!('payable_open' in (await vals(await f.login(B.username, B.password))).values))
+})
+
+// ---------------------------------------------------------------------------
+// AH2（ADR-0057 补充 3）：approval_pending 接入范围；hide 模式只折叠无范围语义的指标
+// ---------------------------------------------------------------------------
+test('AH2: approval_pending follows the approval-centre visibility predicate for restricted callers', { timeout: 300000 }, async (t) => {
+  const f = await server(t)
+  const { db, api } = f
+  const whA = db.prepare("SELECT id, org_id FROM warehouses WHERE code='WH01'").get()
+  const whB = db.prepare("SELECT id, org_id FROM warehouses WHERE code='WH03'").get()
+  assert.notEqual(whA.org_id, whB.org_id)
+  const grant = db.prepare('INSERT OR IGNORE INTO role_permissions (role_code, perm_code) VALUES (?,?)')
+  // 只给查看权限：system:approval:manage 会让账号成为审批管理员（ADR-0015「待我审批」全见），那是下面单独验证的另一条路径
+  grant.run('warehouse', 'approval.instance.view')
+  grant.run('warehouse', 'system:metrics:view')
+  const A = await f.account('ah2_wh_a', 'warehouse', { org_id: whA.org_id, data_scope: 'org' })
+  const N = await f.account('ah2_none', 'warehouse', { data_scope: 'org' })
+  db.prepare('UPDATE users SET org_id=NULL WHERE id=?').run(N.id)
+  const Ntok = await f.login(N.username, N.password)
+  const get = async (token) => okData(await api('/api/metrics/values?keys=approval_pending', { token }))
+  const before = { a: (await get(A.token)).values.approval_pending, g: (await get(f.admin)).values.approval_pending, n: (await get(Ntok)).values.approval_pending }
+
+  const today = "date('now','localtime')"
+  const so = db.prepare(`INSERT INTO sales_orders (doc_no, channel, order_date, status, total_qty, receivable_amount, paid_amount, warehouse_id) VALUES (?, 'dealer', ${today}, 'confirmed', 1, 10, 0, ?)`)
+  const soA = Number(so.run('AH2-S-A', whA.id).lastInsertRowid)
+  const soB = Number(so.run('AH2-S-B', whB.id).lastInsertRowid)
+  const inst = db.prepare('INSERT INTO approval_instances (doc_type, doc_id, doc_no, action, status, submitted_by_id) VALUES (?,?,?,?,?,?)')
+  inst.run('SO', soA, 'AH2-S-A', 'confirm', 'pending', null) // 范围内单据 → 可见
+  inst.run('SO', soB, 'AH2-S-B', 'confirm', 'pending', null) // 他组织单据 → 不可见
+  inst.run('TF', 999999, 'AH2-TF', 'submit', 'pending', null) // 无范围解析器的单据类型 → 失败关闭
+  inst.run('SO', soA, 'AH2-S-A2', 'confirm', 'approved', null) // 非 pending 不计
+  inst.run('SO', soB, 'AH2-S-B-OWN', 'confirm', 'pending', A.id) // 他组织单据，但提交人是本人 → 自己的实例可见（同审批中心）
+
+  const a = await get(A.token)
+  assert.equal(a.values.approval_pending - before.a, 2, 'own-scope document + own submission, nothing else')
+  assert.equal(a.scoped.approval_pending, true)
+  const g = await get(f.admin)
+  assert.equal(g.values.approval_pending - before.g, 4, 'global caller counts every pending row')
+  assert.equal(g.values.approval_pending, db.prepare("SELECT COUNT(*) v FROM approval_instances WHERE status='pending'").get().v)
+  // 与审批中心概览同一份判据：同一个账号在概览里看到的待审批数 = 指标值
+  const ov = okData(await api('/api/approval/overview', { token: A.token }))
+  assert.equal(ov.pending, a.values.approval_pending, 'metric == approval-centre overview for the same caller')
+  // 审批管理员（system:approval:manage）在受限范围下仍按审批中心的既有契约全见 pending（approval_manager_global 默认开）：指标与概览仍一致
+  grant.run('warehouse', 'system:approval:manage')
+  const mgr = await f.login(A.username, A.password)
+  const m = await get(mgr)
+  const mov = okData(await api('/api/approval/overview', { token: mgr }))
+  assert.equal(m.values.approval_pending, mov.pending, 'manager: metric == overview')
+  assert.equal(m.values.approval_pending, g.values.approval_pending, 'manager sees the whole pending queue, as in the approval centre (ADR-0015)')
+  db.prepare("DELETE FROM role_permissions WHERE role_code='warehouse' AND perm_code='system:approval:manage'").run()
+  // 空范围失败关闭：没有组织、没有自己的提交、没有审批队列 ⇒ 不增加
+  assert.equal((await get(Ntok)).values.approval_pending, before.n)
+  // 绑定门店账号（data_scope=all）：bound:deny，不可见
+  const store = db.prepare('SELECT id FROM stores ORDER BY id LIMIT 1').get()
+  const B = await f.account('ah2_bound', 'warehouse', { data_scope: 'all' })
+  db.prepare('UPDATE users SET data_scope=?, store_id=? WHERE id=?').run('all', store.id, B.id)
+  assert.ok(!('approval_pending' in (await get(await f.login(B.username, B.password))).values))
+})
+
+test('AH2: hide mode keeps the page, shows scope-aware metrics and reports how many were collapsed (separately from missing permissions)', { timeout: 300000 }, async (t) => {
+  const f = await server(t)
+  const { db, api } = f
+  const whA = db.prepare("SELECT id, org_id FROM warehouses WHERE code='WH01'").get()
+  const grant = db.prepare('INSERT OR IGNORE INTO role_permissions (role_code, perm_code) VALUES (?,?)')
+  // 只给"销售 + 经销商信用"两类业务权限：缺其余权限的指标属于"缺权限"，信用类属于"无范围语义折叠"
+  for (const k of ['sales_amount', 'credit_usage', 'over_credit_dealers']) for (const p of METRIC_BY_KEY[k].perms) grant.run('warehouse', p)
+  grant.run('warehouse', 'system:metrics:view')
+  const A = await f.account('ah2_partial', 'warehouse', { org_id: whA.org_id, data_scope: 'org' })
+  const dict = okData(await api('/api/metrics', { token: A.token }))
+  const shown = dict.groups.flatMap((g) => g.items).map((x) => x.key)
+  assert.ok(shown.includes('sales_amount'), 'scope-aware metric with permission is shown')
+  assert.ok(!shown.includes('credit_usage') && !shown.includes('over_credit_dealers'), 'scope-less collapsed')
+  assert.equal(dict.hidden_count, METRICS.length - shown.length)
+  assert.equal(dict.hidden_scopeless, 2, 'only the two credit metrics are collapsed for being scope-less; the rest lack permission')
+  assert.ok(dict.hidden_count > dict.hidden_scopeless)
+  const v = okData(await api('/api/metrics/values?keys=credit_usage,sales_amount', { token: A.token }))
+  assert.equal(v.hidden_scopeless, 1, 'keys filter narrows the count')
+  assert.ok('sales_amount' in v.values && !('credit_usage' in v.values))
+  // 全局调用者：什么都不折叠
+  const g = okData(await api('/api/metrics', { token: f.admin }))
+  assert.equal(g.hidden_scopeless, 0)
 })
