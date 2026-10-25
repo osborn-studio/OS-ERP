@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- * 文件标识：tests/audit-fts-races.test.mjs ｜ AF4 审计 FTS 开关的两个竞态窗口：在途请求的 LIKE 重试、启动自愈与维护脚本的重叠（ADR-0054 补充 2）
+ * 文件标识：tests/audit-fts-races.test.mjs ｜ AF4 审计 FTS 开关的两个竞态窗口：在途请求的 LIKE 重试、启动自愈与维护脚本的重叠（ADR-0054 补充 2）；AG4 写入者进程 vs --disable/--enable（补充 3）
  * 只在新临时数据目录与随机 loopback 端口运行；服务与维护脚本都是真实子进程；暂停钩子只在 GML_RUNTIME_MODE=test 生效；合成凭据不输出。
  * ============================================================================
  */
@@ -22,6 +22,9 @@ import { counterSnapshot, resetCounters } from '../server/lib/process-counters.j
 import { runMigrations } from '../server/db/migrations/runner.js'
 import * as m067 from '../server/db/migrations/067_audit_fts.cjs'
 import m071 from '../server/db/migrations/071_audit_fts_optional.cjs'
+import { insertAuditRow } from '../server/lib/audit-trail.js'
+import { verifyChain } from '../server/lib/audit-chain-verify.js'
+import { spawnWriter, classifyError, parseFallbackTotal, percentile, WRITER_ACTION } from '../scripts/lib/audit-toggle-writer.mjs'
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url))
 const NO_FTS5 = !m067.ftsSupported(new Database(':memory:'))
@@ -313,4 +316,89 @@ test('AF4 two maintenance runs: the loser of an --enable overlap re-reads under 
   assert.equal(setting(db), '1')
   assert.equal(db.prepare('SELECT COUNT(*) c FROM audit_logs_fts').get().c, db.prepare('SELECT COUNT(*) c FROM audit_logs').get().c)
   assert.equal(db.prepare("SELECT COUNT(*) c FROM setting_audit_log WHERE key='audit_fts_enabled' AND value_after='1'").get().c >= 1, true)
+})
+
+// ---------- AG4：写路径——写入者子进程持续经 insertAuditRow 写，同时跑一轮真实 --disable / --enable ----------
+// 边界：小库上一次维护事务可能整个落在写入者两次写之间，用例不强制'写入者撞上锁'；它证明的是'切换前/中/后写入都在进行且零丢行、链完好、索引对账'。
+// 撞锁的统计看 scripts/bench-audit-toggle-under-write.mjs（大库 + 突发写）。写入者在事务外调用 insertAuditRow，不覆盖'外层事务里的 SAVEPOINT 分支'。
+
+test('AG4 helpers: error classes, fallback-total parsing, percentile', () => {
+  assert.equal(classifyError(Object.assign(new Error('no such table: main.audit_logs_fts'), { code: 'SQLITE_ERROR' })), 'no such table')
+  assert.equal(classifyError(Object.assign(new Error('database is locked'), { code: 'SQLITE_BUSY' })), 'SQLITE_BUSY')
+  assert.equal(classifyError(Object.assign(new Error('x'), { code: 'SQLITE_BUSY_SNAPSHOT' })), 'SQLITE_BUSY')
+  assert.equal(classifyError(Object.assign(new Error('error in trigger audit_logs_fts_ai: no such table: x'), { code: 'SQLITE_ERROR' })), 'no such table', 'the missing-table text wins')
+  assert.equal(classifyError(Object.assign(new Error('RAISE in trigger'), { code: 'SQLITE_CONSTRAINT_TRIGGER' })), 'trigger')
+  assert.equal(classifyError(new Error('boom')), 'OTHER')
+  assert.equal(parseFallbackTotal('# HELP x\nos_erp_audit_fts_fallback_total{reason="query"} 2\nos_erp_audit_fts_fallback_total{reason="export_batch"} 1\nother_total 9\n'), 3)
+  assert.equal(parseFallbackTotal('nothing here'), 0)
+  assert.equal(percentile([], 50), null)
+  assert.equal(percentile([5, 1, 3, 2, 4], 50), 3)
+  assert.equal(percentile([1, 2, 3, 4], 99), 4)
+})
+
+test('AG4 writer process keeps inserting through --disable and --enable: every acked row present, chain intact, FTS index == rows after --enable', { timeout: 120000, ...needsFts }, async (t) => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'os-ag4-'))
+  const file = path.join(dir, 'gml_cosmetic.db')
+  const kids = [] // 本用例派生的所有子进程：清理时统一终止并等待退出，再删目录
+  t.after(async () => {
+    for (const c of kids) { if (c.exitCode === null && c.signalCode === null) { c.kill('SIGTERM'); await once(c, 'exit') } }
+    rmSync(dir, { recursive: true, force: true })
+  })
+  {
+    const db = new Database(file)
+    db.pragma('journal_mode = WAL')
+    db.exec(readFileSync(new URL('../server/db/schema.sql', import.meta.url), 'utf8'))
+    runMigrations(db, { mode: 'test', warn: () => {} })
+    for (let i = 0; i < 50; i++) insertAuditRow(db, { userId: 1, userName: `seed${i % 3}`, action: 'CREATE', module: 'sales', entity: 'order', entityId: i })
+    db.close()
+  }
+  const peek = (sql, ...a) => { const r = new Database(file, { readonly: true }); try { return r.prepare(sql).get(...a) } finally { r.close() } }
+  const written = () => peek('SELECT COUNT(*) c FROM audit_logs WHERE action=?', WRITER_ACTION).c
+  // until：25 s 上限；三处等待加起来仍小于用例超时
+  const until = async (pred, what) => { for (let i = 0; i < 1000 && !pred(); i++) await delay(25); assert.ok(pred(), `timed out: ${what}`) }
+  const toggle = (action) => new Promise((resolve) => {
+    const out = path.join(dir, `ag4-${action}.json`)
+    const c = spawn(process.execPath, [SCRIPT, '--data-dir', dir, '--industry', 'cosmetic', `--${action}`, '--out', out, '--reason', 'AG4 under-write test'], { cwd: ROOT, env: { PATH: process.env.PATH, HOME: dir, TMPDIR: dir, GML_RUNTIME_MODE: 'test', GML_DB: '', GML_JWT_SECRET: 'x'.repeat(48) }, stdio: 'ignore' })
+    kids.push(c)
+    c.on('close', (code) => resolve({ code, report: JSON.parse(readFileSync(out, 'utf8')) }))
+  })
+
+  const writer = spawnWriter({ dataDir: dir, mode: 'steady', rate: 400, retries: 2, busyMs: 5000 })
+  kids.push(writer.child)
+  await writer.ready
+  await until(() => written() >= 20, 'writer is inserting with FTS triggers in place')
+
+  const dis = await toggle('disable')
+  assert.equal(dis.code, 0)
+  assert.equal(dis.report.status, 'ok')
+  assert.equal(peek("SELECT COUNT(*) c FROM sqlite_master WHERE name LIKE 'audit_logs_fts%'").c, 0, 'FTS table and triggers are gone')
+  const atDisable = written()
+  await until(() => written() >= atDisable + 20, 'writer keeps inserting while the index is absent')
+
+  const ena = await toggle('enable')
+  assert.equal(ena.code, 0)
+  assert.equal(ena.report.status, 'ok')
+  const atEnable = written()
+  await until(() => written() >= atEnable + 20, 'writer keeps inserting after --enable (triggers back)')
+
+  const s = await writer.stop()
+  assert.ok(s && s.acked >= 60, `writer acked rows: ${s?.acked}`)
+  assert.deepEqual(s.lost_rows, {}, `no write may fail during the toggles: ${JSON.stringify(s.attempt_errors)}`)
+  // 重试成功不能掩盖结构性错误：切换期间只允许（已被重试消化的）SQLITE_BUSY，出现 no such table / trigger / 其它类别即为缺陷
+  assert.deepEqual(Object.keys(s.attempt_errors).filter((k) => k !== 'SQLITE_BUSY'), [], `unexpected write errors: ${JSON.stringify(s.attempt_errors)}`)
+
+  const db = new Database(file, { readonly: true })
+  const total = db.prepare('SELECT COUNT(*) c FROM audit_logs').get().c
+  const mine = db.prepare('SELECT COUNT(*) c, COUNT(DISTINCT entity_id) d FROM audit_logs WHERE action=?').get(WRITER_ACTION)
+  assert.equal(mine.c, s.acked, 'every acknowledged write is in the table')
+  assert.equal(mine.d, s.acked, 'no duplicated sequence numbers')
+  assert.equal(total, 50 + s.acked, 'nothing else appeared or disappeared')
+  const chain = verifyChain(db)
+  assert.equal(chain.ok, true, `hash chain intact: ${JSON.stringify(chain.brk ?? null)}`)
+  assert.equal(chain.rows, total)
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM audit_logs_fts_docsize').get().c, total, 'FTS index covers every row, incl. those written while it was absent')
+  assert.equal(setting(db), '1')
+  const chk = spawnSync(process.execPath, [SCRIPT, '--data-dir', dir, '--industry', 'cosmetic', '--integrity-check', '--out', path.join(dir, 'ag4-check.json')], { cwd: ROOT, env: { PATH: process.env.PATH, HOME: dir, TMPDIR: dir, GML_RUNTIME_MODE: 'test', GML_DB: '', GML_JWT_SECRET: 'x'.repeat(48) }, encoding: 'utf8', timeout: 60000 })
+  db.close()
+  assert.equal(chk.status, 0, chk.stdout + chk.stderr)
 })
