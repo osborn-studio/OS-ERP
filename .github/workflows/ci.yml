@@ -392,14 +392,19 @@ jobs:
         if: always()
         run: rm -rf "$CAP_RUN" "$CAP_REPORTS"
 
-  # AE7: manual dependency review. Runs both audit modes (runtime: high+critical vs the "allow" section; dev: critical vs the
-  # "dev" section of docs/security/audit-allowlist.json), writes JSON summaries outside the checkout and uploads them as one
-  # artifact. workflow_dispatch only; read-only token; no secrets. Needs network access to registry.npmjs.org. It has not been
-  # dispatched on GitHub yet.
+  # AE7/AH7: dependency review. Runs on pull_request (gate) and workflow_dispatch. Steps: (1) lock-registry guard (every resolved
+  # host must be registry.npmjs.org; offline), (2) `npm ci --ignore-scripts` from the lockfile (no lifecycle scripts run), (3)
+  # install-vs-lockfile check (node_modules/.package-lock.json equals package-lock.json; it does not show which host served the
+  # downloads), (4) `npm audit signatures` against registry.npmjs.org (verifies the registry's signature over its own metadata for each
+  # installed name@version; npm reads that metadata from the registry, it does not compare it with the lockfile integrity or the
+  # tarball bytes: see docs/security/dependency-notes.md section 12), (5) both audit modes (runtime: high+critical vs the "allow" section; dev: critical
+  # vs the "dev" section of docs/security/audit-allowlist.json) writing JSON summaries outside the checkout, uploaded as one
+  # artifact. Read-only token; no secrets; fork PRs are fine (plain pull_request, not the privileged-token variant). Needs network access to
+  # registry.npmjs.org. It has not run on GitHub yet.
   dependency-review:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -408,7 +413,16 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: .nvmrc
+      - name: Lock registry guard (offline)
+        run: node scripts/check-lock-registry.mjs
+      - name: Install from the lockfile (npm ci, lifecycle scripts disabled)
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Installed tree matches the lockfile
+        run: node scripts/check-install-registry.mjs
+      - name: Verify registry signatures (npm audit signatures, npmjs registry)
+        run: npm audit signatures --registry=https://registry.npmjs.org
       - name: Audit runtime and dev dependencies (both modes always run; the job fails if either fails)
+        if: ${{ !cancelled() }}
         run: |
           set -uo pipefail
           out="$RUNNER_TEMP/dependency-review"

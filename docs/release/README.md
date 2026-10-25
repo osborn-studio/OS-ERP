@@ -242,3 +242,13 @@ version set is a `version` change, and the same `name@version` with a different 
 change (the one to look at first). Exit code is 0 with or without differences; it is non-zero only when the previous (or current)
 SBOM is missing, unreadable or not a structurally valid CycloneDX 1.x document (or, for `verify-release`, when any other check fails).
 This is an informational comparison, not a vulnerability or licence analysis, and the hosted steps have not run on GitHub yet.
+
+## Safe extraction of an untrusted candidate zip (AH7)
+
+```bash
+node scripts/verify-release.mjs --artifact=RC-<version>-<sha>.zip --extract-to=<new-or-empty-dir> \
+  [--zip-max-entries=5000] [--zip-max-file-bytes=67108864] [--zip-max-total-bytes=536870912] [--zip-max-archive-bytes=268435456]
+```
+
+Entries, per-file and total inflated bytes are capped (the real output is measured, not the header), and absolute or `..` paths, backslashes, symlinks, special files, encrypted entries and zip64 are refused. Details and limits: `docs/security/dependency-notes.md` section 12.
+

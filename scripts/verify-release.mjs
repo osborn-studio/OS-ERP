@@ -12,6 +12,7 @@ import { LOG_FILE, evidenceDigest, readLog, signatureDigest } from './lib/eviden
 import { loadAnchor, checkLogDescent } from './lib/offbox-anchor.mjs'
 import { diffSboms, loadSbomFile, renderTable } from './lib/sbom-diff.mjs'
 import { hashEntries, listTestsTree, TESTS_TREE_FILE } from './lib/tests-tree.mjs'
+import { DEFAULT_LIMITS, extractZipSafe } from './lib/zip-safe.mjs'
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const manifest = JSON.parse(fs.readFileSync(path.join(root, 'MANIFEST.json'), 'utf8'))
 let failed = 0
@@ -274,6 +275,40 @@ if (sdIdx >= 0) {
       process.stdout.write(renderTable(diff))
       console.log(`[verify] sbom-diff-json ${JSON.stringify(diff)}`)
     } catch (error) { fail(`SBOM-DIFF: ${error.message}`) }
+  }
+}
+// AH7：--extract-to=<dir> 配合 --artifact=<zip>：把候选 zip 按硬上限安全解压到一个空目录（不可信 zip：条目数、单文件与总解压字节、
+// 路径穿越 / 绝对路径 / 符号链接一律拒绝，见 scripts/lib/zip-safe.mjs），并要求 zip 内的 MANIFEST.json 与本包的逐字节一致。
+// 上限可调：--zip-max-entries / --zip-max-file-bytes / --zip-max-total-bytes / --zip-max-archive-bytes（正整数），默认见 DEFAULT_LIMITS。
+const flagVal = name => {
+  const hits = process.argv.map((a, i) => [a, i]).filter(([a]) => a === name || a.startsWith(`${name}=`))
+  if (hits.length > 1) { fail(`${name} given more than once`); return null }
+  if (!hits.length) return undefined
+  const [a, i] = hits[0]
+  const v = a.startsWith(`${name}=`) ? a.slice(name.length + 1) : process.argv[i + 1]
+  if (!v || v.startsWith('--')) { fail(`${name} needs a value`); return null }
+  return v
+}
+const extractTo = flagVal('--extract-to')
+const limitFlags = { maxEntries: '--zip-max-entries', maxFileBytes: '--zip-max-file-bytes', maxTotalBytes: '--zip-max-total-bytes', maxArchiveBytes: '--zip-max-archive-bytes' }
+const zipLimits = {}
+for (const [key, flag] of Object.entries(limitFlags)) {
+  const v = flagVal(flag)
+  if (v === undefined || v === null) continue
+  if (!/^[1-9]\d{0,15}$/.test(v) || !Number.isSafeInteger(Number(v))) fail(`${flag} must be a positive integer`)
+  else zipLimits[key] = Number(v)
+}
+if (extractTo === undefined && Object.keys(zipLimits).length) fail('--zip-max-* only make sense together with --extract-to=<dir>')
+if (extractTo) {
+  const zipArg = process.argv.find(a => a.startsWith('--artifact='))?.slice(11)
+  if (!zipArg) fail('--extract-to needs --artifact=<RC-*.zip>')
+  else {
+    try {
+      const r = extractZipSafe(path.resolve(zipArg), path.resolve(extractTo), zipLimits, { strip: 1 })
+      const inner = path.join(path.resolve(extractTo), 'MANIFEST.json')
+      if (!fs.existsSync(inner) || !fs.readFileSync(inner).equals(fs.readFileSync(path.join(root, 'MANIFEST.json')))) fail('EXTRACT: MANIFEST.json inside the archive differs from this package\'s MANIFEST.json')
+      else console.log(`[verify] archive extracted safely to ${extractTo}: ${r.files} files, ${r.bytes} bytes, ${r.entries} entries (limits: ${JSON.stringify({ ...DEFAULT_LIMITS, ...zipLimits })})`)
+    } catch (error) { fail(`EXTRACT: ${error.message}`) }
   }
 }
 console.log(`[verify] ${Object.keys(manifest.files).length} files; ${failed} errors`)
