@@ -5,7 +5,22 @@ import { mkdtempSync, rmSync, readFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { percentile, summarize } from '../scripts/bench-api.mjs'
+import { percentile, summarize, startContender } from '../scripts/bench-api.mjs'
+
+test('contender startup is acknowledged while holding a real write lock; startup errors reject', async (t) => {
+  const { default: Database } = await import('better-sqlite3')
+  const dir = mkdtempSync(path.join(tmpdir(), 'os-bench-contender-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const dbFile = path.join(dir, 'test.db')
+  const db = new Database(dbFile)
+  db.pragma('journal_mode = WAL')
+  db.close()
+  const contender = await startContender({ dbFile, holdMs: 25, gapMs: 10 })
+  const result = await contender.stop()
+  assert.ok(result.cycles >= 1, 'an immediately stopped contender still completes its acknowledged cycle')
+  assert.equal(await startContender({ dbFile, holdMs: 0, gapMs: 0 }), null)
+  await assert.rejects(startContender({ dbFile: path.join(dir, 'missing', 'db'), holdMs: 25, gapMs: 10 }))
+})
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url))
 const BENCH = path.join(ROOT, 'scripts/bench-api.mjs')
