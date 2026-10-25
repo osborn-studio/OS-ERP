@@ -115,3 +115,7 @@ HEAD `5748fd9bdfa8ce221e9b397d4e3dd6935f2e783b`，运行 `40186014710`：focused
 仅在 batch17 修复：允许明确指定 `--extract-to` 的归档由既有安全解压流程消费，仍要求 ZIP 限额、路径/链接安全、MANIFEST 一致及全部文件内容校验；无 evidence 且无 extract-to 的孤立 artifact 继续拒绝。参数例外与既有解析器使用相同 token 匹配，缺值/空值/重复目标仍失败。新增空格形式正向与无效目标负向测试，不改已有防穿越、限额、篡改断言。
 
 本机 Node 22：修前23项中4失败；修后ZIP+参数24/24、候选/供应链/tree策略34/34、真实候选包验证1/1通过，文件头和codemap检查通过。Claude CLI `claude-haiku-5-5` 工具禁用只读复审 `is_error=false`，canonicalModel核验一致，无确认阻断；模型提到的限额测试缺口由原有ZIP测试覆盖（0、1e3、超条目/字节、无效限制无写入），没有重复删弱测试。解压后内容不匹配时保留目录、退出失败为既有行为，不声称原子回滚。上述为开发检查，仍须新HEAD托管Linux验收，PR保持draft。
+
+## PR #6 写争用修复向后集成（2026-10-25）
+
+来源 `e9da5d3`，精确证据与 Haiku 审查取舍见 `pr6-contention-fix.md`。替换周期锁争用下概率性“36 次全成功”测试，分离严格成功基线及耗尽/完整性核对；保持生产重试策略不变。集成冲突仅在旧 15ms/10 次概率预算的测试段，采用新两场景及原 5ms/8 次预算，同时保留 AH1 的 CASE_TIMEOUT/SPAWN_TIMEOUT 负载倍率；生成文档按当前分支重生成。Node 22 相关测试 21/21、tree/fs-fault policy 检查、全部 17 项适用守卫/类型检查/构建通过。新的 HEAD Linux CI 尚待验证。没有恢复定时跟进或 auto-merge。

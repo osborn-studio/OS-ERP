@@ -234,6 +234,8 @@ for (let round = 1; round <= ROUNDS; round++) {
         const lines = out.split('\n')
         const picked = []
         for (let i = 0; i < lines.length; i++) {
+          // This diagnostic is built from numeric benchmark counters only (never raw server output).
+          if (/^# write-bench failure /.test(lines[i])) picked.push(lines[i])
           if (/^\s*not ok /.test(lines[i])) {
             picked.push(lines[i])
             for (let j = i + 1; j < Math.min(i + 12, lines.length); j++) {
