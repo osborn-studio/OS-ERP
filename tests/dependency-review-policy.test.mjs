@@ -27,9 +27,10 @@ test('dependency-review exists, is dispatch-only, independent and time-boxed', (
   assert.ok(Number(code.match(/^\s+timeout-minutes:\s*(\d+)\s*$/m)?.[1]) <= 15)
 })
 
-test('it is the last job in the file (appended as a whole block)', () => {
+test('it comes after capacity-smoke; later batches append their own jobs as whole blocks after it (AH6 appends fs-fault)', () => {
   const names = [...workflow.matchAll(/^  ([a-z][a-z0-9-]*):\n(?=    )/gm)].map((x) => x[1])
-  assert.equal(names[names.length - 1], 'dependency-review')
+  assert.ok(names.indexOf('dependency-review') > names.indexOf('capacity-smoke'))
+  assert.equal(names.filter((n) => n === 'dependency-review').length, 1)
 })
 
 test('actions are SHA-pinned with a version comment', () => {

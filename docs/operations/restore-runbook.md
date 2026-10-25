@@ -59,6 +59,22 @@ GML_BACKUP_KEY="$(cat /secure/backup.key)" GML_RUNTIME_MODE=production GML_DATA_
 3. 若发现“备份已不在、`.audit-manifest.*` 还在”的孤儿清单：这是删除在“删备份”与“删清单”之间被打断。**如果那份清单你已离机保存，保留你的离机副本**；盘上的孤儿清单下一次运行只会清扫**上一份报告明确列为被打断清理（`planned` / `failed`）所涉及的备份**对应的孤儿清单（条目 `pruned_orphans` 记名）；其它孤儿清单（例如备份被你搬到机外、清单留作审计基线）不会被自动删除。
 4. 重新运行 `node scripts/db-backup.mjs`（同样的 `--keep`）：按 keep 规则继续裁剪、清扫孤儿清单，写出 `report_phase=final` 且 `prune_state=done` 的报告。重复运行是安全的，但不是空操作：每次运行都会新增一份备份并按 keep 裁剪上一份，所以 `--keep=1` 时每次报告都会是 `prune_state=done`；只有备份数没超 keep 时才是 `none`。
 
+### 被打断后的三种遗留物：分别计数与人工处置（AH6）
+
+`node scripts/db-backup.mjs` 会在清理阶段自动清扫下面三种遗留物，并在报告顶层 `orphan_causes` 里**分别**记个数与文件名（`prune_interrupted_manifest` / `encrypt_interrupted_part` / `report_write_interrupted_tmp`，另有 `files` 列名；计的是文件数，加密模式下一份备份的孤儿清单有 `.json` + `.enc` 两个）。自动清扫之外，运维按下面处理；任何一种都**不影响已有的完整备份**。
+
+| 成因 | 盘上样子 | 怎么来的 | 自动清扫条件 | 人工处置 |
+| --- | --- | --- | --- | --- |
+| A 清理被打断 | `gml_<库>_<stamp>.db[.enc].audit-manifest.json` / `.enc` 还在，同名备份不在 | 清理“删备份”与“删清单”之间被杀 | 仅当上一份报告把该备份列在 `planned`/`failed` 的 `pruned` 里 | 若这份清单是你的离机审计基线，先留好离机副本再让脚本清扫；备份被你搬到机外的孤儿清单**不会**被自动删，也无需处理。重新运行 `db-backup`（同样的 `--keep`）即可。 |
+| B 加密被打断 | `gml_<库>_<stamp>.db.enc.partial`（或 `….audit-manifest.enc.partial`），0600，是**密文**，不是备份，不能用于恢复 | 密文写完、改名前被杀（断电 / kill -9） | 命名匹配本库、普通文件、修改时间早于 10 分钟（`GML_BACKUP_PARTIAL_MIN_AGE_MS`） | 确认没有备份进程在跑后，等超过 10 分钟再运行 `db-backup`，或手工删除该 `.partial`。**同时**检查同目录有没有 `.*.plain.tmp`：被杀时明文临时文件来不及擦除，必须用 `shred`/脚本的擦除方式处理（不是普通删除），见 `audit-integrity.md` §5b。该次备份没有成功，重新跑一次备份即可。 |
+| C 写报告被打断 | `.backup-report-<stamp>.json.<随机串>.tmp`（点文件） | 报告写完、改名前被杀 | 下一次运行写报告前清扫（上面 A 小节第 2 步） | 不要手工改名成报告；需要时 `jq .` 查看内容。重新运行 `db-backup`。 |
+
+注意：10 分钟年龄保护是启发式的，不是锁；**同一备份目录不要同时跑两个 `db-backup`**（一个进程卡住超过 10 分钟，另一个运行可能清扫它的 `.partial`，卡住的那次恢复后会因改名失败而报 `BACKUP_ENCRYPT_FAILED`，不会产生半截备份，重跑即可）。
+
+核对：下一次成功运行后，`jq .orphan_causes <最新报告>` 应显示各计数与 `files`；若 B 的 `.partial` 仍在，多半是修改时间不足 10 分钟（并发运行保护），稍后再跑即可。`exit 0` 且 `failed=0` 才算收尾。
+
+> AH6 Codex 审计记录：无高危发现；两个中危（清扫 `.partial` 的并发保护只是年龄启发式、登记报告把“配置了”当成“已注入”）——后者已修复（报告区分 injected / not-reached / refused），前者已在上文如实写明限制，未加文件锁。
+
 ## 2. 定期：恢复演练（证明备份能起来，量 RTO/RPO）
 
 频率：每月一次，以及每次升级前。演练在一台与线上无关的机器或线上机器上的一个**空目录**里做，不会碰线上目录。

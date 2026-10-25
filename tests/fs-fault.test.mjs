@@ -17,7 +17,7 @@ import Database from 'better-sqlite3'
 import { runMigrations, MIGRATIONS_DIR } from '../server/db/migrations/runner.js'
 import { insertAuditRow } from '../server/lib/audit-trail.js'
 import { verifyChain } from '../server/lib/audit-chain-verify.js'
-import { FAULT_POINTS, faultPoint, assertFsFaultAllowed } from '../scripts/lib/fs-fault.mjs'
+import { FAULT_POINTS, faultPoint, assertFsFaultAllowed, buildFaultReport, writeFaultReport } from '../scripts/lib/fs-fault.mjs'
 import { decryptFile, MAGIC } from '../server/lib/backup-crypto.js'
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url))
@@ -26,7 +26,19 @@ const ARCHIVE = 'scripts/audit-archive.mjs'
 const BACKUP = 'scripts/db-backup.mjs'
 const MODES = ['throw', 'abort']
 const envFor = (dir, extra = {}) => ({ PATH: process.env.PATH, HOME: dir, TMPDIR: dir, GML_RUNTIME_MODE: 'test', GML_DATA_DIR: dir, GML_DB: '', GML_JWT_SECRET: 'a'.repeat(48), ...extra })
-const run = (script, args, dir, extra = {}) => spawnSync(process.execPath, [script, ...args], { cwd: ROOT, env: envFor(dir, extra), encoding: 'utf8', timeout: 120000 })
+// AH6：GML_FS_FAULT_REPORT=<文件> ⇒ 每次带注入点的子进程运行都记一条 { script, point, mode, status, signal }，进程退出时写成登记报告（CI 上传）
+const FAULT_RECORDS = []
+if (process.env.GML_FS_FAULT_REPORT) process.on('exit', () => { writeFaultReport(process.env.GML_FS_FAULT_REPORT, FAULT_RECORDS) })
+const run = (script, args, dir, extra = {}) => {
+  const r = spawnSync(process.execPath, [script, ...args], { cwd: ROOT, env: envFor(dir, extra), encoding: 'utf8', timeout: 120000 })
+  if (extra.GML_TEST_FS_FAULT) {
+    const out = `${r.stdout}${r.stderr}`
+    // 到达证据：SIGABRT、或输出里有注入消息、或非零退出且不是配置被拒；退出 0 = 没走到该点；FS_FAULT_* 拒绝 = 配置被拒
+    const result = r.signal === 'SIGABRT' || out.includes(`injected filesystem fault at ${extra.GML_TEST_FS_FAULT}`) ? 'injected' : /FS_FAULT_(FORBIDDEN|UNKNOWN|MODE_INVALID)/.test(out) ? 'refused' : r.status === 0 ? 'not-reached' : 'injected'
+    FAULT_RECORDS.push({ script, point: extra.GML_TEST_FS_FAULT, mode: extra.GML_TEST_FS_FAULT_MODE ?? 'throw', status: r.status, signal: r.signal, result })
+  }
+  return r
+}
 const fault = (name, mode) => ({ GML_TEST_FS_FAULT: name, GML_TEST_FS_FAULT_MODE: mode })
 function tmp(t, prefix = 'os-ad6-') {
   const dir = mkdtempSync(path.join(tmpdir(), prefix))
@@ -42,7 +54,7 @@ function assertDied(r, mode, what) {
 // ---------------------------------------------------------------- 库本身
 test('fs-fault: unset env is a no-op; outside test mode any setting is refused; unknown point / bad mode refused', () => {
   const all = Object.values(FAULT_POINTS).flat()
-  assert.equal(all.length, 15)
+  assert.equal(all.length, 17)
   for (const p of all) faultPoint(p, { GML_RUNTIME_MODE: 'test' })
   assert.equal(assertFsFaultAllowed({}), null)
   for (const mode of [undefined, 'production', 'demo']) {
@@ -188,7 +200,9 @@ function assertGoodBackup(f, file, what) {
 
 // AG6 的两个点（报告/清理的持久性）有各自的专用用例（见文件后部）：它们依赖 --keep 与报告的两阶段写入，不适用下面的通用断言
 const AG6_POINTS = ['backup.after-report-write-before-rename', 'backup.after-prune-delete-before-dirsync']
-const GENERIC_BACKUP_POINTS = FAULT_POINTS.backup.filter((p) => !AG6_POINTS.includes(p))
+// AH6 的两个点（加密中断的 .partial、清理时备份已删而清单未删）同样有专用用例（见文件后部）
+const AH6_POINTS = ['backup.encrypt-before-rename', 'backup.prune-between-backup-and-manifest']
+const GENERIC_BACKUP_POINTS = FAULT_POINTS.backup.filter((p) => !AG6_POINTS.includes(p) && !AH6_POINTS.includes(p))
 
 for (const point of GENERIC_BACKUP_POINTS) {
   for (const mode of MODES) {
@@ -723,4 +737,162 @@ test('evidence-log: a torn tail (power loss between write and fsync) is rejected
   writeFileSync(file, committed) // 等价于 git checkout 已提交的版本
   assert.equal(APPEND(file, 2).status, 0)
   assert.equal(readLog(file).ok, true)
+})
+
+// ---------------------------------------------------------------- AH6：孤儿成因（三种，各自计数）与登记报告
+// 成因 A 清理被打断（备份已删、清单还在）；成因 B 加密被打断（<终名>.db.enc.partial / 清单 .enc.partial）；成因 C 写报告被打断（.backup-report-*.tmp）。
+// 报告顶层 orphan_causes 分别计数并列名；未被上一份报告解释的孤儿一律不碰；.partial 有最小年龄保护（GML_BACKUP_PARTIAL_MIN_AGE_MS，默认 10 分钟）。
+const CAUSES = ['prune_interrupted_manifest', 'encrypt_interrupted_part', 'report_write_interrupted_tmp']
+const AGE0 = { GML_BACKUP_PARTIAL_MIN_AGE_MS: '0' }
+const countsOf = (rep) => Object.fromEntries(CAUSES.map((c) => [c, rep.orphan_causes[c]]))
+const zeroExcept = (c, n) => Object.fromEntries(CAUSES.map((k) => [k, k === c ? n : 0]))
+const partialsOf = (f) => f.names().filter((n) => n.endsWith('.partial'))
+
+test('registry (AH6): the two new backup points are registered; fault report builder records only whitelisted fields and lists unexercised points', () => {
+  for (const p of AH6_POINTS) assert.ok(FAULT_POINTS.backup.includes(p), p)
+  const rep = buildFaultReport([{ script: BACKUP, point: 'backup.after-db-copy', mode: 'abort', status: null, signal: 'SIGABRT', result: 'injected', secret: 'x' }, { script: BACKUP, point: 'backup.after-sidecar', mode: 'throw', status: 1, signal: null, result: 'injected' }, { script: BACKUP, point: 'archive.after-delete', mode: 'throw', status: 0, signal: null, result: 'not-reached' }, { script: BACKUP, point: 'log.after-lock', mode: 'throw', status: 2, signal: null, result: 'refused' }], { GITHUB_ACTIONS: 'true', GML_JWT_SECRET: 'nope' })
+  assert.equal(rep.target_host, false); assert.equal(rep.hosted_runner, true)
+  assert.deepEqual(rep.injections.map((i) => [i.point, i.mode, i.outcome]), [['backup.after-db-copy', 'abort', 'signal:SIGABRT'], ['backup.after-sidecar', 'throw', 'exit:1'], ['archive.after-delete', 'throw', 'exit:0'], ['log.after-lock', 'throw', 'exit:2']])
+  assert.deepEqual(rep.summary, { attempts: 4, injected: 2, not_reached: 1, refused: 1, aborted: 1, nonzero_exit: 2, exit_zero: 1 })
+  assert.ok(rep.not_exercised.includes('archive.after-delete') && rep.not_exercised.includes('log.after-lock') && !rep.not_exercised.includes('backup.after-db-copy'), 'only points confirmed injected count as exercised')
+  assert.doesNotMatch(JSON.stringify(rep), /nope|secret/)
+})
+
+test('fault report writer creates the directory and writes valid JSON (GML_FS_FAULT_REPORT hook)', (t) => {
+  const file = path.join(tmp(t), 'nested', 'fs-fault-report.json')
+  assert.equal(writeFaultReport(file, [{ script: ARCHIVE, point: 'archive.after-delete', mode: 'abort', status: null, signal: 'SIGABRT' }]), true)
+  assert.equal(JSON.parse(readFileSync(file, 'utf8')).injections[0].outcome, 'signal:SIGABRT')
+})
+
+test('orphan_causes is present and all zero on a clean run (three counters, no cross-contamination)', { timeout: 120000 }, (t) => {
+  const f = backupFixture(t)
+  assert.equal(f.B(['--keep=5']).status, 0)
+  const rep = readReport(f)
+  assert.deepEqual(countsOf(rep), zeroExcept('none', 0))
+  assert.deepEqual(Object.keys(rep.orphan_causes.files).sort(), [...CAUSES].sort())
+})
+
+// 成因 A：清理在“备份已删、清单未删”之间被打断（真实孤儿，而不是手写文件）
+for (const mode of MODES) {
+  test(`orphan cause A (${mode}): prune interrupted between the backup unlink and its manifest unlink leaves an orphan manifest; the next run sweeps exactly it and counts it as prune_interrupted_manifest`, { timeout: 180000 }, (t) => {
+    const f = backupFixture(t)
+    assert.equal(f.B(['--keep=5']).status, 0)
+    const old = f.dbs()
+    assert.equal(old.length, 1)
+    const r = f.B(['--keep=1'], fault('backup.prune-between-backup-and-manifest', mode))
+    assertDied(r, mode, 'prune/manifest gap')
+    assert.deepEqual(f.dbs().filter((n) => old.includes(n)), [], 'the old backup is gone')
+    const orphan = `${old[0]}.audit-manifest.json`
+    assert.ok(f.names().includes(orphan), 'its manifest is left behind: a genuine orphan')
+    const fresh = f.dbs().filter((n) => !old.includes(n))
+    assert.equal(fresh.length, 1); assertGoodBackup(f, fresh[0], 'new backup')
+    // 无关孤儿（备份被运维搬走）不得被一并清扫，也不计入任何成因
+    const keepSake = 'gml_cosmetic_20200101-000000.db.audit-manifest.json'
+    writeFileSync(path.join(f.bdir, keepSake), '{}\n')
+    const next = f.B(['--keep=1'])
+    assert.equal(next.status, 0, next.stdout + next.stderr)
+    assert.ok(!f.names().includes(orphan), 'the interrupted-prune orphan is swept')
+    assert.ok(f.names().includes(keepSake), 'an unexplained orphan stays')
+    const rep = readReport(f)
+    assert.deepEqual(countsOf(rep), zeroExcept('prune_interrupted_manifest', 1))
+    assert.deepEqual(rep.orphan_causes.files.prune_interrupted_manifest, [orphan])
+    assert.deepEqual(cosEntry(rep).pruned_orphans, [orphan])
+  })
+}
+
+// 成因 B：加密在“密文已写完、尚未改名”时被打断，遗留 <终名>.db.enc.partial（密文，不是明文）
+test('orphan cause B (abort): encryption killed before the rename leaves only a ciphertext .partial; fresh partials are protected by the age guard; an aged one is swept and counted as encrypt_interrupted_part', { timeout: 240000 }, (t) => {
+  const f = backupFixture(t)
+  assert.equal(f.B(['--keep=5'], KEY).status, 0)
+  const good = f.names().filter((n) => n.endsWith('.db.enc'))
+  const r = f.B(['--keep=5'], { ...KEY, ...fault('backup.encrypt-before-rename', 'abort') })
+  assertDied(r, 'abort', 'encrypt partial')
+  const parts = partialsOf(f)
+  assert.equal(parts.length, 1, 'exactly the interrupted ciphertext partial')
+  assert.match(parts[0], /^gml_cosmetic_\d{8}-\d{6}(_\d+)?\.db\.enc\.partial$/)
+  assert.ok(head(path.join(f.bdir, parts[0]), 4).equals(MAGIC), 'the partial is ciphertext with the backup header, not a plaintext SQLite file')
+  assert.deepEqual(f.names().filter((n) => n.endsWith('.db.enc')), good, 'no new final-named ciphertext')
+  assert.equal(statSync(path.join(f.bdir, parts[0])).mode & 0o777, 0o600)
+  // 诱饵：别的库的 partial、用户文件、疑似解密输出名——都不得被碰
+  const decoys = ['gml_food_20200101-000000.db.enc.partial', 'notes.partial', 'restore-out.db.partial']
+  for (const d of decoys) writeFileSync(path.join(f.bdir, d), 'x')
+  // 年龄保护：默认 10 分钟，刚留下的 partial（可能属于并发运行）不动
+  const guarded = f.B(['--keep=5'], KEY)
+  assert.equal(guarded.status, 0, guarded.stdout + guarded.stderr)
+  assert.ok(f.names().includes(parts[0]), 'a fresh partial is left alone')
+  assert.deepEqual(countsOf(readReport(f)), zeroExcept('none', 0))
+  // 年龄为 0（测试覆盖）时清扫，且只清扫匹配本库命名规则的 partial
+  const swept = f.B(['--keep=5'], { ...KEY, ...AGE0 })
+  assert.equal(swept.status, 0, swept.stdout + swept.stderr)
+  assert.ok(!f.names().includes(parts[0]), 'the interrupted partial is gone')
+  for (const d of decoys) assert.ok(f.names().includes(d), `${d} untouched`)
+  const rep = readReport(f)
+  assert.deepEqual(countsOf(rep), zeroExcept('encrypt_interrupted_part', 1))
+  assert.deepEqual(rep.orphan_causes.files.encrypt_interrupted_part, [parts[0]])
+  assert.deepEqual(cosEntry(rep).pruned_partials, [parts[0]])
+  assert.equal(cosEntry(rep).prune_state, 'done')
+  // 备份本身未受影响
+  for (const n of f.names().filter((x) => x.endsWith('.db.enc'))) decryptFile(path.join(f.bdir, n), null, KEY_BYTES)
+})
+
+test('orphan cause B (abort, manifest ciphertext partial): a stale <backup>.audit-manifest.enc.partial is swept and counted with the same cause', { timeout: 180000 }, (t) => {
+  const f = backupFixture(t)
+  assert.equal(f.B(['--keep=5'], KEY).status, 0)
+  const stale = 'gml_cosmetic_20200101-000000.db.enc.audit-manifest.enc.partial'
+  writeFileSync(path.join(f.bdir, stale), 'x')
+  const r = f.B(['--keep=5'], { ...KEY, ...AGE0 })
+  assert.equal(r.status, 0, r.stdout + r.stderr)
+  assert.ok(!f.names().includes(stale))
+  assert.deepEqual(countsOf(readReport(f)), zeroExcept('encrypt_interrupted_part', 1))
+})
+
+test('orphan cause B (throw): a handled encryption failure removes its own partial and shreds the plaintext; nothing for the next run to count', { timeout: 180000 }, (t) => {
+  const f = backupFixture(t)
+  const r = f.B([], { ...KEY, ...fault('backup.encrypt-before-rename', 'throw') })
+  assertDied(r, 'throw', 'encrypt partial throw')
+  assert.match(r.stdout + r.stderr, /BACKUP_ENCRYPT_FAILED/)
+  assert.deepEqual(partialsOf(f), [])
+  assert.deepEqual(plaintextSnapshots(f), [])
+  assert.equal(f.names().filter((n) => n.endsWith('.plain.tmp')).length, 0)
+  const next = f.B([], { ...KEY, ...AGE0 })
+  assert.equal(next.status, 0, next.stdout + next.stderr)
+  assert.deepEqual(countsOf(readReport(f)), zeroExcept('none', 0))
+})
+
+// 成因 C：写报告被打断（临时文件已写完未改名）
+for (const mode of MODES) {
+  test(`orphan cause C (${mode}): report write interrupted leaves a report temp (abort) or none (throw); the next run sweeps it and counts it as report_write_interrupted_tmp`, { timeout: 180000 }, (t) => {
+    const f = backupFixture(t)
+    assert.equal(f.B(['--keep=5']).status, 0)
+    const r = f.B(['--keep=5'], fault('backup.after-report-write-before-rename', mode))
+    assertDied(r, mode, 'report write')
+    const tmps = reportTmps(f)
+    assert.equal(tmps.length, mode === 'abort' ? 1 : 0)
+    const next = f.B(['--keep=5'])
+    assert.equal(next.status, 0, next.stdout + next.stderr)
+    assert.deepEqual(reportTmps(f), [])
+    const rep = readReport(f)
+    assert.deepEqual(countsOf(rep), zeroExcept('report_write_interrupted_tmp', mode === 'abort' ? 1 : 0))
+    assert.deepEqual(rep.orphan_causes.files.report_write_interrupted_tmp, tmps)
+  })
+}
+
+test('the three causes are counted separately in one report and the sweep never touches live backups, their manifests, or the previous report', { timeout: 240000 }, (t) => {
+  const f = backupFixture(t)
+  assert.equal(f.B(['--keep=5'], KEY).status, 0)
+  // A：清理被打断
+  assertDied(f.B(['--keep=1'], { ...KEY, ...fault('backup.prune-between-backup-and-manifest', 'abort') }), 'abort', 'A')
+  // B：遗留 partial；C：遗留报告临时文件（此刻上一份报告是 pre-prune，列着被打断的清理）
+  writeFileSync(path.join(f.bdir, 'gml_cosmetic_20200101-000000.db.enc.partial'), 'x')
+  writeFileSync(path.join(f.bdir, '.backup-report-20200101-000000.json.abcdef.tmp'), '{}')
+  const before = f.names().filter((n) => n.endsWith('.db.enc'))
+  const next = f.B(['--keep=1'], { ...KEY, ...AGE0 })
+  assert.equal(next.status, 0, next.stdout + next.stderr)
+  const rep = readReport(f)
+  assert.deepEqual(countsOf(rep), { prune_interrupted_manifest: 2, encrypt_interrupted_part: 1, report_write_interrupted_tmp: 1 }) // 计的是文件数：加密模式下孤儿清单有 .json + .enc 两份
+  const live = f.names().filter((n) => n.endsWith('.db.enc'))
+  assert.equal(live.length, 1, 'keep=1 keeps exactly the newest')
+  assert.ok(before.includes(live[0]) || live.length === 1)
+  decryptFile(path.join(f.bdir, live[0]), null, KEY_BYTES)
+  assert.ok(existsSync(path.join(f.bdir, `${live[0]}.audit-manifest.json`)) && existsSync(path.join(f.bdir, `${live[0]}.audit-manifest.enc`)), 'the live backup keeps both manifests')
 })

@@ -64,8 +64,11 @@ function removeQuietly(file) {
   try { fs.rmSync(file, { force: true }) } catch { /* 清理失败不覆盖原始错误 */ }
 }
 
-/** 加密 src → dest（dest 不得已存在）。返回 { size, sha256 }（密文，含 header 与 tag）。 */
-export function encryptFile(src, dest, keyBytes) {
+/**
+ * 加密 src → dest（dest 不得已存在）。返回 { size, sha256 }（密文，含 header 与 tag）。
+ * opts.beforeRename（AH6，仅供测试注入点）：密文已写完并 fsync、尚未改名时调用；它抛错 ⇒ 走正常失败路径删除 partial。
+ */
+export function encryptFile(src, dest, keyBytes, opts = {}) {
   const partial = `${dest}.partial`
   let inFd = null
   let outFd = null
@@ -95,6 +98,7 @@ export function encryptFile(src, dest, keyBytes) {
     emit(cipher.getAuthTag())
     fs.fsyncSync(outFd)
     fs.closeSync(outFd); outFd = null
+    if (typeof opts.beforeRename === 'function') opts.beforeRename()
     fs.renameSync(partial, dest)
     return { size, sha256: hash.digest('hex') }
   } catch (e) {
