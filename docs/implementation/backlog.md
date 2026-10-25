@@ -188,7 +188,7 @@ AH2 逐条评估了字典里**全部**仍为 `scopeless` 的指标（评估时�
 |---|---|---|
 | `release-candidate.yml`（含 `dry_run`）、`capacity-smoke`、`dependency-review`、`audit-no-fts5`、夜间工作流 | 均未在托管 runner 上实跑（第十七批复查：#4 已合并但 main 上仍未找到这些文件，#5–#11 未合并；详见 docs/release/README.md） | AG1/AG8 |
 | 仍声明为 `scopeless` 的指标 | ~~未逐条评估~~：AH2 已评估（见上节），剩 2 条 `no_org_column`；`hide` 模式只折叠它们并给"已隐藏 N 项"说明 | AG2 → AH2 |
-| `explain-plans.json` | 指纹取自默认小合成库；大数据量下的计划（如 OMS 密集窗口）未入快照；`ANALYZE` 政策仍只在文档 | AG3/AF3 |
+| `explain-plans.json` | ~~指纹取自小库、大数据量下的计划未入快照~~ → 已由 AH3 补 `explain-plans.large.json`（夜间工作流比较；CI 只做两份快照互查）；`ANALYZE` 政策已有可选的启动期开关但仍默认关，托管 runner 上的夜间比较未实跑 | AG3/AF3 → AH3 |
 | AG4 基准表 | 数值取自节奏修复前的脚本版本；修复后未重跑 | AG4 |
 | 锚点意图 | `--require-intent-key-id` 默认关闭，过渡何时结束无计划；`baseline-anchor-list-missing` 分支仍无测试；能写库者可伪造未签名意图 | AG5/AF5 |
 | 备份 | 真实掉电未测；Linux 上的 fs-fault 结果未登记；孤儿清单清扫只覆盖 prune 中断一种成因 | AG6/AF6 |

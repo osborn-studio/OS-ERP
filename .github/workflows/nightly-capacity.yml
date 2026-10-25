@@ -189,6 +189,23 @@ jobs:
           grep -oE '^audit-fts-maintain integrity-check (ok|FAILED) status=[a-z]+ industry=[a-z]+ rows=[0-9]+ elapsed_ms=[-0-9.]+' "$CAP_REPORTS/audit-fts.log" || true
           [ "$rc" -eq 0 ] || echo "::warning::audit FTS integrity check exited with code $rc (raw output withheld)"
           exit "$rc"
+      # AH3 (ADR-0044 supplement 7): compares the committed docs/implementation/explain-plans.large.json with the plans on the pipeline's
+      # synthetic database. The pipeline database has no OMS orders, so --fill-oms tops up an isolated online-backup copy of it with 200k
+      # (the original is only read; the copy lives in the runner temp dir and is removed by the tool); the tool refuses a database that
+      # is not large enough, so an empty OMS table can never produce a green result. Skipped for large-ci (the extra copy would not fit
+      # the runner disk). Plan fingerprints do not depend on row counts; the row-count thresholds do. It never changes the gate: a failure
+      # is a warning. Stdout and stderr go to a disposable log; only fixed-format lines with numbers are echoed (no paths, no statement text).
+      - name: Large-database plan snapshot (explain-audit --scale large --compare on the pipeline database)
+        id: explain_large
+        if: inputs.scale != 'large-ci' && steps.pipeline.outcome == 'success'
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          node scripts/explain-audit.mjs --scale large --compare docs/implementation/explain-plans.large.json --large-dir "$CAP_RUN/data" --fill-oms 200000 > "$CAP_REPORTS/explain-large.log" 2>&1
+          rc=$?
+          grep -E '^explain-audit \(大库\): [0-9]+ 条语句, 迁移 [0-9a-z_]+, 阈值 [0-9]+ 行; 裸 SCAN [0-9]+ \(违规 [0-9]+, 豁免 [0-9]+, 小表 [0-9]+\), 索引全扫 [0-9]+$|^explain-audit \(大库\): 计划指纹比较 [0-9]+ 条, 漂移 [0-9]+ \(白名单 [0-9]+\), 过期白名单 [0-9]+$' "$CAP_REPORTS/explain-large.log" || true
+          [ "$rc" -eq 0 ] || echo "::warning::large-database plan snapshot exited with code $rc (raw output withheld)"
+          exit "$rc"
       - name: Reduce reports to the allowlisted summary (printed to the log)
         id: summary
         if: always()

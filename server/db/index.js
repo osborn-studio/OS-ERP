@@ -191,6 +191,30 @@ export function sqliteBusyMs(env = process.env) {
   return Number(raw)
 }
 
+/**
+ * AH3：启动期一次 SQLite 优化开关（默认关）。`GML_SQLITE_OPTIMIZE_ON_BOOT` 只认 1 / true（开）与 0 / false / 空（关），其它值抛
+ * `SQLITE_OPTIMIZE_ON_BOOT_INVALID`（拼错的开关宁可启动失败）。
+ * 打开它会让 SQLite 在库里写 `sqlite_stat1`（它认为有用时），从而改变规划器的前提——explain-audit 的断言与计划指纹快照都以"没有统计"为前提，
+ * 所以默认关；开之前先读 docs/operations/query-planner.md 2e。整个仓库只有这一处允许该语句（analyze-scan 的精确豁免）。
+ */
+export function sqliteOptimizeOnBoot(env = process.env) {
+  const raw = env.GML_SQLITE_OPTIMIZE_ON_BOOT
+  if (raw === undefined || raw === '' || raw === '0' || raw === 'false') return false
+  if (raw === '1' || raw === 'true') return true
+  throw Object.assign(new Error(`GML_SQLITE_OPTIMIZE_ON_BOOT 只接受 1 / true / 0 / false / 空，收到「${showValue(raw)}」`), { code: 'SQLITE_OPTIMIZE_ON_BOOT_INVALID' })
+}
+
+/** 每个库连接建立时调用一次（连接池里只建一次）；失败只告警不影响启动 */
+function optimizeOnBoot(db, code) {
+  const t0 = process.hrtime.bigint()
+  try {
+    db.pragma('optimize')
+    console.log(`[sqlite-optimize-on-boot] ${code}: done in ${(Number(process.hrtime.bigint() - t0) / 1e6).toFixed(1)} ms (GML_SQLITE_OPTIMIZE_ON_BOOT is on; planner statistics may now exist)`)
+  } catch (e) {
+    console.warn(`[sqlite-optimize-on-boot] ${code}: skipped (${e.code || 'error'})`)
+  }
+}
+
 export function getDbFor(industry) {
   const mode = runtimeMode()
   if (path.resolve(requireDataDirectory()) !== path.resolve(DATA_DIR)) {
@@ -202,6 +226,7 @@ export function getDbFor(industry) {
     assertDatabaseMode(db, mode)
     return db
   }
+  const optimize = sqliteOptimizeOnBoot() // 非法值在打开库之前就抛
   fs.mkdirSync(DATA_DIR, { recursive: true })
   const db = new Database(dbPathFor(code))
   try {
@@ -214,6 +239,7 @@ export function getDbFor(industry) {
   db.pragma('foreign_keys = ON')
   // POS / 商城并发写：遇锁等待（默认 5s，`GML_SQLITE_BUSY_MS` 可调）而不是立刻抛 SQLITE_BUSY
   db.pragma(`busy_timeout = ${sqliteBusyMs()}`)
+  if (optimize) optimizeOnBoot(db, code)
   pools.set(code, db)
   return db
 }
@@ -260,5 +286,5 @@ export default {
   getDb, getDbFor, initSchema, initSchemaFor, DB_PATH, DATA_DIR,
   INDUSTRIES, DEFAULT_INDUSTRY, isSeeded, tableCount,
   runWithIndustry, getCurrentIndustry, dbPathFor, industryList, requireExplicitDataDir,
-  assertIndustry, normalizeIndustry, industryError, INDUSTRY_CODE_INVALID, showValue, sqliteBusyMs
+  assertIndustry, normalizeIndustry, industryError, INDUSTRY_CODE_INVALID, showValue, sqliteBusyMs, sqliteOptimizeOnBoot
 }
