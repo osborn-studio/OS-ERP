@@ -2,9 +2,10 @@
  * ============================================================================
  * 文件标识：tests/dependency-review-policy.test.mjs ｜ ci.yml 的 dependency-review job 静态守卫（roadmap-v10 AE7）
  * ============================================================================
- * 便宜、诚实的文本断言：job 仅 workflow_dispatch 触发、Actions 按 SHA 固定、不引用 secrets、权限只读、
+ * 便宜、诚实的文本断言：job 对 ci.yml 的每个事件都运行（含 pull_request，不带 job 级 if，满足 AF1 的 required-check 语义）、Actions 按 SHA 固定、不引用 secrets、权限只读、
+ * 步骤顺序（锁文件 registry 守卫 → npm ci --ignore-scripts → 安装树核对 → npm audit signatures → 审计）、
  * 两种审计模式都运行、摘要写到 $RUNNER_TEMP、只上传白名单内的两个 JSON、保留 30 天。不证明它在 GitHub 上能跑通
- * （它尚未被触发）。不联网。
+ * （它尚未运行过，AH7）。不联网。
  * ============================================================================
  */
 import test from 'node:test'
@@ -19,9 +20,9 @@ const m = workflow.match(/^  dependency-review:\n([\s\S]*?)(?=^  \S|(?![\s\S]))/
 const job = m ? m[0] : ''
 const code = job.replace(/^\s*#.*$/gm, '')
 
-test('dependency-review exists, is dispatch-only, independent and time-boxed', () => {
+test('dependency-review exists, runs on every ci.yml event without a conditional skip, independent and time-boxed', () => {
   assert.ok(job, 'jobs.dependency-review must exist')
-  assert.match(code, /^\s+if:\s*github\.event_name == 'workflow_dispatch'\s*$/m)
+  assert.doesNotMatch(code.split('steps:')[0], /^\s+if:/m, 'no job-level if: a conditional skip breaks required-check semantics (AF1)')
   assert.doesNotMatch(code, /^\s+needs:/m)
   assert.match(code, /^\s+runs-on:\s*ubuntu-latest\s*$/m)
   assert.ok(Number(code.match(/^\s+timeout-minutes:\s*(\d+)\s*$/m)?.[1]) <= 15)
@@ -77,4 +78,26 @@ test('one artifact, whitelisted to the two summaries, uploaded even on failure, 
   ])
   assert.match(block, /retention-days:\s*30\s*$/m)
   assert.match(block, /if-no-files-found:\s*error/)
+})
+
+test('AH7 gate steps exist, in order, before the audit step; install keeps scripts disabled', () => {
+  const idx = (re) => { const m = code.match(re); assert.ok(m, String(re)); return m.index }
+  const guard = idx(/run:\s*node scripts\/check-lock-registry\.mjs\s*$/m)
+  const install = idx(/run:\s*npm ci --ignore-scripts --no-audit --no-fund\s*$/m)
+  const installed = idx(/run:\s*node scripts\/check-install-registry\.mjs\s*$/m)
+  const sigs = idx(/run:\s*npm audit signatures --registry=https:\/\/registry\.npmjs\.org\s*$/m)
+  const audit = idx(/check-audit-allowlist\.mjs --summary/)
+  assert.ok(guard < install && install < installed && installed < sigs && sigs < audit)
+  assert.doesNotMatch(code, /run:\s*npm (ci|install|i)\b(?![^\n]*--ignore-scripts)/, 'every install must pass --ignore-scripts')
+  assert.doesNotMatch(code, /check-lock-registry\.mjs[^\n]*--allow/, 'CI must not widen the registry allowlist')
+  assert.doesNotMatch(code, /continue-on-error/)
+})
+
+test('the audit step still runs (and the job still fails) when an earlier gate step failed, but not when cancelled', () => {
+  const step = code.match(/- name: Audit runtime and dev dependencies[^\n]*\n\s+if:\s*(\$\{\{ !cancelled\(\) \}\})/)
+  assert.ok(step, 'audit step must carry if: ${{ !cancelled() }}')
+})
+
+test('only the dependency-review job was touched for AH7: other jobs keep their triggers and there is no pull_request_target', () => {
+  assert.match(workflow, /^on:\n  push:\n    branches: \[main\]\n  pull_request:\n  workflow_dispatch:/m)
 })
