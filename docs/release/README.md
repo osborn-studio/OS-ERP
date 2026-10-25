@@ -21,7 +21,7 @@ node scripts/release-candidate.mjs [--run-tests] [--run-guards] [--ci-run=<run i
   [--regression-result=passed --regression-source="<where it ran>"] [--reuse-node-modules]
 ```
 
-`--run-tests` makes the script itself run the focused suite (`node --test --test-concurrency=1 tests/*.test.mjs`) and the
+`--run-tests` makes the script itself run the focused suite (`node --test --test-concurrency=1 tests/*.test.mjs tests/slow/*.test.mjs`; the slow directory is excluded from the PR gate's focused step and run by the `slow-tests` job, see `docs/implementation/testing.md`) and the
 five guards, before the acceptance step. `--ci-run=auto` looks up the CI run (see below). Both are optional; without them
 the corresponding fields stay `not run` / `null`. `--run-tests` cannot be combined with `--focused-result`.
 

@@ -170,6 +170,19 @@
 | 新浏览器场景（审计 FTS 状态、MCP 限速卡、指标隐藏说明）未执行 | Linux CI | AE11 |
 | `dmserver` 上的所有性能数字均未复测 | 目标主机 | 全批 |
 
+## 第十七批集成后仍 open 的残留
+
+| 范围 | 残留 / 证据边界 |
+|---|---|
+| AH1 / AH6 / AH7 / AH11 | 托管慢套件耗时、Linux 故障注入、签名门禁与新增浏览器场景需对应 HEAD 的成功证据 |
+| AH2 | 两个信用指标仍无经销商组织归属；approval_manager_global=false 的指标侧负向用例待补 |
+| AH3 | 大库运行比较在 nightly，PR 仅比较小库与已提交的大库指纹；默认关闭 optimize |
+| AH4 | 清理/归档与 FTS 重建并发尚无全程互斥，结束时检测 interfered |
+| AH5 | SQLite 单文件不能实现意图表独立写权限；doctor 仅报告，不阻断 |
+| AH7 | release-candidate 自己的 ZIP 提取尚未采用条目/总量硬上限 |
+| AH9 / AH10 | 动态配额分页及跨午夜边界、预览与停用之间的并发写负向验证待补 |
+| 发布与试点 | 默认分支发行工作流首跑、权属确认、试点验收与目标主机性能验收仍未完成 |
+
 ## 第十七批 scopeless 指标评估结论 AH2
 
 AH2 逐条评估了字典里**全部**仍为 `scopeless` 的指标（评估时只剩 3 条，不是路线图预期的"至少再接入 5 条"；其余 22 条在 AD1/AF2/AG2 已接入）。`node scripts/check-metrics-scope.mjs --report` 随时重列。
@@ -181,6 +194,14 @@ AH2 逐条评估了字典里**全部**仍为 `scopeless` 的指标（评估时�
 | `over_credit_dealers` | 同上 | `no_org_column` | 同上 |
 
 `pending` 分类目前为 0 条；守卫在 `pending` 超过阈值（默认 2）时在 CI 上 `::warning::`，不失败。
+## 第十七批 AH1 后仍 open 的残留
+
+| 位置 | 残留 | 来源 |
+|---|---|---|
+| `slow-tests` job | 未在托管 runner 上跑过；ubuntu 上各文件耗时未知（`test-timings.json` 是 macOS Mac mini 参考值） | AH1 |
+| 负载常量 | 只迁移了 write-contention、release-signing 与两个 audit-fts slow 文件；其余测试里的零散超时/轮询未迁移 | AH1 |
+| `tests/fs-fault.test.mjs` | 62 s 刚超阈值，作为豁免留在 `tests/`（AH6 给它单独 job） | AH1 |
+| 历史基线失败 | 迁移 075 快照与 `fallback_total` 键已在第十六批修复；AH1 的旧耗时记录保留原始失败，不作为当前候选验证结论 | AH1 |
 
 ## 第十六批后仍 open 的残留
 

@@ -105,12 +105,14 @@ const testFiles = readdirSync(path.join(ROOT, 'scripts'))
   .sort()
 
 const checks = testFiles.map((f) => ({ name: `test:${f}`, cmd: [`scripts/${f}`], industries: industriesFor(path.join(ROOT, 'scripts', f)) }))
-const nodeTestFiles = readdirSync(path.join(ROOT, 'tests'))
+// AH1: tests/slow/ holds the files over 60 s; the isolated regression still runs them (it is not the PR gate's critical path).
+const nodeTestFiles = ['tests', 'tests/slow'].flatMap(dir => (existsSync(path.join(ROOT, dir)) ? readdirSync(path.join(ROOT, dir)) : [])
   .filter(f => f.endsWith('.test.mjs') && (!ONLY || f.includes(ONLY)))
   .sort()
+  .map(f => `${dir}/${f}`))
 // Explicit file arguments work without shell glob expansion and keep future suites in the gate.
 if (nodeTestFiles.length) checks.unshift({
-  name: 'node:test', cmd: ['--test', '--test-concurrency=1', ...nodeTestFiles.map(f => `tests/${f}`)], industries: ['-']
+  name: 'node:test', cmd: ['--test', '--test-concurrency=1', ...nodeTestFiles], industries: ['-']
 })
 
 // 自检脚本：都自带多库循环，跑一次即可

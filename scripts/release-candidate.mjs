@@ -181,7 +181,9 @@ export function parseTestSummary(text) {
 }
 /** 运行焦点套件（展开 glob 由 node 自己做），返回 {result, origin:'produced', …}；失败也返回结果，由调用方决定是否中止。 */
 function runFocused(cwd) {
-  const files = fs.existsSync(path.join(cwd, 'tests')) ? fs.readdirSync(path.join(cwd, 'tests')).filter(f => f.endsWith('.test.mjs')).sort().map(f => `tests/${f}`) : []
+  // AH1: files over 60 s live in tests/slow/ (excluded from the PR gate's `tests/*.test.mjs`); a candidate's own run must still include them.
+  const listDir = dir => fs.existsSync(path.join(cwd, dir)) ? fs.readdirSync(path.join(cwd, dir)).filter(f => f.endsWith('.test.mjs')).sort().map(f => `${dir}/${f}`) : []
+  const files = [...listDir('tests'), ...listDir('tests/slow')]
   if (!files.length) throw new Error('--run-tests: no tests/*.test.mjs found; refusing to record an empty run')
   const t0 = Date.now()
   const r = spawnSync(process.execPath, ['--test', '--test-concurrency=1', ...files], { cwd, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, env: { ...process.env, NO_COLOR: '1' } })
@@ -194,7 +196,7 @@ function runFocused(cwd) {
   }
   if (!counts) throw new Error('Focused suite exited 0 but its summary counts could not be parsed; refusing to record a produced result')
   if (counts.tests < 1 || counts.pass < 1 || counts.fail !== 0 || counts.cancelled !== 0) throw new Error(`Focused suite summary is not a clean pass: ${JSON.stringify(counts)}`)
-  return { result: 'passed', origin: 'produced', command: `node --test --test-concurrency=1 tests/*.test.mjs`, files: files.length, duration_ms, summary_counts: counts }
+  return { result: 'passed', origin: 'produced', command: `node --test --test-concurrency=1 tests/*.test.mjs tests/slow/*.test.mjs`, files: files.length, duration_ms, summary_counts: counts }
 }
 
 /** `--ci-run=auto`：用 gh 查 HEAD 对应 ci.yml 的最新成功 run。拿不到就 id=null 并写明原因。 */

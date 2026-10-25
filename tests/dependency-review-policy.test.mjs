@@ -32,6 +32,7 @@ test('it comes after capacity-smoke; later batches append their own jobs as whol
   const names = [...workflow.matchAll(/^  ([a-z][a-z0-9-]*):\n(?=    )/gm)].map((x) => x[1])
   assert.ok(names.indexOf('dependency-review') > names.indexOf('capacity-smoke'))
   assert.equal(names.filter((n) => n === 'dependency-review').length, 1)
+  assert.doesNotMatch(job, /^  (?!dependency-review:)[a-z][a-z0-9-]*:\n/m, 'the job block must not swallow a following job')
 })
 
 test('actions are SHA-pinned with a version comment', () => {

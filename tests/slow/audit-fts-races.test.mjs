@@ -1,3 +1,4 @@
+// slow: 186 s: concurrent maintenance processes and a writer process that keeps inserting through --disable/--enable (scripts/test-timings.mjs, threshold 60 s)
 /**
  * ============================================================================
  * 文件标识：tests/audit-fts-races.test.mjs ｜ AF4 审计 FTS 开关的两个竞态窗口：在途请求的 LIKE 重试、启动自愈与维护脚本的重叠（ADR-0054 补充 2）；AG4 写入者进程 vs --disable/--enable（补充 3）
@@ -17,16 +18,17 @@ import { fileURLToPath } from 'node:url'
 import { setTimeout as delay } from 'node:timers/promises'
 import Database from 'better-sqlite3'
 import bcrypt from 'bcryptjs'
-import { auditQueryPlan, ftsAvailable, keywordUsesFts, isFtsMissingError, parseFilters, exportChunks, orderOf } from '../server/lib/audit-view.js'
-import { counterSnapshot, resetCounters } from '../server/lib/process-counters.js'
-import { runMigrations } from '../server/db/migrations/runner.js'
-import * as m067 from '../server/db/migrations/067_audit_fts.cjs'
-import m071 from '../server/db/migrations/071_audit_fts_optional.cjs'
-import { insertAuditRow } from '../server/lib/audit-trail.js'
-import { verifyChain } from '../server/lib/audit-chain-verify.js'
-import { spawnWriter, classifyError, parseFallbackTotal, percentile, WRITER_ACTION } from '../scripts/lib/audit-toggle-writer.mjs'
+import { auditQueryPlan, ftsAvailable, keywordUsesFts, isFtsMissingError, parseFilters, exportChunks, orderOf } from '../../server/lib/audit-view.js'
+import { counterSnapshot, resetCounters } from '../../server/lib/process-counters.js'
+import { runMigrations } from '../../server/db/migrations/runner.js'
+import * as m067 from '../../server/db/migrations/067_audit_fts.cjs'
+import m071 from '../../server/db/migrations/071_audit_fts_optional.cjs'
+import { insertAuditRow } from '../../server/lib/audit-trail.js'
+import { verifyChain } from '../../server/lib/audit-chain-verify.js'
+import { spawnWriter, classifyError, parseFallbackTotal, percentile, WRITER_ACTION } from '../../scripts/lib/audit-toggle-writer.mjs'
+import { CASE_TIMEOUT_FAST_MS, CASE_TIMEOUT_MEDIUM_MS, READY_POLL_ATTEMPTS, READY_POLL_INTERVAL_MS, SPAWN_TIMEOUT_SHORT_MS, UNTIL_POLL_ATTEMPTS, UNTIL_POLL_INTERVAL_MS, scaleMs } from '../lib/load-tolerance.mjs'
 
-const ROOT = fileURLToPath(new URL('../', import.meta.url))
+const ROOT = fileURLToPath(new URL('../../', import.meta.url))
 const NO_FTS5 = !m067.ftsSupported(new Database(':memory:'))
 const needsFts = NO_FTS5 ? { skip: 'this SQLite build has no FTS5' } : process.env.GML_AUDIT_FTS === '0' ? { skip: 'GML_AUDIT_FTS=0: the FTS path is never planned' } : {}
 const SCRIPT = 'scripts/audit-fts-maintain.mjs'
@@ -43,7 +45,7 @@ function tmpDb(t, rows = 12) {
   const db = new Database(file)
   const other = new Database(file)
   db.pragma('foreign_keys=ON')
-  db.exec(readFileSync(new URL('../server/db/schema.sql', import.meta.url), 'utf8'))
+  db.exec(readFileSync(new URL('../../server/db/schema.sql', import.meta.url), 'utf8'))
   runMigrations(db, { mode: 'test', warn: () => {} })
   for (let i = 0; i < rows; i++) ins(db, { user: `user${i % 3}`, action: i === 5 ? 'RAREWORDONE' : 'CREATE' })
   t.after(() => { db.close(); other.close(); rmSync(dir, { recursive: true, force: true }) })
@@ -152,7 +154,7 @@ function instance(t, extra = {}) {
     state.child = child
     state.stopped = once(child, 'close')
     if (waitReady) {
-      for (let i = 0; i < 1200 && !ready && child.exitCode === null; i++) await delay(50)
+      for (let i = 0; i < READY_POLL_ATTEMPTS && !ready && child.exitCode === null; i++) await delay(READY_POLL_INTERVAL_MS)
       assert.ok(ready, `server must start\n${state.out.slice(-800)}`)
     }
   }
@@ -179,7 +181,7 @@ function instance(t, extra = {}) {
   }
   state.script = (action, tag = String(Date.now())) => {
     const { out, args } = state.scriptArgs(action, tag)
-    const r = spawnSync(process.execPath, args, { cwd: ROOT, env: state.scriptEnv(), encoding: 'utf8', timeout: 120000 })
+    const r = spawnSync(process.execPath, args, { cwd: ROOT, env: state.scriptEnv(), encoding: 'utf8', timeout: CASE_TIMEOUT_FAST_MS })
     let report = null
     try { report = JSON.parse(readFileSync(out, 'utf8')) } catch { /* 参数错误时没有报告 */ }
     return { status: r.status, stderr: r.stderr, report }
@@ -199,13 +201,13 @@ test('AF4 pause hooks are refused outside GML_RUNTIME_MODE=test', needsFts, (t) 
   const { dir } = tmpDb(t)
   const inst = instance(t)
   const env = inst.scriptEnv({ GML_RUNTIME_MODE: 'demo', GML_TEST_FTS_MAINTAIN_PAUSE: path.join(dir, 'pause') })
-  const r = spawnSync(process.execPath, [SCRIPT, '--data-dir', dir, '--industry', 'cosmetic', '--enable', '--reason', 'x', '--out', path.join(dir, 'r.json')], { cwd: ROOT, env, encoding: 'utf8', timeout: 60000 })
+  const r = spawnSync(process.execPath, [SCRIPT, '--data-dir', dir, '--industry', 'cosmetic', '--enable', '--reason', 'x', '--out', path.join(dir, 'r.json')], { cwd: ROOT, env, encoding: 'utf8', timeout: SPAWN_TIMEOUT_SHORT_MS })
   assert.notEqual(r.status, 0)
   assert.match(`${r.stdout}${r.stderr}`, /PAUSE_HOOK_FORBIDDEN/)
   assert.equal(existsSync(path.join(dir, 'pause')), false, 'nothing was written')
 })
 
-test('AF4 in-flight request: --disable lands between "choose FTS" and "execute" -> 200 via LIKE, counter moves, identical rows (list and export)', { timeout: 180000, ...needsFts }, async (t) => {
+test('AF4 in-flight request: --disable lands between "choose FTS" and "execute" -> 200 via LIKE, counter moves, identical rows (list and export)', { timeout: CASE_TIMEOUT_MEDIUM_MS, ...needsFts }, async (t) => {
   const inst = instance(t)
   const pauseDir = path.join(inst.dir, 'pause')
   await inst.spawn()
@@ -229,7 +231,7 @@ test('AF4 in-flight request: --disable lands between "choose FTS" and "execute" 
       rmSync(path.join(pauseDir, '.audit-fts-paused'), { force: true })
       rmSync(path.join(pauseDir, '.audit-fts-continue'), { force: true })
     }
-    const pending = fetch(`${base2}${route}`, { headers: admin, signal: AbortSignal.timeout(60000) })
+    const pending = fetch(`${base2}${route}`, { headers: admin, signal: AbortSignal.timeout(scaleMs(60000)) })
     await waitFile(path.join(pauseDir, '.audit-fts-paused'), inst.child)
     const off = inst.script('disable', `race-${label}`) // 请求已选定 FTS 路径、尚未执行；真实脚本此刻提交
     assert.equal(off.status, 0, off.stderr)
@@ -245,7 +247,7 @@ test('AF4 in-flight request: --disable lands between "choose FTS" and "execute" 
   assert.match(m, /os_erp_audit_fts_fallback_total\{reason="query"\} 2/)
 })
 
-test('AF4 overlap: server healing decided on a stale read; --enable commits first -> the server re-reads under the write lock and does nothing', { timeout: 180000, ...needsFts }, async (t) => {
+test('AF4 overlap: server healing decided on a stale read; --enable commits first -> the server re-reads under the write lock and does nothing', { timeout: CASE_TIMEOUT_MEDIUM_MS, ...needsFts }, async (t) => {
   const inst = instance(t)
   await inst.spawn()
   const db = inst.open()
@@ -261,14 +263,14 @@ test('AF4 overlap: server healing decided on a stale read; --enable commits firs
   assert.equal(on.report.status, 'ok')
   assert.equal(objects(db).includes('audit_logs_fts'), true)
   writeFileSync(path.join(pauseDir, '.migrate-heal-continue'), '1')
-  for (let i = 0; i < 1200 && !inst.out.includes('服务已启动') && inst.child.exitCode === null; i++) await delay(50)
+  for (let i = 0; i < READY_POLL_ATTEMPTS && !inst.out.includes('服务已启动') && inst.child.exitCode === null; i++) await delay(READY_POLL_INTERVAL_MS)
   assert.match(inst.out, /服务已启动/, `server starts despite the overlap\n${inst.out.slice(-600)}`)
   assert.doesNotMatch(inst.out, /heal 071/, 'the loser saw the converged state and healed nothing')
   assert.doesNotMatch(inst.out, /BUSY/)
   assert.equal(db.prepare('SELECT COUNT(*) c FROM audit_logs_fts').get().c, db.prepare('SELECT COUNT(*) c FROM audit_logs').get().c)
 })
 
-test('AF4 overlap: server healing decided on a stale read; --disable commits first -> the server must not undo it', { timeout: 180000, ...needsFts }, async (t) => {
+test('AF4 overlap: server healing decided on a stale read; --disable commits first -> the server must not undo it', { timeout: CASE_TIMEOUT_MEDIUM_MS, ...needsFts }, async (t) => {
   const inst = instance(t)
   await inst.spawn()
   const db = inst.open()
@@ -282,13 +284,13 @@ test('AF4 overlap: server healing decided on a stale read; --disable commits fir
   assert.equal(off.status, 0, off.stderr)
   assert.equal(setting(db), '0')
   writeFileSync(path.join(pauseDir, '.migrate-heal-continue'), '1')
-  for (let i = 0; i < 1200 && !inst.out.includes('服务已启动') && inst.child.exitCode === null; i++) await delay(50)
+  for (let i = 0; i < READY_POLL_ATTEMPTS && !inst.out.includes('服务已启动') && inst.child.exitCode === null; i++) await delay(READY_POLL_INTERVAL_MS)
   assert.match(inst.out, /服务已启动/)
   assert.deepEqual(objects(db), [], 'healing honoured the newer decision: FTS stays off')
   assert.equal(setting(db), '0')
 })
 
-test('AF4 two maintenance runs: the loser of an --enable overlap re-reads under BEGIN IMMEDIATE and reports already_in_state', { timeout: 180000, ...needsFts }, async (t) => {
+test('AF4 two maintenance runs: the loser of an --enable overlap re-reads under BEGIN IMMEDIATE and reports already_in_state', { timeout: CASE_TIMEOUT_MEDIUM_MS, ...needsFts }, async (t) => {
   const inst = instance(t)
   await inst.spawn()
   const db = inst.open()
@@ -336,7 +338,7 @@ test('AG4 helpers: error classes, fallback-total parsing, percentile', () => {
   assert.equal(percentile([1, 2, 3, 4], 99), 4)
 })
 
-test('AG4 writer process keeps inserting through --disable and --enable: every acked row present, chain intact, FTS index == rows after --enable', { timeout: 120000, ...needsFts }, async (t) => {
+test('AG4 writer process keeps inserting through --disable and --enable: every acked row present, chain intact, FTS index == rows after --enable', { timeout: CASE_TIMEOUT_FAST_MS, ...needsFts }, async (t) => {
   const dir = mkdtempSync(path.join(tmpdir(), 'os-ag4-'))
   const file = path.join(dir, 'gml_cosmetic.db')
   const kids = [] // 本用例派生的所有子进程：清理时统一终止并等待退出，再删目录
@@ -347,7 +349,7 @@ test('AG4 writer process keeps inserting through --disable and --enable: every a
   {
     const db = new Database(file)
     db.pragma('journal_mode = WAL')
-    db.exec(readFileSync(new URL('../server/db/schema.sql', import.meta.url), 'utf8'))
+    db.exec(readFileSync(new URL('../../server/db/schema.sql', import.meta.url), 'utf8'))
     runMigrations(db, { mode: 'test', warn: () => {} })
     for (let i = 0; i < 50; i++) insertAuditRow(db, { userId: 1, userName: `seed${i % 3}`, action: 'CREATE', module: 'sales', entity: 'order', entityId: i })
     db.close()
@@ -355,7 +357,7 @@ test('AG4 writer process keeps inserting through --disable and --enable: every a
   const peek = (sql, ...a) => { const r = new Database(file, { readonly: true }); try { return r.prepare(sql).get(...a) } finally { r.close() } }
   const written = () => peek('SELECT COUNT(*) c FROM audit_logs WHERE action=?', WRITER_ACTION).c
   // until：25 s 上限；三处等待加起来仍小于用例超时
-  const until = async (pred, what) => { for (let i = 0; i < 1000 && !pred(); i++) await delay(25); assert.ok(pred(), `timed out: ${what}`) }
+  const until = async (pred, what) => { for (let i = 0; i < UNTIL_POLL_ATTEMPTS && !pred(); i++) await delay(UNTIL_POLL_INTERVAL_MS); assert.ok(pred(), `timed out: ${what}`) }
   const toggle = (action) => new Promise((resolve) => {
     const out = path.join(dir, `ag4-${action}.json`)
     const c = spawn(process.execPath, [SCRIPT, '--data-dir', dir, '--industry', 'cosmetic', `--${action}`, '--out', out, '--reason', 'AG4 under-write test'], { cwd: ROOT, env: { PATH: process.env.PATH, HOME: dir, TMPDIR: dir, GML_RUNTIME_MODE: 'test', GML_DB: '', GML_JWT_SECRET: 'x'.repeat(48) }, stdio: 'ignore' })
@@ -398,7 +400,7 @@ test('AG4 writer process keeps inserting through --disable and --enable: every a
   assert.equal(chain.rows, total)
   assert.equal(db.prepare('SELECT COUNT(*) c FROM audit_logs_fts_docsize').get().c, total, 'FTS index covers every row, incl. those written while it was absent')
   assert.equal(setting(db), '1')
-  const chk = spawnSync(process.execPath, [SCRIPT, '--data-dir', dir, '--industry', 'cosmetic', '--integrity-check', '--out', path.join(dir, 'ag4-check.json')], { cwd: ROOT, env: { PATH: process.env.PATH, HOME: dir, TMPDIR: dir, GML_RUNTIME_MODE: 'test', GML_DB: '', GML_JWT_SECRET: 'x'.repeat(48) }, encoding: 'utf8', timeout: 60000 })
+  const chk = spawnSync(process.execPath, [SCRIPT, '--data-dir', dir, '--industry', 'cosmetic', '--integrity-check', '--out', path.join(dir, 'ag4-check.json')], { cwd: ROOT, env: { PATH: process.env.PATH, HOME: dir, TMPDIR: dir, GML_RUNTIME_MODE: 'test', GML_DB: '', GML_JWT_SECRET: 'x'.repeat(48) }, encoding: 'utf8', timeout: SPAWN_TIMEOUT_SHORT_MS })
   db.close()
   assert.equal(chk.status, 0, chk.stdout + chk.stderr)
 })

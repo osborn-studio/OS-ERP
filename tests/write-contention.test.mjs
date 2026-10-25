@@ -28,6 +28,7 @@ import { sqliteBusyMs } from '../server/db/index.js'
 import {
   withWriteRetry, isBusyError, backoffMs, writeRetryStats, resetWriteRetryStats, writeRetryMaxFromEnv
 } from '../server/lib/tx.js'
+import { CASE_TIMEOUT_FAST_MS, CASE_TIMEOUT_SLOW_MS, SPAWN_TIMEOUT_MEDIUM_MS, WRITE_BENCH } from './lib/load-tolerance.mjs'
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url))
 const noSleep = () => {}
@@ -38,7 +39,7 @@ function seededCopy(t) {
   if (!seedTemplate) {
     seedTemplate = mkdtempSync(path.join(tmpdir(), 'os-y7-seed-'))
     const seed = spawnSync(process.execPath, ['scripts/reseed-all.mjs', '--force'], {
-      cwd: ROOT, encoding: 'utf8', timeout: 120000,
+      cwd: ROOT, encoding: 'utf8', timeout: CASE_TIMEOUT_FAST_MS,
       env: { PATH: process.env.PATH, HOME: seedTemplate, GML_RUNTIME_MODE: 'demo', GML_DATA_DIR: seedTemplate }
     })
     assert.equal(seed.status, 0, seed.stderr)
@@ -234,7 +235,7 @@ test('hot write routes are wrapped in withWriteRetry', () => {
   }
 })
 
-test('multi-process writers on one DB: no lost writes, no duplicates, retries recorded', { timeout: 240000 }, async (t) => {
+test('multi-process writers on one DB: no lost writes, no duplicates, retries recorded', { timeout: CASE_TIMEOUT_SLOW_MS }, async (t) => {
   const dir = seededCopy(t)
   const dbPath = path.join(dir, 'gml_cosmetic.db')
   const probe = new Database(dbPath)
@@ -323,10 +324,10 @@ test('multi-process writers on one DB: no lost writes, no duplicates, retries re
   probe.close()
 })
 
-test('bench-api --profile=write: fixed schema, integrity verified, retries counted, bad flags refused', { timeout: 240000 }, (t) => {
+test('bench-api --profile=write: fixed schema, integrity verified, retries counted, bad flags refused', { timeout: CASE_TIMEOUT_SLOW_MS }, (t) => {
   const BENCH = path.join(ROOT, 'scripts/bench-api.mjs')
   const bench = (args, env) => spawnSync(process.execPath, [BENCH, ...args], {
-    cwd: ROOT, encoding: 'utf8', timeout: 150000, env: { PATH: process.env.PATH, HOME: tmpdir(), ...env }
+    cwd: ROOT, encoding: 'utf8', timeout: SPAWN_TIMEOUT_MEDIUM_MS, env: { PATH: process.env.PATH, HOME: tmpdir(), ...env }
   })
   const dir = seededCopy(t)
   const env = { GML_RUNTIME_MODE: 'demo', GML_DATA_DIR: dir }
@@ -336,7 +337,7 @@ test('bench-api --profile=write: fixed schema, integrity verified, retries count
   const out = path.join(dir, 'write.json')
   // busy-ms 15 < 外部写者占锁 25 ms → BUSY 真实出现；每次尝试约有 (gap+busy)/(hold+gap) ≈ 7 成机会拿到锁，
   // retry-max 10（上限）让 36 次写入全部成功的概率在托管 runner 的负载抖动下仍接近 1（busy 5 / retry 8 时约 1/3 的运行会有一次用尽）
-  const r = bench(['--profile=write', '--iterations', '12', '--concurrency', '4', '--busy-ms', '15', '--retry-max', '10', '--contender-hold-ms', '25', '--contender-gap-ms', '10', '--out', out], env)
+  const r = bench(['--profile=write', '--iterations', '12', '--concurrency', '4', '--busy-ms', String(WRITE_BENCH.busyMs), '--retry-max', String(WRITE_BENCH.retryMax), '--contender-hold-ms', String(WRITE_BENCH.contenderHoldMs), '--contender-gap-ms', String(WRITE_BENCH.contenderGapMs), '--out', out], env)
   assert.equal(r.status, 0, r.stdout + r.stderr)
   assert.ok(existsSync(out))
   const j = JSON.parse(readFileSync(out, 'utf8'))

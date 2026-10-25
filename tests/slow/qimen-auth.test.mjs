@@ -1,3 +1,4 @@
+// slow: 94 s: signing, rotation and migration cases on a real server (scripts/test-timings.mjs, threshold 60 s)
 /**
  * ============================================================================
  * 文件标识：tests/qimen-auth.test.mjs ｜ 测试：奇门网关每平台密钥、HMAC 签名、时间窗、nonce 防重放、能力清单权限（ADR-0033）
@@ -27,7 +28,7 @@ import { readFileSync } from 'node:fs'
 import ts from 'typescript'
 import Database from 'better-sqlite3'
 
-const ROOT = fileURLToPath(new URL('../', import.meta.url))
+const ROOT = fileURLToPath(new URL('../../', import.meta.url))
 const require = createRequire(import.meta.url)
 const rnd = () => randomBytes(24).toString('base64url')
 
@@ -112,7 +113,7 @@ function gatewayBody(secret, platform, { method = METHOD, request = { itemCode: 
 
 test('migration 060 is idempotent, verifies, and only the demo platform starts with a secret', { timeout: 300000 }, async (t) => {
   const f = await server(t)
-  const m060 = require('../server/db/migrations/060_qimen_secrets.cjs')
+  const m060 = require('../../server/db/migrations/060_qimen_secrets.cjs')
   assert.equal(m060.verify(f.db), true)
   m060.up(f.db)
   m060.up(f.db)
@@ -140,7 +141,7 @@ test('canonical contract: key order does not matter, content does', () => {
   const b = signWith('s', { appKey: 'k', method: 'm', timestamp: '1', nonce: 'n', request: { a: { c: 'x', d: [1, 2] }, b: 1 } })
   assert.equal(a, b)
   assert.notEqual(a, signWith('s', { appKey: 'k', method: 'm', timestamp: '1', nonce: 'n', request: { b: 2, a: { d: [1, 2], c: 'x' } } }))
-  return import('../server/lib/qimen-auth.js').then(({ signQimen }) => {
+  return import('../../server/lib/qimen-auth.js').then(({ signQimen }) => {
     // 服务端实现与测试里的独立实现一致（含缺省 request = {}）
     assert.equal(signQimen('s', { appKey: 'k', method: 'm', timestamp: '1', nonce: 'n', request: { b: 1, a: { d: [1, 2], c: 'x' } } }), a)
     assert.equal(signQimen('s', { appKey: 'k', method: 'm', timestamp: '1', nonce: 'n' }), signWith('s', { appKey: 'k', method: 'm', timestamp: '1', nonce: 'n', request: {} }))
@@ -349,10 +350,10 @@ test('warehouse binding and protocol errors still work behind the new signature'
 })
 
 test('front-end debug signer (src/utils/qimen-sign.ts) matches the server contract byte for byte', async () => {
-  const src = readFileSync(fileURLToPath(new URL('../src/utils/qimen-sign.ts', import.meta.url)), 'utf8')
+  const src = readFileSync(fileURLToPath(new URL('../../src/utils/qimen-sign.ts', import.meta.url)), 'utf8')
   const js = ts.transpileModule(src, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText
   const { signQimen: clientSign, canonicalJson, newNonce } = await import('data:text/javascript;base64,' + Buffer.from(js).toString('base64'))
-  const { signQimen: serverSign, canonicalJson: serverCanon } = await import('../server/lib/qimen-auth.js')
+  const { signQimen: serverSign, canonicalJson: serverCanon } = await import('../../server/lib/qimen-auth.js')
   const request = { z: [3, { b: '中文', a: null }], a: { y: 1.5, x: true }, n: undefined }
   const parts = { appKey: 'ak', method: METHOD, timestamp: '1700000000000', nonce: 'abcdefabcdefabcd', request }
   assert.equal(canonicalJson(request), serverCanon(request))
@@ -366,12 +367,12 @@ const DEMO_CONSTANT = 'GML-DEMO-SECRET'
 
 test('migration 069 clears rows holding the public demo constant, records it, and keeps real secrets', { timeout: 300000 }, async (t) => {
   const f = await server(t)
-  const { sealSecret, openSecret } = await import('../server/lib/secret-box.js')
+  const { sealSecret, openSecret } = await import('../../server/lib/secret-box.js')
   const env = { GML_SECRET_KEY: 'ab8-test-key-0123456789abcdef' }
   const saved = process.env.GML_SECRET_KEY
   process.env.GML_SECRET_KEY = env.GML_SECRET_KEY
   t.after(() => { if (saved === undefined) delete process.env.GML_SECRET_KEY; else process.env.GML_SECRET_KEY = saved })
-  const m069 = require('../server/db/migrations/069_qimen_clear_demo_secret.cjs')
+  const m069 = require('../../server/db/migrations/069_qimen_clear_demo_secret.cjs')
   const rows = f.db.prepare("SELECT id FROM platforms WHERE app_key IS NOT NULL AND status='active' ORDER BY id LIMIT 4 OFFSET 1").all()
   const [sealedDemo, plainDemo, real, other] = rows.map((r) => r.id)
   const set = f.db.prepare('UPDATE platforms SET app_secret_sealed=?, app_secret_rotated_at=?, app_secret_masked=? WHERE id=?')
@@ -405,21 +406,21 @@ test('migration 069 clears rows holding the public demo constant, records it, an
   assert.equal(viaGateway.status, 401)
   assert.equal(viaGateway.body.code, '1005')
   // 配置审计不把这条事实记录当作"未登记的键"
-  const { auditSettingTrail } = await import('../server/lib/settings.js')
+  const { auditSettingTrail } = await import('../../server/lib/settings.js')
   const trail = auditSettingTrail(f.db)
   assert.deepEqual(trail.problems.filter((p) => ['SETTING_KEY_UNKNOWN', 'SETTING_AUDIT_DESYNC'].includes(p.code)), [])
 })
 
 test('migration 069 on a clean database writes no settings row and verifies', { timeout: 300000 }, async (t) => {
   const f = await server(t)
-  const m069 = require('../server/db/migrations/069_qimen_clear_demo_secret.cjs')
+  const m069 = require('../../server/db/migrations/069_qimen_clear_demo_secret.cjs')
   assert.equal(m069.verify(f.db), true)
   assert.equal(f.db.prepare("SELECT COUNT(*) c FROM settings WHERE key='qimen_demo_secret_cleared'").get().c, 0)
 })
 
 test('demo/test startup generates a per-install secret for the demo platform only; it is never printed or reused', { timeout: 300000 }, async (t) => {
   const f = await server(t)
-  const { openSecret } = await import('../server/lib/secret-box.js')
+  const { openSecret } = await import('../../server/lib/secret-box.js')
   const env = { GML_JWT_SECRET: f.jwtSecret, GML_RUNTIME_MODE: 'test' }
   const secured = f.db.prepare('SELECT id, app_key, app_secret_sealed s, app_secret_masked m FROM platforms WHERE app_secret_sealed IS NOT NULL').all()
   assert.equal(secured.length, 1)
@@ -444,8 +445,8 @@ test('demo/test startup generates a per-install secret for the demo platform onl
 })
 
 test('ensureDemoQimenSecret is idempotent, skips a demo platform that already has one, and refuses production', async () => {
-  const { ensureDemoQimenSecret } = await import('../server/lib/qimen-auth.js')
-  const { isSealed } = await import('../server/lib/secret-box.js')
+  const { ensureDemoQimenSecret } = await import('../../server/lib/qimen-auth.js')
+  const { isSealed } = await import('../../server/lib/secret-box.js')
   const env = { GML_RUNTIME_MODE: 'test', GML_JWT_SECRET: randomBytes(32).toString('hex') }
   const mk = () => {
     const db = new Database(':memory:')

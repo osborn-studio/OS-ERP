@@ -1,3 +1,4 @@
+// slow: 93 s: per-document-type MCP token scope matrix over a real server (scripts/test-timings.mjs, threshold 60 s)
 // X5（ADR-0011 补充）：通用单据读工具 doc.query / doc.get / doc.list_types 按「单据类型」校验令牌所有者当前的查看权限点。
 //   · 映射表覆盖全部在用单据类型，且权限点真实存在；采购链与 HTTP 的 PO_READ_PERMS 同源；
 //   · 所有者缺该类型的查看权限 → TOKEN_OWNER_PERM_DENIED（query/get），list_types 不列出该类型；
@@ -16,11 +17,11 @@ import net from 'node:net'
 import { fileURLToPath } from 'node:url'
 import { setTimeout as delay } from 'node:timers/promises'
 import Database from 'better-sqlite3'
-import { createToken } from '../server/mcp/tokens.js'
-import { DOC_VIEW_PERMS, viewPermsOf, bindingOf } from '../server/mcp/doc-perms.js'
-import { PO_READ_PERMS } from '../server/lib/purchase.js'
+import { createToken } from '../../server/mcp/tokens.js'
+import { DOC_VIEW_PERMS, viewPermsOf, bindingOf } from '../../server/mcp/doc-perms.js'
+import { PO_READ_PERMS } from '../../server/lib/purchase.js'
 
-const ROOT = fileURLToPath(new URL('../', import.meta.url))
+const ROOT = fileURLToPath(new URL('../../', import.meta.url))
 const secret = () => randomBytes(24).toString('base64url')
 
 async function server(t) {
@@ -533,9 +534,9 @@ const AB7_TYPES = ['RC', 'YQ', 'SH']
 test('AB7 RC/YQ/SH binding rules live in DOC_SCOPE_RESOLVERS and use the shared store-binding predicate', { timeout: 300000 }, async (t) => {
   const f = await server(t)
   const { db, api, mcp } = f
-  const { DOC_SCOPE_RESOLVERS, docInScope, docScopeOf } = await import('../server/lib/docflow.js')
-  await import('../server/lib/purchase.js')
-  const sb = await import('../server/lib/store-binding.js')
+  const { DOC_SCOPE_RESOLVERS, docInScope, docScopeOf } = await import('../../server/lib/docflow.js')
+  await import('../../server/lib/purchase.js')
+  const sb = await import('../../server/lib/store-binding.js')
   for (const c of AB7_TYPES) assert.equal(DOC_SCOPE_RESOLVERS[c].binding, 'store', `${c} declares its binding in the resolver table`)
   assert.equal(sb.boundStoreId({ store_id: '3' }), 3)
   assert.equal(sb.boundStoreId({ store_id: null }), null)
@@ -635,10 +636,10 @@ const AC3_EXPECT = { PS: 'store', PSF: 'store', RC: 'store', YQ: 'store', SH: 's
 test('AC3 registry: every bound DOC_VIEW_PERMS type has a resolver binding rule, scope=all no longer bypasses it', { timeout: 300000 }, async (t) => {
   const f = await server(t)
   const { db } = f
-  const { DOC_SCOPE_RESOLVERS, docInScope, docScopeOf, docEventScope } = await import('../server/lib/docflow.js')
-  await import('../server/lib/purchase.js')
-  await import('../server/lib/order-center.js')
-  const sb = await import('../server/lib/store-binding.js')
+  const { DOC_SCOPE_RESOLVERS, docInScope, docScopeOf, docEventScope } = await import('../../server/lib/docflow.js')
+  await import('../../server/lib/purchase.js')
+  await import('../../server/lib/order-center.js')
+  const sb = await import('../../server/lib/store-binding.js')
   for (const [c, b] of Object.entries(AC3_EXPECT)) assert.equal(DOC_SCOPE_RESOLVERS[c].binding, b, `${c} declares binding ${b}`)
   for (const [c, e] of Object.entries(DOC_VIEW_PERMS)) {
     if (e.binding) assert.equal(DOC_SCOPE_RESOLVERS[c]?.binding, e.binding, `${c}: resolver binding mirrors DOC_VIEW_PERMS`)
@@ -730,7 +731,7 @@ test('AC3 registry: every bound DOC_VIEW_PERMS type has a resolver binding rule,
 test('AC3 MCP matrix: PS PSF DR OC OCS DS RB x {bound-own, bound-other, unbound, admin} through doc.get / doc.query / order.trace_document, zero writes', { timeout: 300000 }, async (t) => {
   const f = await server(t)
   const { db, api, mcp } = f
-  const { DOC_SCOPE_RESOLVERS } = await import('../server/lib/docflow.js')
+  const { DOC_SCOPE_RESOLVERS } = await import('../../server/lib/docflow.js')
   const admin = (await api('/api/auth/login', { body: { username: 'admin', password: '12345', industry: 'cosmetic' } })).body.data.token
   const mk = async (username, role) => {
     const r = (await api('/api/auth/users', { token: admin, body: { username, name: username, role, password: secret(), data_scope: 'all' } })).body
