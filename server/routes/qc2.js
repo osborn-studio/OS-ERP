@@ -48,7 +48,8 @@
 import { Router } from 'express'
 import { getDb } from '../db/index.js'
 import { ok, fail, wrap, pageParams, paged, bizFail } from '../lib/http.js'
-import { requireAuth, requirePerm, currentUser } from '../middleware/auth.js'
+import { requireAuth, requirePerm, currentUser, attachOrgScope } from '../middleware/auth.js'
+import { assertStockDocInScope, assertWarehouseInScope, warehouseInScope } from '../lib/stock.js'
 import { audit } from '../middleware/audit.js'
 import {
   QC2Error, SOURCE_LABEL, RESULT_LABEL, MODE_LABEL, DISPOSITION_LABEL, DEFECT_CODES,
@@ -79,6 +80,8 @@ function guard(fn) {
     }
   })
 }
+// ADR-0038 补充（AA4）：质检单据随仓库的组织范围；范围外与不存在同形 404（`DOC_NOT_FOUND`），先于任何状态推进。
+const inScope = (table, req, id, notFound) => assertStockDocInScope(getDb(), table, Number(id), req.orgScope, { notFound })
 const dict = (obj) => Object.entries(obj).map(([value, label]) => ({ value, label }))
 
 const P_VIEW = 'quality.qc.view'
@@ -132,19 +135,21 @@ r.get('/sample-plan', requireAuth, wrap((req, res) => {
 // 待检来源
 // ===========================================================================
 
-r.get('/pending', requireAuth, requirePerm(P_VIEW), wrap((req, res) => {
+r.get('/pending', requireAuth, requirePerm(P_VIEW), attachOrgScope, wrap((req, res) => {
   const rows = pendingSources(getDb(), {
     sourceType: req.query.source_type || null,
     keyword: req.query.keyword || null,
     warehouseId: req.query.warehouse_id ? Number(req.query.warehouse_id) : null,
-    limit: req.query.limit || 200
+    limit: req.query.limit || 200,
+    orgScope: req.orgScope
   })
   ok(res, { list: rows, total: rows.length })
 }))
 
-r.get('/pending/detail', requireAuth, requirePerm(P_VIEW), guard((req, res) => {
-  const data = sourceDetail(getDb(), req.query.source_type, req.query.source_id ? Number(req.query.source_id) : null)
-  if (!data) return fail(res, '来源单据不存在', 404)
+r.get('/pending/detail', requireAuth, requirePerm(P_VIEW), attachOrgScope, guard((req, res) => {
+  const db = getDb()
+  const data = sourceDetail(db, req.query.source_type, req.query.source_id ? Number(req.query.source_id) : null)
+  if (!data || !warehouseInScope(db, data.warehouse_id, req.orgScope)) return fail(res, '来源单据不存在', 404)
   return ok(res, data)
 }))
 
@@ -152,20 +157,27 @@ r.get('/pending/detail', requireAuth, requirePerm(P_VIEW), guard((req, res) => {
 // 报检单（QCR）
 // ===========================================================================
 
-r.get('/requests', requireAuth, requirePerm(P_VIEW), wrap((req, res) => {
+r.get('/requests', requireAuth, requirePerm(P_VIEW), attachOrgScope, wrap((req, res) => {
   const { page, pageSize } = pageParams(req)
   const out = listRequests(getDb(), {
     page, pageSize,
     status: req.query.status || null,
     sourceType: req.query.source_type || null,
-    keyword: req.query.keyword || null
+    keyword: req.query.keyword || null,
+    orgScope: req.orgScope
   })
   return paged(res, out)
 }))
 
-r.post('/requests', requireAuth, requirePerm(P_REQUEST), guard((req, res) => {
+r.post('/requests', requireAuth, requirePerm(P_REQUEST), attachOrgScope, guard((req, res) => {
   const db = getDb()
   const b = req.body || {}
+  // 报检的来源单据 / 指定仓必须在范围内（来源范围外 404 同形，显式仓越界 403）
+  if (b.warehouse_id != null) assertWarehouseInScope(db, Number(b.warehouse_id), req.orgScope)
+  if (b.source_id != null) {
+    const sd = sourceDetail(db, b.source_type, Number(b.source_id))
+    if (sd && !warehouseInScope(db, sd.warehouse_id, req.orgScope)) return fail(res, '来源单据不存在', 404)
+  }
   const out = createRequest(db, {
     sourceType: b.source_type,
     sourceId: b.source_id != null ? Number(b.source_id) : null,
@@ -181,25 +193,29 @@ r.post('/requests', requireAuth, requirePerm(P_REQUEST), guard((req, res) => {
   return ok(res, out)
 }))
 
-r.post('/requests/:id/submit', requireAuth, requirePerm(P_REQUEST), guard((req, res) => {
+r.post('/requests/:id/submit', requireAuth, requirePerm(P_REQUEST), attachOrgScope, guard((req, res) => {
+  inScope('qc_requests', req, req.params.id, '报检单不存在')
   const out = submitRequest(getDb(), { id: Number(req.params.id), actor: actorOf(req), remark: req.body?.remark || null })
   audit(req, { action: 'SUBMIT', module: 'quality', entity: 'qc_requests', entityId: out.request.id })
   return ok(res, out)
 }))
 
-r.post('/requests/:id/close', requireAuth, requirePerm(P_VIEW), guard((req, res) => {
+r.post('/requests/:id/close', requireAuth, requirePerm(P_VIEW), attachOrgScope, guard((req, res) => {
   const db = getDb()
+  inScope('qc_requests', req, req.params.id, '报检单不存在')
   transitionRequest(db, { id: Number(req.params.id), action: 'close', actor: actorOf(req), remark: req.body?.remark || null })
   return ok(res, getRequest(db, Number(req.params.id)))
 }))
 
-r.post('/requests/:id/cancel', requireAuth, requirePerm(P_REQUEST), guard((req, res) => {
+r.post('/requests/:id/cancel', requireAuth, requirePerm(P_REQUEST), attachOrgScope, guard((req, res) => {
   const db = getDb()
+  inScope('qc_requests', req, req.params.id, '报检单不存在')
   transitionRequest(db, { id: Number(req.params.id), action: 'cancel', actor: actorOf(req), remark: req.body?.remark || null })
   return ok(res, getRequest(db, Number(req.params.id)))
 }))
 
-r.get('/requests/:id', requireAuth, requirePerm(P_VIEW), guard((req, res) => {
+r.get('/requests/:id', requireAuth, requirePerm(P_VIEW), attachOrgScope, guard((req, res) => {
+  inScope('qc_requests', req, req.params.id, '报检单不存在')
   const data = getRequest(getDb(), Number(req.params.id))
   if (!data) return fail(res, '报检单不存在', 404)
   return ok(res, data)
@@ -209,19 +225,22 @@ r.get('/requests/:id', requireAuth, requirePerm(P_VIEW), guard((req, res) => {
 // 检验单（QCI）
 // ===========================================================================
 
-r.get('/inspections', requireAuth, requirePerm(P_VIEW), wrap((req, res) => {
+r.get('/inspections', requireAuth, requirePerm(P_VIEW), attachOrgScope, wrap((req, res) => {
   const { page, pageSize } = pageParams(req)
   const out = listInspections(getDb(), {
     page, pageSize,
     status: req.query.status || null,
     result: req.query.result || null,
-    keyword: req.query.keyword || null
+    keyword: req.query.keyword || null,
+    orgScope: req.orgScope
   })
   return paged(res, out)
 }))
 
-r.post('/inspections/:id/submit', requireAuth, requirePerm(P_INSPECT), guard((req, res) => {
+r.post('/inspections/:id/submit', requireAuth, requirePerm(P_INSPECT), attachOrgScope, guard((req, res) => {
   const db = getDb()
+  // 提交结论会改写 sku+批次级的 qc_status（跨仓可售结论）：检验单所在仓必须在范围内
+  inScope('qc_inspections', req, req.params.id, '检验单不存在')
   const out = submitInspection(db, {
     id: Number(req.params.id),
     lines: req.body?.lines || null,
@@ -235,20 +254,22 @@ r.post('/inspections/:id/submit', requireAuth, requirePerm(P_INSPECT), guard((re
   return ok(res, out)
 }))
 
-r.post('/inspections/:id/close', requireAuth, requirePerm(P_INSPECT), guard((req, res) => {
+r.post('/inspections/:id/close', requireAuth, requirePerm(P_INSPECT), attachOrgScope, guard((req, res) => {
   const db = getDb()
+  inScope('qc_inspections', req, req.params.id, '检验单不存在')
   transitionInspection(db, { id: Number(req.params.id), action: 'close', actor: actorOf(req) })
   return ok(res, getInspection(db, Number(req.params.id)))
 }))
 
-r.post('/inspections/:id/cancel', requireAuth, requirePerm(P_INSPECT), guard((req, res) => {
+r.post('/inspections/:id/cancel', requireAuth, requirePerm(P_INSPECT), attachOrgScope, guard((req, res) => {
   const db = getDb()
+  inScope('qc_inspections', req, req.params.id, '检验单不存在')
   transitionInspection(db, { id: Number(req.params.id), action: 'cancel', actor: actorOf(req), remark: req.body?.remark || null })
   return ok(res, getInspection(db, Number(req.params.id)))
 }))
 
-r.get('/inspections/:id', requireAuth, requirePerm(P_VIEW), guard((req, res) => {
-  const data = getInspection(getDb(), Number(req.params.id))
+r.get('/inspections/:id', requireAuth, requirePerm(P_VIEW), attachOrgScope, guard((req, res) => {
+  const data = getInspection(getDb(), Number(req.params.id), req.orgScope)
   if (!data) return fail(res, '检验单不存在', 404)
   return ok(res, data)
 }))
@@ -257,19 +278,20 @@ r.get('/inspections/:id', requireAuth, requirePerm(P_VIEW), guard((req, res) => 
 // 不良品处理（DH）
 // ===========================================================================
 
-r.get('/handlings', requireAuth, requirePerm(P_VIEW), wrap((req, res) => {
+r.get('/handlings', requireAuth, requirePerm(P_VIEW), attachOrgScope, wrap((req, res) => {
   const { page, pageSize } = pageParams(req)
   const out = listHandlings(getDb(), {
     page, pageSize,
     status: req.query.status || null,
     mode: req.query.mode || null,
     inspectionId: req.query.inspection_id ? Number(req.query.inspection_id) : null,
-    keyword: req.query.keyword || null
+    keyword: req.query.keyword || null,
+    orgScope: req.orgScope
   })
   return paged(res, out)
 }))
 
-r.post('/handlings', requireAuth, requirePerm(P_HANDLE), guard((req, res) => {
+r.post('/handlings', requireAuth, requirePerm(P_HANDLE), attachOrgScope, guard((req, res) => {
   const db = getDb()
   const b = req.body || {}
   const out = createHandling(db, {
@@ -281,14 +303,15 @@ r.post('/handlings', requireAuth, requirePerm(P_HANDLE), guard((req, res) => {
     reason: b.reason || null,
     defectCode: b.defect_code || null,
     remark: b.remark || null,
-    actor: actorOf(req)
+    actor: actorOf(req),
+    orgScope: req.orgScope
   })
   audit(req, { action: 'CREATE', module: 'quality', entity: 'qc_defect_handlings', entityId: out.id })
   return ok(res, out)
 }))
 
-r.post('/handlings/:id/confirm', requireAuth, requirePerm(P_HANDLE), guard((req, res) => {
-  const out = confirmHandling(getDb(), { id: Number(req.params.id), actor: actorOf(req), remark: req.body?.remark || null })
+r.post('/handlings/:id/confirm', requireAuth, requirePerm(P_HANDLE), attachOrgScope, guard((req, res) => {
+  const out = confirmHandling(getDb(), { id: Number(req.params.id), actor: actorOf(req), remark: req.body?.remark || null, orgScope: req.orgScope })
   audit(req, {
     action: 'QC_HANDLE_CONFIRM', module: 'quality', entity: 'qc_defect_handlings', entityId: out.id,
     detail: { mode: out.mode, qty: out.qty, out_doc_no: out.out_doc_no }
@@ -296,13 +319,13 @@ r.post('/handlings/:id/confirm', requireAuth, requirePerm(P_HANDLE), guard((req,
   return ok(res, out)
 }))
 
-r.post('/handlings/:id/cancel', requireAuth, requirePerm(P_HANDLE), guard((req, res) => {
-  const out = cancelHandling(getDb(), { id: Number(req.params.id), reason: req.body?.reason || null, actor: actorOf(req) })
+r.post('/handlings/:id/cancel', requireAuth, requirePerm(P_HANDLE), attachOrgScope, guard((req, res) => {
+  const out = cancelHandling(getDb(), { id: Number(req.params.id), reason: req.body?.reason || null, actor: actorOf(req), orgScope: req.orgScope })
   return ok(res, out)
 }))
 
-r.get('/handlings/:id', requireAuth, requirePerm(P_VIEW), guard((req, res) => {
-  const data = getHandling(getDb(), Number(req.params.id))
+r.get('/handlings/:id', requireAuth, requirePerm(P_VIEW), attachOrgScope, guard((req, res) => {
+  const data = getHandling(getDb(), Number(req.params.id), req.orgScope)
   if (!data) return fail(res, '不良品处理单不存在', 404)
   return ok(res, data)
 }))
