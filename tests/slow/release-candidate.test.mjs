@@ -348,9 +348,10 @@ test('--run-tests --ci-run auto records produced results bound to the package te
   assert.equal(ft.result, 'passed')
   assert.equal(ft.origin, 'produced')
   assert.ok(ft.duration_ms >= 0)
-  const stubs = readdirSync(path.join(src, 'tests')).filter(f => f.endsWith('.test.mjs') && f !== 'zz-ok.test.mjs').length // 每个桩 1 个用例 + zz-ok 的 2 个（1 通过、1 跳过）
+  // Header-guard fixtures now also create tests/slow stubs; count the entire fixture tree.
+  const stubs = readdirSync(path.join(src, 'tests'), { recursive: true }).filter(f => f.endsWith('.test.mjs') && f !== 'zz-ok.test.mjs').length // 每个桩 1 个用例 + zz-ok 的 2 个（1 通过、1 跳过）
   assert.deepEqual(ft.summary_counts, { tests: stubs + 2, pass: stubs + 1, fail: 0, cancelled: 0, skipped: 1, todo: 0 })
-    assert.equal(ft.tests_tree_sha256, hashTestsTree(src))
+  assert.equal(ft.tests_tree_sha256, hashTestsTree(src))
   for (const g of Object.values(ev.guards)) { assert.equal(g.result, 'passed'); assert.equal(g.origin, 'produced'); assert.ok(g.duration_ms >= 0) }
   // CI：来自 gh 替身，且被标注为查询结果
   assert.equal(ev.ci_run_id, '424242')
