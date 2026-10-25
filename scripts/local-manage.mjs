@@ -14,6 +14,7 @@ import net from 'node:net'
 import { randomBytes } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { assessDataSeparation } from './lib/data-separation.mjs'
 import { createRequire } from 'node:module'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -149,7 +150,9 @@ async function backup() {
 async function doctor() {
   const cfg = config()
   const result = { node: process.version, supportedNode: process.versions.node.startsWith('22.'), platform: process.platform,
-    sqlite: nativeReady(), frontend: fs.existsSync(path.join(ROOT, 'dist/index.html')), instance: INSTANCE, dataDirectory: DATA, backupDirectory: BACKUPS, port: cfg.port }
+    sqlite: nativeReady(), frontend: fs.existsSync(path.join(ROOT, 'dist/index.html')), instance: INSTANCE, dataDirectory: DATA, backupDirectory: BACKUPS, port: cfg.port,
+    // AH5（ADR-0055 补充 4）：谁能直接写库——只报告，不改变退出码
+    dataSeparation: assessDataSeparation({ dataDir: DATA }) }
   try { const response = await fetch(`http://127.0.0.1:${cfg.port}/api/meta/health`, { signal: AbortSignal.timeout(2000) }); result.health = await response.json() }
   catch { result.health = 'not running (normal before start)' }
   console.log(JSON.stringify(result, null, 2))
