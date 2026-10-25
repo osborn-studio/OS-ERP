@@ -38,6 +38,8 @@ const DECLARED = [
   'server/lib/profile.js',
   'server/lib/db-ttl-cache.js',
   'server/lib/trust-proxy.js',
+  'server/lib/process-counters.js',
+  'server/lib/metrics-export.js',
   'server/lib/redact.js',
   'server/middleware/audit.js',
   'server/middleware/security-headers.js',

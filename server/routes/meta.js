@@ -39,6 +39,10 @@ import { WAREHOUSE_TYPES } from '../lib/warehouse.js'
 import { versionInfo } from '../version.js'
 // 运维健康（ADR-0029）：详情只给 admin，匿名只拿 status
 import { computeOpsStatus, opsCounters } from '../lib/ops-status.js'
+// Prometheus 文本导出（ADR-0045）：admin JWT 或 GML_METRICS_TOKEN Bearer
+import { renderPrometheus, metricsTokenOk, PROMETHEUS_CONTENT_TYPE } from '../lib/metrics-export.js'
+import { counterSnapshot } from '../lib/process-counters.js'
+import { writeRetryStats } from '../lib/tx.js'
 import { DATA_DIR } from '../db/index.js'
 import { ROLES } from '../middleware/auth.js'
 // 配置的唯一出处与唯一写入点（批次 R）：
@@ -124,13 +128,40 @@ r.get(
   })
 )
 
-/** 运维计数器（admin）：备份年龄 / 迁移校验和不一致数 / 节流存储 / 磁盘。未知值为 -1。 */
+/** `Authorization: Bearer <x>` 里的 x；形状不对 ⇒ null（不回显、不记录） */
+function bearerOf(req) {
+  const m = /^Bearer ([^\s]+)$/.exec(String(req.headers.authorization || ''))
+  return m ? m[1] : null
+}
+
+/**
+ * 指标鉴权（ADR-0045）：仅 `?format=prometheus` 接受 `GML_METRICS_TOKEN` 的 Bearer（抓取端没有用户会话）；
+ * 令牌不对 / 未配置 ⇒ 落到 `requireAuth`（admin JWT），所以错误令牌得 401，与"没带凭据"不可区分。
+ * 令牌对 JSON 形态与其它任何路由都无效。
+ */
+function metricsAuth(req, res, next) {
+  if (req.query?.format === 'prometheus' && metricsTokenOk(bearerOf(req))) return next()
+  return requireAuth(req, res, next)
+}
+
+/**
+ * 运维计数器。默认 JSON（ADR-0029）；`?format=prometheus` 返回 text exposition（ADR-0045）。
+ * 令牌放行时 `req.user` 为空：仅此处的处理器跳过 isOpsAdmin。
+ */
 r.get(
   '/metrics',
-  requireAuth,
+  metricsAuth,
   wrap((req, res) => {
-    if (!isOpsAdmin(req.user)) return fail(res, '需要管理员权限', 403, 403)
-    return ok(res, { counters: opsCounters(computeOpsStatus({ db: getDb(), dataDir: DATA_DIR })) })
+    const format = req.query?.format
+    if (format !== undefined && format !== 'json' && format !== 'prometheus') return fail(res, 'format 只能是 json 或 prometheus', 400, 400)
+    const viaToken = !req.user && format === 'prometheus'
+    if (!viaToken && !isOpsAdmin(req.user)) return fail(res, '需要管理员权限', 403, 403)
+    const ops = computeOpsStatus({ db: getDb(), dataDir: DATA_DIR })
+    if (format !== 'prometheus') return ok(res, { counters: opsCounters(ops) })
+    res.status(200)
+    res.setHeader('Content-Type', PROMETHEUS_CONTENT_TYPE)
+    res.setHeader('Cache-Control', 'no-store')
+    return res.end(Buffer.from(renderPrometheus({ ops, retry: writeRetryStats(), counters: counterSnapshot(), version: versionInfo().version }), 'utf8'))
   })
 )
 

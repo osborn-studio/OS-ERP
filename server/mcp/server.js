@@ -38,6 +38,7 @@ import { requireAuth, requirePerm } from '../middleware/auth.js'
 import * as engine from '../lib/stock.js'
 import { versionInfo } from '../version.js'
 import { logger } from '../lib/logger.js'
+import { incCounter } from '../lib/process-counters.js'
 
 const r = Router()
 
@@ -183,12 +184,14 @@ function insertCallLog(db, { token, tool, ok, errorCode, errorMessage, args, sum
     const err = new Error(`调用审计暂不可用，操作未提交：${e?.message ?? e}`)
     err.code = 'AUDIT_UNAVAILABLE'
     err.status = 503
+    incCounter('audit_strict_write_failures_total', 'mcp_call_log')
     throw err
   }
   if (inserted.changes !== 1) {
     const err = new Error('调用审计未落行，操作未提交')
     err.code = 'AUDIT_UNAVAILABLE'
     err.status = 503
+    incCounter('audit_strict_write_failures_total', 'mcp_call_log')
     throw err
   }
 }
