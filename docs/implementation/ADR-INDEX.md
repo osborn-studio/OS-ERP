@@ -61,5 +61,5 @@
 | 0053 | [ADR-0053：指标接口按范围收口，`report.dashboard_kpi` 与 dealer summary 补功能权限（AD1）](ADR-0053-metrics-scope-and-kpi-permissions.md) | 第十三批（进行中） | 开发实现，尚非产品上线验收 | `test-metrics.mjs` | — |
 | 0054 | [ADR-0054：审计 FTS5 索引可选化与无 FTS5 构建的真实验证（AD4）](ADR-0054-audit-fts-optional.md) | 第十三批（进行中） | 开发实现，尚非产品上线验收 | `audit-fts-maintain.mjs`<br>`bench-audit-fts-toggle.mjs`<br>`test-setting-audit.mjs` | — |
 | 0055 | [ADR-0055：透明日志与审计链的离机签名锚点（AD5）](ADR-0055-offbox-anchors.md) | 第十三批（进行中） | 开发实现，尚非产品上线验收 | `lib/data-separation.mjs`<br>`lib/offbox-anchor.mjs`<br>`offbox-anchor.mjs` | — |
-| 0056 | [ADR-0056：MCP 工具级速率限制与日配额（AD9）](ADR-0056-mcp-rate-limit-quota.md) | 第十三批（进行中） | 开发实现，尚非产品上线验收 | `bench-mcp-rate-contention.mjs` | — |
+| 0056 | [ADR-0056：MCP 工具级速率限制与日配额（AD9）](ADR-0056-mcp-rate-limit-quota.md) | 第十三批（进行中） | 开发实现，尚非产品上线验收 | `bench-mcp-rate-contention.mjs`<br>`check-metrics-scope.mjs`<br>`mcp-rate-calibrate.mjs` | — |
 | 0057 | [ADR-0057：指标按业务查看权限过滤，受限范围默认隐藏无范围语义的指标（AE1）](ADR-0057-metrics-perms-hide.md) | 第十四批（进行中） | 开发实现，尚非产品上线验收 | `check-metrics-scope.mjs`<br>`test-setting-audit.mjs` | — |

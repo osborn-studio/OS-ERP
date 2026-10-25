@@ -316,6 +316,66 @@ export function dailyQuotaUsage(db, { cap = 500 } = {}) {
   } catch { return null }
 }
 
+/** 配额接口的分页：默认 / 上限（AH9）。 */
+export const QUOTA_PAGE_DEFAULT = 100
+export const QUOTA_PAGE_MAX = 500
+
+/**
+ * 游标（AH9）：不透明的 base64url(`<本地日期>.<used>.<id>`)，表示"排在 (used 降序, id 升序) 次序里这一行**之后**"的位置，并绑定生成它时的本地日历日。
+ * 只认规范形式——`YYYY-MM-DD` 日期、非负整数 used（无前导零）、正整数 id、都在安全整数内，且重新编码后与输入逐字符相同；其它一律 null（调用方返回 400）。
+ * 它是位置不是快照：翻页期间用量变大的令牌只会往前挪（可能被本次翻页漏掉，不会重复出现），用量在同一本地日历日内只增不减；
+ * **跨过本地午夜用量归零，旧位置不再有意义，所以日期不是今天的游标一律作废**（`dailyQuotaPage` 返回 `expired: true`，路由答 400 让调用方回到首页）。
+ */
+export function encodeQuotaCursor({ day, used, id }) {
+  return Buffer.from(`${day}.${used}.${id}`, 'utf8').toString('base64url')
+}
+export function decodeQuotaCursor(raw) {
+  if (typeof raw !== 'string' || raw.length === 0 || raw.length > 96 || !/^[A-Za-z0-9_-]+$/.test(raw)) return null
+  const m = /^([0-9]{4}-[0-9]{2}-[0-9]{2})\.(0|[1-9][0-9]{0,15})\.([1-9][0-9]{0,15})$/.exec(Buffer.from(raw, 'base64url').toString('utf8'))
+  if (!m) return null
+  const pos = { day: m[1], used: Number(m[2]), id: Number(m[3]) }
+  if (!Number.isSafeInteger(pos.used) || !Number.isSafeInteger(pos.id)) return null
+  return encodeQuotaCursor(pos) === raw ? pos : null
+}
+
+/**
+ * 在用令牌今日日配额用量的**一页**（AH9，`GET /api/mcp/limits/quota` 用）。→ `{ rows:[{id,name,used}], next, expired? }` | `null`（读失败）。
+ * 次序固定为 `used DESC, id ASC`（id 唯一 ⇒ 全序，并列也不会重复或遗漏）；`after = {day,used,id}` 取其后的一页（keyset，不用 OFFSET）。
+ * `next` = 这一页最后一行的位置游标；只有确实还有更多行时才给（多取 1 行判断，没有"恰好一页"的空翻页）。
+ * `after.day` 不是现在的本地日期（跨过午夜）⇒ `{ rows: [], next: null, expired: true }`：日期谓词与分页谓词在同一条语句里，不会在午夜边界上拿到半新半旧的结果。
+ * 用量口径与 `dailyQuotaUsage` / `dailyQuotaState` 完全一致；`limit` 不是正整数时按默认 100 处理（上限 500），`after` 不合规按没有处理（参数全部是绑定值，不拼 SQL）。
+ */
+export function dailyQuotaPage(db, { limit = QUOTA_PAGE_DEFAULT, after = null } = {}) {
+  const n = Number.isSafeInteger(limit) && limit >= 1 ? Math.min(limit, QUOTA_PAGE_MAX) : QUOTA_PAGE_DEFAULT
+  const pos = after && typeof after.day === 'string' && /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(after.day)
+    && Number.isSafeInteger(after.used) && after.used >= 0 && Number.isSafeInteger(after.id) && after.id > 0 ? after : null
+  try {
+    const rows = db.prepare(`
+      SELECT id, name, used, day FROM (
+        SELECT t.id AS id, t.name AS name, COUNT(l.id) AS used, date('now','localtime') AS day
+          FROM agent_tokens t
+          LEFT JOIN mcp_call_logs l ON l.token_id = t.id AND l.created_at >= date('now','localtime')
+         WHERE t.status = 'active' AND (t.expires_at IS NULL OR t.expires_at = '' OR t.expires_at >= datetime('now','localtime'))
+         GROUP BY t.id
+      )
+      WHERE (? IS NULL) OR (day = ? AND (used < ? OR (used = ? AND id > ?)))
+      ORDER BY used DESC, id
+      LIMIT ?`).all(pos ? 1 : null, pos?.day ?? '', pos?.used ?? 0, pos?.used ?? 0, pos?.id ?? 0, n + 1)
+    if (pos && rows.length === 0 && db.prepare("SELECT date('now','localtime') AS d").get().d !== pos.day) return { rows: [], next: null, expired: true }
+    const page = rows.slice(0, n).map(({ id, name, used }) => ({ id, name, used }))
+    const last = rows[page.length - 1]
+    return { rows: page, next: rows.length > n && last ? encodeQuotaCursor(last) : null }
+  } catch { return null }
+}
+
+/**
+ * 限速桶表里 `denied` 行的**行数**（AH9，导出为 gauge `os_erp_mcp_rate_denied_rows`）。读失败 / 表缺失 ⇒ -1（"未知"，与其它 gauge 同约定）。
+ * 它衡量表的体量：每令牌每窗口至多一行，随既有的过期清理（`purge`）一起被删，所以长期持续增长说明清理没在跑。永不抛。
+ */
+export function deniedRowCount(db) {
+  try { return db.prepare("SELECT COUNT(*) c FROM mcp_rate_buckets WHERE kind='denied'").get().c } catch { return -1 }
+}
+
 /** 已配置的日配额（0 = 关闭）。只读展示用：读失败按 0 显示不影响限流（限流自己走 `dailyQuotaState`，读失败 fail closed）。 */
 export function dailyQuotaConfigured(db) {
   const n = Number(readSetting(db, 'mcp_token_daily_quota'))
@@ -353,4 +413,4 @@ export function dailyQuotaState(db, tokenId, { now = () => new Date() } = {}) {
   }
 }
 
-export default { createMcpRateLimiter, recentLimitedByToken, dailyQuotaUsage, rateStoreFromEnv, dailyQuotaState, DEFAULT_MCP_RATE, mcpRatePolicy, dailyQuotaConfigured }
+export default { createMcpRateLimiter, recentLimitedByToken, dailyQuotaUsage, dailyQuotaPage, encodeQuotaCursor, decodeQuotaCursor, deniedRowCount, rateStoreFromEnv, dailyQuotaState, DEFAULT_MCP_RATE, mcpRatePolicy, dailyQuotaConfigured }

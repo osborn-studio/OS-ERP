@@ -23,7 +23,7 @@
  *   （所有者改密 / 停用 / 过期时不再是 active），两列都来自服务端，页面不自己推断。
  * ============================================================================
  */
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Card, SectionTitle, StatCard, Table, Tabs, useFetch, toast } from '../../components/ui'
 import api from '../../api/client'
 import { PRODUCT_NAME } from '../../constants/brand'
@@ -391,29 +391,56 @@ function McpTokenLimitsBlock({ nonce }: { nonce: number }) {
   )
 }
 
-type McpQuota = { daily_quota: number; enabled: boolean; usage_unavailable?: boolean; truncated?: boolean; tokens: { id: number; name: string; used: number; remaining: number }[] }
+type McpQuotaToken = { id: number; name: string; used: number; remaining: number }
+type McpQuota = { daily_quota: number; enabled: boolean; usage_unavailable?: boolean; truncated?: boolean; next_cursor?: string | null; tokens: McpQuotaToken[] }
 
 /**
  * 每令牌今日配额用量（AG9，只读，仅 system.mcp.manage）。数据来自 `GET /api/mcp/limits/quota`，口径同日配额判定（本地日历日的审计行数）。
  * 配额关闭时服务端返回空列表，这里整块不显示；读取失败（含 403）同样不显示。
+ * AH9：游标分页——首屏 100 行，`next_cursor` 非空时显示「加载更多」，按它取下一页并追加（按 id 去重）；刷新（nonce）时回到首页。
  */
 function McpQuotaBlock({ nonce }: { nonce: number }) {
   const { data, error } = useFetch<McpQuota>('/mcp/limits/quota', undefined, [nonce])
+  const [extra, setExtra] = useState<McpQuotaToken[]>([])
+  const [cursor, setCursor] = useState<string | null>(null)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [moreFailed, setMoreFailed] = useState(false)
+  const generation = useRef(0) // 刷新后到达的旧「加载更多」响应必须丢弃，否则会把已清空的行又塞回来并推进新列表的游标
+  useEffect(() => { generation.current += 1; setExtra([]); setCursor(data?.next_cursor ?? null); setMoreFailed(false); setLoadingMore(false) }, [data])
   if (!data || error || !data.enabled) return null
   if (data.usage_unavailable) return <div data-testid="mcp-quota" data-quota={data.daily_quota} data-unavailable="1" className="mt-3 text-[12px] text-amber-700">今日配额用量暂时读不到（审计表不可读）；此时调用会被安全拒绝，不代表还有剩余额度。</div>
-  const low = data.tokens.filter((t) => t.remaining === 0).length
+  const rows = [...data.tokens, ...extra.filter((t) => !data.tokens.some((d) => d.id === t.id))]
+  const low = rows.filter((t) => t.remaining === 0).length
+  const loadMore = async () => {
+    if (!cursor || loadingMore) return
+    const mine = generation.current
+    setLoadingMore(true); setMoreFailed(false)
+    try {
+      const res = await api.get('/mcp/limits/quota', { cursor, limit: 100 })
+      if (mine !== generation.current) return
+      const page: McpQuota = res.data
+      if (page.usage_unavailable) { setMoreFailed(true); return }
+      setExtra((prev) => [...prev, ...page.tokens.filter((t) => !prev.some((p) => p.id === t.id))])
+      setCursor(page.next_cursor ?? null)
+    } catch { if (mine === generation.current) setMoreFailed(true) } finally { if (mine === generation.current) setLoadingMore(false) }
+  }
   return (
-    <div data-testid="mcp-quota" data-quota={data.daily_quota} data-exhausted={low} className="mt-3">
-      {data.truncated && <div className="text-[12px] text-amber-700 mb-1" data-testid="mcp-quota-truncated">令牌过多，仅列出前 500 张，用量多者优先。</div>}
-      <div className="text-[12px] text-slate-500 mb-1">今日配额用量（每令牌 {data.daily_quota} 次，本地日历日，审计行口径）</div>
-      {data.tokens.length === 0
+    <div data-testid="mcp-quota" data-quota={data.daily_quota} data-exhausted={low} data-loaded={rows.length} data-has-more={cursor ? '1' : '0'} className="mt-3">
+      <div className="text-[12px] text-slate-500 mb-1">今日配额用量（每令牌 {data.daily_quota} 次，本地日历日，审计行口径；用量多者在前）</div>
+      {rows.length === 0
         ? <div className="text-[12px] text-slate-500" data-testid="mcp-quota-empty">没有在用令牌</div>
-        : <ul className="text-[13px] divide-y divide-slate-100">{data.tokens.map((t) => (
+        : <ul className="text-[13px] divide-y divide-slate-100">{rows.map((t) => (
             <li key={t.id} className="py-1 flex justify-between" data-testid="mcp-quota-row" data-token-id={t.id} data-used={t.used} data-remaining={t.remaining}>
               <span>{t.name} <span className="text-slate-400">#{t.id}</span></span>
               <span className={t.remaining === 0 ? 'text-red-600' : 'text-slate-700'}>已用 {t.used} / 剩余 {t.remaining}</span>
             </li>
           ))}</ul>}
+      {cursor && (
+        <button type="button" className="mt-2 text-[12px] text-blue-600 hover:underline disabled:opacity-50" data-testid="mcp-quota-more" disabled={loadingMore} onClick={loadMore}>
+          {loadingMore ? '加载中…' : '加载更多'}
+        </button>
+      )}
+      {moreFailed && <div className="text-[12px] text-amber-700 mt-1" data-testid="mcp-quota-more-failed">加载更多失败，请稍后重试或刷新。</div>}
     </div>
   )
 }

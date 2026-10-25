@@ -757,10 +757,16 @@ MCP 按令牌的速率限制与日配额（ADR-0056 / AD9）
 | 导出 | 类型 | 路由 | MCP 工具 | 被模块调用 |
 |---|---|---|---|---|
 | `DEFAULT_MCP_RATE` | const | — | — | — |
+| `QUOTA_PAGE_DEFAULT` | const | — | — | — |
+| `QUOTA_PAGE_MAX` | const | — | — | — |
 | `createMcpRateLimiter` | fn | — | — | mcp/server.js |
 | `dailyQuotaConfigured` | fn | — | — | — |
+| `dailyQuotaPage` | fn | — | — | — |
 | `dailyQuotaState` | fn | — | — | — |
 | `dailyQuotaUsage` | fn | — | — | — |
+| `decodeQuotaCursor` | fn | — | — | — |
+| `deniedRowCount` | fn | GET /api/meta/metrics | — | — |
+| `encodeQuotaCursor` | fn | — | — | — |
 | `mcpRatePolicy` | fn | — | — | — |
 | `rateStoreFromEnv` | fn | — | — | — |
 | `recentLimitedByToken` | fn | — | — | — |

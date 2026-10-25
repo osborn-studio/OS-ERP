@@ -22,7 +22,7 @@ import { createToken, revokeToken, SCOPE_LABEL, listTokensWithStatus, getTokenWi
 import { TOOLS } from './tools.js'
 // 「AI 能力目录」的唯一口径（单据矩阵 + 工具清单 + 安全边界都由它算，页面不自己编）
 import { buildMcpCatalog } from './catalog.js'
-import { mcpRatePolicy, dailyQuotaConfigured, recentLimitedByToken, dailyQuotaUsage } from '../lib/mcp-rate-limit.js'
+import { mcpRatePolicy, dailyQuotaConfigured, recentLimitedByToken, dailyQuotaPage, decodeQuotaCursor, QUOTA_PAGE_DEFAULT, QUOTA_PAGE_MAX } from '../lib/mcp-rate-limit.js'
 import { mcpCodeTotal } from '../lib/process-counters.js'
 
 const r = Router()
@@ -111,22 +111,37 @@ r.get(
 /**
  * 每令牌今日日配额用量（AG9，只读，仅 system.mcp.manage）：`daily_quota`（0 = 关闭）与「在用（active）令牌」今日已用 / 剩余。
  * 用量与 `dailyQuotaState` 同口径（本地日历日的 `mcp_call_logs` 行数）；配额关闭时 `tokens` 为空（没有可剩余的额度，不披露调用节奏）。
- * 只含令牌 id / 名称与数字，不含前缀、哈希、明文；在用 = active 且未过期；先按用量排序后截断，至多 500 张，超出 `truncated=true`。审计表读不到时 `usage_unavailable=true`、`tokens` 为空（不报「剩余全部额度」，因为限流此时 fail closed）。
+ * 只含令牌 id / 名称与数字，不含前缀、哈希、明文；在用 = active 且未过期。
+ * 游标分页（AH9）：`limit`（1..500，默认 100，超过 500 取 500；非整数 / <1 ⇒ 400）+ `cursor`（上一页返回的 `next_cursor`，不合规 ⇒ 400）；
+ * 次序固定 `used DESC, id ASC`；游标绑定生成时的本地日期，跨过本地午夜即作废（400）；`next_cursor` 为 null 表示没有更多页；`truncated` 保留旧字段，含义改为「还有后续页」（= next_cursor 非空）。
+ * 审计表读不到时 `usage_unavailable=true`、`tokens` 为空（不报「剩余全部额度」，因为限流此时 fail closed）。
  */
+const singleParam = (v) => (Array.isArray(v) ? undefined : v)
 r.get(
   '/limits/quota',
   requireAuth,
   requirePerm('system.mcp.manage'),
-  wrap((_req, res) => {
+  wrap((req, res) => {
+    const rawLimit = singleParam(req.query.limit)
+    let limit = QUOTA_PAGE_DEFAULT
+    if (req.query.limit !== undefined) {
+      if (typeof rawLimit !== 'string' || !/^[0-9]{1,9}$/.test(rawLimit) || Number(rawLimit) < 1) return fail(res, 'limit 必须是 1..500 的整数', 400, 400)
+      limit = Math.min(Number(rawLimit), QUOTA_PAGE_MAX)
+    }
+    let after = null
+    if (req.query.cursor !== undefined) {
+      after = decodeQuotaCursor(singleParam(req.query.cursor))
+      if (!after) return fail(res, 'cursor 无效（请使用上一页返回的 next_cursor）', 400, 400)
+    }
     const db = getDb()
     const quota = dailyQuotaConfigured(db)
-    if (!(quota > 0)) return ok(res, { daily_quota: 0, enabled: false, usage_unavailable: false, truncated: false, tokens: [] })
-    const u = dailyQuotaUsage(db, { cap: 500 })
+    if (!(quota > 0)) return ok(res, { daily_quota: 0, enabled: false, usage_unavailable: false, truncated: false, next_cursor: null, tokens: [] })
+    const page = dailyQuotaPage(db, { limit, after })
+    if (page?.expired) return fail(res, 'cursor 已过期（已跨过本地午夜，用量已归零），请从第一页重新开始', 400, 400)
     // 审计表读不到：限流此时 fail closed，所以不能报"还剩全部额度"——如实标 usage_unavailable
-    if (!u) return ok(res, { daily_quota: quota, enabled: true, usage_unavailable: true, truncated: false, tokens: [] })
-    const tokens = u.rows.map((t) => ({ id: t.id, name: t.name, used: t.used, remaining: Math.max(0, quota - t.used) }))
-    const truncated = u.truncated
-    return ok(res, { daily_quota: quota, enabled: true, usage_unavailable: false, truncated, tokens })
+    if (!page) return ok(res, { daily_quota: quota, enabled: true, usage_unavailable: true, truncated: false, next_cursor: null, tokens: [] })
+    const tokens = page.rows.map((t) => ({ id: t.id, name: t.name, used: t.used, remaining: Math.max(0, quota - t.used) }))
+    return ok(res, { daily_quota: quota, enabled: true, usage_unavailable: false, truncated: page.next !== null, next_cursor: page.next, tokens })
   })
 )
 

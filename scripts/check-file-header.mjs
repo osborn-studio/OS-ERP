@@ -43,6 +43,8 @@ const DECLARED = [
   'server/lib/audit-anchor-intent.js',
   'scripts/lib/anchor-intent-signer.mjs',
   'scripts/audit-verify-chain.mjs',
+  // 限速阈值校准（AH9，ADR-0056 补充 4）
+  'scripts/mcp-rate-calibrate.mjs',
   'scripts/audit-archive.mjs',
   'scripts/gen-role-matrix.mjs',
   // 离机锚点（AD5，ADR-0055）
