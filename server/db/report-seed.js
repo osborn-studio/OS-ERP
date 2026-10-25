@@ -174,10 +174,24 @@ const OPENING_ROWS = [
  */
 const OPEN_PERIODS = ['2026-05', '2026-06', '2026-07', '2026-08', '2026-09', '2026-10']
 const CLOSED_PERIODS = ['2026-04']
-// 做**真实期末结转**的期间。选 2026-07 是因为它是演示数据里唯一"本期损益发生额非 0"的期间
-// （2026-05 / 2026-10 的凭证是收付款与成本结转，不含损益科目）——
-// 拿一个损益为 0 的期间做结转，演示库会显示"已结转"却什么也没转，等于没演示。
-const CARRY_PERIODS = ['2026-07']
+// 做**真实期末结转**的期间 —— **按数据挑，不写死**。
+// 原来写死 2026-07（当时它是演示数据里唯一"本期损益发生额非 0"的期间）。但销售出库 / 成本结转的
+// 演示凭证日期来自灌数时钟（seedNow() 往前推若干天），随着真实日期推移，这些损益凭证会从 7 月
+// 滑进 8 月（food 库 2026-10-25 起实际如此），写死的 7 月就变成"损益为 0 的期间"——结转被
+// carryForward 拒绝、演示库里看不到结转效果，verify-seed / test-closing 也随之变红。
+// 规则：① 已经做过结转的登记期间照旧（重启幂等，不再多结一期）；
+//      ② 否则在登记期间里（不含最后一个月，它是"进行中"的当月）按时间顺序挑第一个有未结转损益的期间；
+//      ③ 一个都没有就不结转，并在日志里说明（演示数据少一块必须有说得出的原因）。
+const PREFERRED_CARRY_PERIOD = '2026-07'
+function pickCarryPeriods(db) {
+  const candidates = OPEN_PERIODS.slice(0, -1)
+  const status = (p) => { try { return C.closingStatus(db, { period: p }) } catch { return null } }
+  const already = candidates.filter((p) => status(p)?.carried)
+  if (already.length) return already
+  const ordered = [PREFERRED_CARRY_PERIOD, ...candidates.filter((p) => p !== PREFERRED_CARRY_PERIOD)]
+  const first = ordered.find((p) => candidates.includes(p) && status(p)?.pending)
+  return first ? [first] : []
+}
 
 export function seedReport(db, { silent = false } = {}) {
   requireDemoDatabase(db)
@@ -264,6 +278,8 @@ export function seedReport(db, { silent = false } = {}) {
   // 手工插的那张一旦与余额脱节（以后演示数据改了就会脱节），
   // 它就会成为一张"看起来对、其实平不了"的票 —— 而错误要到下次关账才发现。
   let carried = 0
+  const CARRY_PERIODS = pickCarryPeriods(db)
+  if (!CARRY_PERIODS.length) log('期末结转跳过：登记期间里没有带未结转损益的期间（演示库将没有结转样本）')
   for (const p of CARRY_PERIODS) {
     try {
       const out = C.carryForward(db, { period: p, actor: { name: '演示数据' } })
