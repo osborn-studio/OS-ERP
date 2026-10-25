@@ -174,7 +174,7 @@
 
 | 位置 | 残留 | 来源 |
 |---|---|---|
-| `release-candidate.yml`（含 `dry_run`）、`capacity-smoke`、`dependency-review`、`audit-no-fts5`、夜间工作流 | 均未在托管 runner 上实跑（PR #4–#11 未合并，main 上没有这些文件） | AG1/AG8 |
+| `release-candidate.yml`（含 `dry_run`）、`capacity-smoke`、`dependency-review`、`audit-no-fts5`、夜间工作流 | 均未在托管 runner 上实跑（第十七批复查：#4 已合并但 main 上仍未找到这些文件，#5–#11 未合并；详见 docs/release/README.md） | AG1/AG8 |
 | 仍声明为 `scopeless` 的指标 | 每条有理由但未逐条评估是否可接入范围；`hide` 模式下受限账号整体隐藏 | AG2 |
 | `explain-plans.json` | 指纹取自默认小合成库；大数据量下的计划（如 OMS 密集窗口）未入快照；`ANALYZE` 政策仍只在文档 | AG3/AF3 |
 | AG4 基准表 | 数值取自节奏修复前的脚本版本；修复后未重跑 | AG4 |

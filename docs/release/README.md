@@ -165,6 +165,33 @@ PRs #1 to #3 are merged; #4 to #9 are open and unmerged; `gh` cannot find a PR #
 `regression`) and `linux-validation.yml`; `release-candidate.yml` and `nightly-capacity.yml` return HTTP 404 there. PRs #1 to #3 are
 merged; #4 to #10 are open and unmerged; PR #11 could not be found (HTTP 404). Dispatched 0 times (no `dry_run` run, no full run); no run id exists.
 
+**第十七批复查 (AH8, 2026-10-24 21:08 PDT = 2026-10-25 04:08 UTC): still not run; not dispatchable.** Read-only lookups against
+`osborn-studio/OS-ERP` (`gh pr list --state all`, `gh pr view N --json statusCheckRollup`, `gh api repos/osborn-studio/OS-ERP/contents/.github/workflows?ref=main`,
+`gh workflow list --all`, `gh run list`, plus `gh pr view 4 --json mergeCommit,mergedAt`, `gh api repos/osborn-studio/OS-ERP/commits/main`,
+`gh api repos/osborn-studio/OS-ERP/branches`, `gh api repos/osborn-studio/OS-ERP/contents/.github/workflows/ci.yml?ref=main` (decoded and grepped for top-level job keys) and
+`gh api repos/osborn-studio/OS-ERP/actions/runs/<id>/jobs` for runner labels); nothing was dispatched, re-run, approved or merged.
+- Merged into `main`: PR #1, #2, #3 and now **#4** (`feat/batch-eight`, merged 2026-10-25T03:59:13Z, merge commit `3ac0b8c`, which is
+  the `main` head at lookup time). Open and unmerged: #5, #6, #7, #8, #9, #10, #11. PR #12 was not found (`gh pr view 12`: "Could not
+  resolve to a PullRequest"); `batch-sixteen` is not a branch on the remote (branch listing shows `main` and the `feat/*` and `ci/*` branches only).
+- Workflow files on `main` (contents API, ref `main`): `ci.yml` and `linux-validation.yml` only. `release-candidate.yml` and
+  `nightly-capacity.yml` returned HTTP 404 (not found). `ci.yml` on `main` has the jobs `checks`, `docker`, `browser`, `regression`;
+  `capacity-smoke`, `dependency-review` and `audit-no-fts5` were not found there. `gh workflow list --all` shows only "CI" and "OS ERP Linux validation".
+- Hosted runs of the new workflows/jobs: `gh run list --workflow release-candidate.yml` returns "not found on the default branch", and
+  `gh run list --event workflow_dispatch` returned no rows, so no `release-candidate.yml` run and no dispatch run was found by these lookups (a tag-triggered run is not excluded by them). `nightly-capacity.yml` was not found in the workflow list (no run lookup was possible). The only evidence for the other jobs comes from PR-branch `pull_request` runs of `ci.yml`, not from `main`:
+  `audit-no-fts5` ("Audit search on a SQLite build without FTS5") completed SUCCESS on jobs labelled `ubuntu-latest` (runner names "GitHub Actions N", from the run-jobs API) for #9
+  (https://github.com/osborn-studio/OS-ERP/actions/runs/40160487305), #10 (https://github.com/osborn-studio/OS-ERP/actions/runs/40160487214) and #11
+  (https://github.com/osborn-studio/OS-ERP/actions/runs/40160488292); `capacity-smoke` ("Capacity smoke (manual, medium, hosted, trend only)") was SKIPPED on all three;
+  "Release candidate (unsigned, artifacts only)" (a job inside `ci.yml` on #9/#10, not the `release-candidate.yml` workflow) was SKIPPED; `dependency-review` was
+  SKIPPED on #10 and #11 (a `dependency-review` job was not listed among the #9 checks). Skipped means the job did not execute.
+- Latest check results of the open PRs (statusCheckRollup at lookup time; four of the five newest runs were still in progress, so the matrix job result is not final):
+  #5 `checks` in progress (https://github.com/osborn-studio/OS-ERP/actions/runs/40160263356); #6 four jobs SUCCESS (https://github.com/osborn-studio/OS-ERP/actions/runs/40052184538);
+  #7 four jobs SUCCESS (https://github.com/osborn-studio/OS-ERP/actions/runs/40083744638); #8 four jobs SUCCESS (https://github.com/osborn-studio/OS-ERP/actions/runs/40106110079);
+  #9, #10, #11 `checks` in progress with the results above. Earlier completed runs for #9, #10 and #11 on 2026-10-24 ended `failure` (e.g. https://github.com/osborn-studio/OS-ERP/actions/runs/40125708580 for #11); this
+  check did not inspect their logs. The `main` push run for the #4 merge (https://github.com/osborn-studio/OS-ERP/actions/runs/40160214891) was in progress.
+- Dispatch instructions: `release-candidate.yml` is NOT on `main`, so `workflow_dispatch` cannot be used and no dispatch was attempted. Once a PR that carries the
+  file is merged, run the steps in the section below (dry run first, then the full run); this entry does not supersede them.
+- No dispatch was attempted during this recheck; no run id was found for `release-candidate.yml` or `nightly-capacity.yml`. Hosted results here are CI gate evidence only, not release-package or production acceptance.
+
 ### 首跑步骤 (first run: dry run first, then the full run) (AG1)
 
 `release-candidate.yml` has never run on GitHub, and `workflow_dispatch` only works on a workflow file present on the target ref, so it can be
