@@ -12,6 +12,7 @@
 
 - [ADR-0041：MCP `order.trace_document` 与 `doc.query` 按单据解析器表判归属](docs/implementation/ADR-0041-mcp-trace-query-scope.md) — 判据唯一化：两个工具的归属都走 `docflow.docScopeOf / docInScope`（即 `/api/docflow/history`、`doc.get` 用的同一份解析器表）。入参由新的 `docScopeCtx(db, ctx)` 组装：`orgScope = ctx.scope`（令牌范围 ∩ 所有者当前范围，ADR-0011 `effectiveScope`），`user` = 令牌所有者行（`store` 型解析器需要 `store_id`；无主令牌为…
 - [ADR-0042：OMS 写路由与 MCP 库存工具按组织范围收口](docs/implementation/ADR-0042-oms-write-mcp-inventory-scope.md) — 判据不新增：沿用 ADR-0034 / 0039 的「平台绑定组织 = 平台履约仓所属组织」（`omsOrderScopeSql` / `omsPlatformScopeSql`，`server/lib/sales-order.js`），仓库侧用 ADR-0038 的 `assertWarehouseInScope` / `stockScopeSql`（`server/lib/stock.js`）。 2. `ship` / `complete` / `refund` 增 `a…
+- [ADR-0044：低库存口径统一与看板热点块（AA5）](docs/implementation/ADR-0044-dashboard-hot-blocks.md) — `metrics.js` / `ai.js` / `tools.js` 全部改调 `countBelowSafe` / `listBelowSafe`（`lib/stock.js`）。口径差异（有意为之，逐条列出）
 
 ## 第九批：见 roadmap-v5
 
