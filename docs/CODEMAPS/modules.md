@@ -3,7 +3,7 @@
 <!-- generated -->
 <!-- 由 `node scripts/gen-codemap.mjs` 生成，勿手改；CI 校验不漂移 -->
 
-共 89 个模块。“路由”只列在处理器区域内直接引用该函数的路由（路由超过 5 条时按路由文件汇总，明细见 [routes.md](routes.md)）；“MCP 工具”来自 `server/mcp/tools.js` 的 40 个工具；“被模块调用”是其它 lib/mcp 模块里的跨文件引用。“—”表示静态扫描没找到调用方，不等于死代码。
+共 90 个模块。“路由”只列在处理器区域内直接引用该函数的路由（路由超过 5 条时按路由文件汇总，明细见 [routes.md](routes.md)）；“MCP 工具”来自 `server/mcp/tools.js` 的 40 个工具；“被模块调用”是其它 lib/mcp 模块里的跨文件引用。“—”表示静态扫描没找到调用方，不等于死代码。
 
 ## 扫描边界（必读）
 
@@ -236,6 +236,16 @@
 | `chainColumnsPresent` | fn | — | — | lib/audit-anchor-manifest.js |
 | `verifyChain` | fn | — | — | lib/audit-anchor-manifest.js, lib/audit-trail.js |
 | `verifyJsonlSegment` | fn | — | — | lib/audit-anchor-manifest.js |
+
+## `server/lib/audit-fts-state.js`
+
+审计 FTS 分批重建的检查点表：名字、结构、"重建中"判据（roadmap-v13 AH4，ADR-0054 补充 4）
+
+| 导出 | 类型 | 路由 | MCP 工具 | 被模块调用 |
+|---|---|---|---|---|
+| `REBUILD_STATE_DDL` | const | — | — | — |
+| `REBUILD_STATE_TABLE` | const | — | — | lib/audit-view.js |
+| `rebuildInProgress` | fn | — | — | lib/audit-view.js |
 
 ## `server/lib/audit-trail.js`
 

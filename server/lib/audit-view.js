@@ -14,6 +14,7 @@
  *     仅按 action 过滤必须带 module（`AUDIT_ACTION_NEEDS_MODULE`，400）。
  *   · （AF4）`auditQueryPlan`：选 FTS 与执行之间索引可能被 `--disable` 删掉（`no such table: audit_logs_fts`）；`plan.run` 捕获它**一次**，换 LIKE 重跑
  *     并计 `audit_fts_fallback_total{reason}`；导出跨批次时同样（游标不变，两条路径同序同结果）。其它错误、LIKE 计划上的错误、重跑后的再次失败都原样抛出。
+ *   · （AH4）`audit-fts-maintain --rebuild` 分批重建未完成时库里有检查点表 `audit_fts_rebuild_state`，`ftsAvailable` 见到它就不走 FTS（残缺索引不回答检索）。
  *   · （AA6）排序随过滤选择：命中 module / user_id 索引（末列 created_at）时按 `created_at DESC, id DESC`，索引直接给出顺序、无排序临时表；
  *     其余按 `id DESC`（rowid 倒扫）。导出的游标与列表排序同一份（`orderOf` / `exportChunks`）。
  * ============================================================================
@@ -22,6 +23,7 @@ import { redactValue, redactText } from './redact.js'
 import { readSetting } from './settings.js'
 import { incCounter } from './process-counters.js'
 import { testPause } from './test-pause.js'
+import { REBUILD_STATE_TABLE, rebuildInProgress } from './audit-fts-state.js'
 
 export const AUDIT_EXPORT_MAX_ROWS = 50000
 export const AUDIT_PAGE_MAX = 200
@@ -52,7 +54,11 @@ export const ftsEnvDisabled = () => process.env.GML_AUDIT_FTS === '0'
 /** 这个库能不能走 FTS：迁移 067 建了 `audit_logs_fts`（没有 FTS5 的构建上迁移是空操作，表不存在 → 回退 LIKE） */
 export function ftsAvailable(db) {
   if (ftsOverride === false || ftsEnvDisabled()) return false
-  try { return !!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(FTS_TABLE) } catch { return false }
+  // AH4：分批重建未完成（检查点表在）= 索引残缺，不用它回答检索（回退 LIKE，结果相同）
+  try {
+    const names = new Set(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name IN (?, ?)").all(FTS_TABLE, REBUILD_STATE_TABLE).map((r) => r.name))
+    return names.has(FTS_TABLE) && !names.has(REBUILD_STATE_TABLE)
+  } catch { return false }
 }
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
@@ -106,7 +112,7 @@ export function ftsState(db) {
   let present = false
   try { present = !!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(FTS_TABLE) } catch { /* 无表 */ }
   const envOff = ftsEnvDisabled()
-  return { setting_enabled: setting, index_present: present, env_disabled: envOff, active: present && !envOff && ftsOverride !== false }
+  return { setting_enabled: setting, index_present: present, env_disabled: envOff, active: present && !envOff && ftsOverride !== false && !rebuildInProgress(db) }
 }
 
 /**

@@ -6,7 +6,8 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { spawnSync } from 'node:child_process'
+import { spawnSync, spawn } from 'node:child_process'
+import { setTimeout as sleep } from 'node:timers/promises'
 import { mkdtempSync, rmSync, readFileSync, readdirSync, existsSync, symlinkSync, writeFileSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -14,6 +15,8 @@ import { fileURLToPath } from 'node:url'
 import Database from 'better-sqlite3'
 import { runMigrations } from '../server/db/migrations/runner.js'
 import * as m067 from '../server/db/migrations/067_audit_fts.cjs'
+import { REBUILD_STATE_TABLE } from '../server/lib/audit-fts-state.js'
+import { ftsAvailable, ftsState } from '../server/lib/audit-view.js'
 
 // AD4：CI 的 audit-no-fts5 job 在没有 FTS5 的 SQLite 构建上跑本文件：依赖索引存在的用例跳过，无 FTS5 用例真实执行
 const NO_FTS5 = !m067.ftsSupported(new Database(':memory:'))
@@ -262,4 +265,169 @@ test('AD4 a failed toggle rolls back everything, including a freshly seeded sett
   assert.equal(ftsNames(db).length, 4, 'objects restored by the rollback')
   assert.equal(settingRow(db), undefined, 'no half-seeded setting row')
   assert.equal(db.prepare("SELECT COUNT(*) c FROM setting_audit_log WHERE key='audit_fts_enabled'").get().c, 0, 'no stray baseline')
+})
+
+// ============================================================================
+// AH4（ADR-0054 补充 4）：--rebuild 分批 + 检查点 + --resume；SIGTERM / SIGINT 在批边界停止
+// ============================================================================
+const BASE = (dir) => ['--data-dir', dir, '--industry', 'cosmetic']
+const docs = (db) => db.prepare('SELECT COUNT(*) c FROM audit_logs_fts_docsize').get().c
+const stateRow = (db) => (db.prepare("SELECT name FROM sqlite_master WHERE name=?").get(REBUILD_STATE_TABLE) ? db.prepare(`SELECT * FROM ${REBUILD_STATE_TABLE}`).get() : null)
+const matchCount = (db, q) => db.prepare('SELECT COUNT(*) c FROM audit_logs_fts WHERE audit_logs_fts MATCH ?').get(`"${q}"`).c
+/** 有唯一实体名的 n 行：让 MATCH 能逐行核对；绕过 fixture 的循环以便大表快速建 */
+function bigFixture(t, rows) {
+  const { dir, db } = fixture(t, 0)
+  const ins = db.prepare('INSERT INTO audit_logs (user_id,user_name,action,module,entity,entity_id) VALUES (1,?,?,?,?,?)')
+  db.transaction(() => { for (let i = 0; i < rows; i++) ins.run(`user${i % 7}`, i % 2 ? 'UPDATE' : 'CREATE', 'sales', `ent${i}`, String(i)) })()
+  return { dir, db }
+}
+/** 起一个 --rebuild/--resume 子进程，在第 k 批提交之后的暂停点发信号，再放行；返回 { code, stdout, report } */
+async function interrupted(dir, { mode = 'rebuild', batchRows, afterBatch, signal = 'SIGTERM', out, extra = [] }) {
+  const pdir = path.join(dir, `pause-${out}`)
+  const child = spawn(process.execPath, [SCRIPT, ...BASE(dir), `--${mode}`, '--batch-rows', String(batchRows), '--out', path.join(dir, `${out}.json`), ...extra], {
+    cwd: ROOT, env: { ...env(dir), GML_TEST_FTS_MAINTAIN_PAUSE: pdir, GML_TEST_FTS_REBUILD_PAUSE_AFTER_BATCH: String(afterBatch) }, stdio: ['ignore', 'pipe', 'pipe']
+  })
+  let stdout = ''; let stderr = ''
+  child.stdout.on('data', (d) => { stdout += d }); child.stderr.on('data', (d) => { stderr += d })
+  const closed = new Promise((res) => child.on('close', (code, sig) => res({ code, sig })))
+  const marker = path.join(pdir, '.fts-rebuild-batch-paused')
+  for (let i = 0; i < 2400 && !existsSync(marker); i++) await sleep(25)
+  assert.ok(existsSync(marker), `never reached the batch ${afterBatch} pause point: ${stdout}${stderr}`)
+  child.kill(signal)
+  writeFileSync(path.join(pdir, '.fts-rebuild-batch-continue'), '1')
+  const { code, sig } = await closed
+  return { code, sig, stdout, stderr, report: JSON.parse(readFileSync(path.join(dir, `${out}.json`), 'utf8')) }
+}
+
+test('AH4 --rebuild is batched: one transaction per batch, progress lines, complete index, no checkpoint left behind (50k rows)', needsFts5, (t) => {
+  const { dir, db } = bigFixture(t, 50000)
+  const r = run([...BASE(dir), '--rebuild', '--batch-rows', '5000', '--pause-ms', '0', '--out', path.join(dir, 'b.json')], dir)
+  assert.equal(r.status, 0, r.stderr + r.stdout)
+  const lines = r.stdout.split('\n').filter((l) => /^audit-fts-maintain progress /.test(l))
+  assert.equal(lines.length, 10, r.stdout)
+  assert.match(lines[0], /batch=1\/10 rows=5000\/50000 pct=10\.0/)
+  assert.match(lines.at(-1), /batch=10\/10 rows=50000\/50000 pct=100\.0/)
+  const rep = reportOf(dir, path.join(dir, 'b.json'))
+  assert.equal(rep.status, 'ok'); assert.equal(rep.batches, 10); assert.equal(rep.rows_indexed, 50000); assert.equal(rep.batch_rows, 5000); assert.equal(rep.resumed, false)
+  assert.ok(rep.max_batch_ms >= 0)
+  assert.equal(stateRow(db), null, 'checkpoint removed together with the last batch')
+  assert.equal(docs(db), 50000)
+  assert.equal(matchCount(db, 'ent49999'), 1); assert.equal(matchCount(db, 'ent0'), db.prepare("SELECT COUNT(*) c FROM audit_logs WHERE entity LIKE '%ent0%'").get().c)
+  assert.equal(run([...BASE(dir), '--integrity-check', '--out', path.join(dir, 'i.json')], dir).status, 0)
+})
+
+test('AH4 SIGTERM stops at a batch boundary with a resumable checkpoint; the partial index is not used for queries; --resume completes it and --integrity-check passes (50k rows, rows written in between)', needsFts5, async (t) => {
+  const { dir, db } = bigFixture(t, 50000)
+  const a = await interrupted(dir, { batchRows: 5000, afterBatch: 3, out: 'a' })
+  assert.equal(a.code, 3, a.stdout + a.stderr)
+  assert.equal(a.report.status, 'interrupted'); assert.equal(a.report.ok, false); assert.equal(a.report.signal, 'SIGTERM')
+  assert.equal(a.report.batches, 3); assert.equal(a.report.rows_indexed, 15000)
+  assert.ok(!/batch=4\//.test(a.stdout), 'no batch after the signal')
+  const cp = stateRow(db)
+  assert.ok(cp, 'checkpoint persisted'); assert.equal(cp.last_id, 15000); assert.equal(cp.high_water, 50000); assert.equal(cp.remaining, 35000); assert.equal(cp.industry, 'cosmetic')
+  assert.equal(docs(db), 15000, 'index is partial at the boundary')
+  assert.equal(ftsAvailable(db), false, 'queries ignore the half-built index'); assert.equal(ftsState(db).active, false)
+  const mid = run([...BASE(dir), '--integrity-check', '--out', path.join(dir, 'm.json')], dir)
+  assert.equal(mid.status, 1); assert.equal(reportOf(dir, path.join(dir, 'm.json')).status, 'rebuild_in_progress')
+  // 中断期间业务照常写：触发器索引新行（id 在高水位之后）
+  const ins = db.prepare("INSERT INTO audit_logs (user_id,user_name,action,module,entity,entity_id) VALUES (1,'late','LATE','sales',?,?)")
+  db.transaction(() => { for (let i = 0; i < 100; i++) ins.run(`late${i}`, String(i)) })()
+  const b = run([...BASE(dir), '--resume', '--batch-rows', '10000', '--pause-ms', '0', '--out', path.join(dir, 'b.json')], dir)
+  assert.equal(b.status, 0, b.stderr + b.stdout)
+  const rb = reportOf(dir, path.join(dir, 'b.json'))
+  assert.equal(rb.status, 'ok'); assert.equal(rb.resumed, true); assert.equal(rb.rows_indexed, 35000); assert.equal(rb.batches, 4)
+  assert.equal(stateRow(db), null); assert.equal(ftsAvailable(db), true)
+  assert.equal(docs(db), 50100, 'every row exactly once, including the ones written while interrupted')
+  assert.equal(matchCount(db, 'late99'), 1); assert.equal(matchCount(db, 'ent15000'), 1); assert.equal(matchCount(db, 'ent49999'), 1)
+  const chk = run([...BASE(dir), '--integrity-check', '--out', path.join(dir, 'c.json')], dir)
+  assert.equal(chk.status, 0, chk.stderr + chk.stdout); assert.equal(reportOf(dir, path.join(dir, 'c.json')).status, 'ok')
+})
+
+test('AH4 SIGINT also stops at a boundary; a second interrupt + resume still ends with a consistent index', needsFts5, async (t) => {
+  const { dir, db } = bigFixture(t, 4000)
+  const a = await interrupted(dir, { batchRows: 500, afterBatch: 2, signal: 'SIGINT', out: 'a' })
+  assert.equal(a.code, 3); assert.equal(a.report.signal, 'SIGINT'); assert.equal(stateRow(db).last_id, 1000)
+  const b = await interrupted(dir, { mode: 'resume', batchRows: 500, afterBatch: 2, out: 'b' })
+  assert.equal(b.code, 3, b.stdout + b.stderr); assert.equal(b.report.resumed, true); assert.equal(stateRow(db).last_id, 2000)
+  const c = run([...BASE(dir), '--resume', '--pause-ms', '0', '--out', path.join(dir, 'c.json')], dir)
+  assert.equal(c.status, 0, c.stderr + c.stdout)
+  assert.equal(docs(db), 4000)
+  assert.equal(run([...BASE(dir), '--integrity-check', '--out', path.join(dir, 'i.json')], dir).status, 0)
+})
+
+test('AH4 refusals: --resume without a checkpoint; --rebuild over an existing checkpoint (needs --restart); bad option combinations (exit 2)', needsFts5, async (t) => {
+  const { dir, db } = bigFixture(t, 3000)
+  const none = run([...BASE(dir), '--resume', '--out', path.join(dir, 'n.json')], dir)
+  assert.equal(none.status, 1); assert.equal(reportOf(dir, path.join(dir, 'n.json')).status, 'no_checkpoint')
+  assert.equal(docs(db), 3000, 'untouched')
+  await interrupted(dir, { batchRows: 500, afterBatch: 2, out: 'a' })
+  const again = run([...BASE(dir), '--rebuild', '--out', path.join(dir, 'r.json')], dir)
+  assert.equal(again.status, 1); assert.equal(reportOf(dir, path.join(dir, 'r.json')).status, 'checkpoint_exists')
+  assert.equal(stateRow(db).last_id, 1000, 'refusal leaves the checkpoint alone')
+  const restart = run([...BASE(dir), '--rebuild', '--restart', '--pause-ms', '0', '--out', path.join(dir, 'rs.json')], dir)
+  assert.equal(restart.status, 0, restart.stderr + restart.stdout)
+  assert.equal(reportOf(dir, path.join(dir, 'rs.json')).resumed, false); assert.equal(stateRow(db), null); assert.equal(docs(db), 3000)
+  for (const bad of [['--batch-rows', '0'], ['--batch-rows', 'abc'], ['--batch-rows', '1000001'], ['--pause-ms', '-1'], ['--pause-ms', '60001']]) {
+    assert.equal(run([...BASE(dir), '--rebuild', ...bad], dir).status, 2, bad.join(' '))
+  }
+  assert.equal(run([...BASE(dir), '--optimize', '--batch-rows', '10'], dir).status, 2, '--batch-rows only with --rebuild/--resume')
+  assert.equal(run([...BASE(dir), '--resume', '--restart'], dir).status, 2, '--restart is only for --rebuild')
+  assert.equal(run([...BASE(dir), '--integrity-check', '--restart'], dir).status, 2)
+  assert.equal(run([...BASE(dir), '--rebuild', '--resume'], dir).status, 2, 'exactly one mode')
+})
+
+test('AH4 a checkpoint copied from a different database is refused on --resume and changes nothing; --rebuild --restart clears it', needsFts5, async (t) => {
+  const A = bigFixture(t, 3000)
+  const B = fixture(t, 0)
+  const ins = B.db.prepare('INSERT INTO audit_logs (user_id,user_name,action,module,entity,entity_id) VALUES (1,?,?,?,?,?)')
+  B.db.transaction(() => { for (let i = 0; i < 3000; i++) ins.run('other', 'DELETE', 'purchase', `zzz${i}`, String(i)) })()
+  await interrupted(A.dir, { batchRows: 500, afterBatch: 2, out: 'a' })
+  const ddl = A.db.prepare('SELECT sql FROM sqlite_master WHERE name=?').get(REBUILD_STATE_TABLE).sql
+  B.db.exec(ddl)
+  const row = stateRow(A.db)
+  B.db.prepare(`INSERT INTO ${REBUILD_STATE_TABLE} (${Object.keys(row).join(',')}) VALUES (${Object.keys(row).map(() => '?').join(',')})`).run(...Object.values(row))
+  const before = docs(B.db)
+  const r = run([...BASE(B.dir), '--resume', '--out', path.join(B.dir, 'x.json')], B.dir)
+  assert.equal(r.status, 1, r.stderr + r.stdout)
+  const rep = reportOf(B.dir, path.join(B.dir, 'x.json'))
+  assert.equal(rep.status, 'checkpoint_mismatch'); assert.equal(rep.rows_indexed, 0)
+  assert.equal(docs(B.db), before, 'index not touched'); assert.ok(stateRow(B.db), 'checkpoint left for the operator to inspect')
+  assert.equal(run([...BASE(B.dir), '--rebuild', '--restart', '--pause-ms', '0', '--out', path.join(B.dir, 'y.json')], B.dir).status, 0)
+  assert.equal(stateRow(B.db), null); assert.equal(docs(B.db), 3000)
+  assert.equal(run([...BASE(B.dir), '--integrity-check', '--out', path.join(B.dir, 'z.json')], B.dir).status, 0)
+  // 也拒绝行业不符的检查点
+  await interrupted(A.dir, { mode: 'resume', batchRows: 500, afterBatch: 1, out: 'a2' })
+  A.db.prepare(`UPDATE ${REBUILD_STATE_TABLE} SET industry='food'`).run()
+  const wrong = run([...BASE(A.dir), '--resume', '--out', path.join(A.dir, 'w.json')], A.dir)
+  assert.equal(wrong.status, 1); assert.equal(reportOf(A.dir, path.join(A.dir, 'w.json')).status, 'checkpoint_mismatch')
+})
+
+test('AH4 rows deleted from the not-yet-indexed range while interrupted are detected at the end (status interfered, checkpoint kept); --rebuild --restart heals the index', needsFts5, async (t) => {
+  const { dir, db } = bigFixture(t, 3000)
+  await interrupted(dir, { batchRows: 500, afterBatch: 2, out: 'a' })
+  db.prepare('DELETE FROM audit_logs WHERE id IN (2500, 2501)').run() // 触发器对"尚未入索引"的行发 delete 命令：索引不再可信
+  const r = run([...BASE(dir), '--resume', '--pause-ms', '0', '--out', path.join(dir, 'r.json')], dir)
+  assert.equal(r.status, 1)
+  const rep = reportOf(dir, path.join(dir, 'r.json'))
+  assert.equal(rep.status, 'interfered'); assert.match(rep.error, /--rebuild --restart/)
+  assert.ok(stateRow(db), 'checkpoint kept: the index stays out of the query path'); assert.equal(ftsAvailable(db), false)
+  const fix = run([...BASE(dir), '--rebuild', '--restart', '--pause-ms', '0', '--out', path.join(dir, 'f.json')], dir)
+  assert.equal(fix.status, 0, fix.stderr + fix.stdout)
+  assert.equal(docs(db), 2998); assert.equal(stateRow(db), null)
+  assert.equal(run([...BASE(dir), '--integrity-check', '--out', path.join(dir, 'i.json')], dir).status, 0)
+})
+
+test('AH4 --disable then --enable discards a stale checkpoint and ends with a complete index', needsFts5, async (t) => {
+  const { dir, db } = bigFixture(t, 2000)
+  await interrupted(dir, { batchRows: 500, afterBatch: 1, out: 'a' })
+  assert.equal(run([...BASE(dir), '--disable', '--reason', 'drill', '--out', path.join(dir, 'd.json')], dir).status, 0)
+  assert.equal(stateRow(db), null)
+  assert.equal(run([...BASE(dir), '--enable', '--reason', 'drill over', '--out', path.join(dir, 'e.json')], dir).status, 0)
+  assert.equal(docs(db), 2000); assert.equal(ftsAvailable(db), true)
+  // 检查点在、索引也在时 --enable：同样收敛成完整索引并清掉检查点
+  await interrupted(dir, { batchRows: 500, afterBatch: 1, out: 'b' })
+  db.prepare("UPDATE settings SET value='0' WHERE key='audit_fts_enabled'").run()
+  assert.equal(run([...BASE(dir), '--enable', '--reason', 'again', '--out', path.join(dir, 'e2.json')], dir).status, 0)
+  assert.equal(stateRow(db), null); assert.equal(docs(db), 2000)
+  assert.equal(run([...BASE(dir), '--integrity-check', '--out', path.join(dir, 'i.json')], dir).status, 0)
 })

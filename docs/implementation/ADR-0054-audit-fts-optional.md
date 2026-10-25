@@ -100,3 +100,28 @@ Codex 审计（gpt-6.1-sol，只读，针对相对 batch-twelve 的差异）：�
 - 中：脚本 `--busy-ms` 并不约束总等待（重试退避可越过截止时间；提交阶段沿用的超时可能被取锁阶段耗尽）⇒ 已修：退避不超过剩余预算；提交前把 `busy_timeout` 重设为完整的 `--busy-ms`（提交阶段另算一份预算，这样耗时的回填不会让提交以 0 超时失败）。文档的表述相应改为「取锁阶段的总预算」。
 - 低：自愈暂停点的守卫读的是 `runMigrations` 的 `mode` 选项而非真实进程环境，内部调用 `runMigrations(db,{mode:'test'})` 可在生产进程里激活钩子（无 HTTP 可达路径）⇒ 已修：钩子只看真实 `process.env.GML_RUNTIME_MODE`。
 - 审计方未能在其沙箱内运行代码（better-sqlite3 的 Node ABI 不符），结论为静态阅读；运行证据来自本机测试。
+
+---
+
+## 补充 4（AH4，第十七批）：分批 `--rebuild`、检查点与 `--resume`
+
+状态：开发实现，尚非产品上线验收｜相关：roadmap-v13 AH4；承接 AC5（单事务 `rebuild` 持写锁到结束）与 AG4 基准
+
+### 决定
+1. **分批**：`--rebuild` 不再执行 FTS5 的一次性 `rebuild` 命令，而是 ①一个事务：`delete-all` 清空索引 + 建检查点表 + 写首条检查点（"索引已清空却没有标记"的瞬间不存在）；②按 id 升序每批一个 `BEGIN IMMEDIATE` 事务：`INSERT INTO audit_logs_fts(rowid, …) SELECT … WHERE id > last AND id <= high_water ORDER BY id LIMIT N`，并在同一事务里更新检查点；③最后一批与"删检查点表"同一事务。批间 `--pause-ms`（默认 5）让出写锁。`BEGIN IMMEDIATE` 的 BUSY 重试与 `--busy-ms` 预算沿用 AF4 的口径（有上限）。默认 `--batch-rows` 5000（范围 1..1000000）。
+2. **检查点 = 单行表 `audit_fts_rebuild_state`**（定义在 `server/lib/audit-fts-state.js`，不是迁移）。选表而非设置键的理由：它与批处理必须**同事务**更新（设置写入走 `writeSetting`，带危险键留痕，每批一条审计行不合适）；它是瞬态运维状态，重建完成即删，不属于 schema，也不占迁移号。字段：`industry`、`fingerprint`（高水位及之前最近 5 行 id/action/entity/user_name/created_at 的 SHA-256）、`high_water`（开始时 `MAX(id)`）、`last_id`、`total_rows`、`remaining`、`batch_rows`、`batches`、`started_at`、`updated_at`。高水位之后的新行由触发器照常索引，不进批处理范围。
+3. **表的存在即"索引未完成"**：`audit-view.js` 的 `ftsAvailable()`（以及 `ftsState().active`）见到检查点表就返回 false，检索回退 LIKE（结果相同）；`--integrity-check` / `--optimize` 报 `rebuild_in_progress`（退出 1）。这样残缺索引永远不会回答检索。
+4. **信号**：SIGTERM / SIGINT 只置标志；better-sqlite3 是同步调用，信号处理器只能在批与批之间运行，所以"在批边界停止"是天然的——批内事务要么整体提交要么整体回滚。停止后报告 `status: "interrupted"`、`signal`、退出码 **3**，检查点已保存。崩溃 / `kill -9` 同样可续跑（每批提交即更新检查点）。
+5. **`--resume`**：校验 ①检查点存在（否则 `no_checkpoint`）；②`industry` 与 `--industry` 一致；③指纹与本库当前高水位附近行一致；④内容自洽 —— 任何一项不符 → `checkpoint_mismatch`，**什么都不改**（检查点保留，供运维检查；`--rebuild --restart` 清除）。`--rebuild` 遇已有检查点 → `checkpoint_exists`（防止误清一个可续跑的重建）；`--rebuild --restart` 丢弃检查点从头来。
+6. **开关动作收敛检查点**：`--disable` 删表时一并删检查点；`--enable` 在检查点存在时删它，并在索引表仍在（残缺）时做一次完整 `rebuild`。`--enable` / `--disable` 的"已在目标状态"判定把"检查点存在"算作未收敛。
+
+### 数据丢失风险与边界（诚实）
+- **重建期间删除"尚未入索引"的审计行**（审计归档 / 清理）会让 `AFTER DELETE` 触发器对索引发出无效的 `delete` 命令，索引不再可信。批处理不会逐批重数全表（那是 O(n²)）；改为在**末尾**核对：扫完 `(last_id, high_water]` 后检查点的 `remaining` 必须为 0，否则 `status: "interfered"`、退出 1、**检查点保留**（索引继续不被查询使用），错误信息指向 `--rebuild --restart`。这是**事后**发现，不是预防；运维文档要求重建期间不要跑归档 / 清理。已入索引范围内的删除是正常的（触发器 delete 一个确实存在的项）。审计行的 `action/entity/user_name` 被 UPDATE（哈希链会因此断）不在检测范围。
+- 高水位之后的行靠触发器索引；若重建时触发器本身缺失（`--rebuild` 常用于触发器被重建之后），这些行不会被索引——与旧的单事务 `rebuild` 对触发器缺失的处理同样，报告里照常给 `triggers_present`。
+- 指纹取高水位一侧而不是最老的行，是为了让"老行被归档"不会把合法检查点误判成别的库；代价是它只能分辨"明显不同的库"，不是密码学意义的库身份。
+- 中断期间检索走 LIKE，较慢但正确；已在 `ftsAvailable` 里判定的进行中请求可能仍读到刚被清空的索引（`delete-all` 与该请求之间的窗口），与 AF4 的在途请求窗口同类，未单独处理。
+- 重建总耗时变长（默认批大小下约为单事务的 2×，capacity-baseline "AH4"），换来写入者最长被挡时间从整个重建降到单批。
+- 托管 runner（ubuntu）与无 FTS5 构建上的新用例未验证（无 FTS5 时按原因跳过）；基准为 Mac mini、高负载、单次运行。
+
+### 做了什么
+`scripts/audit-fts-maintain.mjs`（分批、`--resume`、`--restart`、`--batch-rows`、`--pause-ms`、信号、检查点校验）、`server/lib/audit-fts-state.js`（新）、`server/lib/audit-view.js`（`ftsAvailable`/`ftsState`）、`tests/audit-fts-maintain.test.mjs`（+7 个 AH4 用例：50k 行分批与进度、SIGTERM 中断→续跑→`integrity-check` ok 且中断期间写入的行恰好索引一次、SIGINT 连续两次中断、拒绝路径、别的库的检查点、`interfered`、开关收敛）、`docs/operations/audit-search.md`、capacity-baseline（AG4 表重跑并替换；新增 AH4 批大小对持锁时间的一节）。测试暂停点复用 `GML_TEST_FTS_MAINTAIN_PAUSE`（名 `fts-rebuild-batch`，由 `GML_TEST_FTS_REBUILD_PAUSE_AFTER_BATCH=<k>` 选批；仅 `GML_RUNTIME_MODE=test`）。变异检查：去掉 `ftsAvailable` 对检查点的判断、或去掉末尾剩余数核对，对应用例转红。
