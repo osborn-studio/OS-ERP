@@ -126,6 +126,8 @@ test('Z7 filters + pagination + redaction', { timeout: 90000 }, async t => {
   f.db.exec('DELETE FROM audit_logs')
   // AG11：列表响应带 fts.fallback_total（进程内 audit_fts_fallback_total 各 reason 之和；新进程未发生回退 = 0 的整数）
   { const fts = (await f.request('/api/meta/audit-logs', admin)).body.data.fts; assert.equal(fts.fallback_total, 0); assert.equal(typeof fts.setting_enabled, 'boolean') }
+  // AH11：列表响应带 anchor_intents 摘要（只读；绝无签名 / 哈希 / 范围 / 操作人字段）
+  { const ai = (await f.request('/api/meta/audit-logs', admin)).body.data.anchor_intents; assert.equal(ai.table_present, true); assert.equal(ai.total, 0); assert.deepEqual(ai.key_ids, []); assert.deepEqual(ai.recent, []) }
   ins(f.db, { user: 'alice', uid: 11, action: 'CREATE', module: 'sales', entity: 'order', eid: '100', at: '2026-10-01 10:00:00', detail: '{"note":"first order"}' })
   ins(f.db, { user: 'bob', uid: 12, action: 'APPROVE', module: 'purchase', entity: 'po', eid: '200', at: '2026-10-05 09:00:00', detail: '{"note":"approve x"}' })
   ins(f.db, { user: 'alice', uid: 11, action: 'DEL100%_done', module: 'sales', entity: 'order', eid: '101', at: '2026-10-10 23:59:59', detail: 'plain text' })

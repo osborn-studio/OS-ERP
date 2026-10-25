@@ -13,7 +13,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 import Database from 'better-sqlite3'
 import jwt from 'jsonwebtoken'
 import {
-  lastBackupStatus, loginThrottleStatus, diskFreeBytes, dbSizes, computeOpsStatus, opsCounters
+  lastBackupStatus, lastBackupReportDetail, loginThrottleStatus, diskFreeBytes, dbSizes, computeOpsStatus, opsCounters
 } from '../server/lib/ops-status.js'
 import { errorCodeOf, buildBackupAlert, sendBackupAlert } from '../server/lib/backup-alert.js'
 
@@ -84,7 +84,7 @@ test('computeOpsStatus isolates probe failures per item and opsCounters maps unk
       dbSizes: () => ({ cosmetic: 10 })
     }
   })
-  assert.deepEqual(Object.keys(ops), ['last_backup', 'migration_checksums', 'login_throttle', 'disk_free_bytes', 'db_sizes'])
+  assert.deepEqual(Object.keys(ops), ['last_backup', 'backup_report', 'migration_checksums', 'login_throttle', 'disk_free_bytes', 'db_sizes'])
   assert.deepEqual(opsCounters(ops), {
     backup_age_seconds: 90000, backup_last_failed: 1, backup_missing: 0,
     migration_checksum_mismatches: 2, migration_checksum_adopted: 1,
@@ -230,7 +230,7 @@ test('health: anonymous gets status only (+version contract); admin gets databas
   const d = (await adminRes.json()).data
   assert.equal(d.status, 'ok')
   assert.equal(typeof d.database.tables, 'number')
-  assert.deepEqual(Object.keys(d.ops), ['last_backup', 'migration_checksums', 'login_throttle', 'disk_free_bytes', 'db_sizes'])
+  assert.deepEqual(Object.keys(d.ops), ['last_backup', 'backup_report', 'migration_checksums', 'login_throttle', 'disk_free_bytes', 'db_sizes'])
   assert.equal(d.ops.last_backup.result, 'failed')
   assert.equal(d.ops.last_backup.encrypted, true)
   assert.ok(d.ops.last_backup.age_seconds >= 7190)
@@ -250,4 +250,23 @@ test('health: anonymous gets status only (+version contract); admin gets databas
   assert.ok(c.backup_age_seconds >= 7190)
   assert.equal(c.migration_checksum_mismatches, 0)
   assert.equal(c.login_throttle_unavailable, 0)
+})
+
+test('AH11 lastBackupReportDetail: counts only, worst prune_state wins, no paths or hashes; none/unreadable -> null', (t) => {
+  const dir = tmp(t)
+  const db = new Database(':memory:')
+  assert.equal(lastBackupReportDetail({ db, dataDir: dir }), null)
+  writeReport(dir, '20261023-110000', {
+    generated_at: '2026-10-23T11:00:00.000Z', failed: 0, report_phase: 'final',
+    results: [
+      { file: '/secret/a.db', sha256: 'abc', prune_state: 'done', pruned: ['b1', 'b2'], pruned_orphans: ['o1'] },
+      { file: '/secret/b.db', sha256: 'def', prune_state: 'failed', pruned: ['b3'], pruned_orphans: [] },
+      { status: 'skipped', pruned: [] }
+    ]
+  })
+  const d = lastBackupReportDetail({ db, dataDir: dir })
+  assert.deepEqual(d, { report_phase: 'final', databases: 3, failed: 0, prune_state: 'failed', pruned_backups: 3, pruned_orphans: 1 })
+  assert.ok(!JSON.stringify(d).includes('secret') && !JSON.stringify(d).includes('abc'))
+  writeReport(dir, '20261023-115959', '{not json')
+  assert.equal(lastBackupReportDetail({ db, dataDir: dir }), null)
 })

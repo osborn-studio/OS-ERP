@@ -300,3 +300,33 @@ test('ci.md documents the browser job and states the scenarios are unexecuted un
   assert.match(doc, /playwright/i)
   assert.match(doc, /尚未在托管 runner 上执行|未执行/)
 })
+
+test('AH11 scenarios are registered, assert real outcomes, and the page hooks and server fields exist', () => {
+  const declared = driver.match(/const SCENARIOS = \[([^\]]+)\]/)[1].split(',').map((x) => x.trim().replace(/'/g, ''))
+  const needles = {
+    'audit-anchor-intents': ['/api/meta/audit-logs', 'anchor_intents', 'audit-anchor-intents', 'audit-anchor-key', 'audit-anchor-recent', 'audit-anchor-legacy', 'data-key-id', 'route.fetch', 'status, 403', 'status, 401', 'count(), 0', 'externalRequests'],
+    'backup-report-card': ['/api/meta/health', 'ops.last_backup', 'backup_report', 'backup-report', 'data-pruned', 'data-orphans', 'data-prune-state', 'route.fetch', 'Object.hasOwn(asPlain, \'ops\'), false', 'count(), 0', 'externalRequests']
+  }
+  for (const [f, list] of Object.entries(needles)) {
+    assert.ok(declared.includes(f), `${f} must be registered in SCENARIOS`)
+    const src = read(`tests/browser/${f}.mjs`)
+    for (const needle of list) assert.ok(src.includes(needle), `${f} must assert ${needle}`)
+    assert.match(src, /from '\.\/lib\.mjs'/)
+    assert.match(src, /blockedbyclient/)
+    assert.match(src, /浏览器部分只在 Linux 托管 CI 运行/)
+    assert.doesNotMatch(src, /https?:\/\/(?!127\.0\.0\.1|localhost)/)
+    assert.doesNotMatch(src, /console\.log\([^)]*(password|token)/i)
+  }
+  const tok = read('tests/browser/mcp-token-429.mjs')
+  for (const needle of ['mcp-token-limited', 'mcp-token-limited-note', 'adminTokenForCleanup', "method: 'DELETE'", '45 秒窗口']) assert.ok(tok.includes(needle), `mcp-token-429 must assert ${needle}`)
+  const audit = read('src/pages/system/AuditLogs.tsx')
+  for (const hook of ['audit-anchor-intents', 'audit-anchor-key', 'audit-anchor-recent', 'audit-anchor-legacy', 'res.data?.anchor_intents']) assert.ok(audit.includes(hook), `AuditLogs.tsx must expose ${hook}`)
+  const card = read('src/components/BackupReportCard.tsx')
+  for (const hook of ['backup-report', 'data-pruned', 'data-orphans', 'data-prune-state', "'/meta/health'"]) assert.ok(card.includes(hook), `BackupReportCard.tsx must expose ${hook}`)
+  assert.ok(read('src/pages/system/Settings.tsx').includes('<BackupReportCard />'), 'Settings.tsx mounts the backup report card')
+  const mcp = read('src/pages/system/McpCenter.tsx')
+  for (const hook of ['mcp-token-limited', 'mcp-token-limited-note', 'rate_limited_recent']) assert.ok(mcp.includes(hook), `McpCenter.tsx must expose ${hook}`)
+  // 信息暴露边界：新服务端字段不得带签名 / 哈希 / 路径
+  const fn = read('server/lib/audit-anchor-intent.js').split('export function anchorIntentSummary')[1] || ''
+  assert.doesNotMatch(fn.split('\n').filter((l) => /SELECT/.test(l)).join('\n'), /intent_hash|anchors_json|range_desc|operator_name/)
+})

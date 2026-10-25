@@ -33,6 +33,7 @@
 import { useMemo, useState } from 'react'
 import { Card, SectionTitle, Modal, Field, Tabs, toast, useFetch, Empty, Status } from '../../components/ui'
 import { api } from '../../api/client'
+import BackupReportCard from '../../components/BackupReportCard'
 
 type EnumOpt = { value: string; label: string }
 type SettingItem = {
@@ -166,6 +167,8 @@ export default function Settings() {
           可从日志重放出当前的配置值。
         </p>
       </div>
+
+      <BackupReportCard />
 
       {/* 自证横幅：这一条回答"库里的现状能不能由历史解释得出来" */}
       {check.data && (

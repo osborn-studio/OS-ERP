@@ -168,3 +168,25 @@ export function verifyAnchorIntents(db, anchors, { publicKey = null, publicKeys 
   }
   return { ok: problems.length === 0, checked: anchors.length, problems }
 }
+
+/**
+ * 只读摘要（AH11）：给审计页展示"意图用了哪些 key_id、有多少条没有签名 / 没有 key_id"。
+ * 只含 id / 时间 / 操作类型 / key_id（公钥指纹，公开信息）/ 是否带签名；绝不含 signature、intent_hash、anchors_json、range_desc、操作人。
+ * 它**不验签**：公钥集合只在离线的 `audit-verify-chain --intent-pubkey` 里持有，页面上的"已签名"只表示记录里有签名字段。
+ */
+export function anchorIntentSummary(db, { recent = 5 } = {}) {
+  const empty = { table_present: false, total: 0, signed: 0, unsigned: 0, signed_without_key_id: 0, key_ids: [], recent: [] }
+  try {
+    if (!hasTable(db, 'audit_anchor_intents')) return empty
+    const total = db.prepare('SELECT COUNT(*) c FROM audit_anchor_intents').get().c
+    const signed = db.prepare("SELECT COUNT(*) c FROM audit_anchor_intents WHERE signature IS NOT NULL AND signature != ''").get().c
+    const withoutKeyId = db.prepare("SELECT COUNT(*) c FROM audit_anchor_intents WHERE signature IS NOT NULL AND signature != '' AND (key_id IS NULL OR key_id = '')").get().c
+    const keyIds = db.prepare("SELECT key_id, COUNT(*) AS count, MAX(created_at) AS last_at FROM audit_anchor_intents WHERE key_id IS NOT NULL AND key_id != '' GROUP BY key_id ORDER BY MAX(id) DESC LIMIT 20").all()
+      .map((k) => ({ key_id: String(k.key_id).slice(0, 16), count: k.count, last_at: k.last_at }))
+    const rows = db.prepare('SELECT id, created_at, operation, key_id, signature FROM audit_anchor_intents ORDER BY id DESC LIMIT ?').all(Math.max(1, Math.min(Number(recent) || 5, 20)))
+      .map((r) => ({ id: r.id, created_at: r.created_at, operation: r.operation, key_id: r.key_id ? String(r.key_id).slice(0, 16) : null, signed: !!r.signature }))
+    return { table_present: true, total, signed, unsigned: total - signed, signed_without_key_id: withoutKeyId, key_ids: keyIds, recent: rows }
+  } catch {
+    return empty
+  }
+}

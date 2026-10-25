@@ -199,6 +199,7 @@
 |---|---|---|---|---|
 | `INTENT_FORMAT` | const | — | — | — |
 | `OPERATION_ACTIONS` | const | — | — | — |
+| `anchorIntentSummary` | fn | GET /api/meta/audit-logs | — | — |
 | `anchorMark` | fn | — | — | — |
 | `intentHash` | fn | — | — | — |
 | `intentRef` | fn | — | — | — |
@@ -929,6 +930,7 @@ OMS /stats 与 AI 平台分析的 SQL 唯一来源（AE3，ADR-0044 补充 4；A
 | `computeOpsStatus` | fn | GET /api/meta/health<br>GET /api/meta/metrics | — | — |
 | `dbSizes` | fn | — | — | — |
 | `diskFreeBytes` | fn | — | — | — |
+| `lastBackupReportDetail` | fn | — | — | — |
 | `lastBackupStatus` | fn | — | — | — |
 | `loginThrottleStatus` | fn | — | — | — |
 | `migrationChecksumStatus` | fn | — | — | — |

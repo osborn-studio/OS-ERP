@@ -422,6 +422,8 @@ function McpOperations() {
   const [confirmations, setConfirmations] = useState<any[]>([])
   const [logs, setLogs] = useState<any[]>([])
   const [tokens, setTokens] = useState<any[]>([])
+  // AH11：令牌表的「近期限流（429）」列。来自 /mcp/limits/tokens 的精确次数（AG9 denied 行）；读取失败 / 非 db 存储时整列显示「—」，不猜数
+  const [limits429, setLimits429] = useState<{ store: string; truncated: boolean; window_seconds: number; byId: Record<number, number> } | null>(null)
   const [busy, setBusy] = useState(false)
   const load = async () => {
     setBusy(true)
@@ -432,6 +434,11 @@ function McpOperations() {
       setConfirmations(pending.data || [])
       setLogs(calls.data || [])
       setTokens(list.data || [])
+      try {
+        const lim = await api.get('/mcp/limits/tokens')
+        const d = lim.data
+        setLimits429(d && Array.isArray(d.tokens) ? { store: String(d.store), truncated: d.truncated === true, window_seconds: Number(d.window_seconds) || 60, byId: Object.fromEntries(d.tokens.map((t: any) => [Number(t.id), Number(t.rate_limited_recent) || 0])) } : null)
+      } catch { setLimits429(null) }
       setLimitsNonce((n) => n + 1)
     } catch (e: any) { toast(e.message, 'error') }
     finally { setBusy(false) }
@@ -479,6 +486,7 @@ function McpOperations() {
         desc="「状态」是行历史，「有效状态」是现状：所有者改密 / 退出全部会话 / 角色或权限集变更后，旧令牌每次调用都被拒（TOKEN_OWNER_REVOKED），清扫把它们如实标为已吊销。"
         right={<button className="btn-ghost btn-sm" disabled={busy || stale === 0} onClick={sweep}>清扫失效令牌{stale ? `（${stale}）` : ''}</button>}
       />
+      <div className="text-[12px] text-slate-500 mb-2" data-testid="mcp-token-limited-note">「近期限流（429）」= 当前与上一个 {limits429?.window_seconds ?? 60} 秒窗口内该令牌被限流的精确次数（拒绝时记录），不是累计值；窗口过去后归零。</div>
       <Table data={tokens} rowKey={(r) => r.id} columns={[
         { key: 'name', title: '名称', render: r => <div><div className="font-medium">{r.name}</div><div className="text-[11px] text-ink-500 font-mono">{r.token_prefix}…</div></div> },
         { key: 'owner', title: '所有者', render: r => r.owner_user_id == null ? <span className="text-ink-500">无主</span> : (r.owner_name || r.owner_username || `#${r.owner_user_id}`) },
@@ -489,6 +497,13 @@ function McpOperations() {
           return <span className={`tag ${m.cls}`} title={r.effective_reason || ''}>{m.text}</span>
         } },
         { key: 'reason', title: '说明', render: r => <span className="break-all text-[12px]">{r.revoked_reason ? `${r.revoked_reason}${r.revoked_at ? ` · ${r.revoked_at}` : ''}` : (r.effective_reason || r.remark || '—')}</span> },
+        { key: 'limited', title: '近期限流（429）', render: r => {
+          if (!limits429 || limits429.store !== 'db') return <span className="text-ink-500" data-testid="mcp-token-limited" data-token-id={r.id} data-recent="" title="仅 GML_MCP_RATE_STORE=db 时有每令牌明细">—</span>
+          // 响应被截断（令牌过多）时，没出现在响应里的令牌是"未知"而不是 0
+          if (limits429.byId[r.id] === undefined && limits429.truncated) return <span className="text-ink-500" data-testid="mcp-token-limited" data-token-id={r.id} data-recent="" title="令牌过多，响应被截断，该令牌不在其中">未知</span>
+          const n = limits429.byId[r.id] ?? 0
+          return <span className={n > 0 ? 'text-amber-700' : 'text-ink-500'} data-testid="mcp-token-limited" data-token-id={r.id} data-recent={n}>{n} 次</span>
+        } },
         { key: 'last_used_at', title: '最近调用', render: r => r.last_used_at || '—' },
         { key: 'actions', title: '操作', render: r => r.status === 'active'
           ? <button className="btn-ghost btn-sm" disabled={busy} onClick={() => revoke(r)}>吊销</button>
