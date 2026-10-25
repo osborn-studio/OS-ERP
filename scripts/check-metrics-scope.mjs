@@ -116,6 +116,34 @@ function parseArgs(argv) {
   return o
 }
 
+/**
+ * 把分类结果渲染成 stdout / stderr 文本。`--report --json` 时 stdout 必须是**纯 JSON**，所以 pending 预警改走 stderr
+ * （CI 的 `::warning ::` 注解 runner 同样会解析 stderr）；其余模式预警跟在表后面走 stdout。纯函数，供测试喂伪造字典。
+ */
+export function renderOutput(rows, rep, o, problemCount = 0) {
+  const lines = []
+  if (o.report && o.json) {
+    lines.push(JSON.stringify(rep, null, 2))
+  } else if (o.report) {
+    const w = Math.max(3, ...rep.scopeless.map((r) => r.key.length))
+    for (const r of rep.scopeless) {
+      lines.push(`${r.key.padEnd(w)}  ${r.category.padEnd(16)}${r.module}  perms=${r.perms.join('|')}${r.backlog ? `  backlog=${r.backlog}` : ''}`)
+      lines.push(`${' '.repeat(w)}  ${r.reason}`)
+    }
+    lines.push(`\n共 ${rep.total} 条指标：scopeAware ${rep.scope_aware}，scopeless ${rep.scopeless.length}（` +
+      SCOPELESS_CATEGORIES.map((c) => `${c} ${rep.by_category[c]}`).join('，') + '）')
+  } else {
+    const w = Math.max(...rows.map((r) => r.key.length))
+    for (const r of rows) lines.push(`${r.key.padEnd(w)}  ${r.cls.padEnd(10)}${r.category ? `  [${r.category}]` : ''}${r.reason ? `  ${r.reason}` : ''}`)
+    const less = rows.filter((r) => r.cls === 'scopeless').length
+    lines.push(`\n共 ${rows.length} 条指标：scopeAware ${rep.scope_aware}，scopeless ${less}，问题 ${problemCount}`)
+  }
+  const warn = pendingWarning(rep.pending, o.max, { ci: o.ci })
+  if (warn && o.json) return { out: lines.join('\n'), err: warn }
+  if (warn) lines.push(warn)
+  return { out: lines.join('\n'), err: '' }
+}
+
 function main() {
   const o = parseArgs(process.argv.slice(2))
   if (o.bad) {
@@ -125,24 +153,9 @@ function main() {
   }
   const { rows, problems } = classifyMetrics(METRICS)
   const rep = buildReport(rows, o.max)
-  if (o.report && o.json) {
-    console.log(JSON.stringify(rep, null, 2))
-  } else if (o.report) {
-    const w = Math.max(3, ...rep.scopeless.map((r) => r.key.length))
-    for (const r of rep.scopeless) {
-      console.log(`${r.key.padEnd(w)}  ${r.category.padEnd(16)}${r.module}  perms=${r.perms.join('|')}${r.backlog ? `  backlog=${r.backlog}` : ''}`)
-      console.log(`${' '.repeat(w)}  ${r.reason}`)
-    }
-    console.log(`\n共 ${rep.total} 条指标：scopeAware ${rep.scope_aware}，scopeless ${rep.scopeless.length}（` +
-      SCOPELESS_CATEGORIES.map((c) => `${c} ${rep.by_category[c]}`).join('，') + '）')
-  } else {
-    const w = Math.max(...rows.map((r) => r.key.length))
-    for (const r of rows) console.log(`${r.key.padEnd(w)}  ${r.cls.padEnd(10)}${r.category ? `  [${r.category}]` : ''}${r.reason ? `  ${r.reason}` : ''}`)
-    const less = rows.filter((r) => r.cls === 'scopeless').length
-    console.log(`\n共 ${rows.length} 条指标：scopeAware ${rep.scope_aware}，scopeless ${less}，问题 ${problems.length}`)
-  }
-  const warn = pendingWarning(rep.pending, o.max)
-  if (warn) console.log(warn)
+  const { out, err } = renderOutput(rows, rep, { ...o, ci: !!(process.env.GITHUB_ACTIONS || process.env.CI) }, problems.length)
+  if (out) console.log(out)
+  if (err) console.error(err)
   for (const p of problems) console.error(`✗ ${p.key}: ${p.issue}`)
   // 不用 process.exit()：stdout 接管道时写入是异步的；pending 预警不影响退出码
   process.exitCode = problems.length ? 1 : 0

@@ -168,3 +168,11 @@
 - 经销商信用两条仍是全局口径（`no_org_column`）。
 - 本机未跑浏览器：说明块文案变化未被场景覆盖（既有场景只断言 testid / `data-count`）；Linux CI 验证。
 - 校验在 Mac mini Node 22 上，不等于 Linux / 目标平台验收。
+
+### Codex 审计（AH2）
+
+`codex exec -m gpt-6.1-sol --sandbox read-only`，静态审查，对象为 `batch-sixteen...HEAD`。发现与处理：
+
+- **中（P2）** `--report --json` 在 `pending` 超阈值时把预警打到 stdout，JSON 后面多一行，输出不再可解析：**已修**。预警在 `--json` 下改走 stderr（`renderOutput` 纯函数），新增测试用 3 条伪造 `pending` 指标断言 stdout 可 `JSON.parse`、stderr 带 `::warning`、阈值内无预警。
+- 未发现授权 / 数据范围泄漏；审批管理员全见与审批中心既有契约（ADR-0015）一致。
+- 未覆盖（审计指出，**未补**）：`approval_manager_global=false` 与"当前级审批人"两条可见性分支没有指标侧用例——两者都由 `instanceVisibleTo` 本身（已有审批域测试）决定，指标只是直接调用它；记入 backlog 的后续测试项。数据库集成与浏览器测试审计沙箱内未运行，由本分支本机测试与 Linux CI 承担。

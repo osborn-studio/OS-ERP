@@ -17,7 +17,7 @@ import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { METRICS, isScopeAware } from '../server/lib/metrics.js'
 import {
-  classifyMetrics, SCOPELESS_CATEGORIES, pendingWarning, DEFAULT_MAX_PENDING
+  classifyMetrics, SCOPELESS_CATEGORIES, pendingWarning, DEFAULT_MAX_PENDING, buildReport, renderOutput
 } from '../scripts/check-metrics-scope.mjs'
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url))
@@ -109,4 +109,19 @@ test('AH2: a pending threshold of 0 does not turn the guard red; unknown flags s
   assert.equal(r.status, 0, r.stdout + r.stderr)
   assert.equal(run(['--bogus']).status, 2)
   assert.equal(run(['--max-pending', 'abc']).status, 2)
+})
+
+test('AH2: with pending over the threshold, --report --json stays pure JSON (warning goes to stderr) and the table mode appends it', () => {
+  const pend = (k) => ({ key: k, perms: ['p'], module: 'm', scopeless: { category: 'pending', reason: REASON, backlog: 'docs/implementation/backlog.md#x' } })
+  const { rows, problems: ps } = classifyMetrics([pend('a'), pend('b'), pend('c'), { key: 'd', perms: ['p'], scopeAware: true }])
+  assert.deepEqual(ps, [])
+  const rep = buildReport(rows, 2)
+  assert.equal(rep.pending, 3)
+  const j = renderOutput(rows, rep, { report: true, json: true, max: 2, ci: true })
+  assert.equal(JSON.parse(j.out).pending, 3, 'stdout is parseable JSON')
+  assert.match(j.err, /^::warning /)
+  const t = renderOutput(rows, rep, { report: true, json: false, max: 2, ci: false })
+  assert.match(t.out, /warning: 3/)
+  assert.equal(t.err, '')
+  assert.equal(renderOutput(rows, buildReport(rows, 3), { report: true, json: true, max: 3, ci: true }).err, '', 'at the threshold: no warning')
 })
