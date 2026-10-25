@@ -2,7 +2,7 @@
   "snapshot_version": 1,
   "note": "Plan fingerprints (normalised EXPLAIN QUERY PLAN) of the statements registered in scripts/explain-audit.mjs. Whitelist entries need statement, accepted_hash (the new fingerprint hash, or \"removed\") and a reason of at least 20 characters.",
   "generator": "node scripts/synth-data.mjs (default small profile: 60 skus / 600 txns / 120 docs, seed 20261023) with GML_RUNTIME_MODE=production, then node scripts/explain-audit.mjs --snapshot docs/implementation/explain-plans.json",
-  "latest_migration": "074_oms_items_order_index",
+  "latest_migration": "075_mcp_rate_denied_kind",
   "sqlite_version": "3.49.2",
   "statement_count": 120,
   "whitelist": [],
