@@ -19,6 +19,7 @@ import { getDb } from '../db/index.js'
 import { ok, fail, wrap, pageParams, paged, failFromError } from '../lib/http.js'
 import { requireAuth, requireRole, requirePerm, currentUser, permContext } from '../middleware/auth.js'
 import { audit } from '../middleware/audit.js'
+import { withWriteRetry } from '../lib/tx.js'
 // 状态推进的**唯一入口**是内核（`applyTransition`）。本文件过去没有直接用过它，
 // 因为采购订单那条边有副作用、走的是 `transitionPurchaseOrder`；而下面补的三条边
 // （PRT.cancel / PRT.complete / GR.close）都是**零副作用的纯状态推进**，直接走内核即可。
@@ -134,7 +135,7 @@ r.post(
     } = req.body || {}
     // 行级校验、单号、落库、汇总重算全在 `createPurchaseOrder` 里 ——
     // 与 MCP 工具 `purchase.create_order` 是同一段代码。
-    const order = createPurchaseOrder(db, {
+    const order = withWriteRetry(db, () => createPurchaseOrder(db, {
       supplierId: supplier_id,
       warehouseId: warehouse_id,
       orderDate: order_date,
@@ -147,7 +148,7 @@ r.post(
       targetWarehouseId: target_warehouse_id || null,
       sourceType: source_type,
       actor: { id: u.uid || null, name: u.name || u.username || null }
-    })
+    }), { label: 'po.create' })
     audit(req, { action: 'CREATE', module: 'purchase', entity: 'purchase_orders', entityId: order.id })
     return ok(res, order)
   })
@@ -211,14 +212,15 @@ r.post(
     //   ② 边权限 `assertEdgePermitted` —— 与请购单（purchase-chain.js）用的是同一份。
     //      原来这一层完全没有，warehouse 角色能 approve 采购订单，而同一角色在请购单上会 403。
     // 这里只负责把「这个人有哪些权限点」（permContext）递下去。
-    const r = transitionPurchaseOrder(db, {
+    const permCtx = permContext(db, req.user)
+    const r = withWriteRetry(db, () => transitionPurchaseOrder(db, {
       id,
       action: req.body?.action,
       remark: req.body?.remark,
       actor: { id: req.user.uid, name: req.user.name || req.user.username },
-      permCtx: permContext(db, req.user),
+      permCtx,
       source: 'api'
-    })
+    }), { label: 'po.transition' })
     audit(req, { action: String(r.action || '').toUpperCase(), module: 'purchase', entity: 'purchase_orders', entityId: id })
     return ok(res, r.order)
   })
@@ -233,7 +235,7 @@ r.post(
   guard((req, res) => {
     const db = getDb()
     const u = currentUser(req)
-    const out = receivePurchaseOrder(db, {
+    const out = withWriteRetry(db, () => receivePurchaseOrder(db, {
       orderId: Number(req.params.id),
       items: req.body?.items || [],
       inspector: req.body?.inspector || null,
@@ -241,7 +243,7 @@ r.post(
       receiptDate: req.body?.receipt_date || null,
       actor: { id: u.uid || null, name: u.name || u.username || null },
       source: 'api'
-    })
+    }), { label: 'po.receive' })
     audit(req, { action: 'RECEIVE', module: 'purchase', entity: 'purchase_receipts', entityId: out.receipt_id })
     return ok(res, out)
   })

@@ -17,15 +17,50 @@ import { Router } from 'express'
 import { localDate } from '../lib/dates.js'
 import { getDb } from '../db/index.js'
 import { ok, fail, wrap, pageParams, paged } from '../lib/http.js'
-import { requireAuth, requireRole, requireInternal, currentUser } from '../middleware/auth.js'
+import { requireAuth, requireRole, requireInternal, currentUser, attachOrgScope } from '../middleware/auth.js'
 import { audit } from '../middleware/audit.js'
 import { nextDocNo } from '../lib/docno.js'
 import { advanceStatus, tryTransition, nowText, logEvent } from '../lib/docflow.js'
+import { publicPlatform } from '../lib/qimen-auth.js'
 import { applyStockOut, pickBatches, releaseStock, reserveStock, reserveForDoc, planShipment, releaseForDoc } from '../lib/stock.js'
+import { assertSalesTargetInScope, SalesOrderError } from '../lib/sales-order.js'
 
 const r = Router()
 r.use(requireAuth, requireInternal('总部线上订单'))
 const W = ['sales', 'warehouse', 'admin']
+
+// ---------------------------------------------------------------------------
+// 平台绑定组织（ADR-0034）：`platforms` 没有 org 列，平台的「绑定组织」= 其履约仓 `platforms.warehouse_id`
+// 所属组织 `warehouses.org_id`。OMS 入口（模拟同步 / 线上单转销售订单）产生的订单一律归这个组织：
+//   · 平台没有履约仓、或履约仓没有组织 ⇒ 422 `PLATFORM_ORG_UNBOUND`（不再回落到「任意电商仓 / 第一个仓」）；
+//   · 调用者的组织范围必须包含该仓 / 组织 ⇒ 否则同步 403、转单 404（与不存在同形，不泄漏线上单存在）。
+// ---------------------------------------------------------------------------
+function platformBinding(db, pf) {
+  const wh = pf?.warehouse_id ? db.prepare('SELECT id, org_id FROM warehouses WHERE id=?').get(Number(pf.warehouse_id)) : null
+  return wh && wh.org_id != null ? { warehouseId: wh.id, orgId: wh.org_id } : null
+}
+const scopeOf = (req) => req.orgScope || { scope: 'none', orgIds: [] }
+/** 返回 null 通过；否则返回 `{ status, code, message }`（调用方自行回复 / 记入失败清单）。 */
+function checkPlatformWrite(db, req, pf, { hideAs404 = false } = {}) {
+  const bind = platformBinding(db, pf)
+  const sc = scopeOf(req)
+  if (sc.scope !== 'all') {
+    try {
+      assertSalesTargetInScope(db, { warehouseId: bind?.warehouseId ?? pf?.warehouse_id ?? null }, sc)
+    } catch (e) {
+      if (e instanceof SalesOrderError) {
+        return hideAs404
+          ? { status: 404, code: 'ORDER_NOT_FOUND', message: '线上订单不存在' }
+          : { status: 403, code: e.code, message: '该平台的履约仓不在您的组织数据范围内' }
+      }
+      throw e
+    }
+  }
+  if (!bind) {
+    return { status: 422, code: 'PLATFORM_ORG_UNBOUND', message: '该平台未绑定履约仓或履约仓未归属组织，订单无法归属，请先在平台档案维护' }
+  }
+  return null
+}
 
 const OMS_SELECT = `
   o.*, pf.name AS platform_name, pf.code AS platform_code, pf.type AS platform_type, pf.shop_name,
@@ -84,7 +119,8 @@ r.get(
          FROM platforms pf LEFT JOIN warehouses w ON w.id=pf.warehouse_id ORDER BY pf.id`
       )
       .all()
-    return ok(res, rows)
+    // 封存的奇门密钥不出库：只给 has_secret / secret_rotated_at（ADR-0033）
+    return ok(res, rows.map(publicPlatform))
   })
 )
 
@@ -92,6 +128,7 @@ r.get(
 r.post(
   '/sync/:platformId',
   requireAuth,
+  attachOrgScope,
   requireRole(...W),
   wrap((req, res) => {
     const db = getDb()
@@ -99,6 +136,8 @@ r.post(
     const platformId = Number(req.params.platformId)
     const pf = db.prepare('SELECT * FROM platforms WHERE id=?').get(platformId)
     if (!pf) return fail(res, '平台不存在', 404)
+    const denied = checkPlatformWrite(db, req, pf)
+    if (denied) return fail(res, denied.message, denied.status, denied.code)
     const count = Math.min(Math.max(Number(req.body?.count || rndInt(2, 5)), 1), 20)
     const started = Date.now()
     const skus = db
@@ -246,6 +285,7 @@ r.get(
 r.post(
   '/orders/:id/convert',
   requireAuth,
+  attachOrgScope,
   requireRole(...W),
   wrap((req, res) => {
     const db = getDb()
@@ -253,12 +293,13 @@ r.post(
     const id = Number(req.params.id)
     const o = db.prepare('SELECT * FROM oms_orders WHERE id=?').get(id)
     if (!o) return fail(res, '线上订单不存在', 404)
-    if (o.sales_order_id) return fail(res, '该订单已转为销售订单')
     const pf = db.prepare('SELECT * FROM platforms WHERE id=?').get(o.platform_id)
+    const denied = checkPlatformWrite(db, req, pf, { hideAs404: true }) // 范围 / 绑定判定早于状态校验，不泄漏存在性
+    if (denied) return fail(res, denied.message, denied.status, denied.code)
+    if (o.sales_order_id) return fail(res, '该订单已转为销售订单')
     const items = db.prepare('SELECT * FROM oms_order_items WHERE oms_order_id=?').all(id)
     if (!items.length) return fail(res, '订单没有明细')
-    const whId = pf?.warehouse_id || db.prepare("SELECT id FROM warehouses WHERE type='ecom' LIMIT 1").get()?.id || db.prepare('SELECT id FROM warehouses LIMIT 1').get()?.id
-    if (!whId) return fail(res, '请先维护仓库档案')
+    const whId = platformBinding(db, pf).warehouseId // 归属平台绑定组织的履约仓（ADR-0034），不回落到任意仓
 
     const tx = db.transaction(() => {
       const docNo = nextDocNo(db, 'SO', 'sales_orders', 'doc_no')
@@ -309,6 +350,7 @@ r.post(
 r.post(
   '/orders/convert-batch',
   requireAuth,
+  attachOrgScope,
   requireRole(...W),
   wrap((req, res) => {
     const db = getDb()
@@ -319,10 +361,12 @@ r.post(
       try {
         const o = db.prepare('SELECT * FROM oms_orders WHERE id=?').get(id)
         if (!o) throw new Error('订单不存在')
+        const pf = db.prepare('SELECT * FROM platforms WHERE id=?').get(o.platform_id)
+        const denied = checkPlatformWrite(db, req, pf, { hideAs404: true })
+        if (denied) throw new Error(denied.status === 404 ? '订单不存在' : denied.message)
         if (o.sales_order_id) throw new Error('已转单')
         const items = db.prepare('SELECT * FROM oms_order_items WHERE oms_order_id=?').all(id)
-        const pf = db.prepare('SELECT * FROM platforms WHERE id=?').get(o.platform_id)
-        const whId = pf?.warehouse_id || db.prepare("SELECT id FROM warehouses WHERE type='ecom' LIMIT 1").get()?.id
+        const whId = platformBinding(db, pf).warehouseId // ADR-0034：平台绑定组织的履约仓
         const tx = db.transaction(() => {
           const docNo = nextDocNo(db, 'SO', 'sales_orders', 'doc_no')
           const info = db

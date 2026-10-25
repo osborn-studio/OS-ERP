@@ -14,7 +14,7 @@ assert.ok(['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname), 'Use an is
 assert.ok(process.env.GML_PLAYWRIGHT_MODULE && process.env.GML_CHROMIUM_EXECUTABLE, 'Provide existing Linux browser tooling paths')
 const { chromium } = await import(pathToFileURL(process.env.GML_PLAYWRIGHT_MODULE).href)
 const browser = await chromium.launch({
-  chromiumSandbox: true, headless: true, executablePath: process.env.GML_CHROMIUM_EXECUTABLE,
+  chromiumSandbox: process.env.GML_CHROMIUM_SANDBOX !== '0', headless: true, executablePath: process.env.GML_CHROMIUM_EXECUTABLE,
   env: { ...process.env, ...(process.env.GML_BROWSER_LD_LIBRARY_PATH ? { LD_LIBRARY_PATH: process.env.GML_BROWSER_LD_LIBRARY_PATH } : {}) }
 })
 const ids = ['public_mall', 'qimen_gateway', 'oms_simulation', 'im_connector', 'agent_access']

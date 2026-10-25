@@ -27,6 +27,7 @@
 // 只不过那次解决的是"通用入口 vs 业务入口"，这次解决的是"HTTP 入口 vs Agent 入口"。
 
 import { advanceStatus, nowText } from './docflow.js'
+import { registerDocScopeBuilder } from './doc-scope-registry.js'
 import { releaseForDoc } from './stock.js'
 import { release as creditRelease, projectOrderHold, resolveSubject } from './credit.js'
 
@@ -36,6 +37,137 @@ export class SalesOrderError extends Error {
     this.code = code
     this.status = status
     this.detail = detail
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 组织数据范围（ADR-0026）：销售域**唯一**的组织范围判据。
+// 与采购侧 `purchaseScopeSql` / `assertPurchaseDocInScope`（ADR-0017/0020）同一口径：
+//   · 不传或 `all` ⇒ 全库；`dealer` / `none` / 空集合 ⇒ 空范围（`1=0`，空范围不许变成全库）；
+//   · 其余 ⇒ 按单据归属组织过滤。
+// 销售订单没有 `org_id` 列，归属由两条参与方推出：出货仓 `warehouses.org_id`、门店 `stores.org_id`
+// （经销商是客户而不是本方组织，不参与）。**任一参与方在范围内即可见**；两者都为 NULL 对受限范围不可见、
+// 对全局范围可见。发货单经所属订单；退货单有来源订单时经订单，无单退货用自己的仓 / 门店。
+// 读（列表 / 详情 / 统计）用 `salesScopeSql`；详情与写路由取单后用 `assertSalesDocInScope`
+// （不在范围内与不存在**同形**：同一句 404，不泄漏存在性）；建单 / 发货 / 退货的目标仓与门店用
+// `assertSalesTargetInScope`（写比读严：涉及的仓与门店必须**都**在范围内）。
+// ---------------------------------------------------------------------------
+
+const DOC_KINDS = {
+  order: { table: 'sales_orders', notFound: '销售订单不存在' },
+  delivery: { table: 'sales_deliveries', notFound: '发货单不存在' },
+  return: { table: 'sales_returns', notFound: '退货单不存在' }
+}
+
+function scopeIds(orgScope) {
+  if (!orgScope || orgScope.scope === 'all') return { all: true, ids: [] }
+  const ids = Array.isArray(orgScope.orgIds) ? orgScope.orgIds.map(Number).filter(Number.isFinite) : []
+  if (orgScope.scope === 'dealer' || orgScope.scope === 'none' || !ids.length) return { all: false, ids: [] }
+  return { all: false, ids }
+}
+
+/**
+ * 把组织范围翻成销售单据查询的 SQL 谓词（无前导 AND）。`kind`：`order` | `delivery` | `return`；
+ * `alias` 是该单据的表别名。返回 `{ sql, params, empty }`。
+ */
+export function salesScopeSql(orgScope, kind = 'order', alias = '') {
+  const { all, ids } = scopeIds(orgScope)
+  if (all) return { sql: '1=1', params: [], empty: false }
+  if (!ids.length) return { sql: '1=0', params: [], empty: true }
+  const col = (a, c) => (a ? `${a}.${c}` : c)
+  const ph = ids.map(() => '?').join(',')
+  const byParty = (a) =>
+    `((SELECT org_id FROM warehouses WHERE id=${col(a, 'warehouse_id')}) IN (${ph}) OR (SELECT org_id FROM stores WHERE id=${col(a, 'store_id')}) IN (${ph}))`
+  const viaOrder = `EXISTS (SELECT 1 FROM sales_orders sco WHERE sco.id=${col(alias, 'order_id')} AND ${byParty('sco')})`
+  if (kind === 'delivery') return { sql: viaOrder, params: [...ids, ...ids], empty: false }
+  if (kind === 'return') {
+    return {
+      sql: `(CASE WHEN ${col(alias, 'order_id')} IS NOT NULL THEN ${viaOrder} ELSE ${byParty(alias)} END)`,
+      params: [...ids, ...ids, ...ids, ...ids],
+      empty: false
+    }
+  }
+  return { sql: byParty(alias), params: [...ids, ...ids], empty: false }
+}
+
+/** 单据是否在范围内；返回该行。范围外与不存在同形（404 + 同一句话）。 */
+export function assertSalesDocInScope(db, kind, id, orgScope) {
+  const def = DOC_KINDS[kind]
+  if (!def) throw new SalesOrderError('BAD_DOC_KIND', `不支持的单据类型 ${kind}`, 400)
+  const scope = salesScopeSql(orgScope, kind, 't')
+  const row = Number.isFinite(Number(id))
+    ? db.prepare(`SELECT t.* FROM ${def.table} t WHERE t.id=? AND ${scope.sql}`).get(Number(id), ...scope.params)
+    : null
+  if (!row) throw new SalesOrderError('DOC_NOT_FOUND', def.notFound, 404)
+  return row
+}
+
+/**
+ * 写路径的目标校验：出货 / 入库仓与门店的归属组织必须都在范围内（NULL 对受限范围不通过）。
+ * 全局范围恒通过。不通过 ⇒ 403。
+ */
+export function assertSalesTargetInScope(db, { warehouseId = null, storeId = null } = {}, orgScope) {
+  const { all, ids } = scopeIds(orgScope)
+  if (all) return
+  const inScope = (table, id) => {
+    if (!ids.length || !Number.isFinite(Number(id))) return false
+    const ph = ids.map(() => '?').join(',')
+    return !!db.prepare(`SELECT 1 FROM ${table} WHERE id=? AND org_id IN (${ph})`).get(Number(id), ...ids)
+  }
+  if (warehouseId != null && !inScope('warehouses', warehouseId)) {
+    throw new SalesOrderError('TARGET_OUT_OF_SCOPE', '所选仓库不在您的组织数据范围内', 403)
+  }
+  if (storeId != null && !inScope('stores', storeId)) {
+    throw new SalesOrderError('TARGET_OUT_OF_SCOPE', '所选门店不在您的组织数据范围内', 403)
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 报价单范围（ADR-0034）：报价没有 org_id 列，归属由三条参与方推出 ——
+//   出货仓 `warehouses.org_id`、门店 `stores.org_id`（与订单同一口径，直接复用 `salesScopeSql`），
+//   再加订货客户 `oc_customers.org_id`（下游客户继承上级，口径同 ADR-0027 `ocScope`）。
+// 经销商是客户而不是本方组织，仍不参与。**读：任一参与方在范围内即可见**；
+// **写（建 / 复制 / 转单）：给出的每一个参与方都必须在范围内，且至少给出一个**（不许建出受限范围永远看不到的无主报价）。
+// ---------------------------------------------------------------------------
+
+const ocCustomerOrgIn = (col, ph) =>
+  `${col} IN (SELECT cs.id FROM oc_customers cs WHERE COALESCE(cs.org_id,
+     (SELECT pp.org_id FROM oc_customers pp WHERE pp.id=cs.parent_customer_id)) IN (${ph}))`
+
+/** 报价列表 / 详情 / 概览的 SQL 谓词（无前导 AND）。`alias` 是 `sales_quotes` 的别名。 */
+export function quoteScopeSql(orgScope, alias = '') {
+  const { all, ids } = scopeIds(orgScope)
+  if (all) return { sql: '1=1', params: [], empty: false }
+  if (!ids.length) return { sql: '1=0', params: [], empty: true }
+  const base = salesScopeSql(orgScope, 'order', alias)
+  const ph = ids.map(() => '?').join(',')
+  const cust = ocCustomerOrgIn(alias ? `${alias}.customer_id` : 'customer_id', ph)
+  return { sql: `(${base.sql} OR ${cust})`, params: [...base.params, ...ids], empty: false }
+}
+
+/** 报价是否在范围内；返回该行。范围外与不存在同形（404）。 */
+export function assertQuoteInScope(db, id, orgScope) {
+  const scope = quoteScopeSql(orgScope, 't')
+  const row = Number.isFinite(Number(id))
+    ? db.prepare(`SELECT t.* FROM sales_quotes t WHERE t.id=? AND ${scope.sql}`).get(Number(id), ...scope.params)
+    : null
+  if (!row) throw new SalesOrderError('QUOTE_NOT_FOUND', `报价单 #${id} 不存在`, 404)
+  return row
+}
+
+/** 写路径目标校验：仓 / 门店 / 订货客户都必须在范围内，且受限范围下至少给出一个。不通过 ⇒ 403。 */
+export function assertQuoteTargetInScope(db, { warehouseId = null, storeId = null, customerId = null } = {}, orgScope) {
+  const { all, ids } = scopeIds(orgScope)
+  if (all) return
+  if (warehouseId == null && storeId == null && customerId == null) {
+    throw new SalesOrderError('TARGET_OUT_OF_SCOPE', '受限数据范围下报价必须指明仓库 / 门店 / 订货客户之一，不能创建无主报价', 403)
+  }
+  assertSalesTargetInScope(db, { warehouseId, storeId }, orgScope)
+  if (customerId != null) {
+    const ph = ids.map(() => '?').join(',')
+    const okC = ids.length && Number.isFinite(Number(customerId)) &&
+      db.prepare(`SELECT 1 FROM oc_customers c WHERE c.id=? AND ${ocCustomerOrgIn('c.id', ph)}`).get(Number(customerId), ...ids)
+    if (!okC) throw new SalesOrderError('TARGET_OUT_OF_SCOPE', '所选订货客户不在您的组织数据范围内', 403)
   }
 }
 
@@ -59,7 +191,17 @@ function creditAccountOf(db, order) {
  *
  * `actor` 必须显式传入 —— MCP 等非 HTTP 入口没有 `req.user`。
  */
-export function cancelOrder(db, { id, reason = null, actor = null, source = 'api' } = {}) {
+export function cancelOrder(db, { id, reason = null, actor = null, source = 'api', orgScope } = {}) {
+  // ADR-0034：非 HTTP 入口（MCP）把所有者的组织范围传进来，范围外与不存在同形（ORDER_NOT_FOUND 404）。
+  // `orgScope === undefined`（HTTP 路由已在调用前判过范围）⇒ 不重复判。
+  if (orgScope !== undefined) {
+    try {
+      assertSalesDocInScope(db, 'order', id, orgScope)
+    } catch (e) {
+      if (e instanceof SalesOrderError && e.status === 404) throw new SalesOrderError('ORDER_NOT_FOUND', '销售订单不存在', 404)
+      throw e
+    }
+  }
   const order = db.prepare('SELECT * FROM sales_orders WHERE id=?').get(Number(id))
   if (!order) throw new SalesOrderError('ORDER_NOT_FOUND', '销售订单不存在', 404)
   if (['shipped', 'completed', 'cancelled'].includes(order.status)) {
@@ -127,4 +269,10 @@ export function cancelOrder(db, { id, reason = null, actor = null, source = 'api
   return tx()
 }
 
-export default { SalesOrderError, cancelOrder }
+export default { SalesOrderError, cancelOrder, salesScopeSql, assertSalesDocInScope, assertSalesTargetInScope, quoteScopeSql, assertQuoteInScope, assertQuoteTargetInScope }
+
+// 单据流读接口（ADR-0032）：销售范围谓词登记给 docflow 的 DOC_SCOPE_RESOLVERS。`spec.kind` ∈ order | delivery | return。
+registerDocScopeBuilder('sales', ({ orgScope }, spec) => {
+  const s = salesScopeSql(orgScope, spec.kind, 't')
+  return s.empty ? null : { sql: s.sql, params: s.params }
+})

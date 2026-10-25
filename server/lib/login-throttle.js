@@ -1,7 +1,8 @@
 /**
  * ============================================================================
  * 文件标识：server/lib/login-throttle.js ｜ 持久化、有容量上限的登录尝试节流
- * IP 跨行业共享；账号键保留查询大小写语义。校验密码前原子消费，数据库失败时拒绝。
+ * IP 跨行业共享；账号键保留查询大小写语义。校验密码前原子预占，数据库失败时拒绝。
+ * 账号桶只计失败（预占 pending，验证后失败转实、成功清零已定案的失败）；IP 桶计全部尝试。
  * ============================================================================
  */
 import Database from 'better-sqlite3'
@@ -111,6 +112,10 @@ export function createLoginThrottle({ dataDir = requireDataDirectory(), mode = r
         key TEXT PRIMARY KEY, attempts INTEGER NOT NULL CHECK(attempts > 0), expires_at INTEGER NOT NULL
       );
       CREATE INDEX IF NOT EXISTS login_throttle_expiry ON login_throttle_buckets(expires_at)`)
+      // ADR-0005 修订：pending = 已预占、尚未定案的尝试数（attempts 含 pending）。旧库原位补列。
+      if (!db.prepare("SELECT 1 FROM pragma_table_info('login_throttle_buckets') WHERE name='pending'").get()) {
+        db.exec('ALTER TABLE login_throttle_buckets ADD COLUMN pending INTEGER NOT NULL DEFAULT 0')
+      }
       db.prepare('DELETE FROM login_throttle_buckets WHERE expires_at<=?').run(checkedTime(now))
       const meta = db.prepare('SELECT * FROM login_throttle_meta WHERE id=1').get()
       if (!meta) {
@@ -130,9 +135,9 @@ export function createLoginThrottle({ dataDir = requireDataDirectory(), mode = r
     db.close()
     throw error
   }
-  const get = db.prepare('SELECT attempts,expires_at FROM login_throttle_buckets WHERE key=?')
-  const insert = db.prepare('INSERT INTO login_throttle_buckets (key,attempts,expires_at) VALUES (?,1,?)')
-  const increment = db.prepare('UPDATE login_throttle_buckets SET attempts=attempts+1 WHERE key=?')
+  const get = db.prepare('SELECT attempts,pending,expires_at FROM login_throttle_buckets WHERE key=?')
+  const insert = db.prepare('INSERT INTO login_throttle_buckets (key,attempts,expires_at,pending) VALUES (?,1,?,?)')
+  const increment = db.prepare('UPDATE login_throttle_buckets SET attempts=attempts+1, pending=pending+? WHERE key=?')
   const consume = db.transaction(keys => {
     const timestamp = checkedTime(now)
     // Another process may only change policy after all buckets expire. A stale
@@ -151,21 +156,46 @@ export function createLoginThrottle({ dataDir = requireDataDirectory(), mode = r
       const earliest = db.prepare('SELECT MIN(expires_at) AS expiry FROM login_throttle_buckets').get().expiry
       return Math.max(1, Math.ceil((earliest - timestamp) / 1000))
     }
-    for (const rule of rules) {
-      if (rule.row) increment.run(rule.key)
-      else insert.run(rule.key, timestamp + rule.window)
-    }
-    return 0
+    // IP 桶：pending 恒为 0（永不退还）；账号桶：本次尝试先记为 pending。
+    rules.forEach((rule, index) => {
+      const pending = index === 1 ? 1 : 0
+      if (rule.row) increment.run(pending, rule.key)
+      else insert.run(rule.key, timestamp + rule.window, pending)
+    })
+    const row = rules[1].row
+    // settledFailures: failures already finalized at reservation time; a later success may clear only these.
+    return { accountEpoch: row ? row.expires_at : timestamp + rules[1].window, settledFailures: row ? row.attempts - row.pending : 0 }
+  })
+  // 定案：只动账号桶，且仅当桶仍是预占时的同一窗口（expires_at 相同）。失败 = pending 转实；
+  // 成功 = 只清掉“预占当时已经定案”的失败；预占之后才定案的失败、以及其他在途预占都继续计数。
+  const settleRow = db.prepare('SELECT attempts,pending,expires_at FROM login_throttle_buckets WHERE key=?')
+  const settle = db.transaction((key, epoch, success, clearable) => {
+    const row = settleRow.get(key)
+    if (!row || row.expires_at !== epoch || row.pending < 1) return
+    const pending = row.pending - 1
+    const failures = row.attempts - row.pending
+    const remaining = failures - Math.min(clearable, failures) + pending
+    if (!success) db.prepare('UPDATE login_throttle_buckets SET pending=? WHERE key=?').run(pending, key)
+    else if (remaining === 0) db.prepare('DELETE FROM login_throttle_buckets WHERE key=?').run(key)
+    else db.prepare('UPDATE login_throttle_buckets SET attempts=?, pending=? WHERE key=?').run(remaining, pending, key)
   })
   return {
     consumeLoginAttempt(input) {
       const keys = requestKeys(input, salt)
-      let retryAfter
-      try { retryAfter = consume.immediate(keys) } catch { throw unavailable() }
-      if (retryAfter) throw Object.assign(new Error('Too many login attempts; try again later'), {
-        status: 429, code: 'LOGIN_RATE_LIMITED', retryAfter
+      let outcome
+      try { outcome = consume.immediate(keys) } catch { throw unavailable() }
+      if (typeof outcome === 'number') throw Object.assign(new Error('Too many login attempts; try again later'), {
+        status: 429, code: 'LOGIN_RATE_LIMITED', retryAfter: outcome
       })
-      return { allowed: true }
+      return { allowed: true, reservation: Object.freeze({ key: keys[1], epoch: outcome.accountEpoch, settledFailures: outcome.settledFailures }) }
+    },
+    /** Best effort and never throws: on any storage error the reservation simply stays counted (fail closed). */
+    settleLoginAttempt(reservation, success) {
+      try {
+        if (!reservation || typeof reservation.key !== 'string' || !Number.isSafeInteger(reservation.epoch) || !Number.isSafeInteger(reservation.settledFailures) || reservation.settledFailures < 0) return false
+        settle.immediate(reservation.key, reservation.epoch, success === true, reservation.settledFailures)
+        return true
+      } catch { return false }
     },
     close() { if (db.open) db.close() }
   }
@@ -182,7 +212,9 @@ export function consumeLoginAttempt(input) {
       current = undefined
       current = { signature, limiter: createLoginThrottle(options) }
     }
-    return current.limiter.consumeLoginAttempt(input)
+    const result = current.limiter.consumeLoginAttempt(input)
+    const limiter = current.limiter
+    return { allowed: true, settle: success => limiter.settleLoginAttempt(result.reservation, success) }
   } catch (error) {
     if (['LOGIN_RATE_LIMITED', 'LOGIN_THROTTLE_INPUT_INVALID'].includes(error.code)) throw error
     throw unavailable()

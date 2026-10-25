@@ -1,7 +1,7 @@
 // ⚠️ 本文件由 scripts/gen-api-types.mjs 自动生成，请勿手改。
 // 改接口请改 server/openapi.js，然后执行：npm run gen:api
 //
-// 生成源：server/openapi.js ｜ OpenAPI 3.0.3 ｜ 契约版本 1.34.0
+// 生成源：server/openapi.js ｜ OpenAPI 3.0.3 ｜ 契约版本 1.36.0
 //
 // ============================================================================
 // 文件标识：src/types/api-routes.ts ｜ 【自动生成，勿手改】接口路径与标签的类型定义
@@ -11,14 +11,14 @@
 // 【注意】本文件由脚本写出：**文件标识块也必须由脚本输出**，否则下次 gen:api 会把它冲掉 ——
 //   "登记了不等于守住了"。改格式请改 scripts/gen-api-types.mjs。
 // ============================================================================
-// 路径 518 条 ｜ 标签 34 个
+// 路径 520 条 ｜ 标签 34 个
 //
 // 用法：
 //   import { typedGet, typedPost } from '../api/typed'
 //   typedGet('/api/purchase/chain/overview')   // 路径写错编译期就报
 
-export const OPENAPI_VERSION = '1.34.0'
-export const API_ROUTE_COUNT = 518
+export const OPENAPI_VERSION = '1.36.0'
+export const API_ROUTE_COUNT = 520
 
 /** 全部已登记的接口路径 */
 export type ApiRoute =
@@ -271,6 +271,7 @@ export type ApiRoute =
   | '/api/mcp/tools'
   | '/api/meta/dict'
   | '/api/meta/health'
+  | '/api/meta/metrics'
   | '/api/meta/settings'
   | '/api/meta/settings/audit'
   | '/api/meta/settings/audit/check'
@@ -459,6 +460,7 @@ export type ApiRoute =
   | '/api/qc/requests/{id}/close'
   | '/api/qc/requests/{id}/submit'
   | '/api/qc/sample-plan'
+  | '/api/qimen/platforms/{id}/secret'
   | '/api/refunds'
   | '/api/refunds/audit'
   | '/api/refunds/meta'
@@ -792,6 +794,7 @@ export type ApiRouteMap = {
   '/api/mcp/tools': { get: true }
   '/api/meta/dict': { get: true }
   '/api/meta/health': { get: true }
+  '/api/meta/metrics': { get: true }
   '/api/meta/settings': { get: true; put: true }
   '/api/meta/settings/audit': { get: true }
   '/api/meta/settings/audit/check': { get: true }
@@ -980,6 +983,7 @@ export type ApiRouteMap = {
   '/api/qc/requests/{id}/close': { post: true }
   '/api/qc/requests/{id}/submit': { post: true }
   '/api/qc/sample-plan': { get: true }
+  '/api/qimen/platforms/{id}/secret': { post: true }
   '/api/refunds': { get: true; post: true }
   '/api/refunds/audit': { get: true }
   '/api/refunds/meta': { get: true }
@@ -1322,6 +1326,7 @@ export const API_ROUTES: readonly ApiRoute[] = [
   '/api/mcp/tools',
   '/api/meta/dict',
   '/api/meta/health',
+  '/api/meta/metrics',
   '/api/meta/settings',
   '/api/meta/settings/audit',
   '/api/meta/settings/audit/check',
@@ -1510,6 +1515,7 @@ export const API_ROUTES: readonly ApiRoute[] = [
   '/api/qc/requests/{id}/close',
   '/api/qc/requests/{id}/submit',
   '/api/qc/sample-plan',
+  '/api/qimen/platforms/{id}/secret',
   '/api/refunds',
   '/api/refunds/audit',
   '/api/refunds/meta',
@@ -1844,6 +1850,7 @@ export const ROUTE_METHODS: Record<ApiRoute, string[]> = {
   '/api/mcp/tools': ['get'],
   '/api/meta/dict': ['get'],
   '/api/meta/health': ['get'],
+  '/api/meta/metrics': ['get'],
   '/api/meta/settings': ['get', 'put'],
   '/api/meta/settings/audit': ['get'],
   '/api/meta/settings/audit/check': ['get'],
@@ -2032,6 +2039,7 @@ export const ROUTE_METHODS: Record<ApiRoute, string[]> = {
   '/api/qc/requests/{id}/close': ['post'],
   '/api/qc/requests/{id}/submit': ['post'],
   '/api/qc/sample-plan': ['get'],
+  '/api/qimen/platforms/{id}/secret': ['post'],
   '/api/refunds': ['get', 'post'],
   '/api/refunds/audit': ['get'],
   '/api/refunds/meta': ['get'],

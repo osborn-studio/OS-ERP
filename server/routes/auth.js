@@ -17,7 +17,8 @@ import { Router } from 'express'
 import bcrypt from 'bcryptjs'
 import { getDb, getDbFor, INDUSTRIES, DEFAULT_INDUSTRY, normalizeIndustry } from '../db/index.js'
 import { ok, fail, bizFail, wrap, pageParams, paged, failFromError } from '../lib/http.js'
-import { signToken, requireAuth, requireRole, ROLES, userPermissions, resolveOrgScope } from '../middleware/auth.js'
+import { issueSessionCookies, clearSessionCookies, sessionTransport, crossSiteBrowserRequest } from '../middleware/session-transport.js'
+import { signToken, JWT_SECRET, requireAuth, requireRole, ROLES, userPermissions, resolveOrgScope } from '../middleware/auth.js'
 import { audit } from '../middleware/audit.js'
 import { createAccount, updateAccount, changePassword, logoutAll, replaceRolePermissions } from '../lib/account-security.js'
 import { consumeLoginAttempt } from '../lib/login-throttle.js'
@@ -30,6 +31,8 @@ const loginFailed = res => bizFail(res, { status: 401, code: 'AUTH_INVALID_CREDE
 r.post(
   '/login',
   wrap(async (req, res) => {
+    // cookie 传输：登录会设置会话 Cookie，必须拒绝跨站浏览器发起的登录（登录 CSRF，ADR-0036）
+    if (sessionTransport() === 'cookie' && crossSiteBrowserRequest(req)) return bizFail(res, { status: 403, code: 'CROSS_SITE_LOGIN_REJECTED', message: '不允许跨站登录请求' })
     const { username, password, industry } = req.body || {}
     if (typeof username !== 'string' || !username.trim() || username.length > 64 || /[\u0000-\u001f\u007f]/u.test(username) ||
         typeof password !== 'string' || !password || Buffer.byteLength(password, 'utf8') > 1024) return fail(res, '账号与密码格式无效', 400, 'AUTH_INPUT_INVALID')
@@ -39,38 +42,47 @@ r.post(
     // —— 同一个判据两份实现，以后只会改一处。
     const code = normalizeIndustry(industry)
     const normalizedUsername = username.trim()
-    try { consumeLoginAttempt({ industry: code, username: normalizedUsername, ip: req.ip }) } catch (e) {
+    let attempt
+    try { attempt = consumeLoginAttempt({ industry: code, username: normalizedUsername, ip: req.ip }) } catch (e) {
       if (e.code === 'LOGIN_RATE_LIMITED') res.set('Retry-After', String(e.retryAfter))
       if (failFromError(res, e)) return
       throw e
     }
-    const db = getDbFor(code) // 按所选行业登录对应的库
-    const before = db.prepare('SELECT * FROM users WHERE username=?').get(normalizedUsername)
-    const matches = await bcrypt.compare(password, before?.password_hash || DUMMY_PASSWORD_HASH)
-    const user = before ? db.prepare('SELECT * FROM users WHERE id=?').get(before.id) : null
-    if (!matches || !user || user.status !== 'active' || user.password_hash !== before.password_hash || user.auth_version !== before.auth_version) return loginFailed(res)
-    db.prepare("UPDATE users SET last_login_at=datetime('now','localtime') WHERE id=?").run(user.id)
-    const token = signToken(user, code)
-    audit({ user: { uid: user.id, name: user.name }, ip: req.ip }, { action: 'LOGIN', module: 'auth', entity: 'user', entityId: user.id, detail: code })
-    return ok(res, {
-      token,
-      industry: code,
-      industryName: INDUSTRIES[code].name,
-      industryLabel: INDUSTRIES[code].label,
-      user: {
-        id: user.id,
-        username: user.username,
-        name: user.name,
-        role: user.role,
-        roleName: ROLES[user.role] || user.role,
-        dept: user.dept,
-        dealer_id: user.dealer_id,
-        store_id: user.store_id,
+    // 预占（含账号桶 pending）已在上面原子完成；下面任何非成功出口都按失败定案（pending 转实），
+    // 抛错也不例外（未定案的预占继续计数，fail closed）。成功才清账号桶里已定案的失败。
+    let succeeded = false
+    try {
+      const db = getDbFor(code) // 按所选行业登录对应的库
+      const before = db.prepare('SELECT * FROM users WHERE username=?').get(normalizedUsername)
+      const matches = await bcrypt.compare(password, before?.password_hash || DUMMY_PASSWORD_HASH)
+      const user = before ? db.prepare('SELECT * FROM users WHERE id=?').get(before.id) : null
+      if (!matches || !user || user.status !== 'active' || user.password_hash !== before.password_hash || user.auth_version !== before.auth_version) return loginFailed(res)
+      db.prepare("UPDATE users SET last_login_at=datetime('now','localtime') WHERE id=?").run(user.id)
+      const token = signToken(user, code)
+      audit({ user: { uid: user.id, name: user.name }, ip: req.ip }, { action: 'LOGIN', module: 'auth', entity: 'user', entityId: user.id, detail: code })
+      succeeded = true
+      // cookie 传输（ADR-0036）：JWT 只进 HttpOnly Cookie，不出现在响应体；bearer 模式原样返回 token
+      const viaCookie = issueSessionCookies(req, res, token, JWT_SECRET)
+      return ok(res, {
+        ...(viaCookie ? { transport: 'cookie' } : { token }),
         industry: code,
-        industryName: INDUSTRIES[code].name
-      },
-      expiresIn: '12h'
-    })
+        industryName: INDUSTRIES[code].name,
+        industryLabel: INDUSTRIES[code].label,
+        user: {
+          id: user.id,
+          username: user.username,
+          name: user.name,
+          role: user.role,
+          roleName: ROLES[user.role] || user.role,
+          dept: user.dept,
+          dealer_id: user.dealer_id,
+          store_id: user.store_id,
+          industry: code,
+          industryName: INDUSTRIES[code].name
+        },
+        expiresIn: '12h'
+      })
+    } finally { attempt.settle(succeeded) }
   })
 )
 
@@ -166,13 +178,21 @@ r.put(
 r.post(
   '/change-password',
   requireAuth,
-  wrap(async (req, res) => ok(res, await changePassword(getDb(), req.user, req.body?.oldPassword, req.body?.newPassword, { ip: req.ip })))
+  wrap(async (req, res) => {
+    const result = await changePassword(getDb(), req.user, req.body?.oldPassword, req.body?.newPassword, { ip: req.ip })
+    clearSessionCookies(req, res) // cookie 传输：全部会话已失效，Cookie 一并清掉；bearer 模式空操作
+    return ok(res, result)
+  })
 )
 
 r.post(
   '/logout-all',
   requireAuth,
-  wrap((req, res) => ok(res, logoutAll(getDb(), req.user, { ip: req.ip })))
+  wrap((req, res) => {
+    const result = logoutAll(getDb(), req.user, { ip: req.ip })
+    clearSessionCookies(req, res)
+    return ok(res, result)
+  })
 )
 
 r.get(
@@ -281,15 +301,31 @@ r.put(
   wrap((req, res) => ok(res, replaceRolePermissions(getDb(), req.user, req.params.code, req.body?.permissions, { ip: req.ip })))
 )
 
-/** 组织档案维护（管理员） */
+/**
+ * 组织档案（平铺全表）。
+ * ADR-0028：admin / 全局范围账号拿全量；其余账号只拿 `resolveOrgScope` 圈定的组织（经销商加上自己的挂靠组织），
+ * 空范围 ⇒ 空列表（空范围不许变成全库）。与 `/org-tree` 不同：这里不补祖先节点——平铺档案不需要拼层级，
+ * 补祖先等于把范围外的上级组织档案（负责人 / 路径）也交出去。
+ */
 r.get(
   '/orgs',
   requireAuth,
   wrap((req, res) => {
     const db = getDb()
     const { type, keyword } = req.query
+    const scope = resolveOrgScope(db, req.user)
     let sql = 'SELECT * FROM orgs WHERE id<>0'
     const params = []
+    if (scope.scope !== 'all') {
+      const ids = new Set((scope.orgIds || []).map(Number).filter(Number.isFinite))
+      if (scope.scope === 'dealer' && scope.dealerId) {
+        const d = db.prepare('SELECT org_id FROM dealers WHERE id=?').get(scope.dealerId)
+        if (d?.org_id) ids.add(Number(d.org_id))
+      }
+      if (!ids.size) return ok(res, [])
+      sql += ` AND id IN (${[...ids].map(() => '?').join(',')})`
+      params.push(...ids)
+    }
     if (type) { sql += ' AND type=?'; params.push(type) }
     if (keyword) { sql += ' AND (name LIKE ? OR code LIKE ?)'; params.push(`%${keyword}%`, `%${keyword}%`) }
     sql += ' ORDER BY path'

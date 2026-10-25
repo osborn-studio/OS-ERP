@@ -23,7 +23,7 @@
  * ============================================================================
  */
 
-import { createCipheriv, createDecipheriv, hkdfSync, randomBytes } from 'node:crypto'
+import { createCipheriv, createDecipheriv, hkdfSync, randomBytes, createHmac } from 'node:crypto'
 import { jwtSecretPosture } from '../middleware/auth.js'
 
 export const SEALED_PREFIX = 'enc:v1:'
@@ -104,4 +104,29 @@ export function maskSecret(plain) {
   return { has_secret: s.length > 0, secret_last4: s.length >= LAST4_MIN_CHARS ? s.slice(-4) : null }
 }
 
-export default { SEALED_PREFIX, SecretBoxError, isSealed, sealSecret, openSecret, resealIfLegacy, maskSecret }
+/**
+ * 脱敏用的带钥哈希（ADR-0030）：HMAC-SHA256(由当前密钥按 `purpose` 派生的子钥, 输入)，取前 `bytes` 字节十六进制。
+ * 与封存用的子钥**不同 info**，两者互不可推；只用**当前**密钥（不用轮换中的旧钥）。
+ * 生产模式下密钥若是公开值 / 缺失（`jwtSecretPosture` 为 public-default / fallback）直接抛 —— 手机号空间只有 10^10，
+ * 拿公开密钥做的"哈希"等于没脱敏。
+ */
+export function keyedPseudonym(purpose, input, { env = process.env, bytes = 12 } = {}) {
+  const explicit = String(env.GML_SECRET_KEY ?? '').trim()
+  if (explicit && explicit.length < MIN_KEY_CHARS) {
+    throw new SecretBoxError('SECRET_BOX_KEY_WEAK', `GML_SECRET_KEY 至少 ${MIN_KEY_CHARS} 个字符`)
+  }
+  let ikm = explicit
+  if (!ikm) {
+    const posture = jwtSecretPosture(env)
+    if (env.GML_RUNTIME_MODE === undefined || env.GML_RUNTIME_MODE === 'production') {
+      if (posture.source !== 'env') {
+        throw new SecretBoxError('PSEUDONYM_KEY_UNSAFE', '生产模式做不可逆脱敏需要显式 GML_SECRET_KEY 或非公开的 GML_JWT_SECRET')
+      }
+    }
+    ikm = posture.secret
+  }
+  const sub = Buffer.from(hkdfSync('sha256', ikm, HKDF_SALT, `pseudonym:${purpose}`, 32))
+  return createHmac('sha256', sub).update(String(input)).digest('hex').slice(0, bytes * 2)
+}
+
+export default { SEALED_PREFIX, SecretBoxError, isSealed, sealSecret, openSecret, resealIfLegacy, maskSecret, keyedPseudonym }

@@ -1,0 +1,73 @@
+{
+  "repo": "casbin/node-casbin",
+  "repo_redirects_to": "apache/casbin-node-casbin",
+  "tag": "v5.51.1",
+  "commit": "2d90c7d8c3b522415605cf3d25481e763e73381e",
+  "tag_published_at": "2026-06-25T15:58:12Z",
+  "selection_rule": "latest non-draft, non-prerelease GitHub release whose published_at is on or before 2026-10-15",
+  "fetched_at": "2026-10-23T12:15:14Z",
+  "license_spdx_as_declared": "Apache-2.0",
+  "license_files": [
+    {
+      "file": "LICENSE",
+      "bytes": 11357,
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+    }
+  ],
+  "files_referenced": [
+    {
+      "path": "examples/rbac_with_domains_model.conf",
+      "referenced_by": [
+        "reusable/rbac/rbac.js header 1"
+      ],
+      "fetch_status": "ok",
+      "bytes": 261,
+      "sha256": "61dd2bd62fd2276924d7f4d2cdb208535bd5939654203efa2f947f1b9681532f",
+      "git_blob_sha": "57c372164232898bdcb2c3b738780c7ba028d1ae",
+      "similarity": [
+        {
+          "local": "reusable/rbac/rbac.js",
+          "tokensA": 1003,
+          "tokensB": 46,
+          "unigramJaccard": 0.0471,
+          "shingleSize": 5,
+          "shinglesA": 894,
+          "shinglesB": 42,
+          "sharedShingles": 0,
+          "localInUpstream": 0,
+          "upstreamInLocal": 0
+        }
+      ]
+    },
+    {
+      "path": "test/enforcer.test.ts",
+      "referenced_by": [
+        "reusable/rbac/rbac.js header reason 1 (enforcer.test.ts:595)"
+      ],
+      "fetch_status": "ok",
+      "bytes": 36445,
+      "sha256": "beda16dc194ea08e4ea0a7dd29356fdc923f09ccfc46855758d90b6fdbc5930f",
+      "git_blob_sha": "fe7750ce622f3671dcb06a2948b9e8596ac2332a",
+      "similarity": [
+        {
+          "local": "reusable/rbac/rbac.js",
+          "tokensA": 1003,
+          "tokensB": 5228,
+          "unigramJaccard": 0.1451,
+          "shingleSize": 5,
+          "shinglesA": 894,
+          "shinglesB": 2066,
+          "sharedShingles": 0,
+          "localInUpstream": 0,
+          "upstreamInLocal": 0
+        }
+      ]
+    }
+  ],
+  "failures": [
+    {
+      "path": "NOTICE",
+      "status": "not present at the pinned commit (HTTP 404); a NOTICE file exists on the default branch at fetch time, so none is stored here"
+    }
+  ]
+}

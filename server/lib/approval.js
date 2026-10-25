@@ -42,7 +42,9 @@ import { userPermissions } from '../middleware/auth.js'
 import { setApprovalGate, effectOwnerOf } from './docflow.js'
 // 采购订单（PO）本体的业务入口实现。**这里 import 业务模块是刻意的**，理由见下方「口径④」：
 // 审批放行必须走正门那段代码，而 PO 的效果归属只有域侧知道。
-import { transitionPurchaseOrder } from './purchase.js'
+import { transitionPurchaseOrder, purchaseScopeSql } from './purchase.js'
+import { salesScopeSql } from './sales-order.js'
+import { ocScope } from './order-center.js'
 
 export class ApprovalError extends Error {
   constructor(message, { code = 'APPROVAL_ERROR', httpStatus = 400, detail = null } = {}) {
@@ -56,6 +58,88 @@ export class ApprovalError extends Error {
     this.detail = detail
   }
 }
+
+// ---------------------------------------------------------------------------
+// 组织数据范围（ADR-0037）：审批实例没有自己的归属，一律**跟着它指向的单据**。
+// ---------------------------------------------------------------------------
+// `scopeCtx` = `{ orgScope, user }`（路由层给 `req.orgScope` / `req.user`）。
+// 不传（null/undefined）⇒ 不收口：lib 内部调用、脚本、MCP 等既有口径不变（与 `purchaseScopeSql` 同一约定）。
+// `orgScope.scope === 'all'` ⇒ 全库。受限范围：单据在组织范围内才算"范围内"；
+// 没有解析器的单据类型、已不存在的单据、空范围 ⇒ **不在范围内**（失败关闭，不是全库）。
+
+/**
+ * 待 Y2 的 DOC_SCOPE_RESOLVERS 合入后替换。
+ * 最小的"单据类型 → 范围谓词"映射，只覆盖审批实例实际会指向的类型：
+ *   · 采购：PRQ / PI / PST / PAY 按自身 org_id，PO / GR / PRT 经 warehouses.org_id（`purchaseScopeSql`，ADR-0017/0020）；
+ *   · 销售：SO / DL / SR（`salesScopeSql`，ADR-0026）；
+ *   · 订货中心：OC 按 oc_orders.customer_id、OCS 按 oc_statements.customer_id（`ocScope`，ADR-0027；
+ *     外部主体仍是"自己的客户"口径）。
+ * 其余类型（TF/CK/QT/AR/…）一律返回 false —— 宁可看不到，也不放行。
+ */
+const PURCHASE_SCOPE = {
+  PRQ: ['purchase_requisitions', 'org'], PI: ['purchase_invoices', 'org'],
+  PST: ['purchase_settlements', 'org'], PAY: ['purchase_payments', 'org'],
+  PO: ['purchase_orders', 'wh'], GR: ['purchase_receipts', 'wh'], PRT: ['purchase_returns', 'wh']
+}
+const SALES_SCOPE = { SO: ['sales_orders', 'order'], DL: ['sales_deliveries', 'delivery'], SR: ['sales_returns', 'return'] }
+const OC_SCOPE = { OC: 'oc_orders', OCS: 'oc_statements' }
+
+export function approvalDocScope(db, docType, docId, scopeCtx = null) {
+  const s = scopeCtx?.orgScope
+  if (!scopeCtx || !s || s.scope === 'all') return true
+  const id = Number(docId)
+  if (!Number.isFinite(id)) return false
+  let sql = null
+  let params = []
+  if (PURCHASE_SCOPE[docType]) {
+    const [table, kind] = PURCHASE_SCOPE[docType]
+    const sc = purchaseScopeSql(s, 't')
+    sql = `SELECT 1 FROM ${table} t WHERE t.id=? AND ${sc[kind]}`
+    params = sc.params
+  } else if (SALES_SCOPE[docType]) {
+    const [table, kind] = SALES_SCOPE[docType]
+    const sc = salesScopeSql(s, kind, 't')
+    sql = `SELECT 1 FROM ${table} t WHERE t.id=? AND ${sc.sql}`
+    params = sc.params
+  } else if (OC_SCOPE[docType]) {
+    let sc
+    try { sc = ocScope(db, { user: scopeCtx.user || {}, orgScope: s }, 't.customer_id') } catch { return false }
+    if (sc.empty) return false
+    sql = `SELECT 1 FROM ${OC_SCOPE[docType]} t WHERE t.id=? AND ${sc.sql}`
+    params = sc.params
+  } else {
+    return false
+  }
+  return !!db.prepare(sql).get(id, ...params)
+}
+
+/** 审批管理员（admin / 超管 / 持 `system:approval:manage`）：ADR-0015 起"待我审批"对其全见。 */
+function isApprovalManager(db, actor) {
+  const u = db.prepare('SELECT id, role, is_super FROM users WHERE id=?').get(actor?.id)
+  return !!u?.is_super || u?.role === 'admin' || userPermissions(db, actor?.id, u?.role).includes('system:approval:manage')
+}
+
+const isGlobalCtx = (scopeCtx) => !scopeCtx || !scopeCtx.orgScope || scopeCtx.orgScope.scope === 'all'
+const stepOfInstance = (db, inst) =>
+  db.prepare('SELECT * FROM approval_steps WHERE template_id=? AND step_no=?').get(inst.template_id, inst.current_step)
+
+/**
+ * 实例对调用者可见吗？全局范围 ∪ 提交人本人 ∪ pending 且当前级审批人是我（自己的待办不受组织限制）∪ 单据在组织范围内。
+ * 读（列表 / 详情 / 历史记录）与撤回、决定的 404 判据都从这里取。
+ */
+export function instanceVisibleTo(db, inst, actor, scopeCtx = null) {
+  if (isGlobalCtx(scopeCtx)) return true
+  if (actor?.id != null && inst.submitted_by_id != null && Number(inst.submitted_by_id) === Number(actor.id)) return true
+  if (inst.status === 'pending') {
+    if (canApproveStep(db, stepOfInstance(db, inst), actor)) return true
+    // 审批管理员的"待我审批"全见（ADR-0015）是既有契约：pending 队列不受组织限制；非 pending 与决定仍按单据范围
+    if (scopeCtx._mgr === undefined) scopeCtx._mgr = isApprovalManager(db, actor)
+    if (scopeCtx._mgr) return true
+  }
+  return approvalDocScope(db, inst.doc_type, inst.doc_id, scopeCtx)
+}
+
+const notFoundInstance = (id) => new ApprovalError(`审批实例 #${id} 不存在`, { code: 'APPROVAL_NOT_FOUND', httpStatus: 404 })
 
 const nowStr = () => new Date().toISOString().slice(0, 19).replace('T', ' ')
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100
@@ -350,9 +434,11 @@ export function canApproveStep(db, step, actor) {
  * @param {function} [apply] 最后一级通过后要执行的业务流转。**必须由调用方传入** ——
  *        审批引擎不认识任何业务，它只负责「按级次放行」。
  */
-export function decideApproval(db = getDb(), { instanceId, decision, comment = null, actor = {}, apply = null }) {
+export function decideApproval(db = getDb(), { instanceId, decision, comment = null, actor = {}, apply = null, scopeCtx = null }) {
   const inst = db.prepare('SELECT * FROM approval_instances WHERE id=?').get(instanceId)
   if (!inst) throw new ApprovalError(`审批实例 #${instanceId} 不存在`, { code: 'APPROVAL_NOT_FOUND', httpStatus: 404 })
+  // ADR-0037：决定要求实例指向的单据在调用者组织范围内（审批人身份由下面的 canApproveStep 另判）；范围外与不存在同形
+  if (!approvalDocScope(db, inst.doc_type, inst.doc_id, scopeCtx)) throw notFoundInstance(instanceId)
   if (inst.status !== 'pending') {
     throw new ApprovalError(`该审批已${statusText(inst.status)}，不能重复处理`, {
       code: 'APPROVAL_NOT_PENDING',
@@ -466,9 +552,13 @@ export function decideApproval(db = getDb(), { instanceId, decision, comment = n
 }
 
 /** 撤回审批（提交人自己撤销，或管理员） */
-export function cancelApproval(db = getDb(), { instanceId, actor = {}, comment = null }) {
+export function cancelApproval(db = getDb(), { instanceId, actor = {}, comment = null, scopeCtx = null }) {
   const inst = db.prepare('SELECT * FROM approval_instances WHERE id=?').get(instanceId)
   if (!inst) throw new ApprovalError(`审批实例 #${instanceId} 不存在`, { code: 'APPROVAL_NOT_FOUND', httpStatus: 404 })
+  // ADR-0037：先判可见（看不到 ⇒ 404，不让 403 泄漏存在性），再要求单据在范围内（提交人也不例外）
+  if (!instanceVisibleTo(db, inst, actor, scopeCtx) || !approvalDocScope(db, inst.doc_type, inst.doc_id, scopeCtx)) {
+    throw notFoundInstance(instanceId)
+  }
   if (inst.status !== 'pending') {
     throw new ApprovalError(`该审批已${statusText(inst.status)}，不能撤回`, { code: 'APPROVAL_NOT_PENDING', httpStatus: 409 })
   }
@@ -495,24 +585,27 @@ function statusText(s) {
 // 查询
 // ---------------------------------------------------------------------------
 
-export function listInstances(db = getDb(), { status = null, docType = null, page = 1, pageSize = 20, mine = null } = {}) {
+export function listInstances(db = getDb(), { status = null, docType = null, page = 1, pageSize = 20, mine = null, actor = null, scopeCtx = null } = {}) {
   const cond = []
   const args = []
   if (status) { cond.push('i.status=?'); args.push(status) }
   if (docType) { cond.push('i.doc_type=?'); args.push(docType) }
   if (mine) { cond.push('i.submitted_by_id=?'); args.push(mine) }
   const where = cond.length ? `WHERE ${cond.join(' AND ')}` : ''
-  const total = db.prepare(`SELECT COUNT(*) c FROM approval_instances i ${where}`).get(...args).c
-  const list = db
-    .prepare(
-      `SELECT i.*, s.name AS template_name
+  const select = `SELECT i.*, s.name AS template_name
          FROM approval_instances i
          LEFT JOIN approval_templates s ON s.id = i.template_id
          ${where}
-        ORDER BY CASE i.status WHEN 'pending' THEN 0 ELSE 1 END, i.id DESC
-        LIMIT ? OFFSET ?`
-    )
-    .all(...args, pageSize, (page - 1) * pageSize)
+        ORDER BY CASE i.status WHEN 'pending' THEN 0 ELSE 1 END, i.id DESC`
+  if (!isGlobalCtx(scopeCtx)) {
+    // 受限范围（ADR-0037）：可见性取决于单据归属与当前级审批人，逐行判定后再分页 ——
+    // total 是过滤后的数量，不泄漏全库规模。审批实例是低量表，这里不做 SQL 下推。
+    const visible = db.prepare(select).all(...args).filter((r) => instanceVisibleTo(db, r, actor, scopeCtx))
+    const slice = visible.slice((page - 1) * pageSize, page * pageSize)
+    return { list: slice.map((r) => ({ ...r, doc_title: docTitleOf(db, r.doc_type, r.doc_id) })), total: visible.length, page, pageSize }
+  }
+  const total = db.prepare(`SELECT COUNT(*) c FROM approval_instances i ${where}`).get(...args).c
+  const list = db.prepare(`${select} LIMIT ? OFFSET ?`).all(...args, pageSize, (page - 1) * pageSize)
   return { list: list.map((r) => ({ ...r, doc_title: docTitleOf(db, r.doc_type, r.doc_id) })), total, page, pageSize }
 }
 
@@ -522,8 +615,7 @@ export function listInstances(db = getDb(), { status = null, docType = null, pag
  * 「待我审批」列表与审批待办计数（ADR-0015）都从这里取，不各写一份过滤。
  */
 export function pendingInstancesFor(db = getDb(), actor) {
-  const u = db.prepare('SELECT id, role, is_super FROM users WHERE id=?').get(actor?.id)
-  const seesAll = !!u?.is_super || u?.role === 'admin' || userPermissions(db, actor?.id, u?.role).includes('system:approval:manage')
+  const seesAll = isApprovalManager(db, actor)
   const rows = db
     .prepare(
       `SELECT i.*, t.name AS template_name
@@ -556,21 +648,33 @@ export function listTemplates(db = getDb()) {
   }))
 }
 
-export function approvalOverview(db = getDb()) {
+export function approvalOverview(db = getDb(), { actor = null, scopeCtx = null } = {}) {
   const q = (sql, ...a) => db.prepare(sql).get(...a)
-  const pending = q(`SELECT COUNT(*) c FROM approval_instances WHERE status='pending'`).c
-  const approved = q(`SELECT COUNT(*) c FROM approval_instances WHERE status='approved'`).c
-  const rejected = q(`SELECT COUNT(*) c FROM approval_instances WHERE status='rejected'`).c
-  const canceled = q(`SELECT COUNT(*) c FROM approval_instances WHERE status='canceled'`).c
   const tplOn = q(`SELECT COUNT(*) c FROM approval_templates WHERE enabled=1`).c
   const tplAll = q(`SELECT COUNT(*) c FROM approval_templates`).c
-  const pendingAmount = q(`SELECT COALESCE(SUM(amount),0) s FROM approval_instances WHERE status='pending'`).s
-  const byType = db
-    .prepare(
-      `SELECT doc_type, COUNT(*) c FROM approval_instances WHERE status='pending' GROUP BY doc_type ORDER BY c DESC`
-    )
-    .all()
-  const last = q(`SELECT MAX(decided_at) t FROM approval_instances WHERE status<>'pending'`).t
+  let pending, approved, rejected, canceled, pendingAmount, byType, last
+  if (isGlobalCtx(scopeCtx)) {
+    pending = q(`SELECT COUNT(*) c FROM approval_instances WHERE status='pending'`).c
+    approved = q(`SELECT COUNT(*) c FROM approval_instances WHERE status='approved'`).c
+    rejected = q(`SELECT COUNT(*) c FROM approval_instances WHERE status='rejected'`).c
+    canceled = q(`SELECT COUNT(*) c FROM approval_instances WHERE status='canceled'`).c
+    pendingAmount = q(`SELECT COALESCE(SUM(amount),0) s FROM approval_instances WHERE status='pending'`).s
+    byType = db
+      .prepare(`SELECT doc_type, COUNT(*) c FROM approval_instances WHERE status='pending' GROUP BY doc_type ORDER BY c DESC`)
+      .all()
+    last = q(`SELECT MAX(decided_at) t FROM approval_instances WHERE status<>'pending'`).t
+  } else {
+    // 受限范围（ADR-0037）：同一份可见性判据，计数与金额只含调用者可见的实例
+    const rows = db.prepare('SELECT * FROM approval_instances').all().filter((r) => instanceVisibleTo(db, r, actor, scopeCtx))
+    const n = (st) => rows.filter((r) => r.status === st).length
+    const pend = rows.filter((r) => r.status === 'pending')
+    pending = pend.length; approved = n('approved'); rejected = n('rejected'); canceled = n('canceled')
+    pendingAmount = pend.reduce((a, r) => a + (Number(r.amount) || 0), 0)
+    const g = new Map()
+    for (const r of pend) g.set(r.doc_type, (g.get(r.doc_type) || 0) + 1)
+    byType = [...g.entries()].map(([doc_type, c]) => ({ doc_type, c })).sort((a, b) => b.c - a.c)
+    last = rows.filter((r) => r.status !== 'pending' && r.decided_at).map((r) => r.decided_at).sort().pop() || null
+  }
   return {
     pending, approved, rejected, canceled,
     total: pending + approved + rejected + canceled,
@@ -637,7 +741,7 @@ export function approvalTodosFor(db = getDb(), actor) {
 }
 
 export default {
-  ApprovalError, amountOf, matchTemplate, stepsOfTemplate, describeApprover,
+  ApprovalError, amountOf, matchTemplate, stepsOfTemplate, describeApprover, approvalDocScope, instanceVisibleTo,
   approvalGate, submitApproval, getInstance, canApproveStep,
   decideApproval, cancelApproval, listInstances, pendingForMe, pendingInstancesFor,
   listTemplates, approvalOverview, approvalTodos, approvalTodosFor, approvalTodoItems

@@ -16,6 +16,8 @@
  *     存活到加密完成后被擦除；校验失败在加密模式下直接擦除而不是隔离。三库在同一写冻结窗口内快照，
  *     报告带共享的 consistency_stamp（近似一致点，非跨库事务）。
  *
+ * 【告警】（ADR-0029）有失败且设置 GML_ALERT_CHANNEL（已存在的通知渠道 code）⇒ 经通知发送路径发一条简短告警（只含行业码/错误码/数据目录名）；成功静默。
+ *
  * 【改它要注意什么】tests/db-backup.test.mjs 用真实子进程跑本脚本；`GML_BACKUP_FAULT`
  *   只在 GML_RUNTIME_MODE=test 下允许，其他模式直接拒绝运行。
  * ============================================================================
@@ -39,6 +41,8 @@ import Database from 'better-sqlite3'
 import { INDUSTRIES, DATA_DIR, dbPathFor } from '../server/db/index.js'
 import { runtimeMode, requireDataDirectory } from '../server/runtime.js'
 import { resolveBackupDir } from '../server/lib/backup-dir.js'
+import { sendBackupAlert } from '../server/lib/backup-alert.js'
+import { getChannel } from '../server/lib/notify.js'
 import { loadBackupKey, encryptFile, decryptFile, shredFile, FORMAT_VERSION } from '../server/lib/backup-crypto.js'
 
 const SMOKE_TABLE = 'users'
@@ -396,4 +400,28 @@ for (const r of results) {
 }
 for (const f of reportFiles) console.log(`  报告：${f}`)
 console.log(failed ? `备份完成，其中 ${failed} 个失败（旧备份未裁剪）` : '备份完成')
+
+// ---- 告警钩子（ADR-0029）：仅失败时、仅当 GML_ALERT_CHANNEL 指向已存在的通知渠道；成功静默 ----
+// 经 notify.js 的发送路径（出站策略在其内部强制）。告警自身失败写 stderr，不改变退出码（失败本来就非零）。
+if (failed && process.env.GML_ALERT_CHANNEL) {
+  const lookup = (code) => {
+    for (const c of codes) {
+      const src = dbPathFor(c)
+      if (!fs.existsSync(src)) continue
+      let adb
+      try {
+        adb = new Database(src, { timeout: 5000 })
+        const channel = getChannel(adb, code)
+        if (channel) return { db: adb, channel, close: () => adb.close() }
+      } catch (e) {
+        console.error(`ALERT_LOOKUP_SKIPPED: ${c} ${e.code || 'ERROR'}`) // 该库打不开/没有 notify_channels 表：记一笔，试下一个库
+      }
+      try { adb?.close() } catch { /* ignore */ }
+    }
+    return null
+  }
+  const alert = await sendBackupAlert({ channelCode: process.env.GML_ALERT_CHANNEL, results, dataDir: DATA_DIR, failed, lookup })
+  if (alert.status === 'sent') console.error('ALERT_SENT: 备份失败告警已发送')
+  else console.error(`ALERT_NOT_SENT: ${alert.status}${alert.detail ? ` ${alert.detail}` : ''}`)
+}
 process.exit(failed ? 1 : 0)

@@ -16,7 +16,7 @@
 import { Router } from 'express'
 import { getDb } from '../db/index.js'
 import { ok, wrap, fail, failFromError } from '../lib/http.js'
-import { requireAuth, requireRole } from '../middleware/auth.js'
+import { requireAuth, requireRole, sessionToken } from '../middleware/auth.js'
 import { auditStrict } from '../middleware/audit.js'
 import { DOC_TYPE_LABEL } from '../lib/stock.js'
 // 仓库类型文案的**唯一出处**在 `lib/warehouse.js`（与"新建/改仓"接口的取值域同一份）——
@@ -24,6 +24,9 @@ import { DOC_TYPE_LABEL } from '../lib/stock.js'
 import { WAREHOUSE_TYPES } from '../lib/warehouse.js'
 // 版本 / 构建 SHA 只有一处（`server/version.js`）：健康检查是运维判断发布版本的落点，不能再写字面量
 import { versionInfo } from '../version.js'
+// 运维健康（ADR-0029）：详情只给 admin，匿名只拿 status
+import { computeOpsStatus, opsCounters } from '../lib/ops-status.js'
+import { DATA_DIR } from '../db/index.js'
 import { ROLES } from '../middleware/auth.js'
 // 配置的唯一出处与唯一写入点（批次 R）：
 //   · `SETTING_RULES` 定义全部键（标签 / 类型 / 默认值 / 值域 / 是否危险）；
@@ -74,19 +77,46 @@ function stockDocTypes(db) {
   return map
 }
 
+/** 运维详情的门：admin 角色或超级管理员（与 ADR-0029 一致）；其余已登录者与匿名都看不到 */
+const isOpsAdmin = (u) => Boolean(u) && (u.role === 'admin' || Number(u.is_super) === 1)
+
+/**
+ * 可选鉴权：没带 Bearer（cookie 传输模式下含会话 Cookie）⇒ 匿名放行（探活、Docker HEALTHCHECK 不带令牌）；
+ * 带了就走完整的 `requireAuth`（令牌无效 ⇒ 401，而不是悄悄当匿名——带了凭据又不对，调用方应当知道）。
+ */
+function optionalAuth(req, res, next) {
+  return sessionToken(req).token ? requireAuth(req, res, next) : next()
+}
+
 r.get(
   '/health',
-  wrap((_req, res) => {
+  optionalAuth,
+  wrap((req, res) => {
     const db = getDb()
-    const tables = db.prepare("SELECT COUNT(*) c FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").get().c
-    const products = db.prepare("SELECT COUNT(*) c FROM products").get().c
-    return ok(res, {
+    // 匿名只拿：status / 服务名 / 版本与构建 SHA（ADR-0012 契约）/ 时间。库计数、备份、磁盘等一律只给 admin。
+    const body = {
       status: 'ok',
       service: 'gml-supply-chain',
       ...versionInfo(),
-      time: new Date().toISOString(),
-      database: { tables, products, seeded: products > 0 }
-    })
+      time: new Date().toISOString()
+    }
+    if (isOpsAdmin(req.user)) {
+      const tables = db.prepare("SELECT COUNT(*) c FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").get().c
+      const products = db.prepare("SELECT COUNT(*) c FROM products").get().c
+      body.database = { tables, products, seeded: products > 0 }
+      body.ops = computeOpsStatus({ db, dataDir: DATA_DIR })
+    }
+    return ok(res, body)
+  })
+)
+
+/** 运维计数器（admin）：备份年龄 / 迁移校验和不一致数 / 节流存储 / 磁盘。未知值为 -1。 */
+r.get(
+  '/metrics',
+  requireAuth,
+  wrap((req, res) => {
+    if (!isOpsAdmin(req.user)) return fail(res, '需要管理员权限', 403, 403)
+    return ok(res, { counters: opsCounters(computeOpsStatus({ db: getDb(), dataDir: DATA_DIR })) })
   })
 )
 

@@ -17,6 +17,7 @@ import { runtimeMode } from '../runtime.js'
 import jwt from 'jsonwebtoken'
 import { getDb, DEFAULT_INDUSTRY, assertIndustry, getCurrentIndustry } from '../db/index.js'
 import { fail, bizFail } from '../lib/http.js'
+import { sessionCookieToken, needsCsrf, csrfValid, clearSessionCookies } from './session-transport.js'
 
 // 密钥来源：`GML_JWT_SECRET` 优先，**兼容 `JWT_SECRET`**（A20）。
 // 起因：`docker-compose.yml` 配的是 `JWT_SECRET`，而这里只读 `GML_JWT_SECRET` ——
@@ -258,13 +259,32 @@ export function bearerToken(req) {
   return header.startsWith('Bearer ') ? header.slice(7) : null
 }
 
+/**
+ * 后台会话令牌的取法（Y11，ADR-0036）：Bearer 头优先；**没有 Authorization 头**且
+ * `GML_SESSION_TRANSPORT=cookie` 时才看会话 Cookie（bearer 模式从不读 Cookie）。
+ * Authorization 头只要出现（即使无效）就不回落到 Cookie。`viaCookie` ⇒ 需要 CSRF 双提交。
+ */
+export function sessionToken(req) {
+  const bearer = bearerToken(req)
+  if (bearer) return { token: bearer, viaCookie: false }
+  if (req.headers.authorization) return { token: null, viaCookie: false }
+  const cookie = sessionCookieToken(req)
+  return cookie ? { token: cookie, viaCookie: true } : { token: null, viaCookie: false }
+}
+
 export function requireAuth(req, res, next) {
-  const token = bearerToken(req)
+  const { token, viaCookie } = sessionToken(req)
   if (!token) return fail(res, '未登录或登录已过期', 401, 401)
+  // Cookie 里的会话一旦判死，顺带清掉两只 Cookie（HttpOnly 的那只前端自己清不掉）
+  const dead = () => { if (viaCookie) clearSessionCookies(req, res) }
   try {
     // 只接受**后台** audience 的令牌：C 端（`gml-mall`）令牌在这里一律 401
     const p = jwt.verify(token, JWT_SECRET, { audience: BACK_AUD, algorithms: ['HS256'] })
-    const revoked = () => bizFail(res, { status: 401, code: 'SESSION_REVOKED', message: '会话已失效，请重新登录' })
+    // Cookie 是环境凭据：写操作必须带与会话绑定的 CSRF 值（头 == Cookie == HMAC(JWT)）
+    if (viaCookie && needsCsrf(req) && !csrfValid(req, token, JWT_SECRET)) {
+      return bizFail(res, { status: 403, code: 'CSRF_TOKEN_INVALID', message: '缺少或无效的 CSRF 令牌，请刷新页面后重试' })
+    }
+    const revoked = () => { dead(); return bizFail(res, { status: 401, code: 'SESSION_REVOKED', message: '会话已失效，请重新登录' }) }
     if (!Number.isSafeInteger(p.uid) || p.uid <= 0 || !Number.isSafeInteger(p.auth_version) || p.auth_version < 0 ||
         !assertIndustry(p.industry) || p.industry !== getCurrentIndustry()) return revoked()
     // ------------------------------------------------------------------
@@ -303,6 +323,7 @@ export function requireAuth(req, res, next) {
     }
     next()
   } catch {
+    dead()
     return fail(res, '登录状态无效，请重新登录', 401, 401)
   }
 }

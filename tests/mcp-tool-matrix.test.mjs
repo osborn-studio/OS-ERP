@@ -17,6 +17,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 import Database from 'better-sqlite3'
 import { createToken } from '../server/mcp/tokens.js'
 import { TOOLS } from '../server/mcp/tools.js'
+import { DOC_VIEW_PERMS } from '../server/mcp/doc-perms.js'
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url))
 const secret = () => randomBytes(24).toString('base64url')
@@ -88,10 +89,13 @@ function outcome(r) {
 
 // 允许的"范围外"拒绝码：ORG_OUT_OF_SCOPE 是约定码；单据类工具按"越界当作不存在"报 404 类码（不泄露存在性）
 const SCOPE_DENY_CODES = new Set(['ORG_OUT_OF_SCOPE', 'NOT_FOUND', 'TARGET_NOT_FOUND', 'DOC_NOT_FOUND', 'REQUISITION_NOT_FOUND', 'ORDER_NOT_FOUND', 'WAREHOUSE_NOT_FOUND', 'APPROVAL_NOT_FOUND'])
+const DOC_READ_TOOLS = new Set(['doc.list_types', 'doc.query', 'doc.get'])
 const PERM_DENY_CODES = new Set(['TOKEN_OWNER_PERM_DENIED', 'PERM_DENIED'])
-// 这几个读工具在 HTTP 侧（dashboard / docflow / 组织树）同样只要登录、没有功能权限点，MCP 与之同口径；
+// 这两个读工具在 HTTP 侧（dashboard / 组织树）同样只要登录、没有功能权限点，MCP 与之同口径；
 // 它们的"权限状态"格子记为 NO_PERM_POINT（不是漏判），范围与停用两格仍照常断言。
-const PERM_FREE_READS = new Set(['report.dashboard_kpi', 'org.tree', 'doc.list_types', 'doc.query', 'doc.get'])
+// X5：doc.list_types / doc.query / doc.get 已按单据类型校验所有者的查看权限（server/mcp/doc-perms.js），
+// 不再属于此列表——权限移除状态下它们必须是 DENIED（TOKEN_OWNER_PERM_DENIED）。
+const PERM_FREE_READS = new Set(['report.dashboard_kpi', 'org.tree'])
 // 读工具在范围外的期望：'empty' = 列表必须为空；'global' = 主数据 / 字典 / 无组织归属，不按组织过滤（与 HTTP 同口径）
 const READ_SCOPE_EXPECT = {
   'master.search_products': 'global', 'master.get_product_360': 'global', 'master.list_partners': 'global',
@@ -286,6 +290,8 @@ test('MCP delegation matrix: every tool x {owner inactive, permission removed, s
       if (needs.length) result = PERM_DENY_CODES.has(r.final.code) && r.final.kind === 'tool_error' ? 'DENIED' : 'LEAK'
       else if (PERM_FREE_READS.has(tool.name)) result = r.final.kind === 'ok' ? 'NO_PERM_POINT' : 'LEAK'
       else result = r.final.kind === 'tool_error' && PERM_DENY_CODES.has(r.final.code) ? 'DENIED' : 'LEAK'
+      // X5：通用单据读工具必须是精确的 TOKEN_OWNER_PERM_DENIED，不是别的 403/404
+      if (DOC_READ_TOOLS.has(tool.name) && !(result === 'DENIED' && r.final.code === 'TOKEN_OWNER_PERM_DENIED')) result = 'LEAK'
       if (changed.length) result = 'LEAK'
       record(tool, 'permission_removed', { result, code: r.final.code, removed: permFree ? 'ALL_ROLE_PERMS' : needs, rows_changed: changed })
       if (result === 'LEAK') failures.push(`permission_removed ${tool.name}: ${r.final.kind}/${r.final.code} ${changed.join(';')}`)
@@ -341,6 +347,34 @@ test('MCP delegation matrix: every tool x {owner inactive, permission removed, s
     db.prepare('UPDATE users SET org_id=NULL, data_scope=? WHERE id=?').run('all', ownerId)
   }
 
+  // ---- 状态 4（Y6）：所有者缺门店 / 经销商绑定 ----
+  // 通用单据读工具对「HTTP 侧按门店 / 经销商绑定」的类型，在所有者拥有查看权限点但没有绑定时必须拒绝
+  // （TOKEN_OWNER_BINDING_REQUIRED），list_types 不列出；有绑定后只放行绑定对象自己的单据。
+  // 订货中心（OC/OCS）的 subject 绑定只约束外部主体（dealer/store 角色），由 mcp-doc-perms.test.mjs 覆盖。
+  matrix.binding_state = { state: 'owner_lacks_binding', types: {} }
+  {
+    const hard = Object.entries(DOC_VIEW_PERMS).filter(([, e]) => e.binding === 'store' || e.binding === 'dealer')
+    assert.ok(hard.length >= 6, 'expected store/dealer bound doc types')
+    for (const [, e] of hard) for (const p of e.perms) grant.run('warehouse', p)
+    db.prepare('UPDATE users SET store_id=NULL, dealer_id=NULL WHERE id=?').run(ownerId)
+    try {
+      const lt = await mcp('tools/call', { name: 'doc.list_types', arguments: {} }, token)
+      const listedCodes = payload(lt)?.doc_types?.map((x) => x.code) || []
+      for (const [code, e] of hard) {
+        const any = db.prepare(`SELECT id FROM ${db.prepare('SELECT table_name FROM doc_types WHERE code=?').get(code).table_name} ORDER BY id LIMIT 1`).get()
+        const before = snapshot()
+        const q = outcome(await mcp('tools/call', { name: 'doc.query', arguments: { doc_type: code } }, token))
+        const g = outcome(await mcp('tools/call', { name: 'doc.get', arguments: { doc_type: code, id: any.id } }, token))
+        const changed = diff(before, snapshot())
+        const ok = q.code === 'TOKEN_OWNER_BINDING_REQUIRED' && g.code === 'TOKEN_OWNER_BINDING_REQUIRED' && !listedCodes.includes(code) && changed.length === 0
+        matrix.binding_state.types[code] = { binding: e.binding, result: ok ? 'DENIED' : 'LEAK', query: q.code, get: g.code, listed: listedCodes.includes(code) }
+        if (!ok) failures.push(`owner_lacks_binding ${code}: query=${q.kind}/${q.code} get=${g.kind}/${g.code} listed=${listedCodes.includes(code)} ${changed.join(';')}`)
+      }
+    } finally {
+      restorePerms()
+    }
+  }
+
   // ---- 产出矩阵并断言覆盖 ----
   const file = path.join(f.dir, 'mcp-tool-matrix.json')
   writeFileSync(file, JSON.stringify(matrix, null, 2))
@@ -349,6 +383,7 @@ test('MCP delegation matrix: every tool x {owner inactive, permission removed, s
   if (process.env.MCP_MATRIX_PRINT) console.log(JSON.stringify(saved, null, 1))
   assert.equal(covered, TOOLS.length, 'matrix must cover every tool in every state')
   assert.equal(saved.tool_count, TOOLS.length)
+  assert.ok(Object.keys(saved.binding_state.types).length >= 6 && Object.values(saved.binding_state.types).every((x) => x.result === 'DENIED'), 'every store/dealer bound type is denied to an unbound owner')
   assert.deepEqual(failures, [], `tools that slipped through:\n${failures.join('\n')}`)
   assert.ok(Object.values(saved.tools).every((x) => Object.values(x.states).every((c) => c.result !== 'LEAK')))
 })
