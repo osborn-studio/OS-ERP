@@ -114,7 +114,10 @@ test('AF1: ci.yml has no tag trigger, no ref-based job skips and no candidate jo
   for (const [, name, body] of ci.matchAll(/^  ([\w-]+):\n([\s\S]*?)(?=^  \S|(?![\s\S]))/gm)) {
     if (!/^    runs-on:/m.test(body)) continue
     const cond = stripComments(body).match(/^    if:\s*(.+)$/m)?.[1]
-    if (cond) assert.equal(cond, "github.event_name == 'workflow_dispatch'", `${name}: only dispatch-only jobs may carry a job-level if`)
+    if (name === 'regression') {
+      // always() prevents a failed dependency from turning this required status into a passing skip.
+      assert.equal(cond, '${{ always() }}')
+    } else if (cond) assert.equal(cond, "github.event_name == 'workflow_dispatch'", `${name}: only dispatch-only jobs may carry a conditional skip`)
   }
 })
 
