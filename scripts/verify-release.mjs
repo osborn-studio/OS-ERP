@@ -11,6 +11,19 @@ import { loadPublicKey, verifyEvidenceSignature, SIG_FILE } from './lib/evidence
 import { LOG_FILE, evidenceDigest, readLog, signatureDigest } from './lib/evidence-log.mjs'
 import { hashEntries, listTestsTree, TESTS_TREE_FILE } from './lib/tests-tree.mjs'
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+// Evidence/archive options must never silently turn into a manifest-only check.
+// Normalize the space form before the existing consumers read the equals form.
+for (const flag of ['--evidence', '--artifact']) {
+  const hits = process.argv.map((value, index) => value === flag || value.startsWith(`${flag}=`) ? index : -1).filter(index => index >= 0)
+  if (hits.length > 1) throw new Error(`${flag} given more than once`)
+  if (!hits.length) continue
+  const index = hits[0]
+  const spaced = process.argv[index] === flag
+  const value = spaced ? process.argv[index + 1] : process.argv[index].slice(flag.length + 1)
+  if (!value || value.startsWith('--')) throw new Error(`${flag} needs a value`)
+  if (spaced) process.argv.splice(index, 2, `${flag}=${value}`)
+}
+if (process.argv.some(a => a.startsWith('--artifact=')) && !process.argv.some(a => a.startsWith('--evidence='))) throw new Error('--artifact requires --evidence')
 const manifest = JSON.parse(fs.readFileSync(path.join(root, 'MANIFEST.json'), 'utf8'))
 let failed = 0
 const fail = message => { console.error(message); failed++ }
