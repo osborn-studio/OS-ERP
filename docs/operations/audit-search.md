@@ -38,7 +38,8 @@ node scripts/audit-fts-maintain.mjs --data-dir /abs/path/to/data --industry cosm
 5. 触发器缺失时（常见于"触发器被重建之后"）分批不适用：初始化事务会在写锁内补齐触发器并做一次完整 `rebuild`（持写锁到结束，同旧行为），报告 `repaired_triggers`；批间触发器被删 → `triggers_missing`（退出 1，`--rebuild --restart` 修复）。
 6. 拒绝路径（退出 1，索引与检查点都不被改动）：`--resume` 没有检查点 → `no_checkpoint`；检查点属于别的行业或别的库（指纹对不上）→ `checkpoint_mismatch`；`--rebuild` 时已有检查点 → `checkpoint_exists`（用 `--resume` 续跑，或确认后 `--rebuild --restart` 丢弃它从头来）。
 7. 重建期间若有**尚未入索引**的审计行被删除（审计归档 / 清理在跑），触发器会对索引发出无效的 delete；续跑到末尾剩余行数对不上时报 `interfered`（检查点保留，索引仍不被查询使用）——用 `--rebuild --restart` 修复。`--disable` / `--enable` 会顺带清掉过期检查点（`--enable` 遇到残缺索引会做一次完整重建）。
-8. 重建完成后再 `--integrity-check` 应为 `ok`（脚本不在持锁的最后一批里跑它，因为它与索引大小成正比）。
+8. 删除检查点之前，最后一批在同一写事务内执行 `integrity-check`（rank=1，对照完整内容表）。这会发现未索引行被更新、触发器短暂缺失导致高水位之后漏行等剩余计数无法发现的问题。失败报告 `error`、退出 1，最后一批回滚且检查点保留；排除并发干扰后用 `--rebuild --restart` 修复。完整性核验随索引大小增长，旧的最长单批耗时不包含这一步，需在托管/目标主机重新测量。完成后仍可另行 `--integrity-check` 复核。
+9. 使用 FTS 的查询把检查点判断与读操作放在同一 SQLite 读事务快照中：重建即便在查询期间开始并完成，也不会返回中途的残缺索引结果。
 
 ### 夜间可选步骤
 

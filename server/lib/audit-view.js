@@ -161,13 +161,12 @@ export function auditQueryPlan(db, filters) {
       }
       if (!fts) return exec()
       testPause('GML_TEST_AUDIT_FTS_PAUSE', 'audit-fts')
-      // AH4：分批重建进行中（检查点表在）索引是残缺的，且 `delete-all` 不会让查询报错、只会漏行——所以执行前复核一次，执行后再复核一次：
-      // 选定 FTS 之后另一进程才开始 `--rebuild`，本次结果可能读到被清空的索引 → 丢弃它，换 LIKE 重跑（同 AF4：只此一次，计 fallback）。
-      // 检查点表与清空索引在同一事务里可见，所以"执行后才看到检查点表"= 执行期间可能读到了残缺索引；剩余窗口：整个重建在一次 fn 调用内开始并结束（极小的表），读到的是完整内容的两个中间态之一。
-      if (rebuildInProgress(db)) toLike()
-      const r = exec()
-      if (fts && rebuildInProgress(db)) { toLike(); return fn(plan) }
-      return r
+      // Pin the checkpoint check and all reads to one SQLite snapshot. A rebuild may start
+      // and finish between two separate checks; a post-read check cannot detect that window.
+      return db.transaction(() => {
+        if (rebuildInProgress(db)) toLike()
+        return exec()
+      })()
     }
   }
   return plan

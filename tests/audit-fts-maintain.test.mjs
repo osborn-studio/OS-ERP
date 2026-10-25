@@ -485,7 +485,7 @@ test('AH4 SIGKILL while a batch transaction is open (rows inserted, not committe
   assert.equal(run([...BASE(dir), '--integrity-check', '--out', path.join(dir, 'i.json')], dir).status, 0)
 })
 
-test('AH4 a query plan that chose FTS before a rebuild began never answers from the emptied index: the result is discarded and re-run on LIKE (same rows, counter +1)', needsFts5, (t) => {
+test('AH4 a query plan pins a complete snapshot when another connection starts a rebuild during its read', needsFts5, (t) => {
   resetCounters()
   const { dir, db } = bigFixture(t, 3000)
   const other = new Database(path.join(dir, 'gml_cosmetic.db'))
@@ -506,9 +506,63 @@ test('AH4 a query plan that chose FTS before a rebuild began never answers from 
     }
     return st.all(...args)
   })
-  assert.equal(calls, 2, 'the emptied-index answer was discarded and re-run once')
-  assert.deepEqual(rows.map((r) => r.id), [1235]); assert.doesNotMatch(plan.where, /audit_logs_fts/)
-  assert.equal(counterSnapshot().audit_fts_fallback_total.query, 1)
+  assert.equal(calls, 1, 'the read uses the complete pre-rebuild snapshot')
+  assert.deepEqual(rows.map((r) => r.id), [1235]); assert.match(plan.where, /audit_logs_fts/)
+  assert.equal(counterSnapshot().audit_fts_fallback_total?.query || 0, 0)
   // 检查点已在 → 之后的计划一开始就不选 FTS
   assert.equal(keywordUsesFts(db, 'ent1234'), false)
+})
+
+test('Haiku audit: updating an unindexed row cannot publish a corrupt completed index', needsFts5, async (t) => {
+  const { dir, db } = bigFixture(t, 1000)
+  const r = await interrupted(dir, { batchRows: 100, afterBatch: 1, signal: null, out: 'update-mid', whilePaused: () => {
+    db.prepare("UPDATE audit_logs SET entity='changed-unindexed' WHERE id=500").run()
+  } })
+  assert.notEqual(r.code, 0, r.stdout + r.stderr)
+  assert.ok(stateRow(db), 'failed final validation retains the checkpoint')
+  assert.equal(ftsAvailable(db), false)
+})
+
+test('Haiku audit: a temporarily removed insert trigger cannot hide a missed high-water row', needsFts5, async (t) => {
+  const { dir, db } = bigFixture(t, 1000)
+  const r = await interrupted(dir, { batchRows: 100, afterBatch: 1, signal: null, out: 'trigger-gap', whilePaused: () => {
+    const sql = db.prepare("SELECT sql FROM sqlite_master WHERE name='audit_logs_fts_ai'").get().sql
+    db.exec('DROP TRIGGER audit_logs_fts_ai')
+    db.prepare("INSERT INTO audit_logs (user_id,user_name,action,module,entity,entity_id) VALUES (1,'late','LATE','sales','missed-high-water','1001')").run()
+    db.exec(sql)
+  } })
+  assert.notEqual(r.code, 0, r.stdout + r.stderr)
+  assert.ok(stateRow(db), 'missed rows must prevent publishing the index')
+  assert.equal(ftsAvailable(db), false)
+})
+
+test('Haiku audit: a rebuild that starts and finishes during a read cannot return partial FTS results', needsFts5, (t) => {
+  const { dir, db } = bigFixture(t, 100)
+  const other = new Database(path.join(dir, 'gml_cosmetic.db'))
+  t.after(() => other.close())
+  const plan = auditQueryPlan(db, parseFilters({ keyword: 'ent42' }))
+  const rows = plan.run(({ where, args }) => {
+    other.transaction(() => {
+      other.exec("INSERT INTO audit_logs_fts(audit_logs_fts) VALUES ('delete-all')")
+      other.exec(REBUILD_STATE_DDL)
+    })()
+    const result = db.prepare(`SELECT id FROM audit_logs ${where}`).all(...args)
+    other.transaction(() => {
+      other.exec("INSERT INTO audit_logs_fts(audit_logs_fts) VALUES ('rebuild')")
+      other.exec(`DROP TABLE ${REBUILD_STATE_TABLE}`)
+    })()
+    return result
+  })
+  assert.deepEqual(rows.map((r) => r.id), [43])
+  assert.equal(db.inTransaction, false)
+})
+
+test('Haiku audit: deleting the checkpoint row cannot be reported as a successful rebuild', needsFts5, async (t) => {
+  const { dir, db } = bigFixture(t, 1000)
+  const r = await interrupted(dir, { batchRows: 100, afterBatch: 1, signal: null, out: 'checkpoint-gone', whilePaused: () => {
+    db.exec(`DELETE FROM ${REBUILD_STATE_TABLE}`)
+  } })
+  assert.notEqual(r.code, 0, r.stdout + r.stderr)
+  assert.equal(r.report.ok, false)
+  assert.equal(ftsAvailable(db), false)
 })

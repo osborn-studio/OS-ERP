@@ -251,11 +251,11 @@ async function batchedRebuild() {
       const tb = performance.now()
       const r = await writeTx(() => {
         const st = stateRowOf()
-        if (!st) return { gone: true } // 别的进程已经收尾
+        if (!st) throw new Error('Rebuild checkpoint disappeared; refusing to report success')
         if (triggerCount.get().c !== TRIGGERS.length) return { triggersGone: true } // 批间有人删了触发器：继续下去新行会漏索引
         const e = edge.get(st.last_id, st.high_water, size)
         if (!e.n) { // 没有更多行：剩余数必须归零，否则是中途有"尚未入索引"的行被删
-          if (st.remaining === 0) { db.exec(`DROP TABLE ${STATE}`); return { n: 0, done: true, remaining: 0 } }
+          if (st.remaining === 0) { db.exec(SQL['integrity-check']); db.exec(`DROP TABLE ${STATE}`); return { n: 0, done: true, remaining: 0 } }
           return { n: 0, interfered: true, remaining: st.remaining }
         }
         batchSql.run(st.last_id, st.high_water, size)
@@ -263,12 +263,11 @@ async function batchedRebuild() {
         if (process.env.GML_TEST_FTS_MAINTAIN_PAUSE && process.env.GML_TEST_FTS_REBUILD_PAUSE_IN_BATCH === String(report.batches + 1)) testPause('GML_TEST_FTS_MAINTAIN_PAUSE', 'fts-rebuild-in-tx')
         const remaining = st.remaining - e.n
         const end = !more.get(e.m, st.high_water)
-        if (end && remaining === 0) db.exec(`DROP TABLE ${STATE}`)
+        if (end && remaining === 0) { db.exec(SQL['integrity-check']); db.exec(`DROP TABLE ${STATE}`) }
         else db.prepare(`UPDATE ${STATE} SET last_id=?, remaining=?, batches=batches+1, batch_rows=?, updated_at=? WHERE id=1`).run(e.m, remaining, size, nowIso())
         return { n: e.n, done: end && remaining === 0, interfered: end && remaining !== 0, remaining, last: e.m }
       })
       const ms = performance.now() - tb
-      if (r.gone) { finished = true; break }
       if (r.triggersGone) { triggersGone = true; break }
       maxBatch = Math.max(maxBatch, ms)
       report.max_batch_ms = Math.round(maxBatch * 10) / 10
