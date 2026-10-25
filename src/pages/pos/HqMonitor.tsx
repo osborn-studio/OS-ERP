@@ -22,6 +22,8 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import api from '../../api/client'
 import { Card, Status, toast } from '../../components/ui'
+import { selectPosActions } from '../../utils/pos-actions'
+import { usePosPermissions } from './usePosPermissions'
 import { Store, Upload, TrendingUp, ExternalLink, Banknote, AlertTriangle, Wallet } from 'lucide-react'
 
 const fmt = (n: number) => '¥' + Math.round(Number(n || 0)).toLocaleString()
@@ -37,6 +39,8 @@ export default function HqMonitor() {
   const [data, setData] = useState<any>(null)
   const [closes, setCloses] = useState<any[]>([])
   const [cash, setCash] = useState<any>(null)
+  const { permissions, currentUser } = usePosPermissions()
+  const canSettle = selectPosActions({ permissions, currentUser }).variance_settle.visible
 
   const load = () => {
     api.get('/pos/hq/overview').then((r: any) => setData(r.data || r)).catch(() => {})
@@ -56,7 +60,7 @@ export default function HqMonitor() {
       toast(handled === 'charge' ? '已落案：责任人承担' : '已落案：公司承担')
       load()
     } catch (e: any) {
-      toast(e.message || '落案失败（此操作需要总部管理员权限）', 'error')
+      toast(e.message || '落案失败（此操作需要 pos.shift.settle 权限）', 'error')
     }
   }
 
@@ -212,6 +216,8 @@ export default function HqMonitor() {
                   </span>
                 </div>
                 <div className="flex items-center gap-2 mt-1">
+                  {canSettle && (
+                    <>
                   <button className="btn-ghost btn-sm" onClick={() => settle(v.id, 'charge')}>责任人承担</button>
                   <button
                     className="btn-ghost btn-sm"
@@ -219,6 +225,8 @@ export default function HqMonitor() {
                   >
                     公司承担
                   </button>
+                    </>
+                  )}
                   <span className="text-[11px] text-slate-400 ml-auto">{HANDLE_LABEL[v.variance_handled]}</span>
                 </div>
               </div>

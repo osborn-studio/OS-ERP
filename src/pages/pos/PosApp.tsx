@@ -31,7 +31,8 @@ import {
 } from 'lucide-react'
 import { PAY_METHODS, ShiftCenter, CashDropPanel, StoreOps } from './ShiftPanels'
 import { ScopeBlocked, isBlocked, type FetchFailure } from '../../components/ScopeNotice'
-import { toFailure } from './usePosPermissions'
+import { toFailure, usePosPermissions } from './usePosPermissions'
+import { selectPosActions } from '../../utils/pos-actions'
 
 /** 依赖 /pos/context（需要 pos.view）的页签；库存 / 要货 / 收货 / 缴款 / 订单各有自己的权限点与失败提示，不能被 context 的 403 一并挡掉 */
 const CTX_TABS: string[] = ['cash', 'shift', 'storeop']
@@ -385,6 +386,8 @@ function StoreStock() {
 
 /** 本机单据 */
 function LocalOrders() {
+  const { permissions, currentUser } = usePosPermissions()
+  const canVoid = selectPosActions({ permissions, currentUser }).order_void.visible
   const [rows, setRows] = useState<any[]>([])
   const [status, setStatus] = useState('local')
   const load = () => api.get('/pos/orders', { status }).then((r: any) => setRows(r.data || r)).catch(() => {})
@@ -414,7 +417,7 @@ function LocalOrders() {
               <div className="text-brand-700 font-medium tabular-nums">¥{r.pay_amount}</div>
               <div className="text-[11px] text-slate-400">{PAY_METHODS.find((m) => m.key === r.pay_method)?.label}</div>
             </div>
-            {r.status === 'local' && (
+            {r.status === 'local' && canVoid && (
               <button className="text-[11px] text-red-500" onClick={() => voidOrder(r.id)}>作废</button>
             )}
           </div>

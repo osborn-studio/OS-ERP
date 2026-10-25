@@ -83,3 +83,18 @@ test('daily close gate disables with reason but keeps visible', () => {
   assert.equal(selectPosActions({ permissions: ALL, currentUser: me, dailyCloseGate: { ok: true } }).daily_close.enabled, true)
   assert.equal(selectPosActions({ permissions: ['pos.shift'], currentUser: me, dailyCloseGate: { ok: false } }).daily_close.visible, false)
 })
+
+test('AA9: void order needs pos.refund, settle variance needs pos.shift.settle; each hidden without it', () => {
+  const only = (perm) => Object.entries(selectPosActions({ permissions: [perm], shift: { status: 'closed', cashier_id: 9 }, currentUser: me }))
+    .filter(([, v]) => v.visible).map(([k]) => k).sort()
+  assert.deepEqual(only('pos.refund'), ['order_void'])
+  assert.deepEqual(only('pos.shift.settle'), ['variance_settle'])
+  for (const permissions of [null, [], ['pos.view', 'pos.shift', 'pos.shift.review']]) {
+    const a = selectPosActions({ permissions, shift: { status: 'closed' }, currentUser: me })
+    assert.equal(a.order_void.visible, false)
+    assert.equal(a.variance_settle.visible, false)
+  }
+  const star = selectPosActions({ permissions: ['*'], currentUser: me })
+  assert.equal(star.order_void.enabled, true)
+  assert.equal(star.variance_settle.enabled, true)
+})
