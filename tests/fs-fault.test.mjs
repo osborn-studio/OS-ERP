@@ -1,6 +1,5 @@
 /**
- * =====================================================================})
-
+ * ============================================================================
  * 文件标识：tests/fs-fault.test.mjs ｜ AD6 掉电模拟：audit-archive / db-backup / 证据日志追加在每个故障注入点后的磁盘状态与恢复
  * 每个注入点 × {throw, abort(SIGABRT)}：子进程带 GML_TEST_FS_FAULT 跑脚本，断言崩后状态属于文档（audit-integrity.md "写入序列的故障注入"）
  * 登记的可恢复状态之一，且下一次正常运行 / `--resume` 能安全、幂等地接续。全部在系统临时目录；只终止本测试自己启动的子进程。
@@ -899,7 +898,8 @@ test('the three causes are counted separately in one report and the sweep never 
   assert.ok(before.includes(live[0]) || live.length === 1)
   decryptFile(path.join(f.bdir, live[0]), null, KEY_BYTES)
   assert.ok(existsSync(path.join(f.bdir, `${live[0]}.audit-manifest.json`)) && existsSync(path.join(f.bdir, `${live[0]}.audit-manifest.enc`)), 'the live backup keeps both manifests')
-=======
+})
+
 test('report cleanup preserves another live writer and unowned legacy temp files', (t) => {
   const f = backupFixture(t)
   assert.equal(f.B(['--keep=5']).status, 0)
