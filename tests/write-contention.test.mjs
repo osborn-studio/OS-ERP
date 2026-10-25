@@ -323,7 +323,9 @@ test('multi-process writers on one DB: no lost writes, no duplicates, retries re
   probe.close()
 })
 
-test('bench-api --profile=write: fixed schema, integrity verified, retries counted, bad flags refused', { timeout: 240000 }, (t) => {
+// Finite retries do not guarantee zero errors against a writer that keeps reacquiring the lock.
+// Keep the strict all-success contract without contention, and separately check every stress outcome.
+for (const contended of [false, true]) test(`bench-api --profile=write: ${contended ? 'periodic contention accounts for exhausted requests' : 'no contention preserves exact all-success counts'}`, { timeout: 240000 }, (t) => {
   const BENCH = path.join(ROOT, 'scripts/bench-api.mjs')
   const bench = (args, env) => spawnSync(process.execPath, [BENCH, ...args], {
     cwd: ROOT, encoding: 'utf8', timeout: 150000, env: { PATH: process.env.PATH, HOME: tmpdir(), ...env }
@@ -334,26 +336,61 @@ test('bench-api --profile=write: fixed schema, integrity verified, retries count
     assert.equal(bench(bad, env).status, 2, bad.join(' '))
   }
   const out = path.join(dir, 'write.json')
-  // busy-ms 15 < 外部写者占锁 25 ms → BUSY 真实出现；每次尝试约有 (gap+busy)/(hold+gap) ≈ 7 成机会拿到锁，
-  // retry-max 10（上限）让 36 次写入全部成功的概率在托管 runner 的负载抖动下仍接近 1（busy 5 / retry 8 时约 1/3 的运行会有一次用尽）
-  const r = bench(['--profile=write', '--iterations', '12', '--concurrency', '4', '--busy-ms', '15', '--retry-max', '10', '--contender-hold-ms', '25', '--contender-gap-ms', '10', '--out', out], env)
-  assert.equal(r.status, 0, r.stdout + r.stderr)
-  assert.ok(existsSync(out))
-  const j = JSON.parse(readFileSync(out, 'utf8'))
-  assert.deepEqual(Object.keys(j), ['schema_version', 'profile', 'generated_at', 'scope_notice', 'host', 'config', 'operations', 'contention', 'integrity', 'totals'])
-  assert.equal(j.profile, 'write')
-  assert.deepEqual(j.operations.map((o) => o.name), ['purchase_order_create', 'receipt_confirm', 'stock_transfer'])
-  assert.deepEqual(Object.keys(j.contention), ['contender_cycles', 'contender_begin_failures', 'server_busy_log_lines', 'write_retry_log_lines', 'write_retry_exhausted_log_lines'])
-  for (const o of j.operations) {
-    assert.equal(o.requests, 12)
-    assert.equal(o.errors, 0, `${o.name}: ${JSON.stringify(o.status_histogram)}`)
-    assert.equal(o.ok, 12)
+  const r = bench(['--profile=write', '--iterations', '12', '--concurrency', '4', '--busy-ms', '5', '--retry-max', '8', '--contender-hold-ms', contended ? '25' : '0', '--contender-gap-ms', '10', '--max-error-rate', '0', '--out', out], env)
+  let j = null
+  try {
+    j = existsSync(out) ? JSON.parse(readFileSync(out, 'utf8')) : null
+    assert.ok(j, 'benchmark must produce a report')
+    assert.equal(j.integrity.ok, true, 'write integrity must hold even when retries exhaust')
+    // A nonzero error rate must still fail the CLI; this is not a relaxed benchmark threshold.
+    assert.equal(r.status, j.totals.errors > 0 ? 1 : 0)
+    assert.deepEqual(Object.keys(j), ['schema_version', 'profile', 'generated_at', 'scope_notice', 'host', 'config', 'operations', 'contention', 'integrity', 'totals'])
+    assert.equal(j.profile, 'write')
+    assert.deepEqual(j.operations.map((o) => o.name), ['purchase_order_create', 'receipt_confirm', 'stock_transfer'])
+    assert.deepEqual(Object.keys(j.contention), ['contender_cycles', 'contender_begin_failures', 'server_busy_log_lines', 'write_retry_log_lines', 'write_retry_exhausted_log_lines'])
+    for (const o of j.operations) {
+      assert.equal(o.requests, 12)
+      assert.equal(o.errors, o.status_histogram['500'] || 0, 'only exhausted writes may fail')
+      assert.equal(o.ok, o.status_histogram['200'] || 0)
+      assert.equal(o.ok + o.errors, 12)
+      if (!contended) { assert.equal(o.errors, 0); assert.equal(o.ok, 12) }
+    }
+    assert.equal(j.integrity.purchase_order_create.duplicate_rows, 0)
+    for (const name of ['purchase_order_create', 'stock_transfer']) {
+      const successful = j.operations.find(o => o.name === name).ok
+      assert.equal(j.integrity[name].rows, successful)
+      assert.equal(j.integrity[name].duplicate_rows, 0)
+      assert.equal(j.integrity[name].succeeded_without_row, 0)
+      assert.equal(j.integrity[name].rows_without_success, 0)
+    }
+    const transferred = j.operations.find(o => o.name === 'stock_transfer').ok
+    const confirmed = j.operations.find(o => o.name === 'receipt_confirm').ok
+    assert.equal(j.integrity.stock_transfer.stock_delta, transferred)
+    assert.equal(j.integrity.stock_transfer.tr_out_per_transfer_exactly_one, true)
+    assert.equal(j.integrity.receipt_confirm.confirmed_rows, confirmed)
+    assert.equal(j.totals.requests, 36)
+    assert.equal(j.totals.errors, j.operations.reduce((sum, o) => sum + o.errors, 0))
+    assert.equal(j.contention.write_retry_exhausted_log_lines, j.totals.errors)
+    assert.ok(j.contention.server_busy_log_lines >= j.contention.write_retry_log_lines + j.contention.write_retry_exhausted_log_lines)
+    if (contended) assert.ok(j.contention.contender_cycles > 0, 'external writer actually ran')
+    else {
+      assert.equal(j.totals.errors, 0)
+      assert.equal(j.integrity.stock_transfer.stock_delta, 12)
+      assert.equal(j.integrity.receipt_confirm.confirmed_rows, 12)
+      assert.equal(j.contention.contender_cycles, 0)
+      assert.equal(j.contention.write_retry_log_lines, 0)
+      assert.equal(j.contention.write_retry_exhausted_log_lines, 0)
+      assert.equal(j.contention.server_busy_log_lines, 0)
+    }
+    assert.match(j.scope_notice, /NOT a target-host/)
+  } catch (error) {
+    // Allowlisted numeric diagnostics only: no subprocess output, paths, credentials or run IDs.
+    const counts = object => Object.fromEntries(Object.entries(object || {}).filter(([, v]) => typeof v === 'number' || typeof v === 'boolean'))
+    t.diagnostic('write-bench failure ' + JSON.stringify({
+      status: r.status, contended, operations: Array.isArray(j?.operations) ? j.operations.map(o => ({ ...counts(o), statuses: counts(o?.status_histogram) })) : [],
+      contention: counts(j?.contention), integrity: j?.integrity?.ok, totals: counts(j?.totals),
+      assertion: String(error.stack).match(/write-contention\.test\.mjs:\d+:\d+/)?.[0]
+    }))
+    throw error
   }
-  assert.equal(j.integrity.ok, true)
-  assert.equal(j.integrity.purchase_order_create.duplicate_rows, 0)
-  assert.equal(j.integrity.stock_transfer.stock_delta, 12)
-  assert.equal(j.integrity.receipt_confirm.confirmed_rows, 12)
-  assert.ok(j.contention.contender_cycles > 0, 'external writer actually ran')
-  assert.equal(j.contention.write_retry_exhausted_log_lines, 0)
-  assert.match(j.scope_notice, /NOT a target-host/)
 })
