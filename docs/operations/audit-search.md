@@ -13,25 +13,32 @@
 ```sh
 node scripts/audit-fts-maintain.mjs --data-dir /abs/path/to/data --industry cosmetic --integrity-check
 node scripts/audit-fts-maintain.mjs --data-dir /abs/path/to/data --industry cosmetic --optimize
-node scripts/audit-fts-maintain.mjs --data-dir /abs/path/to/data --industry cosmetic --rebuild
+node scripts/audit-fts-maintain.mjs --data-dir /abs/path/to/data --industry cosmetic --rebuild [--batch-rows 5000] [--pause-ms 5]
+node scripts/audit-fts-maintain.mjs --data-dir /abs/path/to/data --industry cosmetic --resume
 ```
 
 | 动作 | 做什么 | 持写锁 | 何时用 |
 |---|---|---|---|
 | `--integrity-check` | FTS5 `integrity-check`（含与 `audit_logs` 对账）| 短（一次写事务；大库上与索引大小成正比）| 每周 / 升级后 / 怀疑检索漏行时 |
 | `--optimize` | 合并索引段，不改内容 | 与累积的未合并段成正比 | 大批量写入 / 归档后 |
-| `--rebuild` | 从 `audit_logs` 重建整个索引 | **整个重建期间**（单次写事务）| `integrity-check` 报 corrupt 之后；触发器被重建之后 |
+| `--rebuild` | 从 `audit_logs` 分批重建整个索引（AH4）：每批一个 `BEGIN IMMEDIATE` 事务，批间让出写锁，打印进度 | **每批**（默认 5000 行；30 万行 Mac mini 实测最长一批约 0.3 s，单事务则 1.7 s，见 capacity-baseline AH4）| `integrity-check` 报 corrupt 之后；触发器被重建之后 |
+| `--resume` | 从检查点续跑被中断的 `--rebuild` | 同上 | `--rebuild` 被 SIGTERM / SIGINT / 崩溃中断之后 |
 
 - 必须显式给 `--data-dir`（绝对路径）与 `--industry`。仓库 `data/` 被拒绝（退出 2）；环境里的 `GML_DB` 被忽略。脚本不创建库、不跑迁移、不建 FTS 表。
-- 退出码：0 成功；1 失败（`corrupt` / `busy` / `error`，或表不存在时的 `--optimize` / `--rebuild`）；2 参数 / 环境错误。表不存在时 `--integrity-check` 退出 0，报告 `status: "absent"`（无 FTS5 的构建本来就没有）。
+- 退出码：0 成功；1 失败（`corrupt` / `busy` / `error`，或表不存在时的 `--optimize` / `--rebuild`，或下面的检查点拒绝）；2 参数 / 环境错误；3 分批重建在批边界被信号中断（可 `--resume`）。表不存在时 `--integrity-check` 退出 0，报告 `status: "absent"`（无 FTS5 的构建本来就没有）。
 - 报告：默认写到 `<data-dir>/audit-fts-maintain-<行业>-<动作>-<时间戳>.json`（0600），`--out <绝对路径>` 另指（物理位置不能在仓库 `data/` 下，含经符号链接；不能是库文件或其边车；不覆盖已有文件）。库文件本身是符号链接时拒绝。字段：`status`、`rows`、`elapsed_ms`（BEGIN→COMMIT 墙钟，持写锁时间的粗上界）、`lock_probe`（另一线程用自己的连接反复 `BEGIN IMMEDIATE` 量出的写入者被挡时长：`max_blocked_ms` 近似上界、`max_busy_span_ms` 下界，见 `scripts/lib/lock-probe.mjs`）、`triggers_present`、`bytes_before` / `bytes_after`。报告不含绝对路径。
 - 拿不到写锁（默认等 5 s，`--busy-ms` 可调）时 `status: "busy"`、退出 1，**索引不被改动**。
 
 ### 重建的操作建议
 
 1. 先 `--integrity-check`；只有报 `corrupt` 或触发器曾缺失才需要 `--rebuild`。
-2. `--rebuild` 期间其它写入（包括每条审计写入）会等待 `busy_timeout`（默认 5 s）：**100 万行约数秒**（见 capacity-baseline "AC5"，Mac mini 数字，目标主机请自行实测）。在低峰执行；超过 5 s 的重建会让同时到达的写入收到 `SQLITE_BUSY`。读者不受影响（WAL）。
-3. 重建后再 `--integrity-check` 应为 `ok`。
+2. `--rebuild`（AH4 起分批）只在每一批里持写锁，写入者最多等一批的时间（默认 5000 行/批；`--batch-rows` 1..1000000，`--pause-ms` 批间停顿，默认 5 ms）；每批打印一行 `audit-fts-maintain progress rebuild batch=k/N rows=a/b pct=…`。Mac mini 实测数字见 capacity-baseline "AH4"，目标主机请自行实测；仍建议低峰执行。读者不受影响（WAL）。
+3. **重建期间索引是残缺的**：库里有检查点表 `audit_fts_rebuild_state`，查询路径见到它就不走 FTS（回退 LIKE，结果相同，只是慢），`--integrity-check` / `--optimize` 报 `rebuild_in_progress`。**重建期间不要跑审计归档 / 清理**（见下）。
+4. **中断与续跑**：对脚本发 SIGTERM / SIGINT，它在当前批提交后停止，报告 `status: "interrupted"`、退出 3，检查点留在库里；`--resume` 从检查点继续（`--batch-rows` 缺省沿用检查点里的值）。崩溃 / 杀进程同样可续跑（每批提交后检查点即更新）。
+5. 触发器缺失时（常见于"触发器被重建之后"）分批不适用：初始化事务会在写锁内补齐触发器并做一次完整 `rebuild`（持写锁到结束，同旧行为），报告 `repaired_triggers`；批间触发器被删 → `triggers_missing`（退出 1，`--rebuild --restart` 修复）。
+6. 拒绝路径（退出 1，索引与检查点都不被改动）：`--resume` 没有检查点 → `no_checkpoint`；检查点属于别的行业或别的库（指纹对不上）→ `checkpoint_mismatch`；`--rebuild` 时已有检查点 → `checkpoint_exists`（用 `--resume` 续跑，或确认后 `--rebuild --restart` 丢弃它从头来）。
+7. 重建期间若有**尚未入索引**的审计行被删除（审计归档 / 清理在跑），触发器会对索引发出无效的 delete；续跑到末尾剩余行数对不上时报 `interfered`（检查点保留，索引仍不被查询使用）——用 `--rebuild --restart` 修复。`--disable` / `--enable` 会顺带清掉过期检查点（`--enable` 遇到残缺索引会做一次完整重建）。
+8. 重建完成后再 `--integrity-check` 应为 `ok`（脚本不在持锁的最后一批里跑它，因为它与索引大小成正比）。
 
 ### 夜间可选步骤
 
