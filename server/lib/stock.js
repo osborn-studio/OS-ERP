@@ -1231,20 +1231,26 @@ export function countBelowSafe(db, orgScope = null) {
     .get(...sc.params).c
 }
 
-/** 缺口最大的前 limit 个 SKU；并列时按 sku id 升序，保证结果稳定（老写法并列顺序未定义）。 */
-export function listBelowSafe(db, limit = 50, orgScope = null) {
+/**
+ * 缺口最大的前 limit 个 SKU；并列时按 sku id 升序，保证结果稳定（老写法并列顺序未定义）。
+ * `visibleOnly`（AA5，MCP 用）：受限范围下只列"范围内仓库至少有一行库存"的 SKU——否则范围外的令牌会看到
+ * 全部缺货 SKU 的主数据和 0 库存（既泄露清单又误报缺货）。全局范围不受影响（无库存行的缺货 SKU 照列）。
+ */
+export function listBelowSafe(db, limit = 50, orgScope = null, { visibleOnly = false } = {}) {
   const sc = stockScopeSql(orgScope, 'st')
   if (sc.empty) return []
+  const restricted = !!orgScope && orgScope.scope !== 'all'
+  const visible = visibleOnly && restricted ? ` AND EXISTS (SELECT 1 FROM inventory_stocks st WHERE st.sku_id = sk.id AND ${sc.sql})` : ''
   return db
     .prepare(
       `SELECT x.sku_id, x.sku_code, x.sku_name, p.name AS product_name, x.safe_stock, x.q qty_on_hand, x.safe_stock - x.q shortage
        FROM (SELECT sk.id AS sku_id, sk.product_id, sk.sku_code, sk.name AS sku_name, sk.safe_stock, ${skuStockQty(sc)} q
-               FROM product_skus sk WHERE sk.status='active' AND sk.safe_stock>0) x
+               FROM product_skus sk WHERE sk.status='active' AND sk.safe_stock>0${visible}) x
        JOIN products p ON p.id = x.product_id
        WHERE x.q < x.safe_stock
        ORDER BY shortage DESC, x.sku_id LIMIT ?`
     )
-    .all(...sc.params, limit)
+    .all(...sc.params, ...(visible ? sc.params : []), limit)
 }
 
 // ============================================================

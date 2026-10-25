@@ -7,6 +7,7 @@
  *     按平台绑定组织（履约仓所属组织）过滤，范围外详情与不存在同形 404；未绑定平台只对全局范围可见；外部角色仍 403；
  *   · MCP `doc.get`（单据详情 + 流转留痕）用 docflow 的 `DOC_SCOPE_RESOLVERS` 判范围：
  *     经销商推断归属不再放大可见性，无组织归属的全局类型（OM 等）对受限令牌 404，绑定类型仍叠加 Y6 绑定判定。
+ *   · ADR-0042：OMS 写路由（ship / complete / refund / stock-push）同判据：范围外 404、销售订单仓越界 403、库存推送只含范围内平台与仓。
  * 【夹具口径】test 运行时 + 全新临时数据目录（演示种子）+ 随机回环端口；期望值写成精确集合。
  * ============================================================================
  */
@@ -236,5 +237,114 @@ test('OMS read routes and MCP doc history follow the org scope', { timeout: 3000
     assert.ok(poA && poOther, 'demo has POs in two orgs')
     assert.equal(code(() => docGet({ doc_type: 'PO', id: poA.id }, scopeOf([whA.org_id]))), null)
     assert.equal(code(() => docGet({ doc_type: 'PO', id: poOther.id }, scopeOf([whA.org_id]))), 'NOT_FOUND')
+  })
+})
+
+// ---------------------------------------------------------------------------------------------
+// ADR-0042：OMS 写路由（ship / complete / refund / stock-push）按平台绑定组织收口
+// ---------------------------------------------------------------------------------------------
+test('OMS write routes follow the platform-bound org scope (ADR-0042)', { timeout: 300000 }, async (t) => {
+  const f = await server(t)
+  const { db, api } = f
+  const whA = db.prepare("SELECT id, org_id FROM warehouses WHERE code='WH01'").get()
+  const whB = db.prepare("SELECT id, org_id FROM warehouses WHERE code='WH03'").get()
+  const mkPf = (code, wh) => Number(db.prepare("INSERT INTO platforms (code, name, warehouse_id, sync_stock, status) VALUES (?,?,?,1,'active')").run(code, code, wh).lastInsertRowid)
+  const pfA = mkPf('AA2P-A', whA.id)
+  const pfB = mkPf('AA2P-B', whB.id)
+  const pfU = mkPf('AA2P-U', null)
+  const insO = db.prepare("INSERT INTO oms_orders (platform_id, platform_order_no, status, goods_amount, pay_amount, order_time, receiver, sales_order_id) VALUES (?,?,?,10,10,datetime('now','localtime'),'r',?)")
+  const mkO = (pf, no, status = 'pending', so = null) => Number(insO.run(pf, no, status, so).lastInsertRowid)
+  const insSo = db.prepare(`INSERT INTO sales_orders (doc_no, channel, order_date, status, total_qty, goods_amount, receivable_amount, warehouse_id)
+    VALUES (?, 'platform', date('now','localtime'), 'confirmed', 1, 10, 10, ?)`)
+  const soInB = Number(insSo.run('AA2-SO-B', whB.id).lastInsertRowid) // 平台在 A，但销售订单的仓在 B
+  const oA = mkO(pfA, 'AA2-A')
+  const oAcomplete = mkO(pfA, 'AA2-A2', 'shipped')
+  const oArefund = mkO(pfA, 'AA2-A3')
+  const oB = mkO(pfB, 'AA2-B')
+  const oBshipped = mkO(pfB, 'AA2-B2', 'shipped')
+  const oU = mkO(pfU, 'AA2-U')
+  const oTarget = mkO(pfA, 'AA2-T', 'pending', soInB)
+  const oTargetRefund = mkO(pfA, 'AA2-T2', 'pending', soInB)
+  const parentOrg = db.prepare('SELECT parent_id FROM orgs WHERE id=?').get(whA.org_id).parent_id
+
+  const accountA = await f.account('aa2_oms_a', 'sales', { org_id: whA.org_id, data_scope: 'org' })
+  const accountNone = await f.account('aa2_oms_none', 'sales', { data_scope: 'org' })
+  const accountAll = await f.account('aa2_oms_all', 'sales', { data_scope: 'all' })
+  const status = (id) => db.prepare('SELECT status FROM oms_orders WHERE id=?').get(id).status
+  const logCount = () => db.prepare('SELECT COUNT(*) c FROM oms_sync_logs').get().c
+
+  await t.test('ship/complete/refund on an out-of-scope or missing order: identical 404, nothing changes', async () => {
+    for (const verb of ['ship', 'complete', 'refund']) {
+      const missing = await api(`/api/oms/orders/99999999/${verb}`, { token: accountA.token, body: {} })
+      assert.equal(missing.status, 404, verb)
+      const logs0 = logCount()
+      for (const id of [oB, oBshipped, oU]) {
+        const r = await api(`/api/oms/orders/${id}/${verb}`, { token: accountA.token, body: {} })
+        assert.equal(r.status, 404, `${verb} ${id}: ${JSON.stringify(r.body)}`)
+        assert.deepEqual(r.body, missing.body, `${verb} ${id} must look like not-found`)
+      }
+      const none = await api(`/api/oms/orders/${oA}/${verb}`, { token: accountNone.token, body: {} })
+      assert.equal(none.status, 404, `${verb} with no org`)
+      assert.equal(logCount(), logs0, `${verb} wrote a sync log`)
+    }
+    assert.equal(status(oB), 'pending')
+    assert.equal(status(oBshipped), 'shipped')
+    assert.equal(status(oU), 'pending')
+    assert.equal(status(oA), 'pending')
+  })
+
+  await t.test('linked sales order whose warehouse is out of scope: 403 and no write', async () => {
+    const before = db.prepare('SELECT COUNT(*) c FROM sales_deliveries').get().c
+    for (const verb of ['ship', 'refund']) {
+      const id = verb === 'ship' ? oTarget : oTargetRefund
+      const r = await api(`/api/oms/orders/${id}/${verb}`, { token: accountA.token, body: {} })
+      assert.equal(r.status, 403, `${verb}: ${JSON.stringify(r.body)}`)
+      assert.equal(r.body.error, 'TARGET_OUT_OF_SCOPE')
+      assert.equal(status(id), 'pending')
+    }
+    assert.equal(db.prepare("SELECT status FROM sales_orders WHERE id=?").get(soInB).status, 'confirmed')
+    assert.equal(db.prepare('SELECT COUNT(*) c FROM sales_deliveries').get().c, before)
+  })
+
+  await t.test('in-scope orders still work; global scope reaches every platform', async () => {
+    assert.equal((await api(`/api/oms/orders/${oA}/ship`, { token: accountA.token, body: { express_no: 'AA2X1' } })).status, 200)
+    assert.equal(status(oA), 'shipped')
+    assert.equal((await api(`/api/oms/orders/${oAcomplete}/complete`, { token: accountA.token, body: {} })).status, 200)
+    assert.equal(status(oAcomplete), 'completed')
+    assert.equal((await api(`/api/oms/orders/${oArefund}/refund`, { token: accountA.token, body: { reason: 'x' } })).status, 200)
+    assert.equal(status(oArefund), 'refunded')
+    assert.equal((await api(`/api/oms/orders/${oB}/ship`, { token: accountAll.token, body: {} })).status, 200)
+    assert.equal((await api(`/api/oms/orders/${oBshipped}/complete`, { token: f.admin, body: {} })).status, 200)
+    assert.equal((await api(`/api/oms/orders/${oU}/ship`, { token: f.admin, body: {} })).status, 200)
+  })
+
+  await t.test('stock-push: only in-scope platforms; out-of-scope platform id is 404; totals cover in-scope warehouses only', async () => {
+    const pushLogs = (pf) => db.prepare("SELECT COUNT(*) c FROM oms_sync_logs WHERE platform_id=? AND sync_type='stock'").get(pf).c
+    const missing = await api('/api/oms/stock-push', { token: accountA.token, body: { platform_id: 99999999 } })
+    assert.equal(missing.status, 404)
+    for (const pf of [pfB, pfU]) {
+      const r = await api('/api/oms/stock-push', { token: accountA.token, body: { platform_id: pf } })
+      assert.equal(r.status, 404, `platform ${pf}`)
+      assert.deepEqual(r.body, missing.body)
+      assert.equal(pushLogs(pf), 0)
+    }
+    const all = await api('/api/oms/stock-push', { token: accountA.token, body: {} })
+    assert.equal(all.status, 200, JSON.stringify(all.body))
+    const inScopePlatforms = db.prepare("SELECT p.name FROM platforms p JOIN warehouses w ON w.id=p.warehouse_id WHERE w.org_id=? AND p.sync_stock=1 AND p.status='active' ORDER BY p.name").all(whA.org_id).map((x) => x.name)
+    assert.deepEqual(all.body.data.pushed.map((x) => x.platform).sort(), inScopePlatforms)
+    assert.equal(pushLogs(pfB), 0)
+    assert.equal(pushLogs(pfU), 0)
+    const want = db.prepare(`SELECT COALESCE(SUM(st.qty_on_hand - st.qty_reserved),0) q FROM inventory_stocks st JOIN product_skus s ON s.id=st.sku_id
+      WHERE s.status='active' AND st.warehouse_id IN (SELECT id FROM warehouses WHERE org_id=?)`).get(whA.org_id).q
+    for (const row of all.body.data.pushed) assert.equal(row.total_available, want)
+    const none = await api('/api/oms/stock-push', { token: accountNone.token, body: {} })
+    assert.equal(none.status, 400)
+    // 全局范围：全部平台，库存合计为全库
+    const adminAll = await api('/api/oms/stock-push', { token: f.admin, body: {} })
+    assert.equal(adminAll.status, 200)
+    const wantAll = db.prepare("SELECT COALESCE(SUM(st.qty_on_hand - st.qty_reserved),0) q FROM inventory_stocks st JOIN product_skus s ON s.id=st.sku_id WHERE s.status='active'").get().q
+    assert.ok(adminAll.body.data.pushed.every((x) => x.total_available === wantAll))
+    assert.ok(adminAll.body.data.pushed.some((x) => x.platform === 'AA2P-B') && adminAll.body.data.pushed.some((x) => x.platform === 'AA2P-U'))
+    assert.ok(parentOrg !== undefined)
   })
 })

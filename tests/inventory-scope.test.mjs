@@ -7,6 +7,7 @@
  *     · `/api/inventory/*` 的库存查询 / 流水 / 台账 / 预警 / 统计 / 序列号 / 调拨 / 盘点 / 组装按 `warehouses.org_id` 过滤；
  *       调拨读：任一端在范围内可见；写：两端都必须在范围内（建单目标越界 403，既有单一端越界 403，两端皆外 404）；
  *     · 写目标仓（调整 / 盘点 / 组装 / 调拨）越界 403 且不产生库存或单据；admin 全局、外部角色 403 不变。
+ *     · ADR-0042：MCP 库存工具（读 / 写 / get_cost / pick_suggestion）按所有者的仓库组织范围收口，无组织仓对受限范围不可达。
  * 【夹具口径】同 purchase-action-scope.test.mjs：test 运行时、临时数据目录、随机回环端口，单据直接写库。
  * ============================================================================
  */
@@ -348,5 +349,115 @@ test('inventory domain and purchase status/receive follow warehouse org scope', 
     // admin 全局
     okData(await api(`/api/purchase/orders/${poB.id}/status`, { token: f.admin, body: { action: 'submit' } }))
     okData(await api(`/api/purchase/orders/${poN.id}/receive`, { token: f.admin, body: { items: [] } }))
+  })
+})
+
+// ---------------------------------------------------------------------------------------------
+// ADR-0042：MCP 库存工具按所有者的仓库组织范围收口（与 HTTP `/api/inventory/*` 同一份 stock.js 判据）
+// ---------------------------------------------------------------------------------------------
+test('MCP inventory tools follow the owner warehouse-org scope (ADR-0042)', { timeout: 300000 }, async (t) => {
+  const f = await server(t)
+  const { db } = f
+  process.env.GML_RUNTIME_MODE = 'test'
+  const { TOOLS } = await import('../server/mcp/tools.js')
+  const engine = await import('../server/lib/stock.js')
+  const tool = (name) => TOOLS.find((x) => x.name === name)
+  const call = (name, args, scope, extra = {}) => tool(name).handler({ db, args, ctx: { scope, tokenName: 'aa2', orgId: null, engine, ...extra } })
+  const codeOf = (fn) => { try { fn(); return null } catch (e) { return e.code ?? `ERR:${e.message}` } }
+
+  const whA = db.prepare("SELECT id, org_id FROM warehouses WHERE code='WH01'").get()
+  const whB = db.prepare("SELECT id, org_id FROM warehouses WHERE code='WH03'").get()
+  const mkWh = (code, org) => Number(db.prepare("INSERT INTO warehouses (code, name, type, status, org_id) VALUES (?,?, 'normal','active',?)").run(code, code, org).lastInsertRowid)
+  const whA2 = mkWh('AA2A2', whA.org_id)
+  const whN = mkWh('AA2N', null)
+  // 同组织两仓货主一致（内部调拨的前提）
+  db.prepare('UPDATE warehouses SET default_owner_org_id=? WHERE id=?').run(engine.resolveOwnerOrg(db, whA.id), whA2)
+  const sku = db.prepare('SELECT id FROM product_skus ORDER BY id LIMIT 1').get().id
+  const today = new Date().toISOString().slice(0, 10)
+  // 货主是 A 组织的货放在 B 组织 / 无组织的仓里：旧的货主过滤会放行，仓库组织口径必须隐藏
+  const putStock = (wh, owner, batch) => engine.applyStockIn(db, { bizDate: today, docType: 'ADJ_IN', docNo: `AA2-${batch}`, warehouseId: wh, ownerOrgId: owner, skuId: sku, batchNo: batch, qty: 7, unitCost: 3, expireAt: '2099-01-01 00:00:00', source: 'test', operator: 'aa2' })
+  putStock(whA.id, whA.org_id, 'AA2-A')
+  putStock(whA2, whA.org_id, 'AA2-A2')
+  putStock(whB.id, whA.org_id, 'AA2-B-OWNEDBYA')
+  putStock(whN, whA.org_id, 'AA2-N-OWNEDBYA')
+  const orgOf = (id) => db.prepare('SELECT org_id FROM warehouses WHERE id=?').get(id)?.org_id
+  // 范围含 A 组织及 A 仓 / 无组织仓的默认货主组织（拒绝必须来自「仓库不在范围」，而不是默认货主不在范围）
+  const scopeIds = [...new Set([whA.org_id, engine.resolveOwnerOrg(db, whA.id), engine.resolveOwnerOrg(db, whA2), engine.resolveOwnerOrg(db, whN)])]
+  assert.ok(!scopeIds.includes(whB.org_id), 'fixture: warehouse B org must stay outside the scope')
+  const scopeA = { scope: 'restricted', orgIds: scopeIds }
+  const scopeNone = { scope: 'none', orgIds: [] }
+  const scopeAll = { scope: 'all', orgIds: null }
+  const txCount = () => db.prepare('SELECT COUNT(*) c FROM inventory_transactions').get().c
+  const stockSum = () => db.prepare('SELECT COALESCE(SUM(qty_on_hand),0) q, COUNT(*) c FROM inventory_stocks').get()
+
+  await t.test('read tools only return rows from in-scope warehouses, even when the goods are owned by the scoped org', () => {
+    const q = call('inventory.query_stock', { sku_id: sku, limit: 500 }, scopeA).data.list
+    assert.ok(q.length > 0 && q.every((r) => orgOf(r.warehouse_id) === whA.org_id), `query_stock leaked: ${q.map((r) => r.warehouse_id)}`)
+    assert.ok(q.some((r) => r.batch_no === 'AA2-A') && !q.some((r) => r.batch_no === 'AA2-B-OWNEDBYA' || r.batch_no === 'AA2-N-OWNEDBYA'))
+    assert.ok(call('inventory.query_stock', { sku_id: sku, limit: 500 }, scopeAll).data.list.some((r) => r.batch_no === 'AA2-N-OWNEDBYA'))
+    assert.equal(call('inventory.query_stock', { sku_id: sku, warehouse_id: whB.id }, scopeA).data.count, 0)
+    assert.equal(call('inventory.query_stock', { sku_id: sku }, scopeNone).data.count, 0)
+
+    const tx = call('inventory.list_transactions', { sku_id: sku, limit: 500 }, scopeA).data.list
+    assert.ok(tx.length > 0 && tx.every((r) => orgOf(r.warehouse_id) === whA.org_id), 'list_transactions leaked')
+    assert.equal(call('inventory.list_transactions', { sku_id: sku, warehouse_id: whN }, scopeA).data.count, 0)
+
+    const batches = call('inventory.list_batches', { sku_id: sku, days: 36500 }, scopeA).data.list
+    const seen = new Set(batches.map((b) => b.batch_no))
+    assert.ok(seen.has('AA2-A') && !seen.has('AA2-B-OWNEDBYA') && !seen.has('AA2-N-OWNEDBYA'), `list_batches: ${[...seen]}`)
+    const aBatch = batches.find((b) => b.batch_no === 'AA2-A')
+    assert.equal(aBatch.qty_on_hand, 7)
+
+    const alert = call('inventory.stock_alert', { expiring_days: 36500 }, scopeA).data
+    assert.ok(alert.expiring.every((r) => orgOf(r.warehouse_id) === whA.org_id), 'stock_alert.expiring leaked')
+    assert.ok(alert.expiring.some((r) => r.batch_no === 'AA2-A'))
+    assert.equal(call('inventory.stock_alert', { expiring_days: 36500 }, scopeNone).data.expiring.length, 0)
+  })
+
+  await t.test('get_cost and pick_suggestion refuse out-of-scope and unowned-org warehouses (403), allow in-scope ones', () => {
+    for (const wh of [whB.id, whN]) {
+      assert.equal(codeOf(() => call('inventory.get_cost', { sku_id: sku, warehouse_id: wh, owner_org_id: whA.org_id, batch_no: wh === whB.id ? 'AA2-B-OWNEDBYA' : 'AA2-N-OWNEDBYA' }, scopeA)), 'ORG_OUT_OF_SCOPE', `get_cost ${wh}`)
+      assert.equal(codeOf(() => call('inventory.pick_suggestion', { sku_id: sku, warehouse_id: wh, qty: 1, owner_org_id: whA.org_id }, scopeA)), 'ORG_OUT_OF_SCOPE', `pick ${wh}`)
+    }
+    assert.equal(codeOf(() => call('inventory.get_cost', { sku_id: sku, warehouse_id: whA.id, owner_org_id: whA.org_id, batch_no: 'AA2-A' }, scopeA)), null)
+    assert.equal(codeOf(() => call('inventory.pick_suggestion', { sku_id: sku, warehouse_id: whA.id, qty: 1, owner_org_id: whA.org_id }, scopeA)), null)
+    assert.equal(codeOf(() => call('inventory.pick_suggestion', { sku_id: sku, warehouse_id: whN, qty: 1, owner_org_id: whA.org_id }, scopeAll)), null)
+    assert.equal(codeOf(() => call('inventory.get_cost', { sku_id: sku, warehouse_id: whA.id }, scopeNone)), 'ORG_OUT_OF_SCOPE')
+  })
+
+  await t.test('write tools refuse out-of-scope or org-less warehouses on either end and change nothing', () => {
+    const base = { sku_id: sku, qty: 1, idempotency_key: 'k' }
+    const attempts = [
+      ['inventory.stock_in', { ...base, unit_cost: 1, owner_org_id: whA.org_id }, (wh) => ({ warehouse_id: wh })],
+      ['inventory.stock_out', { ...base, owner_org_id: whA.org_id }, (wh) => ({ warehouse_id: wh })],
+      ['inventory.adjust', { sku_id: sku, delta: 1, reason: 'aa2' }, (wh) => ({ warehouse_id: wh })],
+      ['inventory.transfer', base, (wh, side) => (side === 'to' ? { from_warehouse_id: whA.id, to_warehouse_id: wh } : { from_warehouse_id: wh, to_warehouse_id: whA2 })],
+      ['inventory.ownership_transfer', { ...base, from_owner_org_id: whA.org_id, to_owner_org_id: whA.org_id }, (wh, side) => (side === 'to' ? { from_warehouse_id: whA.id, to_warehouse_id: wh } : { from_warehouse_id: wh, to_warehouse_id: whA2 })]
+    ]
+    for (const [name, fixed, place] of attempts) {
+      for (const wh of [whB.id, whN]) {
+        for (const side of ['from', 'to']) {
+          const before = [txCount(), JSON.stringify(stockSum())]
+          const args = { ...fixed, ...place(wh, side) }
+          assert.equal(codeOf(() => call(name, args, scopeA)), 'ORG_OUT_OF_SCOPE', `${name} wh=${wh} ${side}`)
+          assert.deepEqual([txCount(), JSON.stringify(stockSum())], before, `${name} wrote`)
+        }
+      }
+      assert.equal(codeOf(() => call(name, { ...fixed, ...place(whA.id, 'to') }, scopeNone)), 'ORG_OUT_OF_SCOPE', `${name} with empty scope`)
+    }
+    // 不存在的仓保持 404 语义
+    assert.equal(codeOf(() => call('inventory.adjust', { warehouse_id: 99999999, sku_id: sku, delta: 1, reason: 'aa2' }, scopeA)), 'WAREHOUSE_NOT_FOUND')
+  })
+
+  await t.test('in-scope warehouses still work; global scope reaches org-less warehouses', () => {
+    const t0 = txCount()
+    call('inventory.stock_in', { warehouse_id: whA.id, sku_id: sku, qty: 2, unit_cost: 1, owner_org_id: engine.resolveOwnerOrg(db, whA.id), batch_no: 'AA2-T', idempotency_key: 'k1' }, scopeA)
+    call('inventory.transfer', { from_warehouse_id: whA.id, to_warehouse_id: whA2, sku_id: sku, qty: 1, batch_no: 'AA2-T', idempotency_key: 'k2' }, scopeA)
+    call('inventory.adjust', { warehouse_id: whA2, sku_id: sku, batch_no: 'AA2-T', delta: 1, reason: 'aa2' }, scopeA)
+    assert.ok(txCount() > t0)
+    const t1 = txCount()
+    call('inventory.stock_in', { warehouse_id: whN, sku_id: sku, qty: 1, unit_cost: 1, owner_org_id: whA.org_id, batch_no: 'AA2-G', idempotency_key: 'k3' }, scopeAll)
+    call('inventory.adjust', { warehouse_id: whB.id, sku_id: sku, batch_no: 'AA2-G2', delta: 1, reason: 'aa2' }, scopeAll)
+    assert.equal(txCount(), t1 + 2)
   })
 })
