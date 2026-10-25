@@ -55,6 +55,45 @@ export function lastBackupStatus({ db, dataDir, now = Date.now() }) {
   }
 }
 
+/**
+ * 最近一份备份报告的清理摘要（AH11）：只给计数与状态，不给路径 / 文件名 / sha256。
+ * 无报告 / 读不出 ⇒ null。`prune_state` 取各库条目里最"坏"的一个（failed > planned > skipped > done > none）。
+ */
+export function lastBackupReportDetail({ db, dataDir }) {
+  try {
+    let configured = null
+    try {
+      configured = db.prepare("SELECT value FROM settings WHERE key='backup_dir'").get()?.value || null
+    } catch { /* settings 表缺失：用缺省目录 */ }
+    const dir = resolveBackupDir(configured, dataDir)
+    if (!fs.existsSync(dir)) return null
+    const latest = fs.readdirSync(dir).filter((f) => REPORT_RE.test(f)).sort().at(-1)
+    if (!latest) return null
+    const report = JSON.parse(fs.readFileSync(path.join(dir, latest), 'utf8'))
+    const results = Array.isArray(report.results) ? report.results : []
+    const rank = { none: 0, done: 1, skipped: 2, planned: 3, failed: 4 }
+    let state = 'none'
+    let pruned = 0
+    let orphans = 0
+    for (const r of results) {
+      const st = typeof r?.prune_state === 'string' && Object.hasOwn(rank, r.prune_state) ? r.prune_state : 'none'
+      if (rank[st] > rank[state]) state = st
+      pruned += Array.isArray(r?.pruned) ? r.pruned.length : 0
+      orphans += Array.isArray(r?.pruned_orphans) ? r.pruned_orphans.length : 0
+    }
+    return {
+      report_phase: report.report_phase === 'pre-prune' ? 'pre-prune' : 'final',
+      databases: results.length,
+      failed: Number(report.failed) || 0,
+      prune_state: state,
+      pruned_backups: pruned,
+      pruned_orphans: orphans
+    }
+  } catch {
+    return null
+  }
+}
+
 /** 迁移校验和：mismatched = 内容与登记不符的条数；adopted = 经显式收养登记的条数（需要评审过） */
 export function migrationChecksumStatus(db) {
   try {
@@ -113,6 +152,7 @@ export function dbSizes(dataDir) {
 export function computeOpsStatus({ db, dataDir, now = Date.now(), probes = {} } = {}) {
   return {
     last_backup: (probes.lastBackup || lastBackupStatus)({ db, dataDir, now }),
+    backup_report: (probes.backupReport || lastBackupReportDetail)({ db, dataDir }),
     migration_checksums: (probes.migrationChecksums || migrationChecksumStatus)(db),
     login_throttle: (probes.loginThrottle || loginThrottleStatus)({ dataDir }),
     disk_free_bytes: (probes.diskFree || diskFreeBytes)(dataDir),

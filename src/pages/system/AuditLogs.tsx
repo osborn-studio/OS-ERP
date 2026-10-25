@@ -25,7 +25,9 @@ const AUDIT_COUNT_CAP = 10000 // 与 server/lib/audit-view.js 的 AUDIT_COUNT_CA
 type Draft = { module: string; action: string; user: string; entity: string; entity_id: string; from: string; to: string; keyword: string }
 // fallback_total：AF4 `audit_fts_fallback_total` 各 reason 之和（本进程自启动以来，重启归零；多进程各自计数）。服务端必带；旧服务端缺字段时整块只留空容器
 type FtsState = { setting_enabled: boolean; index_present: boolean; env_disabled: boolean; active: boolean; fallback_total?: number }
-type AuditMeta = { retention?: any; max?: number; ok?: boolean; fts?: FtsState }
+// AH11：anchor_intents = 锚点操作意图摘要（只读；key_id 是公钥指纹前 16 位，没有签名 / 哈希 / 范围 / 操作人）
+type AnchorIntentSummary = { table_present: boolean; total: number; signed: number; unsigned: number; signed_without_key_id: number; key_ids: { key_id: string; count: number; last_at: string }[]; recent: { id: number; created_at: string; operation: string; key_id: string | null; signed: boolean }[] }
+type AuditMeta = { retention?: any; max?: number; ok?: boolean; fts?: FtsState; anchors?: AnchorIntentSummary }
 const EMPTY: Draft = { module: '', action: '', user: '', entity: '', entity_id: '', from: '', to: '', keyword: '' }
 
 export default function AuditLogs() {
@@ -85,6 +87,7 @@ export default function AuditLogs() {
         </Card>
       )}
       {meta.ok && meta.fts && <FtsStateCard fts={meta.fts} />}
+      {meta.ok && meta.anchors && <AnchorIntentCard a={meta.anchors} />}
       <FilterBar
         onReset={() => {
           setDraft(EMPTY)
@@ -181,12 +184,46 @@ function FtsStateCard({ fts }: { fts: FtsState }) {
   )
 }
 
+const OPERATION_TEXT: Record<string, string> = { retention: '保留清理', archive: '归档', erase: '隐私抹除' }
+
+/**
+ * 锚点意图与密钥集合状态（AH11，只读）。只显示记录里的事实：每条意图的 key_id（公钥指纹前 16 位）、是否带签名字段。
+ * 页面**不验签**：公钥集合只在离线的 `audit-verify-chain --intent-pubkey` 持有；用 `--require-intent-key-id` 结束没有 key_id 的过渡期。
+ */
+function AnchorIntentCard({ a }: { a: AnchorIntentSummary }) {
+  if (!a.table_present) return null
+  return (
+    <Card className="mb-3">
+      <div data-testid="audit-anchor-intents" data-total={a.total} data-signed={a.signed} data-unsigned={a.unsigned} data-legacy={a.signed_without_key_id} data-key-count={a.key_ids.length} className="text-[13px] leading-relaxed">
+        <div><b>锚点操作意图：</b>共 {a.total} 条，已带签名 {a.signed} 条，无签名 {a.unsigned} 条{a.signed_without_key_id > 0 && <span className="text-amber-700" data-testid="audit-anchor-legacy">；其中 {a.signed_without_key_id} 条有签名但没有 key_id（过渡期历史意图）</span>}</div>
+        <div className="mt-1 text-[12px] text-slate-500">记录里出现过的签名密钥（key_id = 公钥指纹前 16 位）：</div>
+        {a.key_ids.length === 0
+          ? <div className="text-[12px] text-slate-500" data-testid="audit-anchor-keys-empty">还没有带 key_id 的意图。</div>
+          : <ul className="text-[12.5px] divide-y divide-slate-100">{a.key_ids.map((k) => (
+              <li key={k.key_id} className="py-1 flex justify-between" data-testid="audit-anchor-key" data-key-id={k.key_id} data-count={k.count}>
+                <span className="font-mono">{k.key_id}</span><span className="text-slate-500">{k.count} 条 · 最近 {k.last_at}</span>
+              </li>
+            ))}</ul>}
+        {a.recent.length > 0 && (
+          <ul className="mt-2 text-[12.5px] divide-y divide-slate-100">{a.recent.map((r) => (
+            <li key={r.id} className="py-1 flex justify-between" data-testid="audit-anchor-recent" data-intent-id={r.id} data-key-id={r.key_id ?? ''} data-signed={r.signed ? '1' : '0'}>
+              <span>#{r.id} {OPERATION_TEXT[r.operation] || r.operation} · {r.created_at}</span>
+              <span className={r.signed ? 'text-emerald-700' : 'text-slate-500'}>{r.signed ? `已签名 ${r.key_id ? `· ${r.key_id}` : '· 无 key_id'}` : '未签名'}</span>
+            </li>
+          ))}</ul>
+        )}
+        <div className="mt-1 text-[12px] text-slate-500">本页只显示记录，不验证签名；验证见 <code>audit-verify-chain --intent-pubkey</code>（<code>--require-intent-key-id</code> 结束过渡期）。</div>
+      </div>
+    </Card>
+  )
+}
+
 function useMetaOnce(set: (m: AuditMeta) => void) {
   useEffect(() => {
     let live = true
     api
       .get('/meta/audit-logs', { page: 1, pageSize: 1 })
-      .then((res: any) => live && set({ retention: res.data?.retention, max: res.data?.export_max_rows, fts: res.data?.fts, ok: true }))
+      .then((res: any) => live && set({ retention: res.data?.retention, max: res.data?.export_max_rows, fts: res.data?.fts, anchors: res.data?.anchor_intents, ok: true }))
       .catch(() => {})
     return () => {
       live = false
