@@ -175,7 +175,7 @@
 | 范围 | 残留 / 证据边界 |
 |---|---|
 | AH1 / AH6 / AH7 / AH11 | 托管慢套件耗时、Linux 故障注入、签名门禁与新增浏览器场景需对应 HEAD 的成功证据 |
-| AH2 | 两个信用指标仍无经销商组织归属；approval_manager_global=false 的指标侧负向用例待补 |
+| AH2 | 两个信用指标仍无经销商组织归属；approval_manager_global=false 的指标负向用例已补（已有令牌即时收窄、管理员不变、重新开启恢复） |
 | AH3 | 大库运行比较在 nightly，PR 仅比较小库与已提交的大库指纹；默认关闭 optimize |
 | AH4 | 清理/归档与 FTS 重建并发尚无全程互斥，结束时检测 interfered |
 | AH5 | SQLite 单文件不能实现意图表独立写权限；doctor 仅报告，不阻断 |
