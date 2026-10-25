@@ -92,6 +92,8 @@ r.get(
       total: vis.allow.size,
       modules: groups.map((g) => g.module),
       hidden_count: vis.hidden,
+      // AH2：hidden_count 中"有权限但因无范围语义被折叠"的条数（hide 模式）；其余是缺业务权限。页面据此只给一行"已隐藏 N 项全局口径指标"，不整页隐藏
+      hidden_scopeless: vis.hiddenScopeless,
       // AG11：调用者是否受限（与 `metricScopedFlags` 同一判据，绑定主体也算）；前端据此决定是否标「按范围计算」，不再从行上推断
       scope_restricted: isScopeRestricted(req.orgScope) || subjectBoundOf(req)
     })
@@ -121,7 +123,7 @@ r.get(
     // unknown = 请求了但字典里没有的 key —— 显式回一个列表，别让人对着空值猜
     const unknown = keys ? keys.filter((k) => !METRIC_BY_KEY[k]) : []
     // scoped：该值是否按调用者范围算（false = 全局口径，前端据此标注）；见 ADR-0053
-    return ok(res, { days, values, scoped: metricScopedFlags(req.orgScope, keys, vis.allow, subjectBoundOf(req)), unknown, hidden_count: vis.hidden })
+    return ok(res, { days, values, scoped: metricScopedFlags(req.orgScope, keys, vis.allow, subjectBoundOf(req)), unknown, hidden_count: vis.hidden, hidden_scopeless: vis.hiddenScopeless })
   })
 )
 
@@ -136,7 +138,8 @@ r.get(
     const vis = visibilityOf(db, req)
     return ok(res, {
       items: metricCatalog(db, { days: daysOf(req), withValues: true, orgScope: req.orgScope, allow: vis.allow, subjectBound: subjectBoundOf(req), user: req.user }),
-      hidden_count: vis.hidden
+      hidden_count: vis.hidden,
+      hidden_scopeless: vis.hiddenScopeless
     })
   })
 )
