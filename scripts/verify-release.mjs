@@ -26,7 +26,10 @@ for (const flag of ['--evidence', '--artifact']) {
   if (!value || value.startsWith('--')) throw new Error(`${flag} needs a value`)
   if (spaced) process.argv.splice(index, 2, `${flag}=${value}`)
 }
-if (process.argv.some(a => a.startsWith('--artifact=')) && !process.argv.some(a => a.startsWith('--evidence='))) throw new Error('--artifact requires --evidence')
+// AH7 also consumes the archive in standalone extraction mode, validating its entire tree.
+// Its parser below rejects missing/duplicate destinations and invalid limits before writing.
+const extractionRequested = process.argv.some(a => a === '--extract-to' || a.startsWith('--extract-to='))
+if (process.argv.some(a => a.startsWith('--artifact=')) && !process.argv.some(a => a.startsWith('--evidence=')) && !extractionRequested) throw new Error('--artifact requires --evidence or --extract-to')
 const manifest = JSON.parse(fs.readFileSync(path.join(root, 'MANIFEST.json'), 'utf8'))
 let failed = 0
 const fail = message => { console.error(message); failed++ }

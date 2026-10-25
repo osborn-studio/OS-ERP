@@ -107,3 +107,11 @@ Superseded head `678d513911f641a88968d09b7ceed5ae6caddda8`, run [40168500810](ht
 如实记录本机修复过程：一次合并文本编辑残留分隔符导致测试语法失败，推送前修正并重跑80/80；首次守卫未配置/创建 seed 数据库导致拒绝运行，配置独立 `/tmp/osstack` 数据后重跑通过。没有运行本机 Python，没有使用客户数据。
 
 PR #13 已恢复 draft。以上均非 Linux 验收；新 HEAD 必须重新通过托管 CI 的全部适用检查及隔离回归才可恢复 ready。原 a628d38 的全绿不代替新结果；不合并、不改变 auto-merge、不发布部署。
+
+### 11:25 UTC CI 自动修复：保留 AH7 独立安全解压模式
+
+HEAD `5748fd9bdfa8ce221e9b397d4e3dd6935f2e783b`，运行 `40186014710`：focused 1115用例，1110通过、4失败、1跳过。四条均为 ZIP CLI；本轮新加的 artifact-requires-evidence 前置检查遗漏第十七批的独立 `--extract-to` 消费模式，这是本次审查修改引入的回归。slow、no-FTS、备份故障注入、dependency-review通过；隔离回归在前置成功门禁失败，主体未执行；Docker/浏览器跳过，capacity手动跳过。精确结果已评论 PR13。
+
+仅在 batch17 修复：允许明确指定 `--extract-to` 的归档由既有安全解压流程消费，仍要求 ZIP 限额、路径/链接安全、MANIFEST 一致及全部文件内容校验；无 evidence 且无 extract-to 的孤立 artifact 继续拒绝。参数例外与既有解析器使用相同 token 匹配，缺值/空值/重复目标仍失败。新增空格形式正向与无效目标负向测试，不改已有防穿越、限额、篡改断言。
+
+本机 Node 22：修前23项中4失败；修后ZIP+参数24/24、候选/供应链/tree策略34/34、真实候选包验证1/1通过，文件头和codemap检查通过。Claude CLI `claude-haiku-5-5` 工具禁用只读复审 `is_error=false`，canonicalModel核验一致，无确认阻断；模型提到的限额测试缺口由原有ZIP测试覆盖（0、1e3、超条目/字节、无效限制无写入），没有重复删弱测试。解压后内容不匹配时保留目录、退出失败为既有行为，不声称原子回滚。上述为开发检查，仍须新HEAD托管Linux验收，PR保持draft。

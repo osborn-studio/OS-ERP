@@ -252,3 +252,21 @@ test('verify-release without --extract-to behaves as before', (t) => {
   assert.equal(r.status, 0, r.stderr)
   assert.doesNotMatch(r.stdout, /extracted/)
 })
+
+// The standalone extraction consumer must work with normalized artifact arguments,
+// but mentioning an invalid extraction option must never permit a silent success.
+test('standalone extraction accepts space arguments and rejects incomplete or duplicate destinations', (t) => {
+  const pkg = fixturePackage(t), out = tmp(t)
+  const z = write(out, 'RC-0.0.0-aaaaaaa.zip', zipOf(pkg))
+  const dest = path.join(out, 'spaced')
+  const good = verify(pkg, ['--artifact', z, '--extract-to', dest])
+  assert.equal(good.status, 0, good.stdout + good.stderr)
+  assert.ok(fs.existsSync(path.join(dest, 'MANIFEST.json')))
+  for (const args of [['--extract-to'], ['--extract-to='], ['--extract-to', '--zip-max-entries=5'], ['--extract-to='+path.join(out,'bad'), '--extract-to='+path.join(out,'other')]]) {
+    const r = verify(pkg, ['--artifact', z, ...args])
+    assert.notEqual(r.status, 0, JSON.stringify(args))
+    assert.match(r.stderr, /extract-to (needs a value|given more than once)/)
+  }
+  assert.ok(!fs.existsSync(path.join(out, 'bad')))
+  assert.ok(!fs.existsSync(path.join(out, 'other')))
+})
