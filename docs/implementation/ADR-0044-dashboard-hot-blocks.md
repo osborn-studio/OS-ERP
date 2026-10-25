@@ -252,3 +252,41 @@ MCP 的范围依据从 `owner_org_id` 改为仓库所属组织，是 ADR-0038 �
 - **中（已修）**：`expectSearch` 只要计划里任一处有该索引的约束 SEARCH 就通过，不相干的子查询 SEARCH 可以替主聚合的整条索引扫描"担保"（既有检查器局限，现被九条语句依赖）。→ 计划里只要还有对该索引的整条 `SCAN … USING … INDEX <idx>` 就判不满足；新增用例；合成库上审计仍 0 违规。
 - **低（已修）**：变异断言偏弱（`size >= 8`、两条 topSkus 合并判）。→ 改为断言确切的违规语句集合。
 - 未验证（审阅者与本人一致）：生产规模下 `CREATE INDEX` 的持写锁时长；`dmserver` 上的计划与延迟。
+
+
+---
+
+# 补充 6（AG3，roadmap-v12）：查询计划指纹快照与 ANALYZE 源码守卫
+
+状态：开发实现，尚非产品上线验收｜纯测试 / CI 工具，不改应用行为、不加迁移
+
+## 背景
+AF3 选定的方案（改写 + 迁移 074）靠 `expectIndex` / `expectSearch` 守护，但它们只证明"用了某个索引"：不带这类断言的语句（如 `stock.txn_by_wh_sku_batch` 依赖 `idx_it_wh`）丢索引时不会红；`ANALYZE` 不执行只是文档约定（`docs/operations/query-planner.md`），没有机器守卫。
+
+## 决定
+1. **计划指纹**：`explain-audit --snapshot <file>` 为每条登记语句写 `EXPLAIN QUERY PLAN` 的归一化文本（去字面量 / 参数标记 / 比较符后的数值常量 / 子计划编号，保留表名、虚表策略数字、索引名、SCAN/SEARCH、COVERING、临时 B-tree、嵌套缩进）和 16 位 hash，同时记迁移号、SQLite 版本、生成命令。归一化与比较在 `scripts/lib/explain-plan-guard.mjs`，`auditStatements` 只多输出每行的嵌套深度。
+2. **`--compare <file>`**：按语句 id 比较，`changed` / `added` / `removed` 都算漂移，打印前后计划行，退出码 1。库里有 `sqlite_stat1` 时拒绝比较。迁移号 / SQLite 版本不同只作提示（note），不单独判红。
+3. **白名单** = `{ statement, accepted_hash, reason }`：绑定被接受的**那一个**新指纹（删除用 `"removed"`），理由 ≥20 字符；语句无漂移时条目过期同样红，指向未知语句 / 无理由 / hash 格式错误直接报错。重取快照清空白名单，所以白名单只是 PR 内的临时放行。
+4. **与数据无关**：应用不跑 ANALYZE，计划由固定启发式决定，所以快照取自默认小合成库（`synth-data` 默认 60 SKU / 600 流水 / 120 单，种子 20261023，生产模式），CI 用同一条命令造库再 `--compare`；测试另断言"空的已迁移库"得到同一份指纹。
+5. **CI**：`ci.yml` `checks` 作业只加一步"Query plan snapshot"（造库 + `--compare`）。
+6. **ANALYZE 源码扫描**（`scripts/lib/analyze-scan.mjs`，随 `--compare` 运行，也可 `--analyze-scan` 单跑）：扫 `server/`、`scripts/` 的非测试源码，字符串 / 模板字面量（含 `${}` 内代码）里的独立 `ANALYZE`、`PRAGMA optimize`、`pragma('optimize')` 红；注释、标识符、路径不算；`.sql` 去注释后匹配。豁免表 `ANALYZE_ALLOW`（文件级，理由 ≥20 字符，过期红），当前为空。不扫 `src/`（前端文案可能含 "Analyze"，前端不碰数据库）。
+
+## 已知限制
+- 静态文本检查：运行时拼接、`eval`、命令行 `sqlite3`、`package.json` / 工作流命令扫不到；防手滑不防有意。
+- 词法扫描是启发式（正则字面量 / 除号的区分），极端写法可能错位；当前仓库干净，且有测试覆盖常见形态。
+- 指纹证明的是"夹具上的计划形状没变"，不是生产规模延迟；SQLite 升级会让措辞变化导致整批 hash 变，需确认后重取快照。
+- 受 `GROWTH_TABLES` / 行数阈值影响的是**违规判定**，不是指纹；指纹对数据量不敏感依赖"无 sqlite_stat1"这一前提（比较时强制检查）。
+
+## 测试（tests/explain-plan-guard.test.mjs，16 个）
+归一化（字面量 / 参数 / 编号 / 带数字的标识符）；指纹确定性、与绑定值和数据量无关、保留嵌套；快照形状；删索引 → 红；added / removed；白名单绑定新 hash、后续另一个计划不被放行；无理由 / 未知语句 / 坏 hash 报错、过期条目红；`sqlite_stat1` 拒绝；版本 / 迁移提示；已提交快照与当前代码在空库上一致；扫描（字符串 / 模板 / `pragma()` / 注释 / 标识符 / 正则字面量 / `.sql` / 行号 / 目录跳过 / 豁免理由与过期）；本仓库当前无命中；CLI 端到端（`--snapshot`、`--compare` 绿、漂移红、白名单绿、删索引红、违规时拒绝写快照）。
+
+## Codex 审计（AG3，`gpt-6.1-sol`，只读，防御性审查）
+范围：未提交的 AG3 改动；关注指纹归一化稳定性、白名单滥用、CI 可复现、扫描器漏报。
+- **高：无。** 确认：同一 schema 下指纹与数据内容无关；白名单缺理由 / 单条错绑 / 过期均被拒；快照步骤的库目录全新、种子 / 日期 / 时区固定、依赖锁定，未发现 CI 路径或环境缺陷。
+- **中（已修）**：扫描器对 `ANALYZE/* … */`、`PRAGMA main.optimize`、`PRAGMA/* … */optimize`、`pragma('main.optimize')` 漏报。→ 字符串内先把 SQL 注释换成同长度空格，PRAGMA 名允许 schema 限定；新增用例。
+- **中（已修）**：`if (ok) /it's/.test(s); db.exec('ANALYZE')`：`)` 后的 `/` 被当成除号，正则里的引号错位，吞掉后面的 SQL 字符串。→ 记录每个 `(` 是否属于 if / while / for / with 条件，其 `)` 之后的 `/` 当正则；新增用例（含 `(a + b) / 2` 仍是除号）。
+- **中（已修）**：把所有独立数字替换成 `#` 会抹掉虚表策略（FTS 升序 `INDEX 64:M1` 与降序 `192:M1` 同一 hash）。→ 只替换子计划编号（SUBQUERY / MATERIALIZE / CO-ROUTINE）和比较运算符后的数值常量；重取快照；新增用例。
+- **中（已修）**：已提交快照测试要求 `drifts` 为空，白名单放行的漂移会让 `--compare` 绿、聚焦测试红。→ 只断言没有**未放行**的漂移且 `ok`。
+- **低（已修）**：同一语句的重复白名单条目只匹配第一条，第二条错绑条目逃过过期检查。→ 重复直接报错；新增用例。
+- 记录而未改：指纹按 SQLite 版本取，升级后措辞变化会整批变 hash（SQLite 不承诺 EQP 输出稳定），已在文档写明"确认只是措辞后重取快照"。
+- 未验证：托管 CI 上该步骤的实际运行；Linux 上 better-sqlite3 内置 SQLite 与本机 3.49.2 是否同版本（lockfile 固定同一 better-sqlite3，预期一致）。

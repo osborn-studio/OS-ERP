@@ -150,6 +150,10 @@ const DECLARED = [
   'server/db/migrations/061_hot_query_indexes.cjs',
   'tests/hot-queries.test.mjs',
   'scripts/explain-audit.mjs',
+  // 查询计划指纹快照与统计语句源码扫描（AG3，ADR-0044 补充 6）
+  'scripts/lib/explain-plan-guard.mjs',
+  'scripts/lib/analyze-scan.mjs',
+  'tests/explain-plan-guard.test.mjs',
   // 大库规模演练（Y10）
   'scripts/synth-data.mjs',
   'scripts/synth-pipeline.mjs',
