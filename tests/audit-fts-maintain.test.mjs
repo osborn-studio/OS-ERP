@@ -16,7 +16,9 @@ import Database from 'better-sqlite3'
 import { runMigrations } from '../server/db/migrations/runner.js'
 import * as m067 from '../server/db/migrations/067_audit_fts.cjs'
 import { REBUILD_STATE_TABLE } from '../server/lib/audit-fts-state.js'
-import { ftsAvailable, ftsState } from '../server/lib/audit-view.js'
+import { ftsAvailable, ftsState, auditQueryPlan, parseFilters, keywordUsesFts } from '../server/lib/audit-view.js'
+import { REBUILD_STATE_DDL } from '../server/lib/audit-fts-state.js'
+import { counterSnapshot, resetCounters } from '../server/lib/process-counters.js'
 
 // AD4：CI 的 audit-no-fts5 job 在没有 FTS5 的 SQLite 构建上跑本文件：依赖索引存在的用例跳过，无 FTS5 用例真实执行
 const NO_FTS5 = !m067.ftsSupported(new Database(':memory:'))
@@ -282,21 +284,23 @@ function bigFixture(t, rows) {
   return { dir, db }
 }
 /** 起一个 --rebuild/--resume 子进程，在第 k 批提交之后的暂停点发信号，再放行；返回 { code, stdout, report } */
-async function interrupted(dir, { mode = 'rebuild', batchRows, afterBatch, signal = 'SIGTERM', out, extra = [] }) {
+async function interrupted(dir, { mode = 'rebuild', batchRows, afterBatch, signal = 'SIGTERM', out, extra = [], whilePaused = null, inTx = false }) {
   const pdir = path.join(dir, `pause-${out}`)
   const child = spawn(process.execPath, [SCRIPT, ...BASE(dir), `--${mode}`, '--batch-rows', String(batchRows), '--out', path.join(dir, `${out}.json`), ...extra], {
-    cwd: ROOT, env: { ...env(dir), GML_TEST_FTS_MAINTAIN_PAUSE: pdir, GML_TEST_FTS_REBUILD_PAUSE_AFTER_BATCH: String(afterBatch) }, stdio: ['ignore', 'pipe', 'pipe']
+    cwd: ROOT, env: { ...env(dir), GML_TEST_FTS_MAINTAIN_PAUSE: pdir, [inTx ? 'GML_TEST_FTS_REBUILD_PAUSE_IN_BATCH' : 'GML_TEST_FTS_REBUILD_PAUSE_AFTER_BATCH']: String(afterBatch) }, stdio: ['ignore', 'pipe', 'pipe']
   })
   let stdout = ''; let stderr = ''
   child.stdout.on('data', (d) => { stdout += d }); child.stderr.on('data', (d) => { stderr += d })
   const closed = new Promise((res) => child.on('close', (code, sig) => res({ code, sig })))
-  const marker = path.join(pdir, '.fts-rebuild-batch-paused')
+  const marker = path.join(pdir, inTx ? '.fts-rebuild-in-tx-paused' : '.fts-rebuild-batch-paused')
   for (let i = 0; i < 2400 && !existsSync(marker); i++) await sleep(25)
   assert.ok(existsSync(marker), `never reached the batch ${afterBatch} pause point: ${stdout}${stderr}`)
-  child.kill(signal)
-  writeFileSync(path.join(pdir, '.fts-rebuild-batch-continue'), '1')
+  if (whilePaused) await whilePaused()
+  if (signal) child.kill(signal)
+  if (!inTx) writeFileSync(path.join(pdir, '.fts-rebuild-batch-continue'), '1')
   const { code, sig } = await closed
-  return { code, sig, stdout, stderr, report: JSON.parse(readFileSync(path.join(dir, `${out}.json`), 'utf8')) }
+  const rf = path.join(dir, `${out}.json`)
+  return { code, sig, stdout, stderr, report: existsSync(rf) ? JSON.parse(readFileSync(rf, 'utf8')) : null }
 }
 
 test('AH4 --rebuild is batched: one transaction per batch, progress lines, complete index, no checkpoint left behind (50k rows)', needsFts5, (t) => {
@@ -430,4 +434,81 @@ test('AH4 --disable then --enable discards a stale checkpoint and ends with a co
   assert.equal(run([...BASE(dir), '--enable', '--reason', 'again', '--out', path.join(dir, 'e2.json')], dir).status, 0)
   assert.equal(stateRow(db), null); assert.equal(docs(db), 2000)
   assert.equal(run([...BASE(dir), '--integrity-check', '--out', path.join(dir, 'i.json')], dir).status, 0)
+})
+
+test('AH4 an empty audit table: --rebuild finishes ok and leaves no checkpoint behind (index stays usable)', needsFts5, (t) => {
+  const { dir, db } = bigFixture(t, 0)
+  const r = run([...BASE(dir), '--rebuild', '--pause-ms', '0', '--out', path.join(dir, 'e.json')], dir)
+  assert.equal(r.status, 0, r.stderr + r.stdout)
+  assert.equal(reportOf(dir, path.join(dir, 'e.json')).status, 'ok')
+  assert.equal(stateRow(db), null); assert.equal(ftsAvailable(db), true)
+  assert.equal(run([...BASE(dir), '--integrity-check', '--out', path.join(dir, 'i.json')], dir).status, 0)
+})
+
+test('AH4 a missing insert trigger is repaired under the write lock (one-shot rebuild), so rows above the high-water mark cannot be silently left out', needsFts5, (t) => {
+  const { dir, db } = bigFixture(t, 3000)
+  db.exec('DROP TRIGGER audit_logs_fts_ai')
+  const r = run([...BASE(dir), '--rebuild', '--batch-rows', '500', '--out', path.join(dir, 'r.json')], dir)
+  assert.equal(r.status, 0, r.stderr + r.stdout)
+  const rep = reportOf(dir, path.join(dir, 'r.json'))
+  assert.deepEqual(rep.repaired_triggers, ['audit_logs_fts_ai']); assert.equal(rep.status, 'ok')
+  assert.equal(ftsNames(db).length, 4, 'trigger is back')
+  assert.equal(stateRow(db), null); assert.equal(docs(db), 3000)
+  db.prepare("INSERT INTO audit_logs (user_id,user_name,action,module,entity,entity_id) VALUES (1,'n','NEWROW','sales','newent','1')").run()
+  assert.equal(matchCount(db, 'newent'), 1, 'new rows are indexed by the repaired trigger')
+  assert.equal(run([...BASE(dir), '--integrity-check', '--out', path.join(dir, 'i.json')], dir).status, 0)
+})
+
+test('AH4 a trigger removed between batches stops the rebuild (triggers_missing, checkpoint kept); --rebuild --restart repairs and completes', needsFts5, async (t) => {
+  const { dir, db } = bigFixture(t, 3000)
+  const a = await interrupted(dir, { batchRows: 500, afterBatch: 2, signal: null, out: 'a', whilePaused: async () => { db.exec('DROP TRIGGER audit_logs_fts_ai') } })
+  assert.equal(a.code, 1, a.stdout + a.stderr); assert.equal(a.report.status, 'triggers_missing')
+  assert.ok(stateRow(db)); assert.equal(ftsAvailable(db), false)
+  const fix = run([...BASE(dir), '--rebuild', '--restart', '--out', path.join(dir, 'f.json')], dir)
+  assert.equal(fix.status, 0, fix.stderr + fix.stdout)
+  assert.equal(docs(db), 3000); assert.equal(stateRow(db), null); assert.equal(ftsNames(db).length, 4)
+  assert.equal(run([...BASE(dir), '--integrity-check', '--out', path.join(dir, 'i.json')], dir).status, 0)
+})
+
+test('AH4 SIGKILL while a batch transaction is open (rows inserted, not committed): the batch rolls back, the checkpoint still points at the last committed batch, --resume completes with every row exactly once', needsFts5, async (t) => {
+  const { dir, db } = bigFixture(t, 3000)
+  const k = await interrupted(dir, { batchRows: 500, afterBatch: 3, signal: 'SIGKILL', inTx: true, out: 'k' })
+  assert.equal(k.sig, 'SIGKILL'); assert.equal(k.report, null, 'killed: no report written')
+  const cp = stateRow(db)
+  assert.ok(cp, 'checkpoint survived the kill'); assert.equal(cp.last_id, 1000, 'two batches were committed; the third was open and is gone'); assert.equal(cp.remaining, 2000)
+  assert.equal(docs(db), 1000); assert.equal(matchCount(db, 'ent1000'), 0, 'rows of the uncommitted batch are not in the index'); assert.equal(matchCount(db, 'ent999'), 1)
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM audit_logs').get().c, 3000, 'source rows untouched')
+  const r = run([...BASE(dir), '--resume', '--pause-ms', '0', '--out', path.join(dir, 'r.json')], dir)
+  assert.equal(r.status, 0, r.stderr + r.stdout)
+  assert.equal(docs(db), 3000); assert.equal(stateRow(db), null)
+  assert.equal(matchCount(db, 'ent1000'), 1); assert.equal(matchCount(db, 'ent2999'), 1)
+  assert.equal(run([...BASE(dir), '--integrity-check', '--out', path.join(dir, 'i.json')], dir).status, 0)
+})
+
+test('AH4 a query plan that chose FTS before a rebuild began never answers from the emptied index: the result is discarded and re-run on LIKE (same rows, counter +1)', needsFts5, (t) => {
+  resetCounters()
+  const { dir, db } = bigFixture(t, 3000)
+  const other = new Database(path.join(dir, 'gml_cosmetic.db'))
+  t.after(() => other.close())
+  assert.equal(keywordUsesFts(db, 'ent1234'), true)
+  const plan = auditQueryPlan(db, parseFilters({ keyword: 'ent1234' }))
+  assert.match(plan.where, /audit_logs_fts/)
+  let calls = 0
+  const rows = plan.run(({ where, args }) => {
+    calls++
+    const st = db.prepare(`SELECT id FROM audit_logs ${where} ORDER BY id DESC`)
+    if (calls === 1) { // 另一个进程此刻开始分批重建：同一事务里清空索引 + 建检查点
+      other.exec('BEGIN IMMEDIATE')
+      other.exec("INSERT INTO audit_logs_fts(audit_logs_fts) VALUES ('delete-all')")
+      other.exec(REBUILD_STATE_DDL)
+      other.prepare(`INSERT INTO ${REBUILD_STATE_TABLE} VALUES (1,'cosmetic','x',3000,0,3000,3000,500,0,'t','t')`).run()
+      other.exec('COMMIT')
+    }
+    return st.all(...args)
+  })
+  assert.equal(calls, 2, 'the emptied-index answer was discarded and re-run once')
+  assert.deepEqual(rows.map((r) => r.id), [1235]); assert.doesNotMatch(plan.where, /audit_logs_fts/)
+  assert.equal(counterSnapshot().audit_fts_fallback_total.query, 1)
+  // 检查点已在 → 之后的计划一开始就不选 FTS
+  assert.equal(keywordUsesFts(db, 'ent1234'), false)
 })

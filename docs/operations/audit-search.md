@@ -35,9 +35,10 @@ node scripts/audit-fts-maintain.mjs --data-dir /abs/path/to/data --industry cosm
 2. `--rebuild`（AH4 起分批）只在每一批里持写锁，写入者最多等一批的时间（默认 5000 行/批；`--batch-rows` 1..1000000，`--pause-ms` 批间停顿，默认 5 ms）；每批打印一行 `audit-fts-maintain progress rebuild batch=k/N rows=a/b pct=…`。Mac mini 实测数字见 capacity-baseline "AH4"，目标主机请自行实测；仍建议低峰执行。读者不受影响（WAL）。
 3. **重建期间索引是残缺的**：库里有检查点表 `audit_fts_rebuild_state`，查询路径见到它就不走 FTS（回退 LIKE，结果相同，只是慢），`--integrity-check` / `--optimize` 报 `rebuild_in_progress`。**重建期间不要跑审计归档 / 清理**（见下）。
 4. **中断与续跑**：对脚本发 SIGTERM / SIGINT，它在当前批提交后停止，报告 `status: "interrupted"`、退出 3，检查点留在库里；`--resume` 从检查点继续（`--batch-rows` 缺省沿用检查点里的值）。崩溃 / 杀进程同样可续跑（每批提交后检查点即更新）。
-5. 拒绝路径（退出 1，索引与检查点都不被改动）：`--resume` 没有检查点 → `no_checkpoint`；检查点属于别的行业或别的库（指纹对不上）→ `checkpoint_mismatch`；`--rebuild` 时已有检查点 → `checkpoint_exists`（用 `--resume` 续跑，或确认后 `--rebuild --restart` 丢弃它从头来）。
-6. 重建期间若有**尚未入索引**的审计行被删除（审计归档 / 清理在跑），触发器会对索引发出无效的 delete；续跑到末尾剩余行数对不上时报 `interfered`（检查点保留，索引仍不被查询使用）——用 `--rebuild --restart` 修复。`--disable` / `--enable` 会顺带清掉过期检查点（`--enable` 遇到残缺索引会做一次完整重建）。
-7. 重建完成后再 `--integrity-check` 应为 `ok`（脚本不在持锁的最后一批里跑它，因为它与索引大小成正比）。
+5. 触发器缺失时（常见于"触发器被重建之后"）分批不适用：初始化事务会在写锁内补齐触发器并做一次完整 `rebuild`（持写锁到结束，同旧行为），报告 `repaired_triggers`；批间触发器被删 → `triggers_missing`（退出 1，`--rebuild --restart` 修复）。
+6. 拒绝路径（退出 1，索引与检查点都不被改动）：`--resume` 没有检查点 → `no_checkpoint`；检查点属于别的行业或别的库（指纹对不上）→ `checkpoint_mismatch`；`--rebuild` 时已有检查点 → `checkpoint_exists`（用 `--resume` 续跑，或确认后 `--rebuild --restart` 丢弃它从头来）。
+7. 重建期间若有**尚未入索引**的审计行被删除（审计归档 / 清理在跑），触发器会对索引发出无效的 delete；续跑到末尾剩余行数对不上时报 `interfered`（检查点保留，索引仍不被查询使用）——用 `--rebuild --restart` 修复。`--disable` / `--enable` 会顺带清掉过期检查点（`--enable` 遇到残缺索引会做一次完整重建）。
+8. 重建完成后再 `--integrity-check` 应为 `ok`（脚本不在持锁的最后一批里跑它，因为它与索引大小成正比）。
 
 ### 夜间可选步骤
 

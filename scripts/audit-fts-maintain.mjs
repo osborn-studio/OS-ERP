@@ -12,7 +12,8 @@
  *     批与批之间释放写锁（`--pause-ms`，默认 5）让业务写入进来；每批打印一行进度；最后一批与"删检查点"同一事务。收到 SIGTERM / SIGINT 只在批边界停止（退出 3，status=interrupted），
  *     检查点留在库里；`--resume` 从检查点续跑。检查点存在 = 索引未完成：查询路径（`audit-view.js` 的 `ftsAvailable`）不用它，`--integrity-check` / `--optimize` 报 `rebuild_in_progress`。
  *     `--rebuild` 遇到已有检查点拒绝（`checkpoint_exists`），`--rebuild --restart` 丢弃它从头来；`--resume` 无检查点（`no_checkpoint`）或检查点属于别的库（`checkpoint_mismatch`：行业或指纹不符）拒绝。
- *     重建期间被删除的"尚未入索引"的行会让触发器对索引发出无效 delete：续跑到末尾若剩余行数对不上 → `interfered`（检查点保留，索引仍不被查询使用），用 `--rebuild --restart` 修复。设计与边界见 ADR-0054 补充 4。
+ *     重建期间被删除的"尚未入索引"的行会让触发器对索引发出无效 delete：续跑到末尾若剩余行数对不上 → `interfered`（检查点保留，索引仍不被查询使用），用 `--rebuild --restart` 修复。
+ *     触发器缺失时分批会漏掉高水位之后的新行：初始化事务在写锁内补齐触发器并做一次完整 `rebuild`（报告 `repaired_triggers`）；批间触发器被删 → `triggers_missing`。设计与边界见 ADR-0054 补充 4。
  *   `optimize` / `rebuild` 在表不存在时退出 1（没有东西可维护；建表是迁移 067 的事，不在这里）。
  *
  * 【AD4 开关】`--disable` / `--enable`（必须带 `--reason`）：在**同一个写事务**里改设置 `audit_fts_enabled`（危险键，留痕到 setting_audit_log）并删除 / 重建 FTS 表与触发器
@@ -172,6 +173,14 @@ function fingerprintOf(hw) {
   const rows = db.prepare('SELECT id, action, entity, user_name, created_at FROM audit_logs WHERE id <= ? ORDER BY id DESC LIMIT 5').all(hw)
   return crypto.createHash('sha256').update(JSON.stringify(rows)).digest('hex')
 }
+/** 触发器缺失 → 在写锁内补齐（067 的 up：建缺失的触发器并一次性 rebuild）并删检查点；返回补齐的触发器名（无缺失返回 null）。调用方在 writeTx 里 */
+function repairTriggers() {
+  const missing = TRIGGERS.filter((n) => !exists(db, 'trigger', n))
+  if (!missing.length) return null
+  m067.up(db)
+  if (rebuildInProgress(db)) db.exec(`DROP TABLE ${STATE}`)
+  return missing
+}
 const stateRowOf = () => db.prepare(`SELECT * FROM ${STATE}`).get() ?? null
 const nowIso = () => new Date().toISOString()
 
@@ -197,10 +206,14 @@ async function batchedRebuild() {
         if (st.industry !== args.industry) return { refuse: 'checkpoint_mismatch', msg: `检查点属于行业 ${st.industry}，不是 ${args.industry}：拒绝续跑；确认后用 --rebuild --restart 清除` }
         if (fingerprintOf(st.high_water) !== st.fingerprint) return { refuse: 'checkpoint_mismatch', msg: '检查点指纹与本库不符（别的库的检查点，或高水位附近的行已变）：拒绝续跑；确认后用 --rebuild --restart 清除' }
         if (st.last_id > st.high_water || st.remaining < 0) return { refuse: 'checkpoint_mismatch', msg: '检查点内容自相矛盾：拒绝续跑；用 --rebuild --restart 清除' }
+        const fixed = repairTriggers()
+        if (fixed) return { oneShot: fixed }
         return { state: st }
       }
       const has = rebuildInProgress(db)
       if (has && !args.restart) return { refuse: 'checkpoint_exists', msg: `已有未完成的分批重建：用 --resume 续跑，或 --rebuild --restart 丢弃它从头来` }
+      const fixed = repairTriggers()
+      if (fixed) return { oneShot: fixed }
       if (has) db.exec(`DROP TABLE ${STATE}`)
       db.exec(`INSERT INTO ${FTS}(${FTS}) VALUES ('delete-all')`)
       const hw = db.prepare('SELECT COALESCE(MAX(id), 0) m FROM audit_logs').get().m
@@ -212,14 +225,23 @@ async function batchedRebuild() {
       return { state: stateRowOf() }
     })
     if (init.refuse) { report.status = init.refuse; report.error = init.msg; return }
+    if (init.oneShot) { // 触发器缺失：高水位之后的新行没人索引，分批会漏行——补齐触发器并做一次完整 rebuild（与 AH4 之前的行为相同，持写锁到结束）
+      report.repaired_triggers = init.oneShot
+      report.status = 'ok'
+      report.resumed = resume
+      report.rows_indexed = report.rows
+      return
+    }
     const size = batchRows ?? init.state.batch_rows
     report.batch_rows = size
     report.resumed = resume
     const total = init.state.total_rows
     const startRemaining = init.state.remaining
     const totalBatches = Math.max(1, Math.ceil(startRemaining / size))
-    let finished = startRemaining === 0 && init.state.last_id >= init.state.high_water
+    let finished = false // 空表 / 已扫完的检查点也要进循环：由"没有更多行"那一支在事务里删检查点
     let interfered = false
+    let triggersGone = false
+    const triggerCount = db.prepare(`SELECT COUNT(*) c FROM sqlite_master WHERE type='trigger' AND name IN (${TRIGGERS.map(() => '?').join(',')})`).bind(...TRIGGERS)
     const batchSql = db.prepare(`INSERT INTO ${FTS}(rowid, action, entity, user_name) SELECT id, action, entity, user_name FROM audit_logs WHERE id > ? AND id <= ? ORDER BY id LIMIT ?`)
     const edge = db.prepare('SELECT MAX(id) m, COUNT(*) n FROM (SELECT id FROM audit_logs WHERE id > ? AND id <= ? ORDER BY id LIMIT ?)')
     const more = db.prepare('SELECT 1 FROM audit_logs WHERE id > ? AND id <= ? LIMIT 1')
@@ -230,12 +252,15 @@ async function batchedRebuild() {
       const r = await writeTx(() => {
         const st = stateRowOf()
         if (!st) return { gone: true } // 别的进程已经收尾
+        if (triggerCount.get().c !== TRIGGERS.length) return { triggersGone: true } // 批间有人删了触发器：继续下去新行会漏索引
         const e = edge.get(st.last_id, st.high_water, size)
         if (!e.n) { // 没有更多行：剩余数必须归零，否则是中途有"尚未入索引"的行被删
           if (st.remaining === 0) { db.exec(`DROP TABLE ${STATE}`); return { n: 0, done: true, remaining: 0 } }
           return { n: 0, interfered: true, remaining: st.remaining }
         }
         batchSql.run(st.last_id, st.high_water, size)
+        // 测试暂停点（仅 test 模式）：批事务**已写入、未提交**——测试在这里 SIGKILL，验证崩溃后回滚到上一个检查点
+        if (process.env.GML_TEST_FTS_MAINTAIN_PAUSE && process.env.GML_TEST_FTS_REBUILD_PAUSE_IN_BATCH === String(report.batches + 1)) testPause('GML_TEST_FTS_MAINTAIN_PAUSE', 'fts-rebuild-in-tx')
         const remaining = st.remaining - e.n
         const end = !more.get(e.m, st.high_water)
         if (end && remaining === 0) db.exec(`DROP TABLE ${STATE}`)
@@ -244,6 +269,7 @@ async function batchedRebuild() {
       })
       const ms = performance.now() - tb
       if (r.gone) { finished = true; break }
+      if (r.triggersGone) { triggersGone = true; break }
       maxBatch = Math.max(maxBatch, ms)
       report.max_batch_ms = Math.round(maxBatch * 10) / 10
       if (r.n) {
@@ -258,7 +284,10 @@ async function batchedRebuild() {
       if (process.env.GML_TEST_FTS_MAINTAIN_PAUSE && process.env.GML_TEST_FTS_REBUILD_PAUSE_AFTER_BATCH === String(report.batches)) testPause('GML_TEST_FTS_MAINTAIN_PAUSE', 'fts-rebuild-batch')
       await delay(Math.max(pauseMs, 2)) // 让出写锁，也让事件循环有机会处理信号
     }
-    if (interfered) {
+    if (triggersGone) {
+      report.status = 'triggers_missing'
+      report.error = '重建期间审计表上的 FTS 触发器被删除：继续会漏索引；检查点保留（索引仍不被查询使用）。请用 --rebuild --restart 重来（会先补齐触发器）'
+    } else if (interfered) {
       report.status = 'interfered'
       report.error = '重建期间有"尚未入索引"的行被删除（审计归档 / 清理？）：触发器对索引发出了无效的 delete，索引不可信；检查点保留（索引仍不被查询使用）。请用 --rebuild --restart 从头重建'
     } else if (finished) {
@@ -277,9 +306,10 @@ async function batchedRebuild() {
     report.lock_probe = await probe.stop()
     try { report.checkpoint = rebuildInProgress(db) ? (() => { const c = stateRowOf(); return c && { last_id: c.last_id, high_water: c.high_water, remaining: c.remaining, total_rows: c.total_rows } })() : null } catch { report.checkpoint = null }
     report.fts_present = exists(db, 'table', FTS)
+    report.triggers_present = Object.fromEntries(TRIGGERS.map((n) => [n, exists(db, 'trigger', n)]))
     report.bytes_after = sizeOf(file)
+    report.ok = report.status === 'ok' // finally 里统一收尾：提前 return 的拒绝 / 一次性重建路径也走这里
   }
-  report.ok = report.status === 'ok'
 }
 try {
   db = new Database(file, { fileMustExist: true })

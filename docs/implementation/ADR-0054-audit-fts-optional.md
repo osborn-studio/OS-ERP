@@ -117,11 +117,19 @@ Codex 审计（gpt-6.1-sol，只读，针对相对 batch-twelve 的差异）：�
 
 ### 数据丢失风险与边界（诚实）
 - **重建期间删除"尚未入索引"的审计行**（审计归档 / 清理）会让 `AFTER DELETE` 触发器对索引发出无效的 `delete` 命令，索引不再可信。批处理不会逐批重数全表（那是 O(n²)）；改为在**末尾**核对：扫完 `(last_id, high_water]` 后检查点的 `remaining` 必须为 0，否则 `status: "interfered"`、退出 1、**检查点保留**（索引继续不被查询使用），错误信息指向 `--rebuild --restart`。这是**事后**发现，不是预防；运维文档要求重建期间不要跑归档 / 清理。已入索引范围内的删除是正常的（触发器 delete 一个确实存在的项）。审计行的 `action/entity/user_name` 被 UPDATE（哈希链会因此断）不在检测范围。
-- 高水位之后的行靠触发器索引；若重建时触发器本身缺失（`--rebuild` 常用于触发器被重建之后），这些行不会被索引——与旧的单事务 `rebuild` 对触发器缺失的处理同样，报告里照常给 `triggers_present`。
+- 高水位之后的行靠触发器索引，所以分批**要求三个触发器在位**：初始化事务（`--rebuild` 与 `--resume` 都一样）发现缺失就在写锁内用 067 的 `up` 补齐并做一次完整 `rebuild`（即 AH4 之前的单事务行为，持写锁到结束），删检查点，报告 `repaired_triggers`；批间触发器被删（每批事务内核对）→ `status: "triggers_missing"`、退出 1、检查点保留，`--rebuild --restart` 修复。
 - 指纹取高水位一侧而不是最老的行，是为了让"老行被归档"不会把合法检查点误判成别的库；代价是它只能分辨"明显不同的库"，不是密码学意义的库身份。
-- 中断期间检索走 LIKE，较慢但正确；已在 `ftsAvailable` 里判定的进行中请求可能仍读到刚被清空的索引（`delete-all` 与该请求之间的窗口），与 AF4 的在途请求窗口同类，未单独处理。
+- 中断期间检索走 LIKE，较慢但正确。**在途请求**：`delete-all` 不会让 FTS 查询报错，只会漏行，所以 `auditQueryPlan.run` 在 FTS 计划上执行前、执行后各复核一次检查点表（检查点表与清空索引在同一事务里可见）：执行后才看到它 → 丢弃本次结果，换 LIKE 重跑一次（沿用 AF4 的 `audit_fts_fallback_total{reason}`）。剩余窗口：整个重建在**一次** `fn` 调用内开始并结束（只可能是极小的表）。没有用读快照做原子复核，因为那会改变 AF4 测试固定下来的"执行期间索引被删 → 报错 → 重试"语义。
 - 重建总耗时变长（默认批大小下约为单事务的 2×，capacity-baseline "AH4"），换来写入者最长被挡时间从整个重建降到单批。
 - 托管 runner（ubuntu）与无 FTS5 构建上的新用例未验证（无 FTS5 时按原因跳过）；基准为 Mac mini、高负载、单次运行。
 
 ### 做了什么
-`scripts/audit-fts-maintain.mjs`（分批、`--resume`、`--restart`、`--batch-rows`、`--pause-ms`、信号、检查点校验）、`server/lib/audit-fts-state.js`（新）、`server/lib/audit-view.js`（`ftsAvailable`/`ftsState`）、`tests/audit-fts-maintain.test.mjs`（+7 个 AH4 用例：50k 行分批与进度、SIGTERM 中断→续跑→`integrity-check` ok 且中断期间写入的行恰好索引一次、SIGINT 连续两次中断、拒绝路径、别的库的检查点、`interfered`、开关收敛）、`docs/operations/audit-search.md`、capacity-baseline（AG4 表重跑并替换；新增 AH4 批大小对持锁时间的一节）。测试暂停点复用 `GML_TEST_FTS_MAINTAIN_PAUSE`（名 `fts-rebuild-batch`，由 `GML_TEST_FTS_REBUILD_PAUSE_AFTER_BATCH=<k>` 选批；仅 `GML_RUNTIME_MODE=test`）。变异检查：去掉 `ftsAvailable` 对检查点的判断、或去掉末尾剩余数核对，对应用例转红。
+`scripts/audit-fts-maintain.mjs`（分批、`--resume`、`--restart`、`--batch-rows`、`--pause-ms`、信号、检查点校验）、`server/lib/audit-fts-state.js`（新）、`server/lib/audit-view.js`（`ftsAvailable`/`ftsState`）、`tests/audit-fts-maintain.test.mjs`（+12 个 AH4 用例：50k 行分批与进度、SIGTERM 中断→续跑→`integrity-check` ok 且中断期间写入的行恰好索引一次、SIGINT 连续两次中断、拒绝路径、别的库的检查点、`interfered`、开关收敛、空表、触发器缺失补齐 / 批间被删、**批事务打开时 SIGKILL**→回滚到上一检查点→续跑、查询计划在重建开始后丢弃被清空索引的结果）、`docs/operations/audit-search.md`、capacity-baseline（AG4 表重跑并替换；新增 AH4 批大小对持锁时间的一节）。测试暂停点复用 `GML_TEST_FTS_MAINTAIN_PAUSE`（名 `fts-rebuild-batch`，由 `GML_TEST_FTS_REBUILD_PAUSE_AFTER_BATCH=<k>` 选批；仅 `GML_RUNTIME_MODE=test`）。变异检查：去掉 `ftsAvailable` 对检查点的判断、或去掉末尾剩余数核对，对应用例转红。
+
+### 审计记录（AH4，Codex gpt-6.1-sol 只读，相对 batch-sixteen 的差异）
+审计方未能在其只读沙箱里跑文件系统测试，结论来自静态阅读与内存库复现；未发现对源审计行的直接删除。
+- 高（P1）：在途 FTS 查询在另一进程开始 `--rebuild` 后无声读到被清空的索引 ⇒ 已修（执行前后复核检查点表，丢弃并改走 LIKE；测试：计划在重建开始之后返回同样的行、计数 +1；去掉执行后复核则转红）。残余窗口见上，未消除。
+- 高（P1）：触发器缺失时分批重建"成功"但漏掉高水位之后的行 ⇒ 已修（初始化事务补齐触发器并一次性重建；批内核对；两条测试，去掉任一处即转红）。
+- 中（P2）：空表 `--rebuild` 报 ok 却留下检查点（索引被一直旁路、`--rebuild` 被拒）⇒ 已修（空表也进循环，由"无更多行"分支在事务里删检查点；回归测试）。
+- 中（P2）：信号测试只在批提交之后暂停，覆盖不到事务中途崩溃 ⇒ 已补（`GML_TEST_FTS_REBUILD_PAUSE_IN_BATCH`：批已写入未提交时 SIGKILL，核对检查点停在上一批、索引与源行不变、续跑后恰好一次、`integrity-check` ok）。
+- 修复后的差异**没有**再做第二轮 Codex 审计。
