@@ -98,6 +98,7 @@ const DECLARED = {
   'test-dms.mjs': { ok: 'cond,msg,detail', eq: 'msg,actual,expect' },
   'test-dependency-security.mjs': { ok: null, eq: null },
   'test-local-delivery.mjs': { ok: null, eq: null },
+  'test-timings.mjs': { ok: null, eq: null }, // Measurement CLI, no legacy assertion helpers.
   'test-docflow.mjs': { ok: 'name,cond,detail', eq: 'name,actual,expected' },
   'test-export-excel.mjs': { ok: 'cond,msg,detail', eq: 'msg,actual,expect' },
   'test-final.mjs': { ok: 'cond,msg,detail', eq: 'msg,actual,expect' },

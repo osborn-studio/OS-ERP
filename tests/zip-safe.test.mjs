@@ -36,14 +36,14 @@ function patchCd(buf, name, fieldOff, value, size = 4) {
   throw new Error('entry not found')
 }
 
-test('a normal archive extracts, stripping the top directory, with fixed 0644 modes', (t) => {
+test('a normal archive extracts, stripping the top directory, with 0644 permissions restricted by umask', (t) => {
   const d = tmp(t)
   const z = write(d, 'a.zip', mk({ 'RC/MANIFEST.json': strToU8('{"a":1}'), 'RC/sub/x.txt': strToU8('hello'), 'RC/empty/': new Uint8Array(0) }))
   const r = extractZipSafe(z, path.join(d, 'out'), {}, { strip: 1 })
   assert.deepEqual([r.files, r.bytes], [2, 12])
   assert.equal(fs.readFileSync(path.join(d, 'out/sub/x.txt'), 'utf8'), 'hello')
   assert.ok(fs.statSync(path.join(d, 'out/empty')).isDirectory())
-  assert.equal(fs.statSync(path.join(d, 'out/MANIFEST.json')).mode & 0o777, 0o644)
+  assert.equal(fs.statSync(path.join(d, 'out/MANIFEST.json')).mode & 0o7777, 0o644 & ~process.umask())
 })
 
 test('defaults are finite and sane', () => {
@@ -125,7 +125,7 @@ test('symbolic links and special files are refused (Unix mode in the external at
   refused(() => extractZipSafe(fifo, path.join(d, 'o2')), /special file/)
   const reg = write(d, 'r.zip', mk({ 'RC/file': [strToU8('x'), { os: 3, attrs: (0o100755 << 16) >>> 0 }] }))
   extractZipSafe(reg, path.join(d, 'o3'))
-  assert.equal(fs.statSync(path.join(d, 'o3/RC/file')).mode & 0o777, 0o644, 'zip modes (setuid, exec) are not honoured')
+  assert.equal(fs.statSync(path.join(d, 'o3/RC/file')).mode & 0o7777, 0o644 & ~process.umask(), 'zip modes (setuid, exec) are not honoured; a restrictive umask is preserved')
 })
 
 test('duplicate entries (case-insensitive) and file/dir collisions are refused', (t) => {

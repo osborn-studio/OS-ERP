@@ -101,6 +101,8 @@ const testFiles = readdirSync(path.join(ROOT, 'scripts'))
   .filter((f) => /^test-.*\.mjs$/.test(f))
   // 安装验收需要 --package 指向全新发行包，不能作为数据库单测无参执行。
   .filter((f) => f !== 'test-local-delivery.mjs')
+  // Measurement CLI requires --run/--check; node:test already covers its implementation.
+  .filter((f) => f !== 'test-timings.mjs')
   .filter((f) => !ONLY || f.includes(ONLY))
   .sort()
 
