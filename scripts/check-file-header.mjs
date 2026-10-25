@@ -35,6 +35,8 @@ const DECLARED = [
   'server/index.js',
   'server/lib/audit-trail.js',
   'server/lib/logger.js',
+  'server/lib/profile.js',
+  'server/lib/db-ttl-cache.js',
   'server/lib/trust-proxy.js',
   'server/lib/redact.js',
   'server/middleware/audit.js',

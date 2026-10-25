@@ -263,3 +263,50 @@ node scripts/synth-pipeline.mjs --dir /tmp/synth-large --skus 20000 --txns 25000
 - `qty_on_hand <> 0` 的首页在头部有大段零库存行时会多读；`total` 仍是一次整表聚合（每次进入页面 / 改过滤条件付一次，翻页不付）。
 - `server/lib/metrics.js` 的 `below_safe` 指标（口径不含 `status='active'`，不同于看板）与 `routes/ai.js`、`mcp/tools.js` 里各自的低库存查询未改，仍是原写法；`metrics.js` 注册表里并没有 `dash.todo_counts`，那条语句实际在 `server/routes/dashboard.js`，本次改动落在那里。
 - 新增索引的写放大：`inventory_stocks` 每次库存变动多维护一棵 B 树（未单独测写路径）。
+
+## AA5 看板瓶颈剖析与低库存口径统一（**Mac mini / 合成 medium 库 / 非目标主机**）
+
+> **范围声明**：同 Z3——Mac mini，合成 `medium` 库（`--skus 20000 --docs 30000 --txns 150000`，种子 20261023；2 万 SKU / 84 736 库存行 / 15 万流水），**不是 `dmserver` 结果、不是容量承诺、不是验收证据**。**测量时整机负载极高（`uptime` 15 分钟平均负载约 45–50，同时有其它工作流在跑测试），绝对数字偏大且抖动大**，所以每行都给原始值，并优先看同一轮里"前 / 后交错"的对比。库用 Z3 的"增强库"口径（`safe_stock=(id%5)*40`，1.6 万 SKU 设了安全库存；经销商 `credit_limit=100000`），否则安全库存全 0 看不出低库存查询的代价。
+
+### 逐块计时（`GML_PROFILE=1`，串行请求，增强库，中位数 ms）
+方法：`server/lib/profile.js` 在 `GET /dashboard/summary` 的每个查询块上计时并写一行 `profile_blocks` 日志（响应体不含）；起一个本机测试模式服务，串行请求 30–40 次取中位数。"前"= 本分支基线（Z3 之后的 `dashboard.js`，仅加了计时），"后"= 缓存关闭（`GML_DASHBOARD_CACHE_MS=0`）下的新查询，即**未命中缓存的冷路径**。
+
+| 块 | 前 | 后（冷路径） | 备注 |
+|---|---|---|---|
+| `inventory`（SUM + SUM + COUNT DISTINCT）| **49.6** | 19.4 / 19.9（两次）| **唯一 ≥50 ms 的块**；拆成"求和"+"覆盖索引上去重计数" |
+| `below_safe`（`countBelowSafe`）| 8.2 | 8.8 / 10.0 | Z3 的口径，未再改 |
+| `lastMonth` | 4.2 | 3.8 / 3.9 | `substr(order_date,1,7)` 不能走索引，量级小 |
+| `receivable` | 2.5 | 3.0 / 3.9 | |
+| `payable` | 1.6 | 1.6 | |
+| `alertsRow`（待办 5 项计数）| 0.28 | 0.27 | |
+| `today` / `month` / `purchaseMonth` / `omsMonth` | < 0.1 | < 0.1 | |
+| 处理器总计（中位数）| 74.5 | 54.6 / 56.2 | 负载下中位数不可相加，仅作量级 |
+| HTTP 中位数（串行）| 85.2 | 61.8 / 64.0 | |
+
+同一进程里对 `inventory` 块做 A/B（同一时刻，消除负载差）：原语句 **142 ms**（`SCAN inventory_stocks` + `USE TEMP B-TREE FOR count(DISTINCT)`）→ 求和 34.6 + 去重计数 4.4 = **39 ms**（`SCAN inventory_stocks USING COVERING INDEX idx_stock_sku`，无临时树）；两种写法在 medium 库上结果都是 19 917 个 SKU。覆盖索引 `(sku_id, qty_on_hand, cost_price)` 试过：求和 83 → 24 ms，但给写入最热的表再加一棵索引不值，**没有做迁移 064**（理由见 ADR-0044）。
+
+### `bench-api` p95（`--concurrency 4 --iterations 100`，每次用同一份预热库的新拷贝，前 / 后交错）
+| 接口 | 前（原始值 ms，p95）| 前 p95 中位数 | 后：缓存开（默认）| 后 p95 中位数 | 后：缓存关（冷）|
+|---|---|---|---|---|---|
+| GET /api/dashboard/summary（增强库）| 551.2 / 822.3 / 803.0 / 676.6 | **≈ 740** | 49.6 / 40.4 / 41.7 | **41.7** | 397.6 / 426.1 |
+| GET /api/dashboard/summary（原样合成库，安全库存全 0）| 657.2 | — | 69.7 | — | — |
+| GET /api/dashboard/summary p50（增强库）| 297 / 448 / 503 / 422 | ≈ 435 | 4.9 / 2.3 / 2.5 | 2.5 | 234 / 278 |
+| GET /api/inventory/stocks（未改，噪声参照）| 219 / 223 / 235 / 263 | ≈ 229 | 225 / 296 / 248 | 248 | — |
+| GET /api/meta/health（噪声参照）| 17.9 / 4.1 / 5.7 / 8.4 | — | 12.9 / 5.9 / 7.0 | — | — |
+
+读法与诚实边界：
+- **目标 p95 < 150 ms 达成（41.7 ms），但靠的是缓存命中**。`bench-api` 并发 4 打同一个只读接口，基本全是命中；冷路径（缓存关）p95 仍约 400 ms。原因是 Node 单线程、同步 SQLite：处理器约 55 ms（本机高负载下），4 个并发请求排队，p95 ≈ 4–7 个处理器耗时。冷路径相对"前"从 ≈ 740 降到 ≈ 410，方向与 `inventory` 块 50 → 19 ms 一致；但两组各只有 2–4 次、负载在变，**幅度只能当量级**。
+- 缓存在写入后立即失效（见 ADR-0044），所以真实使用里每次库存 / 订单写入后的第一次读取走冷路径，约 55 ms 量级（串行）。写入频繁的实例命中率会低。
+- `inventory/stocks` 的 ≈ 230–250 ms 是本轮的负载底噪（Z3 记录的 140–150 ms 是另一轮的数字），不可跨轮比较；它没有改动，只作参照。
+- 0 错误，`SQLITE_BUSY` 0。
+
+### `explain-audit`（medium 库）
+66 条语句（`dash.stock_total` 拆出 `dash.stock_sku_count`），**0 违规**，豁免 16，索引全扫 3。
+
+### 低库存口径统一（不涉及性能数字）
+指标 `below_safe`、AI `stock_alert`、MCP `inventory.stock_alert` 改调 `countBelowSafe` / `listBelowSafe`；口径差异逐条见 ADR-0044（指标不再计停用 SKU；MCP 含无库存行的缺货 SKU、范围依据改为仓库所属组织）。medium 增强库上缺货 SKU 为 186 个（与 Z3 相同），`listBelowSafe(-1)`（AI 不限行数）返回这 186 行，约 227 ms（负载下单次）；原写法同样无 LIMIT，行为不变。
+
+### 仍未覆盖
+- `dmserver` 上用生产规模副本复跑；large 规模未跑。
+- `/dashboard/trend`、`/top`、`/todos`、`/inventory-dist` 等其它看板接口未剖析、未缓存。
+- 缓存只在单进程内；多进程部署时每个进程各有一份，靠 `data_version` 感知其它进程的提交（已测两个连接，未做多进程实测）。
