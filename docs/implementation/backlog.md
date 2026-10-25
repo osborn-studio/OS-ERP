@@ -91,3 +91,16 @@
 | 夜间容量工作流首跑可能因 Y10 记录的 3 处全表扫描变红（Z3 已消除，需实跑确认） | 托管 runner | Z10 |
 | `release-candidate` 的焦点/回归结果字段默认 `not run`，CI run id 需人工传入 | 流程 | Z5 |
 | 审计日志导出的 COUNT/LIKE 在大库上的耗时未测 | 性能 | Z7 |
+
+## 第十批后仍 open 的残留
+
+| 位置 | 残留 | 来源 |
+|---|---|---|
+| `GET /master/options`（`warehouses`/`warehouses_all`） | 仍向任意登录用户返回全部仓库 id/名称/编码 | AA4 Codex 审计 |
+| `GET /api/purchase/orders` 列表与详情、`/api/qc/overview`、`/api/qc/audit` | 只有权限门禁，无组织范围裁剪或聚合未按范围 | AA4 |
+| 看板 `/dashboard/summary` 缓存未命中 p95 约 400 ms（并发 4）；`trend`/`top`/`todos`/`inventory-dist` 未剖析未缓存 | 性能 | AA5 |
+| 审计日志关键词仍为子串匹配；仅日期区间或仅 action 过滤无索引；仅 entity 不带 entity_id 走 rowid 倒扫 | 性能 | AA6 |
+| `EVIDENCE.json` 的 `produced` 结果无签名，仅做一致性与包绑定校验 | 流程 | AA7 Codex 审计 |
+| 升级演练只在合成 medium 库、Mac mini 上测过；真正旧结构库需旧版本备份集 | 目标主机 | AA11 |
+| 夜间工作流 `rehearsal` 步骤与 AA8 新浏览器场景未在托管 runner 上实跑 | 托管 runner | AA8/AA11 |
+| `dmserver` 上的所有性能数字均未复测 | 目标主机 | 全批 |
