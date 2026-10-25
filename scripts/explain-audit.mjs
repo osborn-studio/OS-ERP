@@ -21,6 +21,7 @@
  *          [--analyze-scan]   (只跑上述源码扫描，不需要数据库 / GML_DATA_DIR)
  *          [--scale small|large] [--large-dir /abs/dir] [--small-snapshot plans.json]   (AH3：--scale large 在大合成库上跑同一套流程；大库现造（scripts/lib/explain-large.mjs）或用 --large-dir 复用
  *            夜间工作流里 synth-pipeline 留下的库；--snapshot --scale large 同时写 scale / dataset / differences，differences 由与 --small-snapshot（缺省为已提交的小库快照）的差异生成)
+ *          [--fill-oms N] [--large-min t=n,…]   (--large-dir 的库没有 OMS 订单时：在它的隔离副本里补灌 N 个再比较（原库只读）；--scale large 要求 OMS 订单 / 流水 / SKU 达到最低门槛，--large-min 只供测试调低)
  *          [--compare small.json --compare-large large.json [--large-dir d]]   (小库、大库各比一次，再做两份快照的互查)
  *          [--compare small.json --cross-check large.json]   (小库比一次 + 两份快照互查，不需要大库——ci.yml 用这个)
  *   退出码：0 无违规；1 有违规；2 用法/安全拒绝（未显式给 GML_DATA_DIR、指向仓库 data/、输出落在仓库 data/ 内）。
@@ -34,7 +35,7 @@ import { buildWhere, orderOf, countSql, exportSql, AUDIT_COUNT_CAP } from '../se
 import { omsStatsByPlatformStmt, omsStatsTrendStmt, omsStatsTotalStmt, omsStatsTopSkusStmt, aiPlatformAnalysisStmt } from '../server/lib/oms-sql.js'
 import { omsPlatformScopeSql, omsOrderScopeSql } from '../server/lib/sales-order.js'
 import { fingerprintsFromAudit, buildSnapshot, compareSnapshot, diffSnapshots, crossCheckSnapshots } from './lib/explain-plan-guard.mjs'
-import { LARGE_PROFILE, buildLargeDb, resolveLargeDir, datasetRows } from './lib/explain-large.mjs'
+import { LARGE_PROFILE, buildLargeDb, resolveLargeDir, datasetRows, largeShortfalls, copyAndFillOms, LARGE_MINIMUM } from './lib/explain-large.mjs'
 import { scanTree } from './lib/analyze-scan.mjs'
 import { onlineWindow, trendSalesSql, trendPurchaseSql, trendOnlineSql, topProductsSql, topBrandsSql, topDealersSql, topStoresSql, INVENTORY_DIST_AGG_SQL, channelOfflineSql, channelOnlineSql, RECENT_SQL } from '../server/lib/dashboard-sql.js'
 
@@ -481,6 +482,11 @@ function runJob(job, o) {
     const sqliteVersion = db.prepare('select sqlite_version() v').get().v
     const hasStat1 = !!db.prepare("SELECT 1 FROM sqlite_master WHERE name='sqlite_stat1'").get()
     const tableRows = datasetRows(db)
+    if (scale === 'large') {
+      // Codex 审计（AH3）：空 OMS 表上的"大库"比较会是绿灯却什么都没证明——数据集不够大就拒绝（退出码 2）
+      const short = largeShortfalls(tableRows, o.largeMinimum)
+      if (short.length) refuse(`这个库不够"大"（${short.join('；')}）；用 --large-dir 指向大库，或加 --fill-oms N 在隔离副本里补灌 OMS 订单`)
+    }
     let needExplanation = []
     if (job.snapshotFile) {
       if (hasStat1) refuse(`${label.trim() || '小库'}里存在 sqlite_stat1（执行过统计收集），统计信息会改变计划，不能固化成快照`)
@@ -524,8 +530,8 @@ function runJob(job, o) {
 }
 
 export async function main(argv = process.argv.slice(2), env = process.env) {
-  const o = { industry: 'cosmetic', threshold: DEFAULT_THRESHOLD, out: null, snapshot: null, compare: null, scanOnly: false, scale: 'small', largeDir: null, compareLarge: null, crossCheck: null, smallSnapshot: null }
-  const map = { '--industry': 'industry', '--threshold': 'threshold', '--out': 'out', '--snapshot': 'snapshot', '--compare': 'compare', '--scale': 'scale', '--large-dir': 'largeDir', '--compare-large': 'compareLarge', '--cross-check': 'crossCheck', '--small-snapshot': 'smallSnapshot' }
+  const o = { industry: 'cosmetic', threshold: DEFAULT_THRESHOLD, out: null, snapshot: null, compare: null, scanOnly: false, scale: 'small', largeDir: null, compareLarge: null, crossCheck: null, smallSnapshot: null, fillOms: null, largeMin: null }
+  const map = { '--industry': 'industry', '--threshold': 'threshold', '--out': 'out', '--snapshot': 'snapshot', '--compare': 'compare', '--scale': 'scale', '--large-dir': 'largeDir', '--compare-large': 'compareLarge', '--cross-check': 'crossCheck', '--small-snapshot': 'smallSnapshot', '--fill-oms': 'fillOms', '--large-min': 'largeMin' }
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--analyze-scan') { o.scanOnly = true; continue }
     const k = map[argv[i]]
@@ -540,6 +546,20 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   if ((o.compareLarge || o.crossCheck) && o.scale !== 'small') refuse('--compare-large / --cross-check 与 --scale large 不能同时使用（--scale large 单独比较大库）')
   if (o.compareLarge && o.crossCheck) refuse('--compare-large 已包含互查；不要同时给 --cross-check')
   if (o.smallSnapshot && !(o.scale === 'large' && o.snapshot)) refuse('--small-snapshot 只与 --scale large --snapshot 一起使用')
+  if (o.fillOms !== null) {
+    o.fillOms = Number(o.fillOms)
+    if (!Number.isInteger(o.fillOms) || o.fillOms < 1) refuse('--fill-oms 必须是正整数')
+  }
+  o.largeMinimum = {}
+  if (o.largeMin !== null) { // 仅供测试用小库演练：table=n[,table=n]
+    for (const part of String(o.largeMin).split(',')) {
+      const m = /^([a-z_]+)=(\d+)$/.exec(part)
+      if (!m || !(m[1] in LARGE_MINIMUM)) refuse(`--large-min 形如 oms_orders=100,inventory_transactions=0（可用表：${Object.keys(LARGE_MINIMUM).join(' / ')}）`)
+      o.largeMinimum[m[1]] = Number(m[2])
+    }
+  }
+  if (o.fillOms !== null && !o.largeDir) refuse('--fill-oms 只与 --large-dir 一起使用（在它的隔离副本里补灌；现造的大库已含 OMS 订单）')
+  if (o.fillOms !== null && o.snapshot) refuse('--fill-oms 不用于 --snapshot（快照应取自完整的大库）')
   o.threshold = Number(o.threshold)
   if (!Number.isInteger(o.threshold) || o.threshold < 1) refuse('threshold 必须是正整数')
   if (!/^[a-z]+$/.test(o.industry)) refuse('industry 非法')
@@ -562,9 +582,16 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
 
   const cleanups = []
   /** 大库：--large-dir 复用，否则现造（造完在 finally 里删） */
-  const largeDb = () => {
+  const largeDb = async () => {
     if (o.largeDir) {
-      try { return { file: resolveLargeDir(o.largeDir, o.industry), reused: true } } catch (e) { refuse(e.message) }
+      let file
+      try { file = resolveLargeDir(o.largeDir, o.industry) } catch (e) { refuse(e.message) }
+      if (o.fillOms) {
+        const copy = await copyAndFillOms(file, { rows: o.fillOms, log: (m) => console.log(`explain-audit: ${m}`) })
+        cleanups.push(copy.cleanup)
+        return { file: copy.file, reused: true }
+      }
+      return { file, reused: true }
     }
     if (o.industry !== 'cosmetic') refuse('现造大库只支持 cosmetic（其它行业请用 --large-dir 复用）')
     const built = buildLargeDb({ log: (m) => console.log(`explain-audit: ${m}`) })
@@ -581,11 +608,11 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
       if (fs.lstatSync(file).isSymbolicLink()) refuse('库文件是符号链接')
       jobs.push({ scale: 'small', file, label: '', outFile, snapshotFile, compareFile })
     } else {
-      const big = largeDb()
+      const big = await largeDb()
       jobs.push({ scale: 'large', file: big.file, reused: big.reused, label: ' (大库)', outFile, snapshotFile, compareFile, smallSnapshotFile })
     }
     if (compareLargeFile) {
-      const big = largeDb()
+      const big = await largeDb()
       jobs.push({ scale: 'large', file: big.file, reused: big.reused, label: ' (大库)', compareFile: compareLargeFile })
     }
     let first = null

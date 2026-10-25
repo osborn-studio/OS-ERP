@@ -223,6 +223,8 @@ test('resolveLargeDir accepts an absolute directory holding the industry databas
 // ---- CLI ----
 
 const AUDIT = path.join(ROOT, 'scripts/explain-audit.mjs')
+const MINI = ['--large-min', 'oms_orders=100,inventory_transactions=0,product_skus=0']
+const MINI0 = ['--large-min', 'oms_orders=0,inventory_transactions=0,product_skus=0']
 const runAudit = (args, env = {}) => spawnSync(process.execPath, [AUDIT, ...args], { env: { PATH: process.env.PATH, HOME: os.tmpdir(), ...env }, encoding: 'utf8', timeout: 120000 })
 
 test('CLI: --scale large on a reused database writes a large snapshot (scale, dataset row counts, differences) and --compare --scale large is green on it', (t) => {
@@ -233,17 +235,17 @@ test('CLI: --scale large on a reused database writes a large snapshot (scale, da
   const small = path.join(tmp(t), 'small.json')
   const smallDir = tmp(t); migratedFile(smallDir)
   assert.equal(runAudit(['--snapshot', small], { GML_DATA_DIR: smallDir }).status, 0)
-  const a = runAudit(['--snapshot', out, '--scale', 'large', '--large-dir', dir, '--small-snapshot', small])
+  const a = runAudit(['--snapshot', out, '--scale', 'large', '--large-dir', dir, '--small-snapshot', small, ...MINI])
   assert.equal(a.status, 0, a.stderr + a.stdout)
   const parsed = JSON.parse(fs.readFileSync(out, 'utf8'))
   assert.equal(parsed.scale, 'large')
   assert.equal(parsed.statement_count, STATEMENTS.length)
   assert.equal(parsed.dataset.table_rows.oms_orders, 300)
   assert.deepEqual(parsed.differences, [])
-  const ok = runAudit(['--compare', out, '--scale', 'large', '--large-dir', dir])
+  const ok = runAudit(['--compare', out, '--scale', 'large', '--large-dir', dir, ...MINI])
   assert.equal(ok.status, 0, ok.stderr + ok.stdout)
   // a small snapshot is refused as the large baseline and vice versa
-  const mismatch = runAudit(['--compare', small, '--scale', 'large', '--large-dir', dir])
+  const mismatch = runAudit(['--compare', small, '--scale', 'large', '--large-dir', dir, ...MINI])
   assert.equal(mismatch.status, 2, mismatch.stderr)
   assert.match(mismatch.stderr, /scale/)
 })
@@ -254,8 +256,8 @@ test('CLI: --compare with --compare-large checks both snapshot files; --cross-ch
   const work = tmp(t)
   const small = path.join(work, 'small.json'), large = path.join(work, 'large.json')
   assert.equal(runAudit(['--snapshot', small], { GML_DATA_DIR: smallDir }).status, 0)
-  assert.equal(runAudit(['--snapshot', large, '--scale', 'large', '--large-dir', largeDir, '--small-snapshot', small]).status, 0)
-  const both = runAudit(['--compare', small, '--compare-large', large, '--large-dir', largeDir], { GML_DATA_DIR: smallDir })
+  assert.equal(runAudit(['--snapshot', large, '--scale', 'large', '--large-dir', largeDir, '--small-snapshot', small, ...MINI]).status, 0)
+  const both = runAudit(['--compare', small, '--compare-large', large, '--large-dir', largeDir, ...MINI], { GML_DATA_DIR: smallDir })
   assert.equal(both.status, 0, both.stderr + both.stdout)
   assert.match(both.stdout, /大库/)
   const cross = runAudit(['--compare', small, '--cross-check', large], { GML_DATA_DIR: smallDir })
@@ -267,18 +269,40 @@ test('CLI: --compare with --compare-large checks both snapshot files; --cross-ch
   const redCross = runAudit(['--compare', small, '--cross-check', tampered], { GML_DATA_DIR: smallDir })
   assert.equal(redCross.status, 1)
   assert.match(redCross.stderr, /sales\.items/)
-  const redLarge = runAudit(['--compare', small, '--compare-large', tampered, '--large-dir', largeDir], { GML_DATA_DIR: smallDir })
+  const redLarge = runAudit(['--compare', small, '--compare-large', tampered, '--large-dir', largeDir, ...MINI], { GML_DATA_DIR: smallDir })
   assert.equal(redLarge.status, 1)
   assert.match(redLarge.stderr, /计划漂移 sales\.items/)
   // dropping an index from the large database is caught on the large side even though the small database is intact
   const d = new Database(lf); d.exec('DROP INDEX idx_oms_order_time'); d.close()
-  const noIdx = runAudit(['--compare', small, '--compare-large', large, '--large-dir', largeDir], { GML_DATA_DIR: smallDir })
+  const noIdx = runAudit(['--compare', small, '--compare-large', large, '--large-dir', largeDir, ...MINI], { GML_DATA_DIR: smallDir })
   assert.equal(noIdx.status, 1)
   assert.match(noIdx.stderr, /dash\.trend_online/)
   // --snapshot --scale large refuses to bake a violating database into the baseline
-  const refused = runAudit(['--snapshot', path.join(work, 'x.json'), '--scale', 'large', '--large-dir', largeDir, '--small-snapshot', small])
+  const refused = runAudit(['--snapshot', path.join(work, 'x.json'), '--scale', 'large', '--large-dir', largeDir, '--small-snapshot', small, ...MINI])
   assert.equal(refused.status, 1)
   assert.equal(fs.existsSync(path.join(work, 'x.json')), false)
+})
+
+test('CLI: --scale large refuses a database that is not large (empty OMS table), and --fill-oms tops up an isolated copy without touching the original', (t) => {
+  const dir = tmp(t); const file = migratedFile(dir)
+  const small = path.join(tmp(t), 'small.json'); const smallDir = tmp(t); migratedFile(smallDir)
+  assert.equal(runAudit(['--snapshot', small], { GML_DATA_DIR: smallDir }).status, 0)
+  const large = path.join(tmp(t), 'large.json')
+  assert.equal(runAudit(['--snapshot', large, '--scale', 'large', '--large-dir', dir, '--small-snapshot', small, ...MINI0]).status, 0)
+  const empty = runAudit(['--compare', large, '--scale', 'large', '--large-dir', dir])
+  assert.equal(empty.status, 2, empty.stderr + empty.stdout)
+  assert.match(empty.stderr, /不够"大"/)
+  assert.match(empty.stderr, /oms_orders/)
+  assert.equal(runAudit(['--snapshot', path.join(tmp(t), 'x.json'), '--scale', 'large', '--large-dir', dir, '--small-snapshot', small]).status, 2, 'a snapshot of a small database is refused too')
+  const before = fs.statSync(file).mtimeMs
+  const filled = runAudit(['--compare', large, '--scale', 'large', '--large-dir', dir, '--fill-oms', '500', ...MINI])
+  assert.equal(filled.status, 0, filled.stderr + filled.stdout)
+  assert.equal(fs.statSync(file).mtimeMs, before, 'the original database is untouched')
+  const check = new Database(file, { readonly: true })
+  assert.equal(check.prepare('SELECT COUNT(*) c FROM oms_orders').get().c, 0)
+  check.close()
+  assert.equal(runAudit(['--compare', large, '--scale', 'large', '--fill-oms', '500']).status, 2, '--fill-oms needs --large-dir')
+  assert.equal(runAudit(['--compare', large, '--scale', 'large', '--large-dir', dir, '--large-min', 'bogus=1']).status, 2)
 })
 
 test('CLI: a large database that has sqlite_stat1 is refused, not compared', (t) => {
@@ -286,9 +310,9 @@ test('CLI: a large database that has sqlite_stat1 is refused, not compared', (t)
   const small = path.join(tmp(t), 'small.json'); const smallDir = tmp(t); migratedFile(smallDir)
   assert.equal(runAudit(['--snapshot', small], { GML_DATA_DIR: smallDir }).status, 0)
   const large = path.join(tmp(t), 'large.json')
-  assert.equal(runAudit(['--snapshot', large, '--scale', 'large', '--large-dir', largeDir, '--small-snapshot', small]).status, 0)
+  assert.equal(runAudit(['--snapshot', large, '--scale', 'large', '--large-dir', largeDir, '--small-snapshot', small, ...MINI0]).status, 0)
   const d = new Database(lf); d.exec('ANALYZE'); d.close()
-  const r = runAudit(['--compare', large, '--scale', 'large', '--large-dir', largeDir])
+  const r = runAudit(['--compare', large, '--scale', 'large', '--large-dir', largeDir, ...MINI0])
   assert.equal(r.status, 2, r.stderr + r.stdout)
   assert.match(r.stderr, /sqlite_stat1/)
 })
@@ -308,8 +332,8 @@ test('bench-oms-dense-window: reads a reused database read-only and reports p50/
   assert.equal(res.has_stat1, false)
   const keys = Object.keys(res.statements)
   assert.ok(keys.includes('stats_top_skus.global.90d') && keys.includes('stats_by_platform.org1.30d') && keys.includes('ai_platform.global.30d'))
-  for (const k of keys) { const x = res.statements[k]; assert.ok(x.p50 >= 0 && x.p95 >= x.p50, k); assert.ok(x.window_rows >= 0) }
-  assert.ok(res.statements['stats_total.global.90d'].window_rows > 0, 'the dense window must contain orders')
+  for (const k of keys) { const x = res.statements[k]; assert.ok(x.p50 >= 0 && x.p95 >= x.p50, k); assert.ok(x.window_rows_all >= 0) }
+  assert.ok(res.statements['stats_total.global.90d'].window_rows_all > 0, 'the dense window must contain orders')
   assert.ok(res.statements['stats_trend.org1.90d'].rows_returned >= 1, 'the scoped (org 1) statements must see orders')
   assert.equal(fs.statSync(file).mtimeMs, before, 'the database file is untouched')
   const bad = spawnSync(process.execPath, [path.join(ROOT, 'scripts/bench-oms-dense-window.mjs'), '--dir', 'relative'], { encoding: 'utf8' })
@@ -357,10 +381,10 @@ test('ci.yml: only the AG3 step changed in shape; it compares both snapshot file
 
 test('nightly-capacity.yml compares the large snapshot against the pipeline database with output redirected to a log', () => {
   const nightly = read('.github/workflows/nightly-capacity.yml')
-  assert.match(nightly, /explain-audit\.mjs --scale large --compare docs\/implementation\/explain-plans\.large\.json --large-dir "\$CAP_RUN\/data" > "\$CAP_REPORTS\/explain-large\.log" 2>&1/)
+  assert.match(nightly, /explain-audit\.mjs --scale large --compare docs\/implementation\/explain-plans\.large\.json --large-dir "\$CAP_RUN\/data" --fill-oms 200000 > "\$CAP_REPORTS\/explain-large\.log" 2>&1/)
   const step = /- name: Large-database plan snapshot[\s\S]*?(?=\n      - name:|\n      - uses:)/.exec(nightly)?.[0] ?? ''
   assert.match(step, /continue-on-error: true/)
-  assert.match(step, /steps\.pipeline\.outcome == 'success'/)
+  assert.match(step, /if: inputs\.scale != 'large-ci' && steps\.pipeline\.outcome == 'success'/)
   assert.doesNotMatch(step, /cat "\$CAP_REPORTS|tail /)
 })
 

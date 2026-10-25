@@ -23,6 +23,8 @@ import Database from 'better-sqlite3'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 export const LARGE_PROFILE = Object.freeze({ skus: 20000, docs: 50000, txns: 250000, oms_orders: 200000, oms_span_days: 60, seed: 20261023, anchor: '2026-10-01' })
+/** "大库"的最低门槛（--scale large 比较 / 取快照前强制检查；--min-oms-orders 可调低，仅供测试用小库演练）：OMS 订单空表上的绿灯不代表任何事 */
+export const LARGE_MINIMUM = Object.freeze({ oms_orders: 100000, inventory_transactions: 10000, product_skus: 1000 })
 /** 写进大库快照 dataset.table_rows 的表 */
 export const DATASET_TABLES = ['products', 'product_skus', 'inventory_transactions', 'purchase_orders', 'sales_orders', 'oms_orders', 'oms_order_items', 'audit_logs', 'platforms']
 
@@ -94,6 +96,29 @@ export function datasetRows(db, tables = DATASET_TABLES) {
   const out = {}
   for (const t of tables) { try { out[t] = db.prepare(`SELECT COUNT(*) c FROM "${t}"`).get().c } catch { out[t] = null } }
   return out
+}
+
+/** 数据集不够"大"的原因（空数组 = 够了）。rows 来自 datasetRows；minimum 缺项用 LARGE_MINIMUM */
+export function largeShortfalls(rows, minimum = {}) {
+  const min = { ...LARGE_MINIMUM, ...minimum }
+  return Object.entries(min).filter(([t, n]) => !(typeof rows[t] === 'number' && rows[t] >= n)).map(([t, n]) => `${t} 只有 ${rows[t] ?? '无此表'} 行，少于大库最低要求 ${n}`)
+}
+
+/**
+ * 在现成库的**隔离副本**上补灌 OMS 订单（夜间工作流：synth-pipeline 的库没有 OMS 单）。用 better-sqlite3 的在线备份拷贝（WAL 里的内容也在），
+ * 副本放在新建临时目录里；返回 { file, cleanup }。原库只读。
+ */
+export async function copyAndFillOms(srcFile, { rows, log = () => {} } = {}) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'os-erp-ah3-fill-'))
+  const cleanup = () => fs.rmSync(root, { recursive: true, force: true })
+  try {
+    const dest = path.join(root, path.basename(srcFile))
+    const src = new Database(srcFile, { readonly: true, fileMustExist: true })
+    try { await src.backup(dest) } finally { src.close() }
+    log(`灌 ${rows} 个 OMS 订单到副本…`)
+    fillOms(dest, { rows })
+    return { file: dest, cleanup }
+  } catch (e) { cleanup(); throw e }
 }
 
 /**

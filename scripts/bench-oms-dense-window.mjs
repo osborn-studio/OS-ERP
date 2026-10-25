@@ -7,7 +7,7 @@
  *   本脚本对 explain-audit 的大库（`--scale large` 灌的 20 万 OMS 单 + 每单一行明细，时间落在锚点前 60 天、随 id 递增）实测
  *   `oms-sql.js` 的 byPlatform / trend / total / topSkus 与 AI 平台分析：30 / 90 天窗口 × 全局 / 受限组织（org 1）。
  *   窗口的"现在"取锚点后一天（--now，默认 2026-10-02），所以 30 / 90 天窗口覆盖的是数据而不是空区间。
- * 【怎么测】库以 readonly 打开（不改文件）；所有语句轮转计时（每轮每条一次，rep 0 预热），整机负载漂移落在所有语句上；输出 p50 / p95 / 窗口内订单数 / 计划。
+ * 【怎么测】库以 readonly 打开（不改文件）；所有语句轮转计时（每轮每条一次，rep 0 预热），整机负载漂移落在所有语句上；输出 p50 / p95 / 窗口内订单数（window_rows_all = 全部平台的订单数，受限组织语句实际处理的更少）/ 计划。
  * 【诚实边界】进程内计时、单连接、整机负载只看量级；合成数据；不是目标主机（dmserver）的结果，也不是容量承诺。库里有 sqlite_stat1 时照测但在结果里标 has_stat1（那时测的是"开了优化之后"的计划）。
  * 【用法】node scripts/bench-oms-dense-window.mjs --dir /abs/dir-with-gml_cosmetic.db [--industry cosmetic] [--repeat 31] [--now 2026-10-02] [--out result.json]
  *   退出码：0 完成；2 用法 / 路径拒绝。
@@ -53,7 +53,7 @@ try {
         stats_total: omsStatsTotalStmt(days, sc.os0, now), stats_top_skus: omsStatsTopSkusStmt(days, sc.os, now)
       }
       if (sname === 'global') set.ai_platform = aiPlatformAnalysisStmt(days, now)
-      for (const [k, st] of Object.entries(set)) cfgs.push({ name: `${k}.${sname}.${days}d`, st, xs: [], window_rows: db.prepare('SELECT COUNT(*) c FROM oms_orders WHERE order_time >= ? AND date(order_time) >= ?').get(...onlineWindow(days, now)).c })
+      for (const [k, st] of Object.entries(set)) cfgs.push({ name: `${k}.${sname}.${days}d`, st, xs: [], window_rows_all: db.prepare('SELECT COUNT(*) c FROM oms_orders WHERE order_time >= ? AND date(order_time) >= ?').get(...onlineWindow(days, now)).c })
     }
   }
   for (let rep = 0; rep <= o.repeat; rep++) { // rep 0 预热
@@ -71,8 +71,8 @@ try {
     has_stat1: !!db.prepare("SELECT 1 FROM sqlite_master WHERE name='sqlite_stat1'").get(),
     statements: {}
   }
-  for (const c of cfgs) result.statements[c.name] = { p50: median(c.xs), p95: pct(c.xs, 0.95), min: Math.min(...c.xs), window_rows: c.window_rows, rows_returned: c.rows_returned, plan: db.prepare(`EXPLAIN QUERY PLAN ${c.st.sql}`).all(...c.st.params).map((r) => r.detail) }
+  for (const c of cfgs) result.statements[c.name] = { p50: median(c.xs), p95: pct(c.xs, 0.95), min: Math.min(...c.xs), window_rows_all: c.window_rows_all, rows_returned: c.rows_returned, plan: db.prepare(`EXPLAIN QUERY PLAN ${c.st.sql}`).all(...c.st.params).map((r) => r.detail) }
   if (o.out) fs.writeFileSync(path.resolve(o.out), JSON.stringify(result, null, 2) + '\n')
   console.log(`bench-oms-dense-window: ${result.oms_orders} OMS orders, load1 ${result.load1.toFixed(1)}, repeat ${o.repeat}, stat1 ${result.has_stat1}`)
-  for (const [k, v] of Object.entries(result.statements)) console.log(`  ${k.padEnd(34)} p50 ${v.p50.toFixed(1).padStart(7)}  p95 ${v.p95.toFixed(1).padStart(7)}  window_rows ${v.window_rows}`)
+  for (const [k, v] of Object.entries(result.statements)) console.log(`  ${k.padEnd(34)} p50 ${v.p50.toFixed(1).padStart(7)}  p95 ${v.p95.toFixed(1).padStart(7)}  window_rows_all ${v.window_rows_all}`)
 } finally { db.close() }
