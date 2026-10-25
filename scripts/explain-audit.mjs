@@ -19,6 +19,10 @@
  *          [--threshold 200] [--out file.json]
  *          [--snapshot plans.json | --compare plans.json]   (AG3：写出 / 比较计划指纹；--compare 同时跑"非测试代码不得执行统计收集语句"的源码扫描)
  *          [--analyze-scan]   (只跑上述源码扫描，不需要数据库 / GML_DATA_DIR)
+ *          [--scale small|large] [--large-dir /abs/dir] [--small-snapshot plans.json]   (AH3：--scale large 在大合成库上跑同一套流程；大库现造（scripts/lib/explain-large.mjs）或用 --large-dir 复用
+ *            夜间工作流里 synth-pipeline 留下的库；--snapshot --scale large 同时写 scale / dataset / differences，differences 由与 --small-snapshot（缺省为已提交的小库快照）的差异生成)
+ *          [--compare small.json --compare-large large.json [--large-dir d]]   (小库、大库各比一次，再做两份快照的互查)
+ *          [--compare small.json --cross-check large.json]   (小库比一次 + 两份快照互查，不需要大库——ci.yml 用这个)
  *   退出码：0 无违规；1 有违规；2 用法/安全拒绝（未显式给 GML_DATA_DIR、指向仓库 data/、输出落在仓库 data/ 内）。
  * ============================================================================
  */
@@ -29,7 +33,8 @@ import Database from 'better-sqlite3'
 import { buildWhere, orderOf, countSql, exportSql, AUDIT_COUNT_CAP } from '../server/lib/audit-view.js'
 import { omsStatsByPlatformStmt, omsStatsTrendStmt, omsStatsTotalStmt, omsStatsTopSkusStmt, aiPlatformAnalysisStmt } from '../server/lib/oms-sql.js'
 import { omsPlatformScopeSql, omsOrderScopeSql } from '../server/lib/sales-order.js'
-import { fingerprintsFromAudit, buildSnapshot, compareSnapshot } from './lib/explain-plan-guard.mjs'
+import { fingerprintsFromAudit, buildSnapshot, compareSnapshot, diffSnapshots, crossCheckSnapshots } from './lib/explain-plan-guard.mjs'
+import { LARGE_PROFILE, buildLargeDb, resolveLargeDir, datasetRows } from './lib/explain-large.mjs'
 import { scanTree } from './lib/analyze-scan.mjs'
 import { onlineWindow, trendSalesSql, trendPurchaseSql, trendOnlineSql, topProductsSql, topBrandsSql, topDealersSql, topStoresSql, INVENTORY_DIST_AGG_SQL, channelOfflineSql, channelOnlineSql, RECENT_SQL } from '../server/lib/dashboard-sql.js'
 
@@ -438,9 +443,89 @@ function runAnalyzeScan() {
   if (!r.ok) refuse(`源码里有 ${r.hits.length} 处统计语句 / ${r.staleAllow.length} 条过期豁免`, 1)
 }
 
+/** 大库快照的生成命令（写进快照；与 docs/operations/query-planner.md 2e 一致） */
+export const LARGE_SNAPSHOT_GENERATOR = `node scripts/explain-audit.mjs --snapshot docs/implementation/explain-plans.large.json --scale large (builds the AH3 large profile: ${LARGE_PROFILE.skus} SKU / ${LARGE_PROFILE.docs} docs / ${LARGE_PROFILE.txns} txns via scripts/synth-data.mjs with GML_RUNTIME_MODE=production, seed ${LARGE_PROFILE.seed}, plus ${LARGE_PROFILE.oms_orders} OMS orders in a ${LARGE_PROFILE.oms_span_days}-day dense window; or reuses --large-dir)`
+const DEFAULT_SMALL_SNAPSHOT = path.join(ROOT, 'docs/implementation/explain-plans.json')
+
+const readSnapshot = (file) => {
+  try { return JSON.parse(fs.readFileSync(file, 'utf8')) } catch (e) { refuse(`快照无法解析: ${e.message}`) }
+}
+
+/**
+ * 对一个库跑完整个流程：审计 → 可选 --out → 可选 --snapshot → 可选 --compare。
+ * job：{ scale, file, label, outFile, snapshotFile, compareFile, smallSnapshotFile, reused }
+ */
+function runJob(job, o) {
+  const { scale, file, label } = job
+  const db = new Database(file, { readonly: true, fileMustExist: true })
+  try {
+    const applied = db.prepare('SELECT id FROM schema_migrations ORDER BY id DESC LIMIT 1').get()?.id ?? null
+    const result = auditStatements(db, STATEMENTS, { threshold: o.threshold })
+    const report = {
+      schema_version: SCHEMA_VERSION,
+      generated_at: new Date().toISOString(),
+      scope_notice: scale === 'large'
+        ? 'Large synthetic database (AH3): audit of the declared statements with row-count thresholds applied to realistic table sizes. Still synthetic data on a development host, not a production-scale or target-host plan check.'
+        : 'Fixture-scale audit of the declared statements on a demo/test database copy. Not a production-scale plan check.',
+      scale,
+      db: path.basename(file), latest_migration: applied, threshold: o.threshold,
+      statements_checked: result.statements.length, violations: result.violations, unused_allow: result.unusedAllow, statements: result.statements
+    }
+    if (job.outFile) fs.writeFileSync(job.outFile, JSON.stringify(report, null, 2) + '\n')
+    const scans = result.statements.flatMap(s => s.scans)
+    console.log(`explain-audit${label}: ${result.statements.length} 条语句, 迁移 ${applied}, 阈值 ${o.threshold} 行; 裸 SCAN ${scans.filter(s => s.kind === 'table').length} (违规 ${result.violations.length}, 豁免 ${scans.filter(s => s.status === 'allowed').length}, 小表 ${scans.filter(s => s.status === 'below_threshold').length}), 索引全扫 ${scans.filter(s => s.kind === 'index').length}${job.outFile ? ` -> ${job.outFile}` : ''}`)
+    for (const v of result.violations) console.error(`  ✗ ${label.trim() || 'small'} ${v.statement}: ${v.detail} (${v.table}${v.rows != null ? `, ${v.rows} 行` : ''})`)
+    for (const a of result.unusedAllow) console.error(`  ✗ 过期豁免（计划里已没有这处 SCAN，请删掉）: ${a.statement} × ${a.table}`)
+    if (!result.ok) refuse(`${label.trim() || '小库'}：${result.violations.length} 处违规, ${result.unusedAllow.length} 条过期豁免`, 1)
+    const fingerprints = fingerprintsFromAudit(result.statements)
+    const sqliteVersion = db.prepare('select sqlite_version() v').get().v
+    const hasStat1 = !!db.prepare("SELECT 1 FROM sqlite_master WHERE name='sqlite_stat1'").get()
+    const tableRows = datasetRows(db)
+    let needExplanation = []
+    if (job.snapshotFile) {
+      if (hasStat1) refuse(`${label.trim() || '小库'}里存在 sqlite_stat1（执行过统计收集），统计信息会改变计划，不能固化成快照`)
+      // 违规状态不得固化为基线（上面 refuse 已保证 result.ok）
+      let extra = {}
+      if (scale === 'large') {
+        const small = readSnapshot(job.smallSnapshotFile)
+        let previous = []
+        try { previous = JSON.parse(fs.readFileSync(job.snapshotFile, 'utf8')).differences ?? [] } catch { /* 首次生成 */ }
+        const draft = buildSnapshot({ fingerprints, latestMigration: applied, sqliteVersion, generator: LARGE_SNAPSHOT_GENERATOR })
+        const differences = diffSnapshots(small, draft, previous)
+        needExplanation = differences.filter(d => !d.explanation)
+        extra = { scale: 'large', dataset: { profile: job.reused ? 'reused (--large-dir)' : { ...LARGE_PROFILE }, table_rows: tableRows }, differences }
+      }
+      const snap = buildSnapshot({ fingerprints, latestMigration: applied, sqliteVersion, generator: scale === 'large' ? LARGE_SNAPSHOT_GENERATOR : SNAPSHOT_GENERATOR, extra })
+      fs.writeFileSync(job.snapshotFile, JSON.stringify(snap, null, 2) + '\n')
+      console.log(`explain-audit${label}: 计划指纹快照 ${Object.keys(snap.statements).length} 条 -> ${job.snapshotFile}`)
+      for (const d of needExplanation) console.error(`  ✗ 大库与小库计划不同的语句需要写一句说明（differences[].explanation，再抄进 docs/operations/query-planner.md 2e）: ${d.statement} (${d.small_hash} -> ${d.large_hash})`)
+    }
+    let cmpOk = true
+    if (job.compareFile) {
+      const snap = readSnapshot(job.compareFile)
+      if ((snap.scale ?? 'small') !== scale) refuse(`快照 scale 是 ${snap.scale ?? 'small'}，本次比较的是 ${scale}（小库快照用 --scale small，大库快照用 --scale large）`)
+      let cmp
+      try { cmp = compareSnapshot(snap, { fingerprints, latestMigration: applied, sqliteVersion, hasStat1 }) } catch (e) { refuse(`计划快照比较失败: ${e.message}`) }
+      for (const n of cmp.notes) console.log(`  note${label}: ${n}`)
+      for (const d of cmp.drifts) {
+        if (d.whitelisted) { console.log(`  ~ 计划漂移已列入白名单${label}: ${d.statement} (${d.kind}, ${d.afterHash})`); continue }
+        console.error(`  ✗ 计划漂移 ${d.statement} (${d.kind}${label}) ${d.beforeHash ?? '-'} -> ${d.afterHash}${d.note ? `  ${d.note}` : ''}`)
+        for (const l of d.before) console.error(`      - ${l}`)
+        for (const l of d.after) console.error(`      + ${l}`)
+      }
+      for (const w of cmp.staleWhitelist) console.error(`  ✗ 过期白名单条目（该语句没有漂移，请删掉）${label}: ${w.statement}`)
+      const drifted = cmp.drifts.filter(d => !d.whitelisted).length
+      console.log(`explain-audit${label}: 计划指纹比较 ${Object.keys(fingerprints).length} 条, 漂移 ${drifted} (白名单 ${cmp.drifts.length - drifted}), 过期白名单 ${cmp.staleWhitelist.length}`)
+      cmpOk = cmp.ok
+      job.failMessage = `${label.trim() || '小库'}：计划漂移 ${drifted} 处, 过期白名单 ${cmp.staleWhitelist.length} 条；有意为之请重取快照（--snapshot）或在快照 whitelist 里写 accepted_hash + 理由`
+    }
+    return { result, ok: cmpOk && needExplanation.length === 0, failMessage: needExplanation.length ? `${needExplanation.length} 条差异缺说明` : job.failMessage }
+  } finally { db.close() }
+}
+
 export async function main(argv = process.argv.slice(2), env = process.env) {
-  const o = { industry: 'cosmetic', threshold: DEFAULT_THRESHOLD, out: null, snapshot: null, compare: null, scanOnly: false }
-  const map = { '--industry': 'industry', '--threshold': 'threshold', '--out': 'out', '--snapshot': 'snapshot', '--compare': 'compare' }
+  const o = { industry: 'cosmetic', threshold: DEFAULT_THRESHOLD, out: null, snapshot: null, compare: null, scanOnly: false, scale: 'small', largeDir: null, compareLarge: null, crossCheck: null, smallSnapshot: null }
+  const map = { '--industry': 'industry', '--threshold': 'threshold', '--out': 'out', '--snapshot': 'snapshot', '--compare': 'compare', '--scale': 'scale', '--large-dir': 'largeDir', '--compare-large': 'compareLarge', '--cross-check': 'crossCheck', '--small-snapshot': 'smallSnapshot' }
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--analyze-scan') { o.scanOnly = true; continue }
     const k = map[argv[i]]
@@ -449,14 +534,15 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   }
   if (o.snapshot && o.compare) refuse('--snapshot 与 --compare 不能同时使用')
   if (o.scanOnly) { runAnalyzeScan(); return { ok: true } }
+  if (!['small', 'large'].includes(o.scale)) refuse('--scale 只接受 small / large')
+  if (o.largeDir && o.scale !== 'large' && !o.compareLarge) refuse('--large-dir 只与 --scale large 或 --compare-large 一起使用')
+  if ((o.compareLarge || o.crossCheck) && !o.compare) refuse('--compare-large / --cross-check 需要同时给 --compare <小库快照>')
+  if ((o.compareLarge || o.crossCheck) && o.scale !== 'small') refuse('--compare-large / --cross-check 与 --scale large 不能同时使用（--scale large 单独比较大库）')
+  if (o.compareLarge && o.crossCheck) refuse('--compare-large 已包含互查；不要同时给 --cross-check')
+  if (o.smallSnapshot && !(o.scale === 'large' && o.snapshot)) refuse('--small-snapshot 只与 --scale large --snapshot 一起使用')
   o.threshold = Number(o.threshold)
   if (!Number.isInteger(o.threshold) || o.threshold < 1) refuse('threshold 必须是正整数')
   if (!/^[a-z]+$/.test(o.industry)) refuse('industry 非法')
-  if (!env.GML_DATA_DIR || !path.isAbsolute(env.GML_DATA_DIR)) refuse('必须显式设置绝对路径 GML_DATA_DIR（隔离的种子库副本）')
-  if (withinRepoData(env.GML_DATA_DIR)) refuse('GML_DATA_DIR 位于仓库 data/ 之内；请使用独立副本')
-  const file = path.join(env.GML_DATA_DIR, `gml_${o.industry}.db`)
-  if (!fs.existsSync(file)) refuse(`找不到种子库 ${file}`)
-  if (fs.lstatSync(file).isSymbolicLink()) refuse('库文件是符号链接')
   const checkOut = (p) => {
     const f = path.resolve(p)
     if (withinRepoData(path.dirname(f)) || withinRepoData(f)) refuse('输出文件不得位于仓库 data/ 内')
@@ -467,52 +553,64 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   const snapshotFile = o.snapshot ? checkOut(o.snapshot) : null
   const compareFile = o.compare ? path.resolve(o.compare) : null
   if (compareFile && !fs.existsSync(compareFile)) refuse(`找不到快照 ${compareFile}`)
-  const db = new Database(file, { readonly: true, fileMustExist: true })
+  const compareLargeFile = o.compareLarge ? path.resolve(o.compareLarge) : null
+  if (compareLargeFile && !fs.existsSync(compareLargeFile)) refuse(`找不到快照 ${compareLargeFile}`)
+  const crossCheckFile = o.crossCheck ? path.resolve(o.crossCheck) : null
+  if (crossCheckFile && !fs.existsSync(crossCheckFile)) refuse(`找不到快照 ${crossCheckFile}`)
+  const smallSnapshotFile = path.resolve(o.smallSnapshot ?? DEFAULT_SMALL_SNAPSHOT)
+  if (o.scale === 'large' && snapshotFile && !fs.existsSync(smallSnapshotFile)) refuse(`找不到小库快照 ${smallSnapshotFile}（--small-snapshot）`)
+
+  const cleanups = []
+  /** 大库：--large-dir 复用，否则现造（造完在 finally 里删） */
+  const largeDb = () => {
+    if (o.largeDir) {
+      try { return { file: resolveLargeDir(o.largeDir, o.industry), reused: true } } catch (e) { refuse(e.message) }
+    }
+    if (o.industry !== 'cosmetic') refuse('现造大库只支持 cosmetic（其它行业请用 --large-dir 复用）')
+    const built = buildLargeDb({ log: (m) => console.log(`explain-audit: ${m}`) })
+    cleanups.push(built.cleanup)
+    return { file: built.file, reused: false }
+  }
   try {
-    const applied = db.prepare('SELECT id FROM schema_migrations ORDER BY id DESC LIMIT 1').get()?.id ?? null
-    const result = auditStatements(db, STATEMENTS, { threshold: o.threshold })
-    const report = {
-      schema_version: SCHEMA_VERSION,
-      generated_at: new Date().toISOString(),
-      scope_notice: 'Fixture-scale audit of the declared statements on a demo/test database copy. Not a production-scale plan check.',
-      db: path.basename(file), latest_migration: applied, threshold: o.threshold,
-      statements_checked: result.statements.length, violations: result.violations, unused_allow: result.unusedAllow, statements: result.statements
+    const jobs = []
+    if (o.scale === 'small') {
+      if (!env.GML_DATA_DIR || !path.isAbsolute(env.GML_DATA_DIR)) refuse('必须显式设置绝对路径 GML_DATA_DIR（隔离的种子库副本）')
+      if (withinRepoData(env.GML_DATA_DIR)) refuse('GML_DATA_DIR 位于仓库 data/ 之内；请使用独立副本')
+      const file = path.join(env.GML_DATA_DIR, `gml_${o.industry}.db`)
+      if (!fs.existsSync(file)) refuse(`找不到种子库 ${file}`)
+      if (fs.lstatSync(file).isSymbolicLink()) refuse('库文件是符号链接')
+      jobs.push({ scale: 'small', file, label: '', outFile, snapshotFile, compareFile })
+    } else {
+      const big = largeDb()
+      jobs.push({ scale: 'large', file: big.file, reused: big.reused, label: ' (大库)', outFile, snapshotFile, compareFile, smallSnapshotFile })
     }
-    if (outFile) fs.writeFileSync(outFile, JSON.stringify(report, null, 2) + '\n')
-    const scans = result.statements.flatMap(s => s.scans)
-    console.log(`explain-audit: ${result.statements.length} 条语句, 迁移 ${applied}, 阈值 ${o.threshold} 行; 裸 SCAN ${scans.filter(s => s.kind === 'table').length} (违规 ${result.violations.length}, 豁免 ${scans.filter(s => s.status === 'allowed').length}, 小表 ${scans.filter(s => s.status === 'below_threshold').length}), 索引全扫 ${scans.filter(s => s.kind === 'index').length}${outFile ? ` -> ${outFile}` : ''}`)
-    for (const v of result.violations) console.error(`  ✗ ${v.statement}: ${v.detail} (${v.table}${v.rows != null ? `, ${v.rows} 行` : ''})`)
-    for (const a of result.unusedAllow) console.error(`  ✗ 过期豁免（计划里已没有这处 SCAN，请删掉）: ${a.statement} × ${a.table}`)
-    if (!result.ok) refuse(`${result.violations.length} 处违规, ${result.unusedAllow.length} 条过期豁免`, 1)
-    const fingerprints = fingerprintsFromAudit(result.statements)
-    const sqliteVersion = db.prepare('select sqlite_version() v').get().v
-    if (snapshotFile) {
-      // 违规状态不得固化为基线（上面 refuse 已保证 result.ok）
-      const snap = buildSnapshot({ fingerprints, latestMigration: applied, sqliteVersion, generator: SNAPSHOT_GENERATOR })
-      fs.writeFileSync(snapshotFile, JSON.stringify(snap, null, 2) + '\n')
-      console.log(`explain-audit: 计划指纹快照 ${Object.keys(snap.statements).length} 条 -> ${snapshotFile}`)
+    if (compareLargeFile) {
+      const big = largeDb()
+      jobs.push({ scale: 'large', file: big.file, reused: big.reused, label: ' (大库)', compareFile: compareLargeFile })
     }
-    if (compareFile) {
-      let snap
-      try { snap = JSON.parse(fs.readFileSync(compareFile, 'utf8')) } catch (e) { refuse(`快照无法解析: ${e.message}`) }
-      const hasStat1 = !!db.prepare("SELECT 1 FROM sqlite_master WHERE name='sqlite_stat1'").get()
-      let cmp
-      try { cmp = compareSnapshot(snap, { fingerprints, latestMigration: applied, sqliteVersion, hasStat1 }) } catch (e) { refuse(`计划快照比较失败: ${e.message}`) }
-      for (const n of cmp.notes) console.log(`  note: ${n}`)
-      for (const d of cmp.drifts) {
-        if (d.whitelisted) { console.log(`  ~ 计划漂移已列入白名单: ${d.statement} (${d.kind}, ${d.afterHash})`); continue }
-        console.error(`  ✗ 计划漂移 ${d.statement} (${d.kind}) ${d.beforeHash ?? '-'} -> ${d.afterHash}${d.note ? `  ${d.note}` : ''}`)
-        for (const l of d.before) console.error(`      - ${l}`)
-        for (const l of d.after) console.error(`      + ${l}`)
-      }
-      for (const w of cmp.staleWhitelist) console.error(`  ✗ 过期白名单条目（该语句没有漂移，请删掉）: ${w.statement}`)
-      const drifted = cmp.drifts.filter(d => !d.whitelisted).length
-      console.log(`explain-audit: 计划指纹比较 ${Object.keys(fingerprints).length} 条, 漂移 ${drifted} (白名单 ${cmp.drifts.length - drifted}), 过期白名单 ${cmp.staleWhitelist.length}`)
-      runAnalyzeScan()
-      if (!cmp.ok) refuse(`计划漂移 ${drifted} 处, 过期白名单 ${cmp.staleWhitelist.length} 条；有意为之请重取快照（--snapshot）或在快照 whitelist 里写 accepted_hash + 理由`, 1)
+    let first = null
+    const failures = []
+    for (const job of jobs) {
+      const r = runJob(job, o)
+      first ??= r.result
+      if (!r.ok) failures.push(r.failMessage)
     }
-    return result
-  } finally { db.close() }
+    // 两份快照互查（纯文件）：--compare 的小库快照 vs 大库快照
+    const otherFile = compareLargeFile || crossCheckFile
+    if (otherFile) {
+      const small = readSnapshot(compareFile)
+      const large = readSnapshot(otherFile)
+      let x
+      try { x = crossCheckSnapshots(small, large) } catch (e) { refuse(`快照互查失败: ${e.message}`) }
+      if ((large.scale ?? 'small') !== 'large') x.problems.push('--compare-large / --cross-check 的文件不是大库快照（scale 应为 large）')
+      for (const p of x.problems) console.error(`  ✗ 快照互查: ${p}`)
+      console.log(`explain-audit: 小库 / 大库快照互查, 计划不同的语句 ${x.differing.length} (已登记 ${(large.differences ?? []).length}), 问题 ${x.problems.length}`)
+      if (x.problems.length) failures.push(`两份快照不一致 ${x.problems.length} 处`)
+    }
+    if (compareFile || compareLargeFile) runAnalyzeScan()
+    if (failures.length) refuse(failures.join('；'), 1)
+    return first
+  } finally { for (const c of cleanups) c() }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

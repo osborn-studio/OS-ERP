@@ -290,3 +290,28 @@ AF3 选定的方案（改写 + 迁移 074）靠 `expectIndex` / `expectSearch` �
 - **低（已修）**：同一语句的重复白名单条目只匹配第一条，第二条错绑条目逃过过期检查。→ 重复直接报错；新增用例。
 - 记录而未改：指纹按 SQLite 版本取，升级后措辞变化会整批变 hash（SQLite 不承诺 EQP 输出稳定），已在文档写明"确认只是措辞后重取快照"。
 - 未验证：托管 CI 上该步骤的实际运行；Linux 上 better-sqlite3 内置 SQLite 与本机 3.49.2 是否同版本（lockfile 固定同一 better-sqlite3，预期一致）。
+
+---
+
+# 补充 7（AH3，roadmap-v13）：大库查询计划快照、两份快照互查与启动期优化开关
+## 背景
+AG3 的计划指纹取自 60 SKU 的小合成库，前提是"没有 `sqlite_stat1` 时计划与数据量无关"——这是推断，没有在大数据量上验证过；AF3 的 OMS 密集窗口退步（~2×）在小库上看不出来；`ANALYZE` 政策只写在文档里，运维手动或将来代码引入都没有留出受控入口。
+
+## 决定
+1. **第二份快照** `docs/implementation/explain-plans.large.json`：`explain-audit --snapshot <file> --scale large` 在大合成库上取指纹（`scripts/lib/explain-large.mjs` 的 `LARGE_PROFILE`：2 万 SKU / 5 万单据 / 25 万流水 + 20 万 OMS 单落在 60 天密集窗口、平台绑定两个组织，不跑统计）；现造，或用 `--large-dir` 复用现成库（只读）。快照另记 `scale: "large"`、`dataset.table_rows`、`differences`。大库上行数阈值 200 之上的裸 SCAN 照常判违规（小库里这些表低于阈值）。
+2. **互查**：`crossCheckSnapshots`（纯文件）要求两份快照语句集相同；hash 不同的语句必须逐条登记在大库快照的 `differences`（绑定这一对 hash、说明 ≥20 字符）；登记过期 / 重复 / 未知 id、缺说明都红。`--snapshot --scale large` 用 `diffSnapshots` 生成 `differences`，沿用同一对 hash 的旧说明，新差异留空说明并以退出码 1 提醒。
+3. **比较入口**：`--compare small --cross-check large`（CI：小库比较 + 互查，不造大库）；`--compare small --compare-large large [--large-dir d]`；`--scale large --compare large [--large-dir d]`（夜间工作流，对 synth-pipeline 留下的库）。快照的 `scale` 与本次比较不符直接拒绝（退出码 2）。
+4. **CI 与夜间**：`ci.yml` 只改 AG3 的"Query plan snapshot"一步（加 `--cross-check`）；大库造一次在高负载 Mac mini 上实测 1226 s，不放进已 36–40 分钟的 `checks` 作业，改在 `nightly-capacity.yml` 新增"Large-database plan snapshot"一步（`continue-on-error`，不进夜间闸门，输出重定向到一次性日志，只回显固定格式数字行）。
+5. **启动期优化开关** `GML_SQLITE_OPTIMIZE_ON_BOOT`（默认关）：`1` / `true` 开、`0` / `false` / 空关，其它值启动失败（`SQLITE_OPTIMIZE_ON_BOOT_INVALID`，在打开库之前校验）；开则每个库第一次打开时执行一次优化 pragma 并记一行日志（含耗时），执行失败只告警。**实测它在无统计的库上等价于整库统计收集**（485 MB 大库 3.1–3.7 s、写 125 行 `sqlite_stat1`、120 条登记语句 23 条指纹变化、18 处审计违规、AI 平台分析丢掉 `idx_oms_order_time`），所以默认关，并在 `query-planner.md` 2e 写明开启前的流程。
+6. **源码扫描精确豁免**：`ANALYZE_ALLOW` 条目可带 `rule` + `count`，只放行该文件里该规则恰好 `count` 处（多一处红、少一处过期）。当前唯一条目：`server/db/index.js` × `pragma-optimize` × 1。
+7. **证据**：大库上 120 条语句的指纹与小库**逐条相同**（`differences` 为空）——"无统计时计划与数据量无关"从推断变成实测；大库违规 0。`scripts/bench-oms-dense-window.mjs` 在大库上实测 OMS 密集窗口延迟（记在 capacity-baseline 的 AH3 一节，Mac mini、非目标主机）：最坏的全局热销 SKU 90 天 p95 约 200–230 ms，与 AF3 记录同量级。
+8. 重取小库快照只改了 `latest_migration`（074 → 075，该迁移不改计划；指纹无一变化）。
+
+## 已知限制
+- 大库在托管 runner 上的夜间比较**未实跑**（工作流文件只在本地做了文本守卫）；CI 里不比较大库本身，只比较两份已提交文件——如果有人重取小库快照而不重取大库快照，互查会红；如果有人改了会影响计划的 SQL 却只在小库上取快照，大库那份要靠夜间步骤（只告警）才能发现，不会拦合并。
+- 大库是"大"，不是生产规模；指纹仍依赖"没有 `sqlite_stat1`"；对已开启过启动期优化的库，`--compare` 会拒绝（提示删除统计）。
+- 大库快照的 `dataset.profile` 记录的是 `LARGE_PROFILE`；提交的那份由两步等价命令造出（`synth-data.mjs` 同参数 + `fillOms`，与 `buildLargeDb` 的步骤一致，但没有走 `buildLargeDb` 本身的一条龙路径）。
+- 延迟数字是 Mac mini 整机负载 9–10 下的两次运行，p95 抖动可达 30–50 ms，只看量级。
+
+## 测试（tests/explain-plan-large.test.mjs，21 个）
+互查（相同、未登记差异、登记需绑定 hash 对与说明、过期 / 重复 / 未知、语句集不同、`diffSnapshots` 沿用说明）；扫描精确豁免（多一处 / 少一处 / 别的规则 / 理由与 count 校验）与仓库当前只有一处；开关校验与启动行为（默认无日志、开则一行、非法值启动失败）；`fillOms` 确定性与分布；`resolveLargeDir` 判据；CLI（`--scale large` 快照与比较、scale 不符拒绝、`--compare-large`、`--cross-check`、篡改 / 删索引 / 带统计的库）；`bench-oms-dense-window`；已提交的大库快照与小库一致；`query-planner.md` 2e、`ci.yml`、夜间工作流、capacity-baseline 的文本守卫。

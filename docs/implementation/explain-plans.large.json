@@ -1,0 +1,973 @@
+{
+  "snapshot_version": 1,
+  "note": "Plan fingerprints (normalised EXPLAIN QUERY PLAN) of the statements registered in scripts/explain-audit.mjs. Whitelist entries need statement, accepted_hash (the new fingerprint hash, or \"removed\") and a reason of at least 20 characters.",
+  "generator": "node scripts/explain-audit.mjs --snapshot docs/implementation/explain-plans.large.json --scale large (builds the AH3 large profile: 20000 SKU / 50000 docs / 250000 txns via scripts/synth-data.mjs with GML_RUNTIME_MODE=production, seed 20261023, plus 200000 OMS orders in a 60-day dense window; or reuses --large-dir)",
+  "latest_migration": "075_mcp_rate_denied_kind",
+  "sqlite_version": "3.49.2",
+  "statement_count": 120,
+  "whitelist": [],
+  "scale": "large",
+  "dataset": {
+    "profile": {
+      "skus": 20000,
+      "docs": 50000,
+      "txns": 250000,
+      "oms_orders": 200000,
+      "oms_span_days": 60,
+      "seed": 20261023,
+      "anchor": "2026-10-01"
+    },
+    "table_rows": {
+      "products": 6667,
+      "product_skus": 20000,
+      "inventory_transactions": 250000,
+      "purchase_orders": 20000,
+      "sales_orders": 30000,
+      "oms_orders": 200000,
+      "oms_order_items": 200000,
+      "audit_logs": 1,
+      "platforms": 5
+    }
+  },
+  "differences": [],
+  "statements": {
+    "ai.platform_analysis": {
+      "hash": "ca9be4485edfb391",
+      "plan": [
+        "SEARCH o USING COVERING INDEX idx_oms_order_time (order_time>?)",
+        "SEARCH pf USING INTEGER PRIMARY KEY (rowid=?)",
+        "USE TEMP B-TREE FOR GROUP BY",
+        "USE TEMP B-TREE FOR ORDER BY"
+      ]
+    },
+    "ar.aging_view": {
+      "hash": "58d00f45cb8ef4c8",
+      "plan": [
+        "SEARCH d USING INDEX idx_ar_status (status=?)",
+        "USE TEMP B-TREE FOR ORDER BY"
+      ]
+    },
+    "ar.allocs_by_doc": {
+      "hash": "0d3bb0481f7084aa",
+      "plan": [
+        "SEARCH a USING INDEX idx_alloc_ar (ar_id=?)",
+        "SEARCH r USING INTEGER PRIMARY KEY (rowid=?)"
+      ]
+    },
+    "ar.allocs_by_receipt": {
+      "hash": "e978b06f85a1a8a5",
+      "plan": [
+        "SEARCH receipt_allocations USING INDEX idx_alloc_rc (receipt_id=?)"
+      ]
+    },
+    "ar.docs_by_subject": {
+      "hash": "4bbd81edcb7e072b",
+      "plan": [
+        "SEARCH ar_documents USING INDEX idx_ar_subject (subject_type=? AND subject_id=?)",
+        "USE TEMP B-TREE FOR ORDER BY"
+      ]
+    },
+    "ar.docs_open": {
+      "hash": "abdefa635a1ad2ae",
+      "plan": [
+        "SEARCH ar_documents USING INDEX idx_ar_status (status=?)",
+        "USE TEMP B-TREE FOR ORDER BY"
+      ]
+    },
+    "ar.docs_overdue_sum": {
+      "hash": "c1ad633b35e9bf20",
+      "plan": [
+        "SEARCH ar_documents USING INDEX idx_ar_open_due (status=? AND due_date<?)"
+      ]
+    },
+    "ar.docs_page": {
+      "hash": "141f59badfdb3974",
+      "plan": [
+        "SCAN ar_documents USING INDEX idx_ar_due_id"
+      ]
+    },
+    "ar.receipts_by_status": {
+      "hash": "c11a73da958e892b",
+      "plan": [
+        "SEARCH receipts USING INDEX idx_rc_status (status=?)"
+      ]
+    },
+    "ar.receipts_page": {
+      "hash": "58424761b45c0f22",
+      "plan": [
+        "SCAN receipts"
+      ]
+    },
+    "audit.count_all": {
+      "hash": "02c6ad519fb09812",
+      "plan": [
+        "CO-ROUTINE (subquery-1)",
+        "  SCAN audit_logs USING COVERING INDEX idx_audit_user_created",
+        "SCAN (subquery-1)"
+      ]
+    },
+    "audit.count_entity": {
+      "hash": "0996258baae74bf1",
+      "plan": [
+        "CO-ROUTINE (subquery-1)",
+        "  SEARCH audit_logs USING COVERING INDEX idx_audit_entity (entity=? AND entity_id=?)",
+        "SCAN (subquery-1)"
+      ]
+    },
+    "audit.count_entity_only": {
+      "hash": "5ad11812023b0852",
+      "plan": [
+        "CO-ROUTINE (subquery-1)",
+        "  SCAN audit_logs USING COVERING INDEX idx_audit_entity",
+        "SCAN (subquery-1)"
+      ]
+    },
+    "audit.count_keyword": {
+      "hash": "bcaadd74532493cd",
+      "plan": [
+        "CO-ROUTINE (subquery-1)",
+        "  SCAN audit_logs",
+        "SCAN (subquery-1)"
+      ]
+    },
+    "audit.count_keyword_fts": {
+      "hash": "cb13c39665e721ca",
+      "plan": [
+        "CO-ROUTINE (subquery-2)",
+        "  SEARCH audit_logs USING INTEGER PRIMARY KEY (rowid=?)",
+        "  LIST SUBQUERY #",
+        "    SCAN audit_logs_fts VIRTUAL TABLE INDEX 0:M3",
+        "    CREATE BLOOM FILTER",
+        "SCAN (subquery-2)"
+      ]
+    },
+    "audit.count_keyword_nofts": {
+      "hash": "bcaadd74532493cd",
+      "plan": [
+        "CO-ROUTINE (subquery-1)",
+        "  SCAN audit_logs",
+        "SCAN (subquery-1)"
+      ]
+    },
+    "audit.count_module": {
+      "hash": "911c6b279ecfb436",
+      "plan": [
+        "CO-ROUTINE (subquery-1)",
+        "  SEARCH audit_logs USING COVERING INDEX idx_audit_module_created (module=? AND created_at>? AND created_at<?)",
+        "SCAN (subquery-1)"
+      ]
+    },
+    "audit.count_module_action": {
+      "hash": "cd64e35d58040b7d",
+      "plan": [
+        "CO-ROUTINE (subquery-1)",
+        "  SEARCH audit_logs USING INDEX idx_audit_module_created (module=?)",
+        "SCAN (subquery-1)"
+      ]
+    },
+    "audit.count_module_keyword": {
+      "hash": "cd64e35d58040b7d",
+      "plan": [
+        "CO-ROUTINE (subquery-1)",
+        "  SEARCH audit_logs USING INDEX idx_audit_module_created (module=?)",
+        "SCAN (subquery-1)"
+      ]
+    },
+    "audit.count_module_keyword_fts": {
+      "hash": "14bf8902f5a285c6",
+      "plan": [
+        "CO-ROUTINE (subquery-2)",
+        "  SEARCH audit_logs USING INDEX idx_audit_module_created (module=?)",
+        "  LIST SUBQUERY #",
+        "    SCAN audit_logs_fts VIRTUAL TABLE INDEX 0:M3",
+        "    CREATE BLOOM FILTER",
+        "SCAN (subquery-2)"
+      ]
+    },
+    "audit.count_user": {
+      "hash": "61f9864b985774ee",
+      "plan": [
+        "CO-ROUTINE (subquery-1)",
+        "  SEARCH audit_logs USING COVERING INDEX idx_audit_user_created (user_id=? AND created_at>?)",
+        "SCAN (subquery-1)"
+      ]
+    },
+    "audit.export_all": {
+      "hash": "79b727ad2ba87cee",
+      "plan": [
+        "SEARCH audit_logs USING INTEGER PRIMARY KEY (rowid<?)"
+      ]
+    },
+    "audit.export_entity": {
+      "hash": "d7d185bd7d21fde5",
+      "plan": [
+        "SEARCH audit_logs USING INDEX idx_audit_entity (entity=? AND entity_id=? AND rowid<?)"
+      ]
+    },
+    "audit.export_entity_only": {
+      "hash": "79b727ad2ba87cee",
+      "plan": [
+        "SEARCH audit_logs USING INTEGER PRIMARY KEY (rowid<?)"
+      ]
+    },
+    "audit.export_keyword": {
+      "hash": "79b727ad2ba87cee",
+      "plan": [
+        "SEARCH audit_logs USING INTEGER PRIMARY KEY (rowid<?)"
+      ]
+    },
+    "audit.export_keyword_fts": {
+      "hash": "6b65be5cf6895db8",
+      "plan": [
+        "SEARCH audit_logs USING INTEGER PRIMARY KEY (rowid=?)",
+        "LIST SUBQUERY #",
+        "  SCAN audit_logs_fts VIRTUAL TABLE INDEX 0:M3",
+        "  CREATE BLOOM FILTER"
+      ]
+    },
+    "audit.export_keyword_nofts": {
+      "hash": "79b727ad2ba87cee",
+      "plan": [
+        "SEARCH audit_logs USING INTEGER PRIMARY KEY (rowid<?)"
+      ]
+    },
+    "audit.export_module": {
+      "hash": "882031543c4e1e2b",
+      "plan": [
+        "SEARCH audit_logs USING INDEX idx_audit_module_created (module=? AND created_at>? AND created_at<?)"
+      ]
+    },
+    "audit.export_module_action": {
+      "hash": "18fdefa006f555ae",
+      "plan": [
+        "SEARCH audit_logs USING INDEX idx_audit_module_created (module=? AND created_at<?)"
+      ]
+    },
+    "audit.export_module_keyword": {
+      "hash": "18fdefa006f555ae",
+      "plan": [
+        "SEARCH audit_logs USING INDEX idx_audit_module_created (module=? AND created_at<?)"
+      ]
+    },
+    "audit.export_module_keyword_fts": {
+      "hash": "a8417559a339d2f5",
+      "plan": [
+        "SEARCH audit_logs USING INDEX idx_audit_module_created (module=? AND created_at<?)",
+        "LIST SUBQUERY #",
+        "  SCAN audit_logs_fts VIRTUAL TABLE INDEX 0:M3",
+        "  CREATE BLOOM FILTER"
+      ]
+    },
+    "audit.export_user": {
+      "hash": "4adbf34047f9e9cb",
+      "plan": [
+        "SEARCH audit_logs USING INDEX idx_audit_user_created (user_id=? AND created_at>? AND created_at<?)"
+      ]
+    },
+    "audit.list_all": {
+      "hash": "518ac23edf395e5a",
+      "plan": [
+        "SCAN audit_logs"
+      ]
+    },
+    "audit.list_entity": {
+      "hash": "751cdd188e436210",
+      "plan": [
+        "SEARCH audit_logs USING INDEX idx_audit_entity (entity=? AND entity_id=?)"
+      ]
+    },
+    "audit.list_entity_only": {
+      "hash": "518ac23edf395e5a",
+      "plan": [
+        "SCAN audit_logs"
+      ]
+    },
+    "audit.list_keyword": {
+      "hash": "518ac23edf395e5a",
+      "plan": [
+        "SCAN audit_logs"
+      ]
+    },
+    "audit.list_keyword_fts": {
+      "hash": "6b65be5cf6895db8",
+      "plan": [
+        "SEARCH audit_logs USING INTEGER PRIMARY KEY (rowid=?)",
+        "LIST SUBQUERY #",
+        "  SCAN audit_logs_fts VIRTUAL TABLE INDEX 0:M3",
+        "  CREATE BLOOM FILTER"
+      ]
+    },
+    "audit.list_keyword_nofts": {
+      "hash": "518ac23edf395e5a",
+      "plan": [
+        "SCAN audit_logs"
+      ]
+    },
+    "audit.list_module": {
+      "hash": "882031543c4e1e2b",
+      "plan": [
+        "SEARCH audit_logs USING INDEX idx_audit_module_created (module=? AND created_at>? AND created_at<?)"
+      ]
+    },
+    "audit.list_module_action": {
+      "hash": "5b0743dcaeb3aa9a",
+      "plan": [
+        "SEARCH audit_logs USING INDEX idx_audit_module_created (module=?)"
+      ]
+    },
+    "audit.list_module_keyword": {
+      "hash": "5b0743dcaeb3aa9a",
+      "plan": [
+        "SEARCH audit_logs USING INDEX idx_audit_module_created (module=?)"
+      ]
+    },
+    "audit.list_module_keyword_fts": {
+      "hash": "143d7832a3df1ed1",
+      "plan": [
+        "SEARCH audit_logs USING INDEX idx_audit_module_created (module=?)",
+        "LIST SUBQUERY #",
+        "  SCAN audit_logs_fts VIRTUAL TABLE INDEX 0:M3",
+        "  CREATE BLOOM FILTER"
+      ]
+    },
+    "audit.list_user": {
+      "hash": "cd5f71c349ba2ee2",
+      "plan": [
+        "SEARCH audit_logs USING INDEX idx_audit_user_created (user_id=? AND created_at>?)"
+      ]
+    },
+    "dash.below_safe_count": {
+      "hash": "349d800a4bf6e130",
+      "plan": [
+        "SEARCH sk USING COVERING INDEX idx_sku_status_safe (status=? AND safe_stock>?)",
+        "CORRELATED SCALAR SUBQUERY #",
+        "  SEARCH st USING COVERING INDEX idx_stock_sku_qty (sku_id=?)"
+      ]
+    },
+    "dash.channel_offline": {
+      "hash": "2688a1515df5bca4",
+      "plan": [
+        "SEARCH sales_orders USING INDEX idx_so_order_date (order_date>?)",
+        "USE TEMP B-TREE FOR GROUP BY"
+      ]
+    },
+    "dash.channel_online": {
+      "hash": "50bf845c8311261d",
+      "plan": [
+        "SEARCH o USING COVERING INDEX idx_oms_order_time (order_time>?)",
+        "SEARCH pf USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN",
+        "USE TEMP B-TREE FOR GROUP BY"
+      ]
+    },
+    "dash.inventory_dist_agg": {
+      "hash": "85f4d179c9c6a20d",
+      "plan": [
+        "SCAN st USING INDEX idx_stock_wh_sku",
+        "SEARCH sk USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN",
+        "SEARCH p USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN",
+        "USE TEMP B-TREE FOR GROUP BY"
+      ]
+    },
+    "dash.oms_month": {
+      "hash": "a813d31b812324d8",
+      "plan": [
+        "SEARCH oms_orders USING INDEX idx_oms_month (<expr>=?)"
+      ]
+    },
+    "dash.purchase_month": {
+      "hash": "410be874e39711c6",
+      "plan": [
+        "SEARCH purchase_orders USING INDEX idx_po_month (<expr>=?)"
+      ]
+    },
+    "dash.purchase_open": {
+      "hash": "7019255efd6c15bb",
+      "plan": [
+        "SEARCH purchase_orders USING INDEX idx_po_status (status=?)"
+      ]
+    },
+    "dash.recent_oms": {
+      "hash": "7cf48d0cda3bc23f",
+      "plan": [
+        "SCAN o",
+        "SEARCH pf USING INTEGER PRIMARY KEY (rowid=?)"
+      ]
+    },
+    "dash.recent_purchase": {
+      "hash": "7ef2c29744b13403",
+      "plan": [
+        "SCAN po",
+        "SEARCH sup USING INTEGER PRIMARY KEY (rowid=?)"
+      ]
+    },
+    "dash.recent_sales": {
+      "hash": "1492c2528280f9d6",
+      "plan": [
+        "SCAN so",
+        "SEARCH d USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN",
+        "SEARCH s USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN"
+      ]
+    },
+    "dash.recent_txn": {
+      "hash": "116dc4f0c697d839",
+      "plan": [
+        "SCAN t",
+        "SEARCH sk USING INTEGER PRIMARY KEY (rowid=?)",
+        "SEARCH w USING INTEGER PRIMARY KEY (rowid=?)"
+      ]
+    },
+    "dash.sales_month": {
+      "hash": "a0c3bcca2cdb661c",
+      "plan": [
+        "SEARCH sales_orders USING INDEX idx_so_month (<expr>=?)"
+      ]
+    },
+    "dash.sales_today": {
+      "hash": "9566da90472ab1a8",
+      "plan": [
+        "SEARCH sales_orders USING INDEX idx_so_order_date (order_date=?)"
+      ]
+    },
+    "dash.sales_unpaid": {
+      "hash": "b0c8d7682ebe84a8",
+      "plan": [
+        "SCAN sales_orders"
+      ]
+    },
+    "dash.stock_alerts": {
+      "hash": "9c697afb3e96a371",
+      "plan": [
+        "SEARCH sk USING INDEX idx_sku_status_safe (status=? AND safe_stock>?)",
+        "CORRELATED SCALAR SUBQUERY #",
+        "  SEARCH st USING COVERING INDEX idx_stock_sku_qty (sku_id=?)",
+        "SEARCH p USING INTEGER PRIMARY KEY (rowid=?)",
+        "CORRELATED SCALAR SUBQUERY #",
+        "  SEARCH st USING COVERING INDEX idx_stock_sku_qty (sku_id=?)",
+        "CORRELATED SCALAR SUBQUERY #",
+        "  SEARCH st USING COVERING INDEX idx_stock_sku_qty (sku_id=?)",
+        "USE TEMP B-TREE FOR ORDER BY"
+      ]
+    },
+    "dash.stock_sku_count": {
+      "hash": "5ad0147b4bde6d91",
+      "plan": [
+        "CO-ROUTINE (subquery-1)",
+        "  SCAN inventory_stocks USING COVERING INDEX idx_stock_sku",
+        "SCAN (subquery-1)"
+      ]
+    },
+    "dash.stock_total": {
+      "hash": "b3b76251dfe8cc79",
+      "plan": [
+        "SCAN inventory_stocks"
+      ]
+    },
+    "dash.todo_counts": {
+      "hash": "b7e0dd9814dc606c",
+      "plan": [
+        "SCAN CONSTANT ROW",
+        "SCALAR SUBQUERY #",
+        "  SEARCH sales_orders USING COVERING INDEX idx_so_status (status=?)",
+        "SCALAR SUBQUERY #",
+        "  SEARCH purchase_orders USING COVERING INDEX idx_po_status (status=?)",
+        "SCALAR SUBQUERY #",
+        "  SEARCH oms_orders USING COVERING INDEX idx_oms_status (status=?)",
+        "SCALAR SUBQUERY #",
+        "  SEARCH st USING INDEX idx_stock_expire_date (expire_date>? AND expire_date<?)",
+        "SCALAR SUBQUERY #",
+        "  SEARCH dealers USING INDEX idx_dealers_status_credit (status=? AND credit_limit>?)"
+      ]
+    },
+    "dash.top_brands": {
+      "hash": "218219bd8c0042c0",
+      "plan": [
+        "SEARCH so USING INDEX idx_so_order_date (order_date>?)",
+        "SEARCH i USING INDEX idx_soi_order (order_id=?)",
+        "SEARCH sk USING INTEGER PRIMARY KEY (rowid=?)",
+        "SEARCH p USING INTEGER PRIMARY KEY (rowid=?)",
+        "SEARCH b USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN",
+        "USE TEMP B-TREE FOR GROUP BY",
+        "USE TEMP B-TREE FOR ORDER BY"
+      ]
+    },
+    "dash.top_dealers": {
+      "hash": "f9e8341951af7dde",
+      "plan": [
+        "SEARCH so USING INDEX idx_so_order_date (order_date>?)",
+        "SEARCH d USING INTEGER PRIMARY KEY (rowid=?)",
+        "USE TEMP B-TREE FOR GROUP BY",
+        "USE TEMP B-TREE FOR ORDER BY"
+      ]
+    },
+    "dash.top_products": {
+      "hash": "218219bd8c0042c0",
+      "plan": [
+        "SEARCH so USING INDEX idx_so_order_date (order_date>?)",
+        "SEARCH i USING INDEX idx_soi_order (order_id=?)",
+        "SEARCH sk USING INTEGER PRIMARY KEY (rowid=?)",
+        "SEARCH p USING INTEGER PRIMARY KEY (rowid=?)",
+        "SEARCH b USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN",
+        "USE TEMP B-TREE FOR GROUP BY",
+        "USE TEMP B-TREE FOR ORDER BY"
+      ]
+    },
+    "dash.top_stores": {
+      "hash": "857762695f32a4fd",
+      "plan": [
+        "SEARCH so USING INDEX idx_so_order_date (order_date>?)",
+        "SEARCH s USING INTEGER PRIMARY KEY (rowid=?)",
+        "USE TEMP B-TREE FOR GROUP BY",
+        "USE TEMP B-TREE FOR ORDER BY"
+      ]
+    },
+    "dash.trend_online": {
+      "hash": "61100d95cd9454c9",
+      "plan": [
+        "SEARCH oms_orders USING COVERING INDEX idx_oms_order_time (order_time>?)",
+        "USE TEMP B-TREE FOR GROUP BY"
+      ]
+    },
+    "dash.trend_purchase": {
+      "hash": "509858a94fb152ae",
+      "plan": [
+        "SEARCH purchase_orders USING INDEX idx_po_order_date (order_date>?)"
+      ]
+    },
+    "dash.trend_sales": {
+      "hash": "4556a660dc43caf7",
+      "plan": [
+        "SEARCH sales_orders USING INDEX idx_so_order_date (order_date>?)"
+      ]
+    },
+    "oc.orders_page": {
+      "hash": "d90cf0cd02572845",
+      "plan": [
+        "SCAN o",
+        "CORRELATED SCALAR SUBQUERY #",
+        "  SEARCH i USING COVERING INDEX idx_oc_item_ord (order_id=?)",
+        "CORRELATED SCALAR SUBQUERY #",
+        "  SEARCH a USING INDEX idx_oc_appr_ord (order_id=?)"
+      ]
+    },
+    "oc.overview_by_status": {
+      "hash": "3262d346740fa0d0",
+      "plan": [
+        "SCAN oc_orders USING INDEX idx_oc_ord_status",
+        "USE TEMP B-TREE FOR ORDER BY"
+      ]
+    },
+    "oc.overview_credit_used": {
+      "hash": "ddd4679cb9916f8b",
+      "plan": [
+        "SCAN c",
+        "SEARCH d USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN",
+        "CORRELATED SCALAR SUBQUERY #",
+        "  SEARCH l USING INDEX idx_oc_credit_cust (customer_id=?)",
+        "CORRELATED SCALAR SUBQUERY #",
+        "  SEARCH l USING INDEX idx_oc_credit_cust (customer_id=?)",
+        "USE TEMP B-TREE FOR ORDER BY"
+      ]
+    },
+    "oc.overview_pending_approval": {
+      "hash": "c2d7fb0f0632c75c",
+      "plan": [
+        "SEARCH o USING INDEX idx_oc_ord_status (status=?)",
+        "USE TEMP B-TREE FOR ORDER BY"
+      ]
+    },
+    "oms.stats_by_platform": {
+      "hash": "4833720e9859d9c4",
+      "plan": [
+        "MATERIALIZE w",
+        "  SEARCH oms_orders USING COVERING INDEX idx_oms_order_time (order_time>?)",
+        "  USE TEMP B-TREE FOR GROUP BY",
+        "SCAN pf USING INDEX sqlite_autoindex_platforms_1",
+        "BLOOM FILTER ON w (platform_id=?)",
+        "SEARCH w USING AUTOMATIC COVERING INDEX (platform_id=?) LEFT-JOIN",
+        "USE TEMP B-TREE FOR ORDER BY"
+      ]
+    },
+    "oms.stats_by_platform_scoped": {
+      "hash": "435f1207d9bfe5ce",
+      "plan": [
+        "MATERIALIZE w",
+        "  SEARCH oms_orders USING COVERING INDEX idx_oms_order_time (order_time>?)",
+        "  USE TEMP B-TREE FOR GROUP BY",
+        "SCAN pf USING INDEX sqlite_autoindex_platforms_1",
+        "CORRELATED SCALAR SUBQUERY #",
+        "  SEARCH warehouses USING INTEGER PRIMARY KEY (rowid=?)",
+        "BLOOM FILTER ON w (platform_id=?)",
+        "SEARCH w USING AUTOMATIC COVERING INDEX (platform_id=?) LEFT-JOIN",
+        "USE TEMP B-TREE FOR ORDER BY"
+      ]
+    },
+    "oms.stats_top_skus": {
+      "hash": "6dbef5422d812d71",
+      "plan": [
+        "SEARCH o USING COVERING INDEX idx_oms_order_time (order_time>?)",
+        "SEARCH i USING INDEX idx_oms_items_order (oms_order_id=?)",
+        "USE TEMP B-TREE FOR GROUP BY",
+        "USE TEMP B-TREE FOR ORDER BY"
+      ]
+    },
+    "oms.stats_top_skus_scoped": {
+      "hash": "1676fa6c3f91fff3",
+      "plan": [
+        "SEARCH o USING COVERING INDEX idx_oms_order_time (order_time>?)",
+        "LIST SUBQUERY #",
+        "  SCAN scpf",
+        "  CORRELATED SCALAR SUBQUERY #",
+        "    SEARCH warehouses USING INTEGER PRIMARY KEY (rowid=?)",
+        "  CREATE BLOOM FILTER",
+        "SEARCH i USING INDEX idx_oms_items_order (oms_order_id=?)",
+        "USE TEMP B-TREE FOR GROUP BY",
+        "USE TEMP B-TREE FOR ORDER BY"
+      ]
+    },
+    "oms.stats_total": {
+      "hash": "0af2444bd10d77b8",
+      "plan": [
+        "SEARCH oms_orders USING COVERING INDEX idx_oms_order_time (order_time>?)"
+      ]
+    },
+    "oms.stats_total_scoped": {
+      "hash": "e2c4e4047efc8808",
+      "plan": [
+        "SEARCH oms_orders USING COVERING INDEX idx_oms_order_time (order_time>?)",
+        "LIST SUBQUERY #",
+        "  SCAN scpf",
+        "  CORRELATED SCALAR SUBQUERY #",
+        "    SEARCH warehouses USING INTEGER PRIMARY KEY (rowid=?)",
+        "  CREATE BLOOM FILTER"
+      ]
+    },
+    "oms.stats_trend": {
+      "hash": "61100d95cd9454c9",
+      "plan": [
+        "SEARCH oms_orders USING COVERING INDEX idx_oms_order_time (order_time>?)",
+        "USE TEMP B-TREE FOR GROUP BY"
+      ]
+    },
+    "oms.stats_trend_scoped": {
+      "hash": "89d08702ad1d3b4f",
+      "plan": [
+        "SEARCH oms_orders USING COVERING INDEX idx_oms_order_time (order_time>?)",
+        "LIST SUBQUERY #",
+        "  SCAN scpf",
+        "  CORRELATED SCALAR SUBQUERY #",
+        "    SEARCH warehouses USING INTEGER PRIMARY KEY (rowid=?)",
+        "  CREATE BLOOM FILTER",
+        "USE TEMP B-TREE FOR GROUP BY"
+      ]
+    },
+    "po.detail_items": {
+      "hash": "85647f50434774c1",
+      "plan": [
+        "SEARCH i USING INDEX idx_poi_order (order_id=?)",
+        "SEARCH sk USING INTEGER PRIMARY KEY (rowid=?)",
+        "SEARCH p USING INTEGER PRIMARY KEY (rowid=?)",
+        "SEARCH b USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN"
+      ]
+    },
+    "po.detail_receipts": {
+      "hash": "6c317cbcc5931371",
+      "plan": [
+        "SEARCH purchase_receipts USING INDEX idx_prc_order (order_id=?)"
+      ]
+    },
+    "po.invoice_items": {
+      "hash": "df63314230b190cb",
+      "plan": [
+        "SEARCH purchase_invoice_items USING INDEX idx_pinv_item (invoice_id=?)"
+      ]
+    },
+    "po.invoice_list": {
+      "hash": "ecb088bca3251645",
+      "plan": [
+        "SCAN i",
+        "SEARCH s USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN",
+        "CORRELATED SCALAR SUBQUERY #",
+        "  SEARCH x USING COVERING INDEX idx_pinv_item (invoice_id=?)"
+      ]
+    },
+    "po.list_by_status": {
+      "hash": "d9957029c010844d",
+      "plan": [
+        "SEARCH po USING INDEX idx_po_status (status=?)",
+        "SEARCH s USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN",
+        "CORRELATED SCALAR SUBQUERY #",
+        "  SEARCH i USING COVERING INDEX idx_poi_order (order_id=?)",
+        "USE TEMP B-TREE FOR ORDER BY"
+      ]
+    },
+    "po.list_page": {
+      "hash": "14bf34a3784239f9",
+      "plan": [
+        "SCAN po",
+        "SEARCH s USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN",
+        "SEARCH w USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN",
+        "CORRELATED SCALAR SUBQUERY #",
+        "  SEARCH i USING COVERING INDEX idx_poi_order (order_id=?)"
+      ]
+    },
+    "po.payment_items": {
+      "hash": "d2a81e25d89f468e",
+      "plan": [
+        "SEARCH purchase_payment_items USING INDEX idx_ppay_item (payment_id=?)"
+      ]
+    },
+    "po.payment_list": {
+      "hash": "a2b28c94b1e0d669",
+      "plan": [
+        "SCAN p",
+        "SEARCH s USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN"
+      ]
+    },
+    "po.payment_release_by_settle": {
+      "hash": "9bbea29f7a5a5589",
+      "plan": [
+        "SEARCH payment_release_ledger USING INDEX idx_payment_release_settle (settle_id=?)"
+      ]
+    },
+    "po.receipt_items": {
+      "hash": "8489e29095512ef3",
+      "plan": [
+        "SEARCH purchase_receipt_items USING INDEX idx_prci_receipt (receipt_id=?)"
+      ]
+    },
+    "po.receipt_list": {
+      "hash": "b638755f86ecc56d",
+      "plan": [
+        "SCAN pr",
+        "SEARCH s USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN",
+        "SEARCH w USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN",
+        "SEARCH po USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN",
+        "CORRELATED SCALAR SUBQUERY #",
+        "  SEARCH i USING COVERING INDEX idx_prci_receipt (receipt_id=?)"
+      ]
+    },
+    "po.refresh_invoice_amount": {
+      "hash": "69046fd36d88f7c1",
+      "plan": [
+        "SEARCH oi USING COVERING INDEX idx_poi_order (order_id=?)",
+        "SEARCH ii USING INDEX idx_pinvi_order_item (order_item_id=?)",
+        "SEARCH i USING INTEGER PRIMARY KEY (rowid=?)"
+      ]
+    },
+    "po.refresh_settle_amount": {
+      "hash": "fe1134c3d4d9083a",
+      "plan": [
+        "SEARCH si USING INDEX idx_psi_source (source_type=?)",
+        "SEARCH st USING INTEGER PRIMARY KEY (rowid=?)",
+        "SEARCH rc USING COVERING INDEX idx_prc_order (order_id=? AND rowid=?)"
+      ]
+    },
+    "po.refresh_settles": {
+      "hash": "f9d3b5375fa2faf2",
+      "plan": [
+        "SEARCH si USING INDEX idx_psi_source (source_type=?)",
+        "SEARCH st USING INTEGER PRIMARY KEY (rowid=?)",
+        "SEARCH rc USING COVERING INDEX idx_prc_order (order_id=? AND rowid=?)",
+        "USE TEMP B-TREE FOR DISTINCT"
+      ]
+    },
+    "po.settleable_receipts_not_settled": {
+      "hash": "7a10eaf5450ade0b",
+      "plan": [
+        "SEARCH r USING INDEX idx_prc_status_date (status=?)",
+        "LIST SUBQUERY #",
+        "  SEARCH si USING INDEX idx_psi_source (source_type=?)",
+        "  SEARCH st USING INTEGER PRIMARY KEY (rowid=?)",
+        "  CREATE BLOOM FILTER",
+        "USE TEMP B-TREE FOR ORDER BY"
+      ]
+    },
+    "po.settlement_items": {
+      "hash": "ebaffd468b411ddd",
+      "plan": [
+        "SEARCH purchase_settlement_items USING INDEX idx_pset_item (settle_id=?)"
+      ]
+    },
+    "po.settlement_list": {
+      "hash": "53b8664d823e85bd",
+      "plan": [
+        "SCAN st",
+        "SEARCH s USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN"
+      ]
+    },
+    "rpt.ap_open": {
+      "hash": "3956227f1a80e79c",
+      "plan": [
+        "SCAN purchase_settlements"
+      ]
+    },
+    "rpt.ar_open": {
+      "hash": "28a3ba4ddab4f118",
+      "plan": [
+        "SCAN ar_documents"
+      ]
+    },
+    "rpt.purchase_value": {
+      "hash": "848ed841bb117eb7",
+      "plan": [
+        "SEARCH r USING COVERING INDEX idx_prc_month (<expr>=?)",
+        "SEARCH ri USING INDEX idx_prci_receipt (receipt_id=?)"
+      ]
+    },
+    "rpt.sales_cost": {
+      "hash": "0f0338542bff45c6",
+      "plan": [
+        "SEARCH inventory_transactions USING INDEX idx_it_type_month (doc_type=? AND <expr>=?)"
+      ]
+    },
+    "rpt.sales_value": {
+      "hash": "1e49c2d6e57dbb7a",
+      "plan": [
+        "SEARCH d USING COVERING INDEX idx_sdel_month (<expr>=?)",
+        "SEARCH di USING INDEX idx_sdeli_delivery (delivery_id=?)"
+      ]
+    },
+    "rpt.stock_value": {
+      "hash": "b3b76251dfe8cc79",
+      "plan": [
+        "SCAN inventory_stocks"
+      ]
+    },
+    "sales.deliveries_by_order": {
+      "hash": "c34603e25a365405",
+      "plan": [
+        "SEARCH sales_deliveries USING INDEX idx_sdel_order (order_id=?)"
+      ]
+    },
+    "sales.delivery_items": {
+      "hash": "97317d472df02227",
+      "plan": [
+        "SEARCH sales_delivery_items USING INDEX idx_sdeli_delivery (delivery_id=?)"
+      ]
+    },
+    "sales.items": {
+      "hash": "0442bdc2174490c5",
+      "plan": [
+        "SEARCH sales_order_items USING INDEX idx_soi_order (order_id=?)"
+      ]
+    },
+    "sales.list_by_dealer": {
+      "hash": "79b671914849b1f5",
+      "plan": [
+        "SEARCH so USING INDEX idx_so_dealer (dealer_id=?)",
+        "USE TEMP B-TREE FOR ORDER BY"
+      ]
+    },
+    "sales.list_by_status_date": {
+      "hash": "baf8f5288b423cfb",
+      "plan": [
+        "SEARCH so USING INDEX idx_so_status (status=? AND order_date>?)",
+        "SEARCH d USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN",
+        "USE TEMP B-TREE FOR ORDER BY"
+      ]
+    },
+    "sales.list_page": {
+      "hash": "273eaed0b12e2c12",
+      "plan": [
+        "SCAN so",
+        "SEARCH d USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN",
+        "SEARCH s USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN",
+        "SEARCH p USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN",
+        "SEARCH w USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN",
+        "CORRELATED SCALAR SUBQUERY #",
+        "  SEARCH i USING COVERING INDEX idx_soi_order (order_id=?)"
+      ]
+    },
+    "stock.batch_lookup": {
+      "hash": "2bf50a2ba1632394",
+      "plan": [
+        "SEARCH inventory_batches USING INDEX sqlite_autoindex_inventory_batches_1 (sku_id=? AND batch_no=?)"
+      ]
+    },
+    "stock.below_safe": {
+      "hash": "9c697afb3e96a371",
+      "plan": [
+        "SEARCH sk USING INDEX idx_sku_status_safe (status=? AND safe_stock>?)",
+        "CORRELATED SCALAR SUBQUERY #",
+        "  SEARCH st USING COVERING INDEX idx_stock_sku_qty (sku_id=?)",
+        "SEARCH p USING INTEGER PRIMARY KEY (rowid=?)",
+        "CORRELATED SCALAR SUBQUERY #",
+        "  SEARCH st USING COVERING INDEX idx_stock_sku_qty (sku_id=?)",
+        "CORRELATED SCALAR SUBQUERY #",
+        "  SEARCH st USING COVERING INDEX idx_stock_sku_qty (sku_id=?)",
+        "USE TEMP B-TREE FOR ORDER BY"
+      ]
+    },
+    "stock.expiring": {
+      "hash": "af90e598240cc5e5",
+      "plan": [
+        "SEARCH st USING INDEX idx_stock_expire_date (expire_date>? AND expire_date<?)",
+        "SEARCH sk USING INTEGER PRIMARY KEY (rowid=?)",
+        "SEARCH w USING INTEGER PRIMARY KEY (rowid=?)"
+      ]
+    },
+    "stock.query_after": {
+      "hash": "bb448a2cb9a58cdc",
+      "plan": [
+        "SEARCH st USING INTEGER PRIMARY KEY (rowid>?)",
+        "SEARCH sk USING INTEGER PRIMARY KEY (rowid=?)",
+        "SEARCH w USING INTEGER PRIMARY KEY (rowid=?)"
+      ]
+    },
+    "stock.query_by_sku": {
+      "hash": "cdd70d35651b69e5",
+      "plan": [
+        "SEARCH sk USING INTEGER PRIMARY KEY (rowid=?)",
+        "SEARCH st USING INDEX idx_stock_sku (sku_id=?)",
+        "SEARCH w USING INTEGER PRIMARY KEY (rowid=?)"
+      ]
+    },
+    "stock.query_by_warehouse": {
+      "hash": "d00479f07c7aa465",
+      "plan": [
+        "SEARCH w USING INTEGER PRIMARY KEY (rowid=?)",
+        "SEARCH st USING INDEX idx_stock_wh_sku (warehouse_id=?)",
+        "SEARCH sk USING INTEGER PRIMARY KEY (rowid=?)",
+        "USE TEMP B-TREE FOR ORDER BY"
+      ]
+    },
+    "stock.query_page": {
+      "hash": "98d21fa64a6134a6",
+      "plan": [
+        "SCAN st",
+        "SEARCH sk USING INTEGER PRIMARY KEY (rowid=?)",
+        "SEARCH p USING INTEGER PRIMARY KEY (rowid=?)",
+        "SEARCH b USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN",
+        "SEARCH c USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN",
+        "SEARCH w USING INTEGER PRIMARY KEY (rowid=?)"
+      ]
+    },
+    "stock.query_total": {
+      "hash": "93feff459e5112c4",
+      "plan": [
+        "SCAN st"
+      ]
+    },
+    "stock.txn_by_doc": {
+      "hash": "2477e639a77e43c5",
+      "plan": [
+        "SEARCH inventory_transactions USING INDEX idx_it_doc_ref (doc_type=? AND doc_id=?)"
+      ]
+    },
+    "stock.txn_by_wh_sku_batch": {
+      "hash": "3f1b8a9d2aeaa509",
+      "plan": [
+        "SEARCH inventory_transactions USING INDEX idx_it_wh (warehouse_id=?)"
+      ]
+    },
+    "stock.txn_page": {
+      "hash": "95f095e14889d2fb",
+      "plan": [
+        "SCAN t",
+        "SEARCH sk USING INTEGER PRIMARY KEY (rowid=?)",
+        "SEARCH p USING INTEGER PRIMARY KEY (rowid=?)",
+        "SEARCH w USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN"
+      ]
+    }
+  }
+}

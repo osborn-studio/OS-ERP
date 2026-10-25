@@ -83,12 +83,15 @@ jobs:
       # AG3 (ADR-0044 supplement 6): plan fingerprints of every statement registered in scripts/explain-audit.mjs are compared with the committed
       # docs/implementation/explain-plans.json (taken on the default small synthetic database, see docs/operations/query-planner.md); any drift
       # not whitelisted with a reason fails. The same step scans scripts/ and server/ for ANALYZE / PRAGMA optimize in non-test code.
+      # AH3 (ADR-0044 supplement 7): --cross-check also checks the committed docs/implementation/explain-plans.large.json against the small one
+      # (same statements; every plan that differs between the two must be listed with an explanation). The large database itself is NOT built
+      # here (about 20k SKUs / 200k OMS orders, minutes of CPU on a loaded machine); that comparison runs in nightly-capacity.yml.
       - name: Query plan snapshot (explain-audit --compare on a synthetic small database)
         run: |
           set -euo pipefail
           SYNTH_DIR="$(mktemp -d)/synth"
           GML_RUNTIME_MODE=production GML_DATA_DIR="$SYNTH_DIR" GML_DB= node scripts/synth-data.mjs --quiet > /dev/null
-          GML_DATA_DIR="$SYNTH_DIR" node scripts/explain-audit.mjs --compare docs/implementation/explain-plans.json
+          GML_DATA_DIR="$SYNTH_DIR" node scripts/explain-audit.mjs --compare docs/implementation/explain-plans.json --cross-check docs/implementation/explain-plans.large.json
       - name: TypeScript
         run: npx tsc --noEmit
       - name: Vite build

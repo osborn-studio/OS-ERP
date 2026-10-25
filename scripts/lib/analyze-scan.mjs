@@ -12,7 +12,9 @@
  *   · 跳过 tests/、*.test.*、node_modules、dist 及非源码文件。
  * 【诚实边界】这是静态文本检查：运行时拼接（'ANA' + 'LYZE'）、eval、子进程里调 sqlite3 命令行、package.json / 工作流里的命令都扫不到；
  *   它防"手滑把 ANALYZE 写进代码"，不防有意绕过。本文件的模式用片段拼接，使守卫自己不命中。
- * 【ANALYZE_ALLOW】{ file, reason }：整文件豁免，必须写理由（≥20 字符）；条目所指文件已没有命中则算过期、同样报红。当前为空。
+ * 【ANALYZE_ALLOW】{ file, reason, rule?, count? }：必须写理由（≥20 字符）。只有 file 时整文件豁免（命中为 0 算过期）；
+ *   给了 rule（'stats' | 'pragma-optimize'）与 count（≥1）则**精确豁免**：只放行该文件里该规则的恰好 count 处——多一处报红（超出的那几处），少一处算过期。
+ *   当前一条：server/db/index.js 的 pragma-optimize × 1（AH3，GML_SQLITE_OPTIMIZE_ON_BOOT 开关，默认关）。
  * ============================================================================
  */
 import fs from 'node:fs'
@@ -20,7 +22,9 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
-export const ANALYZE_ALLOW = []
+export const ANALYZE_ALLOW = [
+  { file: 'server/db/index.js', rule: 'pragma-optimize', count: 1, reason: 'AH3 opt-in boot hook: runs the SQLite optimize pragma once per opened database only when GML_SQLITE_OPTIMIZE_ON_BOOT is 1/true (default off); see docs/operations/query-planner.md 2e' }
+]
 export const SCAN_DIRS = ['server', 'scripts'] // 不含 src/：前端文案可能含 "Analyze"，且前端不碰数据库
 const SRC_EXT = new Set(['.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx'])
 const SKIP_DIR = new Set(['node_modules', 'dist', 'tests', '.git'])
@@ -134,9 +138,14 @@ function* walk(abs, rel) {
   }
 }
 
-/** 扫目录树。返回 { ok, hits, staleAllow, filesScanned } */
+/** 扫目录树。返回 { ok, hits, allowedHits, staleAllow, filesScanned } */
 export function scanTree(root = ROOT, { dirs = SCAN_DIRS, allow = ANALYZE_ALLOW } = {}) {
-  for (const a of allow) if (!a.file || !a.reason || String(a.reason).trim().length < MIN_REASON) throw new Error(`统计语句扫描豁免 ${a.file ?? '?'} 必须写理由 reason（至少 ${MIN_REASON} 个字符）`)
+  for (const a of allow) {
+    if (!a.file || !a.reason || String(a.reason).trim().length < MIN_REASON) throw new Error(`统计语句扫描豁免 ${a.file ?? '?'} 必须写理由 reason（至少 ${MIN_REASON} 个字符）`)
+    if (a.rule !== undefined && !['stats', 'pragma-optimize'].includes(a.rule)) throw new Error(`统计语句扫描豁免 ${a.file} 的 rule 非法: ${a.rule}`)
+    if (a.count !== undefined && (!Number.isInteger(a.count) || a.count < 1)) throw new Error(`统计语句扫描豁免 ${a.file} 的 count 必须是 ≥1 的整数`)
+    if (a.count !== undefined && a.rule === undefined) throw new Error(`统计语句扫描豁免 ${a.file} 给了 count 就必须同时给 rule`)
+  }
   const raw = []
   let filesScanned = 0
   for (const d of dirs) {
@@ -147,9 +156,15 @@ export function scanTree(root = ROOT, { dirs = SCAN_DIRS, allow = ANALYZE_ALLOW 
       for (const h of scanSource(fs.readFileSync(path.join(root, rel), 'utf8'), rel)) raw.push(h)
     }
   }
-  const allowed = new Set(allow.map(a => a.file))
-  const hits = raw.filter(h => !allowed.has(h.file))
-  const hitFiles = new Set(raw.map(h => h.file))
-  const staleAllow = allow.filter(a => !hitFiles.has(a.file))
-  return { ok: hits.length === 0 && staleAllow.length === 0, hits, staleAllow, filesScanned }
+  const hits = [], allowedHits = [], staleAllow = []
+  const consumed = new Map(allow.map(a => [a, 0]))
+  for (const h of raw) {
+    const a = allow.find(x => x.file === h.file && (x.rule === undefined || x.rule === h.rule) && (x.count === undefined || consumed.get(x) < x.count))
+    if (a) { consumed.set(a, consumed.get(a) + 1); allowedHits.push(h) } else hits.push(h)
+  }
+  for (const a of allow) {
+    const used = consumed.get(a)
+    if (a.count === undefined ? used === 0 : used < a.count) staleAllow.push(a)
+  }
+  return { ok: hits.length === 0 && staleAllow.length === 0, hits, allowedHits, staleAllow, filesScanned }
 }

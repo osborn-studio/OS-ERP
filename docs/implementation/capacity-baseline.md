@@ -949,3 +949,29 @@ gh run view <run-id> --log-failed
 - 同一个秒级用例在 `tests/audit-fts-races.test.mjs`（"AG4 writer process keeps inserting…"，约 3 s）：写入者 400 行/s，经轮询（非 sleep）确认「触发器在位时在写 → `--disable` → 索引缺席时仍在写 → `--enable` → 触发器恢复后仍在写」，断言确认行数 = 表内行数、序号不重、链完好、索引文档数 = 行数。
 - 复现：`node scripts/bench-audit-toggle-under-write.mjs --rounds 20 --rate 200 --seed-rows 20000`；`--mode burst --burst-every-ms 0`；`--writer-busy-ms 500 --retries 0` 观察失败形态。
 - 说明：表中四个场景在审计跟进修复（steady 模式落后时不再"补发"积压、`ok` 须含每次开关均真实执行）**之前**跑出；steady 场景的"实测行/秒"因此可能略高估被挡之后的恢复速率，其余结论不受影响。修复后用 `--rounds 3 --seed-rows 3000` 复跑一次，`ok: true`、`toggles_ok: true`、零失败。
+
+## AH3 大库（20 万 OMS 单、密集窗口）下 OMS `/stats` 语句延迟（**Mac mini / 合成大库 / 非目标主机（不是 `dmserver`）/ 整机负载 9–10 / 两次独立运行**）
+
+脚本：`node scripts/bench-oms-dense-window.mjs --dir <大库目录> --repeat 31 --out result.json`（只读打开；窗口的"现在"取锚点后一天，30 / 90 天窗口覆盖数据而不是空区间）。大库 = `synth-data.mjs --skus 20000 --docs 50000 --txns 250000`（种子 20261023，生产模式，生成 1226 s，整机负载 30–85 时）+ `fillOms` 灌 20 万 OMS 单 + 每单一行明细（订单时间落在锚点前 60 天并随 id 递增 ±6 h，即 AF3 的 `--span 60 --ordered` 密集窗口；平台 1、2 属组织 1，其余属组织 2；30 天窗口 100 018 单、90 天窗口全部 200 000 单）；库 485 MB；不跑 `ANALYZE`；迁移到 075。所有语句**轮转**计时（每轮每条一次，31 轮），整机负载漂移落在所有语句上。**Mac mini 数字，不是 `dmserver` / 目标主机的结果，也不是容量承诺**；同一进程内单连接，没有写入并发。
+
+| 语句（p50 / p95，ms） | 第 1 次运行 | 第 2 次运行 | 对照：开过启动期优化（有 `sqlite_stat1`）|
+|---|---|---|---|
+| byPlatform 全局 30 / 90 天 | 28 / 33；58 / 83 | 27 / 32；56 / 73 | 31 / 45；62 / 75 |
+| trend 全局 30 / 90 天 | 24 / 32；47 / 66 | 23 / 28；47 / 53 | 26 / 36；50 / 66 |
+| total 全局 30 / 90 天 | 14 / 18；27 / 42 | 13 / 16；26 / 33 | 15 / 24；28 / 34 |
+| **topSkus 全局 30 / 90 天** | 70 / 91；**158 / 231** | 66 / 79；**153 / 197** | 74 / 134；166 / 201 |
+| AI 平台分析 30 / 90 天 | 26 / 31；53 / 101 | 25 / 33；49 / 65 | **81 / 112；90 / 133**（计划变了）|
+| byPlatform 受限（org 1）30 / 90 天 | 28 / 42；59 / 79 | 27 / 38；56 / 73 | 31 / 39；60 / 79 |
+| trend 受限 30 / 90 天 | 16 / 23；31 / 40 | 15 / 23；31 / 40 | 17 / 35；33 / 39 |
+| total 受限 30 / 90 天 | 12 / 14；23 / 28 | 12 / 16；23 / 29 | 12 / 18；24 / 31 |
+| topSkus 受限 30 / 90 天 | 36 / 42；73 / 85 | 33 / 50；71 / 99 | 35 / 52；74 / 99 |
+
+读法：
+- **最坏的一条仍是全局热销 SKU 90 天窗口**（窗口覆盖全部 20 万单，要对每个窗口内订单探一次 `idx_oms_items_order`）：p50 约 155 ms、p95 约 200–230 ms。与 AF3 在 20 万单 `--span 60 --ordered` 上登记的"已发布 186 / 216 ms"同量级（那次整机负载 22，这次 9–10），所以 AF3 记录的取舍（ADR-0044 补充 5）在大库上复现，没有变得更糟。其余语句在密集窗口下 p95 都在 100 ms 以内（90 天 byPlatform 全局 73–83 ms 最高）。
+- 两次独立运行的 p95 相差可达 30–50 ms（第 1 次的 topSkus 90 天 231 vs 第 2 次 197；AI 平台分析 90 天 101 vs 65），**只看量级**；p50 在两次之间稳定在 ±5 ms 左右。
+- 第 4 列是对照实验，不是推荐配置：把同一份大库用 `GML_SQLITE_OPTIMIZE_ON_BOOT` 对应的那条优化 pragma 跑一遍（3.1–3.7 s，写入 125 行 `sqlite_stat1`）后再测——AI 平台分析丢了 `idx_oms_order_time`（计划改成 `SCAN pf` + 逐平台走 `sqlite_autoindex_oms_orders_1`），30 天 p50 约 3×，其余语句在噪声内；同时 120 条登记语句有 23 条指纹变化、18 处审计违规（详见 `docs/operations/query-planner.md` 2e）。
+
+explain-audit（大库）：120 条语句，违规 0，裸 SCAN 30（26 条带理由的豁免、4 条在 200 行阈值之下），索引全扫 8；与小库快照逐条相同（`differences` 为空）。
+
+- 复现：`node scripts/explain-audit.mjs --snapshot docs/implementation/explain-plans.large.json --scale large`（现造；约 20 分钟量级，见上）或 `--large-dir`；延迟：`node scripts/bench-oms-dense-window.mjs --dir <大库目录>`。
+- 未覆盖：`dmserver` 与生产规模副本；空闲机器上的数字；并发写入下的读延迟；真实订单时间分布与明细标题长度；多连接并发读取；`ANALYZE` 之后其它语句（除 AI 平台分析外）的延迟。
