@@ -24,9 +24,40 @@
  * ============================================================================
  */
 import { createHash, createPublicKey, sign, verify } from 'node:crypto'
+import { runtimeMode } from '../runtime.js'
 
 export const INTENT_FORMAT = 'os-erp-audit-anchor-intent/1'
 export const OPERATION_ACTIONS = { retention: 'RETENTION_PURGE', archive: 'AUDIT_ARCHIVE', erase: 'PRIVACY_ERASE' }
+
+export const KEY_ID_AFTER_ENV = 'GML_ANCHOR_INTENT_KEY_ID_REQUIRED_AFTER'
+export const KEY_ID_AFTER_DEFAULT = '2026-12-01'
+
+/**
+ * `--require-intent-key-id` 的有效值（AH5，ADR-0055 补充 4）。返回 { required, rule, mode, after }：
+ *   · `flag` 为真 ⇒ 强制，rule='flag'（显式开关永远生效，没有“显式关闭”）；
+ *   · demo / test ⇒ 不按日期强制（rule='mode-not-enforcing'，日期不读取、不校验）；
+ *   · production（`GML_RUNTIME_MODE` 未设也按 production，与 runtimeMode() 一致）⇒ 当前 UTC 时间 ≥ `after` 零点才强制；
+ *     `after` = 环境变量（严格 YYYY-MM-DD 且是真实日历日；空串视为未设）或缺省 2026-12-01。非法值 / 不可用的时钟 ⇒ 抛错，绝不回落到“不强制”。
+ * 模式非法时 runtimeMode() 抛 RUNTIME_MODE_INVALID。
+ */
+export function resolveKeyIdRequirement({ flag = false, env = process.env, now = new Date() } = {}) {
+  if (flag) return { required: true, rule: 'flag', mode: null, after: null }
+  const mode = runtimeMode(env)
+  if (mode !== 'production') return { required: false, rule: 'mode-not-enforcing', mode, after: null }
+  const raw = env[KEY_ID_AFTER_ENV]
+  const after = raw === undefined || raw === '' ? KEY_ID_AFTER_DEFAULT : raw
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(after)
+  const day = new Date(0)
+  if (m) day.setUTCFullYear(Number(m[1]), Number(m[2]) - 1, Number(m[3]))
+  if (!m || day.getUTCFullYear() !== Number(m[1]) || day.getUTCMonth() !== Number(m[2]) - 1 || day.getUTCDate() !== Number(m[3])) {
+    throw fault('INTENT_KEY_ID_AFTER_INVALID', `${KEY_ID_AFTER_ENV} must be a real calendar date YYYY-MM-DD (got ${JSON.stringify(String(after)).slice(0, 40)})`, 500)
+  }
+  day.setUTCHours(0, 0, 0, 0)
+  const t = now instanceof Date ? now.getTime() : NaN
+  if (!Number.isFinite(t)) throw fault('INTENT_KEY_ID_AFTER_INVALID', 'clock is not usable; refusing to decide key_id enforcement', 500)
+  const reached = t >= day.getTime()
+  return { required: reached, rule: reached ? 'production-date-reached' : 'production-date-not-reached', mode, after }
+}
 
 const fault = (code, message, status) => Object.assign(new Error(message), { code, status })
 const hasTable = (db, name) => !!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name)
