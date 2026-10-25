@@ -88,6 +88,8 @@ const DECLARED = [
   'scripts/check-audit-allowlist.mjs',
   'scripts/check-metrics-scope.mjs',
   'tests/audit-allowlist.test.mjs',
+  'scripts/check-lock-registry.mjs',
+  'tests/check-lock-registry.test.mjs',
   'tests/dependency-review-policy.test.mjs',
   'tests/release-candidate-policy.test.mjs',
   'scripts/db-backup.mjs',

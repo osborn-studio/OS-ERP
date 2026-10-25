@@ -218,6 +218,9 @@ read-only toward the repository and need network access.
   host next to npm's own "audited N packages" summary. A local run on 2026-10-24 reported 42 packages with verified signatures and
   13 with verified attestations (lockfile: 36 npmjs.org entries, 341 npmmirror.com entries). Moving the remaining entries to the
   npmjs registry is a separate decision (it changes `package-lock.json` and install reachability).
+  **Update (AG7, 2026-10-24):** the paragraph above describes the state before AG7. `.npmrc` now points at `registry.npmjs.org` and all 377
+  lockfile `resolved` entries use it, so `npm audit signatures` now covers every installed package (327 audited, 327 verified, 58 attestations); the
+  lock-registry guard step after the SBOM diff fails the candidate if any `resolved` host is not `registry.npmjs.org`. See `docs/security/dependency-notes.md` section 11.
 - **SBOM diff vs the previous candidate artifact.** The step looks up the newest earlier successful run of the candidate workflow
   on `main` or on a `v*` tag with event `push` or `workflow_dispatch` (pull-request runs and runs from other branches are ignored, the current run is excluded), downloads its
   `os-erp-candidate-*` artifact with `gh run download`, and diffs its SBOM (`sbom.cdx.json`, or for artifacts from before AF7 the single
