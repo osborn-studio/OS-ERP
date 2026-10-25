@@ -307,6 +307,53 @@ node scripts/synth-pipeline.mjs --dir /tmp/synth-large --skus 20000 --txns 25000
 - 非字符串/含 `%` 的 `user` 子串过滤（按姓名）仍是整表扫描；纯数字现在只匹配 `user_id`（旧版也匹配 `user_name` 恰为该数字的行——行为收窄，已在代码注释中说明）。
 - 只在 Mac mini 上、合成数据、机器带负载；`dmserver` 上的数字、真实长明细的库体积、HTTP 端到端导出时间均**未测**。
 
+## AA11 迁移升级演练：059–062 在合成 medium 库上的逐迁移耗时（**Mac mini / 合成数据 / 非目标主机 / 单次墙钟**）
+
+脚本：`scripts/upgrade-rehearsal.mjs`（库：`scripts/lib/lock-probe.mjs`；测试：`tests/upgrade-rehearsal.test.mjs`）。它在备份集（或合成库目录，经 `db-backup.mjs` 备份成备份集）的**隔离恢复副本**上，从 `--from N` 基线起把编号 > N 的迁移**逐个**交给真实运行器（生产模式、暂存迁移目录里是仓库文件的字节级复制），每步记录耗时与写锁阻塞，升级后核对校验和 / 空操作重跑 / integrity / 外键 / 业务探针 / verify-seed 风格不变量，任一失败即回退（进程内重新恢复并比对 + 调用 ADR-0016 的 `upgrade-rollback-drill.mjs`）。可选夜间步骤见 `nightly-capacity.yml` 的 `rehearsal` 输入（默认 `false`，定时任务永不运行）。
+
+### 基线截断怎么做，为什么不绕过校验和与自愈
+
+- `--from 58` ＝ 编号 ≤ 58 的迁移视为已应用，059–062 重放。工作副本上只做两件事：`DELETE FROM schema_migrations WHERE 编号 > 58`；`DROP INDEX` 那些"仓库里编号 > 58 的迁移创建、基线迁移不创建"的索引（内存库跑 schema.sql + 迁移 ≤58 得到集合 A，再跑全部迁移得到集合 B，只删 B−A 且存在于副本里的索引；本次删 25 个：059 的 21 个、060 的 1 个、061 的 3 个）。表/列不删（删列有损数据），所以 060/062 这类"加列 / 写字典行"的迁移在副本里是对现成结构的幂等重放——报告的 `structure_preexisting` 逐步标明（false = 真正新建，true = 空转）。
+- **不改任何校验和，不调用 adopt。** ≤58 的行保留原校验和，运行器第一遍照常与暂存文件比对，不一致则生产模式在任何写入前 `MIGRATION_CHECKSUM_MISMATCH`。被删的行（>58）先与当前文件比对再删，不一致判 `PRE_UPGRADE_CHECKSUM_MISMATCH`（否则截断会抹掉"这个库在生产上启动会被拒绝"的事实）。重放的行由运行器按当前文件重新登记（origin=applied）。
+- 自愈：每步记录 `healed`；> 基线的迁移被自愈 ＝ up 与 verify 不自洽，判失败；≤ 基线的只记警告。
+- 想演练**真正的旧库**（表/列也不存在），用旧版本代码产出的备份集——它的版本表本来就缺这些行，`--from` 取其最高已应用编号。
+
+### 口径
+
+`duration_ms` ＝ 一次 `runMigrations` 调用的墙钟（含对暂存目录的校验和核对与已登记迁移的 `verify()`）；`overhead_ms` ＝ 紧接着再调一次（必须是空操作，否则判失败）的墙钟；`net_ms ≈ duration − overhead`，**抖动很大（负载 30–50 的机器上经常为 0），只看 `duration_ms`**。写锁：worker 线程里另一个连接每约 1 ms 做一次 `BEGIN IMMEDIATE; COMMIT`（`busy_timeout=0`）。每个"被挡窗口"记两个数，**真实持锁时长落在两者之间**（再加线程调度噪声）：`busy_span`＝第一次到最后一次失败尝试的间隔（下界），`blocked`＝上一次成功到下一次成功的间隔（近似上界，高负载下可能明显偏大）。写入者视角；WAL 下读者不被挡，本演练不量读者；单迁移单事务，粗上界看 `duration_ms`。
+
+### 数据与结果
+
+输入：`synth-data.mjs --skus 20000 --docs 30000 --txns 150000`（medium；6,667 商品 / 12,000 采购单 / 18,000 销售单 / 150,000 库存流水；库文件 236,937,216 字节 ≈ 226 MiB，种子 20261023）生成后，`upgrade-rehearsal.mjs --from=58 --synth-dir=…`。机器：Mac mini（Apple M4，10 核，16 GB，Node v22.22.1），**测量时整机负载平均值约 17–50（其他任务并行）**，数字只能看量级。以下是最终代码上同一份库连跑两次（运行 5、运行 6）；此前用较早版本的脚本（探针只有 `blocked` 一个口径）还跑过四次，059 耗时 447 / 561 / 993 / 1023 ms，量级一致。
+
+| 迁移 | 结构原本存在 | 运行 5：耗时 / 写锁（busy_span–blocked） (ms) | 运行 6：耗时 / 写锁（busy_span–blocked） (ms) | 说明 |
+|---|---|---|---|---|
+| 059_indexes | false（先删了 21 个它创建的索引） | 337.6 / 277.5–280.5 | 415.0 / 349.6–352.9 | 真实建索引；写锁占耗时的约 80–85% |
+| 060_qimen_secrets | false（先删了它创建的 1 个索引） | 34.4 / 0–0 | 36.2 / 0–3.3 | 小迁移；基本没撞上锁 |
+| 061_hot_query_indexes | false（先删了它创建的 3 个索引） | 43.1 / 24.4–27.1 | 135.9 / 73.9–80.5 | 真实建索引 |
+| 062_audit_view_permission | **true** | 16.8 / 0–0 | 41.2 / 0–0 | 权限字典行已存在，空转重放，耗时**不代表**升级成本 |
+| 合计（4 步） | | 431.9 | 628.3 | |
+
+两次运行都通过全部核对且 `warnings` 为空：`checksums_verified`（59/59）、`repo_files_match_registry`、`production_rerun_is_noop`、`registry_covers_all_migrations`、`integrity_ok`、`foreign_keys_not_worse`（0→0）、`probes_retained`（users 1 / products 6667 / purchase_orders 12000 / receipts 0 / ar_open_balance 0 前后相同）、`seed_invariants_not_regressed`（24/24 绿 → 24/24 绿）。其他耗时（运行 5 / 6）：合成库备份 3.9 / 3.7 s，恢复复制 0.3 / 0.4 s，索引集差异计算 1.2 / 0.8 s，verify-seed 风格不变量升级前 137 / 102 s、升级后 109 / 80 s（占总耗时 258 / 192 s 的绝大部分，与迁移本身无关）。库文件大小升级前后相同（删掉的 25 个索引腾出的页被重建复用）。
+
+**读法**：15 万行流水量级的 medium 库，059 建索引在这台机器上约 0.3–1.0 s、持写锁约 0.3–0.85 s；这是"另一个写入者最坏要等多久"的量级，不是 SLA。**没有在 `dmserver` 上测过，没有用真实规模或真实分布的数据测过，没有测读者，没有测并发业务写入与迁移同时进行时的 `SQLITE_BUSY` 次数**（Y7 的写路径基线是另一件事）。六次运行里 059 在 0.34–1.02 s 之间波动，说明单次数字只能看量级；要引用请在目标主机上重复多次取分布。
+
+### 失败路径的证据（夹具规模，`tests/upgrade-rehearsal.test.mjs`）
+
+用 `--extra-migrations-dir` 追加一个"先建表、写行、再抛错"的 `900_rehearsal_failing.cjs`（只复制进暂存目录，永不写进 `server/db/migrations/`）：059–062 先应用，第 900 步失败 ⇒ 退出码 1，报告记录失败步骤与错误，进程内回退（删副本、重新核对 sha256 复制、版本表与升级前逐字段相同、探针相同、integrity ok）与 ADR-0016 回退演练（退出码 0，全部不变量成立）都通过，工作副本里没有半截表、没有 900 行。另有：备份里被篡改的已登记校验和（≤基线与>基线各一例）⇒ `PRE_UPGRADE_CHECKSUM_MISMATCH`、一个迁移都不尝试；`--from` 高于库内真实版本 ⇒ `REHEARSAL_BASELINE_NOT_APPLIED`（退出码 2）；版本表里有登记行而仓库没有对应文件 ⇒ `PRE_UPGRADE_REGISTRY_FILE_MISSING`（截断会把它的校验和历史一并抹掉，所以先拒绝）；一个 `verify()` 与 `up()` 不自洽的迁移，紧接着的核对调用若发生自愈即判失败（不会被悄悄修好）；合成库副本 settings 里指向别处的 `backup_dir`/`backup_keep` 在副本里被改回迁移 020 的缺省值，备份不会写到或裁剪目标目录之外的任何目录。
+
+### 用法
+
+```sh
+# 真实备份集（只读使用；目标目录必须是空目录，不能是线上 data 目录）
+node scripts/upgrade-rehearsal.mjs --from=58 --backup-dir=/abs/backups --target-dir=/abs/empty/rehearsal-$(date +%Y%m%d)
+# 合成库目录（须带 SYNTHCO 合成指纹）
+node scripts/upgrade-rehearsal.mjs --from=58 --synth-dir=/abs/synth-data --target-dir=/abs/empty/rehearsal
+# 预演尚未合入的迁移（编号须大于仓库最大编号）
+node scripts/upgrade-rehearsal.mjs --from=62 --backup-dir=… --target-dir=… --extra-migrations-dir=/abs/candidate-migrations
+```
+退出码：0 通过；1 升级或核对失败（已执行回退）；2 参数 / 目录 / 基线被拒绝（不创建任何文件）。报告 `upgrade-rehearsal-<stamp>.json` 写在目标目录（0600）。
+
 ## AA5 看板瓶颈剖析与低库存口径统一（**Mac mini / 合成 medium 库 / 非目标主机**）
 
 > **范围声明**：同 Z3——Mac mini，合成 `medium` 库（`--skus 20000 --docs 30000 --txns 150000`，种子 20261023；2 万 SKU / 84 736 库存行 / 15 万流水），**不是 `dmserver` 结果、不是容量承诺、不是验收证据**。**测量时整机负载极高（`uptime` 15 分钟平均负载约 45–50，同时有其它工作流在跑测试），绝对数字偏大且抖动大**，所以每行都给原始值，并优先看同一轮里"前 / 后交错"的对比。库用 Z3 的"增强库"口径（`safe_stock=(id%5)*40`，1.6 万 SKU 设了安全库存；经销商 `credit_limit=100000`），否则安全库存全 0 看不出低库存查询的代价。

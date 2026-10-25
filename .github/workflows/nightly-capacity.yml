@@ -23,6 +23,15 @@ on:
           - small
           - medium
           - large
+      # AA11: optional, default off. Scheduled runs never set it, so they never run the rehearsal.
+      rehearsal:
+        description: Also run the upgrade rehearsal (replay migrations 059+ on a copy of the synthetic database, timings in the log only)
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
 
 permissions:
   contents: read
@@ -106,6 +115,19 @@ jobs:
             node scripts/bench-api.mjs --profile=write --iterations 50 --concurrency 4 --max-error-rate 0 --out "$CAP_REPORTS/bench-write.json" > "$CAP_REPORTS/bench-write.log" 2>&1
           rc=$?
           [ "$rc" -eq 0 ] || echo "::error::bench write profile exited with code $rc (raw output withheld)"
+          exit "$rc"
+      # AA11 (optional, default off): replay migrations > 058 one by one on a copy of the pipeline's synthetic database and print
+      # per-migration timings (fixed-format lines only, no paths). It never changes the gate: a failure here is a warning, not a red job.
+      - name: Upgrade rehearsal (optional, off by default)
+        id: rehearsal
+        if: inputs.rehearsal == 'true' && steps.pipeline.outcome == 'success'
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          node scripts/upgrade-rehearsal.mjs --from=58 --synth-dir="$CAP_RUN/data" --target-dir="$CAP_RUN/upgrade-rehearsal" > "$CAP_REPORTS/rehearsal.log" 2>&1
+          rc=$?
+          grep -E '^    [0-9]{3}_[A-Za-z0-9_.-]+ +(ok|failed|unexpected|pending) ' "$CAP_REPORTS/rehearsal.log" || true
+          [ "$rc" -eq 0 ] || echo "::warning::upgrade rehearsal exited with code $rc (raw output withheld)"
           exit "$rc"
       - name: Reduce reports to the allowlisted summary (printed to the log)
         id: summary
