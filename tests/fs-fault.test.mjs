@@ -724,3 +724,14 @@ test('evidence-log: a torn tail (power loss between write and fsync) is rejected
   assert.equal(APPEND(file, 2).status, 0)
   assert.equal(readLog(file).ok, true)
 })
+
+test('report cleanup preserves another live writer and unowned legacy temp files', (t) => {
+  const f = backupFixture(t)
+  assert.equal(f.B(['--keep=5']).status, 0)
+  const live = `.backup-report-20200101-000000.json.${process.pid}.abcdef123456.tmp`
+  const legacy = '.backup-report-20200101-000000.json.abcdef123456.tmp'
+  for (const name of [live, legacy]) writeFileSync(path.join(f.bdir, name), '{"in_progress":true}')
+  const r = f.B(['--keep=5'])
+  assert.equal(r.status, 0, r.stdout + r.stderr)
+  for (const name of [live, legacy]) assert.equal(readFileSync(path.join(f.bdir, name), 'utf8'), '{"in_progress":true}', name)
+})

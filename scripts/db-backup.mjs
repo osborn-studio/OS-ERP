@@ -21,7 +21,7 @@
  *   （AES-256-GCM，认证）。这些是**要离机保存**的对象（docs/operations/audit-integrity.md §6），`audit-verify-chain --against-backup` 据此识别“整链重算”。
  *   链校验失败不挡备份（被篡改的库也要有备份），只在清单里 `verified:false`。清单写失败 ⇒ 该库备份失败（不留没有清单的新备份）。
  *
- * 【报告与清理的持久性】（AG6）报告写成临时文件 `.backup-report-<stamp>.json.<rand>.tmp` → fsync → rename → 目录 fsync（被打断遗留的临时文件由下一次运行清扫）。清理分三步：
+ * 【报告与清理的持久性】（AG6）报告写成临时文件 `.backup-report-<stamp>.json.<pid>.<rand>.tmp` → fsync → rename → 目录 fsync（下一次运行只清扫已退出的本机 PID 临时文件；存活、权限不明及旧格式文件保留供人工检查）。清理分三步：
  *   ① 算出要删的旧备份与孤儿清单，记进报告条目（`pruned` / `pruned_orphans`，`prune_state=planned`）并把 `report_phase=pre-prune` 的报告持久化；② 才删除（备份先、清单后），再 fsync 目录；
  *   ③ 写 `report_phase=final` 终版报告（`prune_state=done|failed|skipped|none`）。pre-prune 报告写不下去 ⇒ 不删任何文件（`skipped`）。注入点 `backup.after-report-write-before-rename`、`backup.after-prune-delete-before-dirsync`。
  *
@@ -507,15 +507,23 @@ const reportBody = (phase) => JSON.stringify({
 }, null, 2) + '\n'
 const sweptDirs = new Set()
 const reportFiles = new Set()
+// Local backup directories: only reap a temp whose recorded writer has exited.
+// PID reuse, EPERM and legacy names are ambiguous, so preserve them for manual inspection.
+function abandonedReportTemp(dir, name) {
+  const match = /^\.backup-report-.*\.json\.([1-9][0-9]*)\.[a-f0-9]{12}\.tmp$/.exec(name)
+  if (!match || !Number.isSafeInteger(Number(match[1]))) return false
+  try { if (!fs.lstatSync(path.join(dir, name)).isFile()) return false } catch { return false }
+  try { process.kill(Number(match[1]), 0); return false } catch (error) { return error.code === 'ESRCH' }
+}
 /** 写一份报告到 dir；失败（含注入的 throw）⇒ 删掉自己的临时文件、记录失败并返回 false。abort 不经过这里，临时文件会留盘，下次运行清扫 */
 function writeReport(dir, phase) {
   const file = path.join(dir, `backup-report-${stamp}.json`)
-  const tmpFile = path.join(dir, `.backup-report-${stamp}.json.${randomBytes(6).toString('hex')}.tmp`)
+  const tmpFile = path.join(dir, `.backup-report-${stamp}.json.${process.pid}.${randomBytes(6).toString('hex')}.tmp`)
   try {
     mkdirDurable(dir)
     if (!sweptDirs.has(dir)) {
       sweptDirs.add(dir)
-      for (const f of fs.readdirSync(dir)) if (/^\.backup-report-.*\.tmp$/.test(f)) fs.rmSync(path.join(dir, f), { force: true }) // 上次被打断遗留的报告临时文件
+      for (const f of fs.readdirSync(dir)) if (abandonedReportTemp(dir, f)) fs.rmSync(path.join(dir, f), { force: true }) // 只清理已退出的本机写者遗留物
     }
     writeFileDurable(tmpFile, reportBody(phase), [], 0o666)
     faultPoint('backup.after-report-write-before-rename')
