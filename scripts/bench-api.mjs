@@ -310,15 +310,32 @@ async function prepareWrite({ dataDir, industry, n }) {
   } finally { db.close() }
 }
 
-function startContender({ dbFile, holdMs, gapMs }) {
+/** Wait at most 10s for the first lock; stop drains the bounded hold/gap and collects final counters. */
+export async function startContender({ dbFile, holdMs, gapMs }) {
   if (holdMs === 0) return null
   const stopFlag = new SharedArrayBuffer(4)
   const worker = new Worker(new URL('./lib/bench-contender.mjs', import.meta.url), { workerData: { dbPath: dbFile, holdMs, gapMs, stopFlag } })
-  const done = new Promise((resolve, reject) => {
-    worker.once('message', resolve); worker.once('error', reject)
+  let stats; let failure; let timer
+  const exited = new Promise(resolve => worker.once('exit', resolve))
+  const ready = new Promise((resolve, reject) => {
+    timer = setTimeout(() => reject(new Error('bench contender startup timed out')), 10000)
+    worker.on('message', message => {
+      if (message.ready === true) resolve()
+      else stats = message
+    })
+    worker.on('error', error => { failure = error; reject(error) })
+    worker.once('exit', () => reject(new Error('bench contender exited before ready')))
   })
+  try { await ready } catch (error) { await worker.terminate(); throw error }
+  finally { clearTimeout(timer) }
   return {
-    async stop() { Atomics.store(new Int32Array(stopFlag), 0, 1); const r = await done; await worker.terminate(); return r }
+    async stop() {
+      Atomics.store(new Int32Array(stopFlag), 0, 1)
+      const code = await exited
+      if (failure) throw failure
+      if (code !== 0 || !stats) throw new Error('bench contender exited without statistics')
+      return stats
+    }
   }
 }
 
@@ -332,7 +349,7 @@ async function runWriteProfile({ opts, call, token, writePlan: W, logCounts, get
     { name: 'stock_transfer', method: 'POST', route: '/api/inventory/transfers', key: (i) => `${W.runId}-tr-${i}`,
       body: (k) => ({ from_warehouse_id: W.fromWarehouseId, to_warehouse_id: W.toWarehouseId, items: [{ sku_id: W.trSkuId, qty: 1 }], remark: k, autoShip: true }) }
   ]
-  const contender = startContender({ dbFile: W.dbFile, holdMs: opts.contenderHoldMs, gapMs: opts.contenderGapMs })
+  const contender = await startContender({ dbFile: W.dbFile, holdMs: opts.contenderHoldMs, gapMs: opts.contenderGapMs })
   const results = []
   const okKeys = { purchase_order_create: [], receipt_confirm: [], stock_transfer: [] }
   const t0 = performance.now()
@@ -356,8 +373,8 @@ async function runWriteProfile({ opts, call, token, writePlan: W, logCounts, get
     if (contender) contenderStats = await contender.stop()
   }
   const wall = (performance.now() - t0) / 1000
-  const busyLines = getBusy()
   await stop()
+  const busyLines = getBusy()
 
   const integrity = await verifyWrites({ W, okKeys, n })
   const total = results.reduce((a, r) => a + r.requests, 0)
