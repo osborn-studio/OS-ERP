@@ -947,12 +947,13 @@ export const TOOLS = [
       const e = scopeEntityIds(ctx, db)
       // AA1（ADR-0041）：单据归属走 docflow 的 DOC_SCOPE_RESOLVERS（与 doc.get、/api/docflow/history 同一份），
       // 不再按 dealer_id 等列名推断；类型级查看权限与绑定规则（doc-perms.js）叠加。
-      // 库存流水按货主过滤（流水不是单据，沿用货主组织判据）。
+      // 库存流水取货主与仓库范围交集（流水不是单据，复用库存仓库判据）。
       const scopeCtx = docScopeCtx(db, ctx)
       const txns = db
         .prepare('SELECT * FROM inventory_transactions WHERE doc_no=? ORDER BY id')
         .all(no)
         .filter((t) => !e || e.orgIds.includes(Number(t.owner_org_id)))
+        .filter((t) => warehouseInScope(db, t.warehouse_id, ctx.scope))
       const hits = []
       let existing = 0 // 库里确有此单号的单据行数（不论是否可见；探测**全部**已登记类型（含停用），不只是几类常用单据）
       const LABELS = { PO: '采购订单', SO: '销售订单', TF: '调拨单', MO: '生产/组装单', WW: '委外单' }
