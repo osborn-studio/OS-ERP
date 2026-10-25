@@ -32,7 +32,7 @@ jobs:
   checks:
     name: Typecheck, build, focused tests
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -206,7 +206,7 @@ jobs:
             if [ "${{ steps.regression.outcome }}" != "success" ]; then
               echo '::group::Failure diagnostics (filtered, long opaque strings redacted)'
               # Only lines that carry a failure signal; any 32+ char opaque string is masked so test credentials never print.
-              grep -E '失败|FAIL|Error|error|✗|退出码|assert|Timeout|EADDRINUSE|ECONNREFUSED' "$RAW_ROOT/runner.log" \
+              grep -E '失败|FAIL|Error|error|✗|退出码|assert|Timeout|EADDRINUSE|ECONNREFUSED|not ok|location:|failureType:|code:' "$RAW_ROOT/runner.log" \
                 | grep -vE '^  ✓' \
                 | sed -E 's/[A-Za-z0-9_.-]{32,}/[REDACTED]/g' \
                 | tail -120 || true

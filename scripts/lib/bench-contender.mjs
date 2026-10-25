@@ -6,7 +6,8 @@
  *   （CLI 脚本、备份、另一个服务实例）。本 worker 用独立连接循环 `BEGIN IMMEDIATE` → 持有 holdMs → `COMMIT` → 间隔 gapMs，
  *   模拟这类外部写者。**不写任何业务行**（空事务只占锁），所以不会改变被测库的内容。
  * 【输入】workerData: { dbPath, holdMs, gapMs, stopFlag: SharedArrayBuffer(Int32 x1) }；stopFlag[0] 置 1 即停止。
- * 【输出】结束时 postMessage({ cycles, begin_failures })；begin_failures = 自己拿不到锁（被服务进程占着）的次数。
+ * 【输出】首次持锁后 postMessage({ ready: true })；结束时 postMessage({ cycles, begin_failures })。
+ *   调用方等 ready 再发请求，避免压测先结束而 worker 尚未启动；begin_failures = 自己拿不到锁的次数。
  * 【注意】只对本脚本调用方传入的隔离副本使用；busy_timeout 固定 2000ms，仅用来避免与服务进程死等。
  * ============================================================================
  */
@@ -28,6 +29,7 @@ while (Atomics.load(stop, 0) === 0) {
     nap(gapMs)
     continue
   }
+  if (cycles === 0) parentPort.postMessage({ ready: true })
   nap(holdMs)
   db.exec('COMMIT')
   cycles++

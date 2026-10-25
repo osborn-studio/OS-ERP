@@ -446,7 +446,9 @@ function main() {
   if (!Object.keys(pend).length) console.log('  待办 pending=none：0 条（已无带排期标记的真实缺口登记）')
   for (const p of problems) console.log(`  ✗ ${p}`)
   console.log(`通过 ${routes.length - problems.length} / 失败 ${problems.length}`)
-  process.exit(problems.length ? 1 : 0)
+  // 不用 process.exit()：stdout 接管道时写入是异步的，--list 的 ~70 KB 超过 64 KB 管道缓冲，机器繁忙时父进程读得慢，
+  // exit 会把未冲出的尾部丢掉（gen-codemap 读到残缺清单、codemap 测试随机红）。设 exitCode 让进程自然结束、先冲完缓冲。
+  process.exitCode = problems.length ? 1 : 0
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === SELF) main()
