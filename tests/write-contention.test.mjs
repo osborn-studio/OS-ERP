@@ -16,13 +16,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn, spawnSync } from 'node:child_process'
-import { mkdtempSync, rmSync, readFileSync, cpSync, existsSync } from 'node:fs'
-import { once } from 'node:events'
+import { mkdtempSync, rmSync, readFileSync, cpSync, existsSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import readline from 'node:readline'
 import { fileURLToPath } from 'node:url'
-import { setTimeout as delay } from 'node:timers/promises'
 import Database from 'better-sqlite3'
 import { sqliteBusyMs } from '../server/db/index.js'
 import {
@@ -254,73 +252,99 @@ test('multi-process writers on one DB: no lost writes, no duplicates, retries re
   const before = { po: probe.prepare('SELECT COUNT(*) c FROM purchase_orders').get().c, tr: probe.prepare('SELECT COUNT(*) c FROM stock_transfers').get().c, stock: onHand() }
 
   const workers = []
-  for (let w = 0; w < N; w++) {
-    const cfg = {
-      dbPath, worker: w, iterations: K, runId, supplierId, poWarehouseId, poSkuId,
-      fromWarehouseId: src.warehouse_id, toWarehouseId: toWh, trSkuId: src.sku_id,
-      maxAttempts: 10, baseDelayMs: 15, maxDelayMs: 120
+  const releaseFile = path.join(dir, 'writers-released')
+  try {
+    for (let w = 0; w < N; w++) {
+      const cfg = {
+        dbPath, worker: w, iterations: K, runId, supplierId, poWarehouseId, poSkuId,
+        fromWarehouseId: src.warehouse_id, toWarehouseId: toWh, trSkuId: src.sku_id,
+        maxAttempts: 10, baseDelayMs: 15, maxDelayMs: 120, releaseFile,
+        // Exercise startup delays beyond the old fixed 400ms lock hold.
+        startDelayMs: 600 + w * 1500
+      }
+      const child = spawn(process.execPath, [path.join(ROOT, 'tests/fixtures/write-contention-worker.mjs'), JSON.stringify(cfg)], {
+        cwd: ROOT, stdio: ['pipe', 'pipe', 'pipe'],
+        env: { PATH: process.env.PATH, HOME: dir, GML_RUNTIME_MODE: 'test', GML_DATA_DIR: dir, GML_SQLITE_BUSY_MS: '1' }
+      })
+      const rl = readline.createInterface({ input: child.stdout })
+      const lines = []
+      let stderr = ''
+      child.stderr.on('data', (d) => { stderr += d })
+      let readyResolve, busyResolve
+      const ready = new Promise(resolve => { readyResolve = resolve })
+      const busy = new Promise(resolve => { busyResolve = resolve })
+      rl.on('line', (l) => { lines.push(l); if (l === 'ready') readyResolve(); if (l === 'busy') busyResolve() })
+      const closed = new Promise(resolve => {
+        child.once('error', error => resolve({ error }))
+        child.once('close', (code, signal) => resolve({ code, signal }))
+      })
+      workers.push({ child, ready, busy, lines, closed, rl, err: () => stderr })
     }
-    const child = spawn(process.execPath, [path.join(ROOT, 'tests/fixtures/write-contention-worker.mjs'), JSON.stringify(cfg)], {
-      cwd: ROOT, stdio: ['pipe', 'pipe', 'pipe'],
-      env: { PATH: process.env.PATH, HOME: dir, GML_RUNTIME_MODE: 'test', GML_DATA_DIR: dir, GML_SQLITE_BUSY_MS: '1' }
-    })
-    t.after(() => { if (child.exitCode === null) child.kill('SIGKILL') })
-    const rl = readline.createInterface({ input: child.stdout })
-    const lines = []
-    let stderr = ''
-    child.stderr.on('data', (d) => { stderr += d })
-    const ready = new Promise((resolve) => rl.on('line', (l) => { lines.push(l); if (l === 'ready') resolve() }))
-    const closed = once(child, 'close')
-    workers.push({ child, ready, lines, closed, err: () => stderr })
+    async function waitForWorkers(phase) {
+      let timer
+      try {
+        await Promise.race([
+          Promise.all(workers.map(w => Promise.race([
+            w[phase], w.closed.then(() => { throw new Error(`worker exited before ${phase}`) })
+          ]))),
+          new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`workers did not reach ${phase}`)), 30000) })
+        ])
+      } finally { clearTimeout(timer) }
+    }
+    await waitForWorkers('ready')
+
+    // 每个写进程首次真实 BUSY 后停在屏障；全部确认后才释放锁，不消耗它们的剩余重试次数。
+    probe.exec('BEGIN IMMEDIATE')
+    for (const w of workers) w.child.stdin.write('go\n')
+    await waitForWorkers('busy')
+    probe.exec('COMMIT')
+    writeFileSync(releaseFile, '')
+
+    const results = []
+    for (const w of workers) {
+      const { code, error } = await w.closed
+      assert.ifError(error)
+      assert.equal(code, 0, w.err())
+      results.push(JSON.parse(w.lines.find((l) => l.startsWith('{"result"'))).result)
+    }
+    const sum = (f) => results.reduce((n, r) => n + f(r), 0)
+    const failures = results.flatMap((r) => r.failures)
+    // 机器很忙时个别写入可能把 10 次重试用尽——允许，但失败只能是 SQLITE_BUSY、且与"用尽"计数一一对应；
+    // 不变量（无丢写 / 无重复 / 无半截提交）按**实际成功数**精确核对。
+    assert.ok(failures.every((f) => String(f.code).startsWith('SQLITE_BUSY')), JSON.stringify(failures))
+    assert.equal(sum((r) => r.stats.exhausted), failures.length)
+    assert.equal(sum((r) => r.stats.non_retryable), 0)
+    const okPo = sum((r) => r.okPo)
+    const okTr = sum((r) => r.okTr)
+    assert.equal(okPo + okTr + failures.length, 2 * N * K)
+    assert.ok(okPo >= N * K * 0.9 && okTr >= N * K * 0.9, `most writes should succeed under retry: po=${okPo} tr=${okTr}`)
+
+    // 没有丢写、没有重复：库里的行数恰好等于成功数
+    const pos = probe.prepare("SELECT doc_no, remark FROM purchase_orders WHERE remark LIKE ?").all(`po:${runId}-%`)
+    assert.equal(pos.length, okPo)
+    assert.equal(new Set(pos.map((p) => p.remark)).size, okPo, 'one PO per request key')
+    assert.equal(new Set(pos.map((p) => p.doc_no)).size, okPo, 'doc_no unique')
+    assert.equal(probe.prepare('SELECT COUNT(*) c FROM purchase_orders').get().c - before.po, okPo)
+    const trs = probe.prepare("SELECT id, doc_no, status FROM stock_transfers WHERE remark LIKE ?").all(`tr:${runId}-%`)
+    assert.equal(trs.length, okTr)
+    assert.equal(new Set(trs.map((x) => x.doc_no)).size, okTr)
+    assert.ok(trs.every((x) => x.status === 'shipped'))
+    assert.equal(probe.prepare('SELECT COUNT(*) c FROM stock_transfers').get().c - before.tr, okTr)
+    // 每张调拨单恰好一条 TR_OUT 流水（没有半截提交、也没有重复提交），库存恰好少成功数
+    const ids = trs.map((x) => x.id)
+    const outs = probe.prepare(`SELECT doc_id, COUNT(*) c FROM inventory_transactions WHERE doc_type='TR_OUT' AND doc_id IN (${ids.map(() => '?').join(',')}) GROUP BY doc_id`).all(...ids)
+    assert.equal(outs.length, okTr)
+    assert.ok(outs.every((o) => o.c === 1), 'exactly one TR_OUT per transfer')
+    assert.equal(before.stock - onHand(), okTr, 'stock conserved: exactly one unit per successful transfer')
+
+    // 重试被记录（父进程占锁，BUSY 必然发生）
+    for (const r of results) assert.ok(r.stats.retries >= 1, `worker ${r.worker} must retry after its confirmed BUSY`)
+  } finally {
+    for (const w of workers) if (w.child.exitCode === null && w.child.signalCode === null) w.child.kill('SIGKILL')
+    await Promise.all(workers.map(w => w.closed))
+    for (const w of workers) w.rl.close()
+    probe.close()
   }
-  await Promise.all(workers.map((w) => w.ready))
-
-  // 父进程先占住写锁 400ms：busy_timeout 只有 1ms，所有写进程的第一次 BEGIN IMMEDIATE 必然 BUSY
-  probe.exec('BEGIN IMMEDIATE')
-  for (const w of workers) w.child.stdin.write('go\n')
-  await delay(400)
-  probe.exec('COMMIT')
-
-  const results = []
-  for (const w of workers) {
-    const [code] = await w.closed
-    assert.equal(code, 0, w.err())
-    results.push(JSON.parse(w.lines.find((l) => l.startsWith('{"result"'))).result)
-  }
-  const sum = (f) => results.reduce((n, r) => n + f(r), 0)
-  const failures = results.flatMap((r) => r.failures)
-  // 机器很忙时个别写入可能把 10 次重试用尽——允许，但失败只能是 SQLITE_BUSY、且与"用尽"计数一一对应；
-  // 不变量（无丢写 / 无重复 / 无半截提交）按**实际成功数**精确核对。
-  assert.ok(failures.every((f) => String(f.code).startsWith('SQLITE_BUSY')), JSON.stringify(failures))
-  assert.equal(sum((r) => r.stats.exhausted), failures.length)
-  assert.equal(sum((r) => r.stats.non_retryable), 0)
-  const okPo = sum((r) => r.okPo)
-  const okTr = sum((r) => r.okTr)
-  assert.equal(okPo + okTr + failures.length, 2 * N * K)
-  assert.ok(okPo >= N * K * 0.9 && okTr >= N * K * 0.9, `most writes should succeed under retry: po=${okPo} tr=${okTr}`)
-
-  // 没有丢写、没有重复：库里的行数恰好等于成功数
-  const pos = probe.prepare("SELECT doc_no, remark FROM purchase_orders WHERE remark LIKE ?").all(`po:${runId}-%`)
-  assert.equal(pos.length, okPo)
-  assert.equal(new Set(pos.map((p) => p.remark)).size, okPo, 'one PO per request key')
-  assert.equal(new Set(pos.map((p) => p.doc_no)).size, okPo, 'doc_no unique')
-  assert.equal(probe.prepare('SELECT COUNT(*) c FROM purchase_orders').get().c - before.po, okPo)
-  const trs = probe.prepare("SELECT id, doc_no, status FROM stock_transfers WHERE remark LIKE ?").all(`tr:${runId}-%`)
-  assert.equal(trs.length, okTr)
-  assert.equal(new Set(trs.map((x) => x.doc_no)).size, okTr)
-  assert.ok(trs.every((x) => x.status === 'shipped'))
-  assert.equal(probe.prepare('SELECT COUNT(*) c FROM stock_transfers').get().c - before.tr, okTr)
-  // 每张调拨单恰好一条 TR_OUT 流水（没有半截提交、也没有重复提交），库存恰好少成功数
-  const ids = trs.map((x) => x.id)
-  const outs = probe.prepare(`SELECT doc_id, COUNT(*) c FROM inventory_transactions WHERE doc_type='TR_OUT' AND doc_id IN (${ids.map(() => '?').join(',')}) GROUP BY doc_id`).all(...ids)
-  assert.equal(outs.length, okTr)
-  assert.ok(outs.every((o) => o.c === 1), 'exactly one TR_OUT per transfer')
-  assert.equal(before.stock - onHand(), okTr, 'stock conserved: exactly one unit per successful transfer')
-
-  // 重试被记录（父进程占锁，BUSY 必然发生）
-  const retries = sum((r) => r.stats.retries)
-  assert.ok(retries >= N, `expected at least one retry per worker, got ${retries}`)
-  probe.close()
 })
 
 // Finite retries do not guarantee zero errors against a writer that keeps reacquiring the lock.
