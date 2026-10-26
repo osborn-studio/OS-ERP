@@ -8,7 +8,8 @@
  *   · `ssh://<别名>/<绝对路径>`：别名必须是 ~/.ssh/config 里**已有**的别名，只经 `ssh`/`scp` 的 BatchMode 非交互调用；
  *     从不改 SSH 配置或认证，不传 -F / -i / ProxyCommand 之类选项。别名与路径按严格白名单校验后才会 spawn 任何进程，
  *     且全程以参数数组调用（无 shell）；远端命令里的路径只含 [A-Za-z0-9._/-]，另加单引号。
- *   写入是"一次写入"：先写临时名，再以不覆盖语义改名（本地 link/rename、远端 `test ! -e … && mv`），随后读回比对。
+ *   写入是"一次写入"：先写临时名，再以不覆盖语义发布（本地 link/独占创建、远端 GNU `ln -T`），随后读回比对。
+ *   远端要求支持 GNU ln -T 与同目录硬链接；不支持时拒绝，不退回可能覆盖已有锚点的移动操作。
  * 【用法】node scripts/offbox-anchor.mjs --data-dir <绝对路径> --dest <绝对目录 | ssh://别名/绝对路径> --key <私钥PEM> [--log <EVIDENCE-LOG.jsonl>]
  *   · `--key`：Ed25519 私钥 PEM（同 release-keygen；仓库外、权限 0600）。
  *   · `--log`：缺省为仓库内 docs/release/EVIDENCE-LOG.jsonl；该文件不存在则锚点记 log.present=false。显式给出但无效 ⇒ 失败。
@@ -97,14 +98,38 @@ const name = `anchor-${stampFor(now)}.json`
 if (target.kind === 'local') {
   const tmp = path.join(target.dir, `.${name}.${randomBytes(4).toString('hex')}.tmp`)
   const final = path.join(target.dir, name)
+  let writeError
+  let failedPath = tmp
+  const owned = new Set()
+  const cleanupErrors = []
+  const remove = (file) => {
+    try { fs.rmSync(file, { force: true }) } catch (e) { cleanupErrors.push(`可能残留 ${file}（${e.code || e.message}）`) }
+  }
+  const writeExclusive = (file) => {
+    failedPath = file
+    const fd = fs.openSync(file, 'wx', 0o644)
+    owned.add(file)
+    let failure
+    try { fs.writeFileSync(fd, text) } catch (e) { failure = e }
+    try { fs.closeSync(fd) } catch (e) {
+      if (!failure) failure = e
+      else cleanupErrors.push(`关闭 ${file} 失败（${e.code || e.message}）`)
+    }
+    if (failure) throw failure
+  }
   try {
-    fs.writeFileSync(tmp, text, { flag: 'wx', mode: 0o644 })
+    writeExclusive(tmp)
+    failedPath = final
     try { fs.linkSync(tmp, final) } catch (e) { // 目标已存在则 EEXIST：永不覆盖
       if (!['EPERM', 'ENOTSUP', 'EOPNOTSUPP', 'EXDEV', 'EMLINK'].includes(e.code)) throw e
-      fs.writeFileSync(final, text, { flag: 'wx', mode: 0o644 }) // 文件系统不支持硬链接（如 exFAT）：独占创建，仍不覆盖
+      writeExclusive(final)
     }
-  } catch (e) { die('WRITE', `写入 ${final} 失败（${e.code || e.message}）`, 1) } finally { fs.rmSync(tmp, { force: true }) }
-  if (fs.readFileSync(final, 'utf8') !== text) die('WRITE', `读回 ${final} 与写入内容不一致`, 1)
+  } catch (e) { writeError = e; if (owned.has(final)) remove(final) } finally { if (owned.has(tmp)) remove(tmp) }
+  // die 会立即退出进程，必须放在清理完成之后。
+  if (writeError || cleanupErrors.length) die('WRITE', [writeError ? `写入 ${failedPath} 失败（${writeError.code || writeError.message}）` : '锚点已发布但清理未完成', ...cleanupErrors].join('；'), 1)
+  let readback
+  try { readback = fs.readFileSync(final, 'utf8') } catch (e) { die('WRITE', `读回 ${final} 失败（${e.code || e.message}）；保留文件供核验`, 1) }
+  if (readback !== text) die('WRITE', `读回 ${final} 与写入内容不一致；保留文件供核验`, 1)
   console.log(`ANCHOR ${final}`)
 } else {
   const { alias, rpath } = target
@@ -121,8 +146,10 @@ if (target.kind === 'local') {
     r = spawnSync(SCP, ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15', '--', local, `${alias}:${remoteTmp}`], { encoding: 'utf8', timeout: 120000 })
   } finally { fs.rmSync(local, { force: true }) }
   if (r.status !== 0) { cleanup(); die('WRITE', `scp 失败：${(r.stderr || '').trim().slice(0, 200)}`, 1) }
-  r = ssh(`test ! -e ${q(remoteFinal)} && mv -- ${q(remoteTmp)} ${q(remoteFinal)}`)
-  if (r.status !== 0) { cleanup(); die('WRITE', `远端改名失败（同名锚点已存在则不覆盖）：${(r.stderr || '').trim().slice(0, 200)}`, 1) }
+  // 原子的独占发布：先 test 再 mv 有竞争窗口；-T 还阻止把同名目录/目录链接当作目的目录。
+  r = ssh(`ln -T -- ${q(remoteTmp)} ${q(remoteFinal)}`)
+  if (r.status !== 0) { cleanup(); die('WRITE', `远端发布未确认（同名锚点不覆盖；需 GNU ln -T 和硬链接；连接中断时请检查 ${alias}:${remoteFinal} 是否已写入）：${(r.stderr || '').trim().slice(0, 200)}`, 1) }
+  cleanup()
   r = ssh(`cat -- ${q(remoteFinal)}`)
   if (r.status !== 0 || r.stdout !== text) die('WRITE', `读回 ${alias}:${remoteFinal} 与写入内容不一致`, 1)
   console.log(`ANCHOR ssh://${alias}${remoteFinal}`)
