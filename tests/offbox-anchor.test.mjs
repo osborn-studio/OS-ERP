@@ -12,7 +12,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -135,6 +135,58 @@ test('anchor: writes a signed anchor-<stamp>.json with log tail, per-industry ch
   const rel = w.rel(w.first())
   assert.equal(rel.status, 0, rel.stdout + rel.stderr)
   w.db.close()
+})
+
+for (const fault of ['unsupported', 'disk-full', 'close-error', 'write-close-error', 'temp-disk-full', 'cleanup-final', 'cleanup-temp', 'collision', 'primary-collision', 'temp-collision', 'readback-error', 'readback-mismatch']) test(`anchor: local publication handles ${fault} without hiding failures or overwriting anchors`, (t) => {
+  const w = world(t)
+  t.after(() => w.db.close())
+  const preload = path.join(tmp(t), 'anchor-fs-fault.cjs')
+  writeFileSync(preload, `const fs=require('node:fs');const path=require('node:path');
+const write=fs.writeFileSync;const link=fs.linkSync;const close=fs.closeSync;const rm=fs.rmSync;const open=fs.openSync;const read=fs.readFileSync;const fault=${JSON.stringify(fault)};const paths=new Map();const base=file=>{const p=typeof file==='number'?paths.get(file):file;return typeof p==='string'?path.basename(p):''};
+fs.openSync=(file,...args)=>{if(fault==='temp-collision'&&base(file).startsWith('.anchor-')){const other=open(file,'wx',0o644);try{write(other,'existing temporary upload')}finally{close(other)}}const fd=open(file,...args);paths.set(fd,file);return fd};
+fs.linkSync=(src,dest)=>{if(fault==='collision'||fault==='primary-collision')write(dest,'existing anchor',{flag:'wx'});if(fault==='primary-collision')return link(src,dest);throw Object.assign(new Error('unsupported'),{code:'ENOTSUP'})};
+fs.writeFileSync=(file,bytes,options)=>{if((['disk-full','write-close-error','cleanup-final'].includes(fault)&&base(file).startsWith('anchor-'))||(fault==='temp-disk-full'&&base(file).startsWith('.anchor-'))){if(typeof file==='number')fs.writeSync(file,'partial');else write(file,'partial',options);throw Object.assign(new Error('disk full'),{code:'ENOSPC'})}return write(file,bytes,options)};
+fs.closeSync=fd=>{close(fd);if(['close-error','write-close-error'].includes(fault)&&base(fd).startsWith('anchor-'))throw Object.assign(new Error('close failed'),{code:'EIO'})};
+fs.rmSync=(file,opts)=>{if((fault==='cleanup-final'&&path.basename(file).startsWith('anchor-'))||(fault==='cleanup-temp'&&path.basename(file).startsWith('.anchor-')))throw Object.assign(new Error('cleanup refused'),{code:'EACCES'});return rm(file,opts)};
+fs.readFileSync=(file,...args)=>{if(base(file).startsWith('anchor-')){if(fault==='readback-error')throw Object.assign(new Error('read failed'),{code:'EIO'});if(fault==='readback-mismatch')return 'changed bytes'}return read(file,...args)};
+`)
+  const r = run(ANCHOR, ['--data-dir', w.data, '--dest', w.dest, '--log', w.log, '--key', w.k.priv], { NODE_OPTIONS: `--require=${preload}` })
+  const files = readdirSync(w.dest)
+  if (fault === 'unsupported') {
+    assert.equal(r.status, 0, r.stderr)
+    assert.equal(files.length, 1)
+    assert.equal(w.chain(path.join(w.dest, files[0])).status, 0)
+  } else if (fault === 'temp-collision') {
+    assert.equal(r.status, 1)
+    assert.equal(files.length, 1)
+    assert.equal(readFileSync(path.join(w.dest, files[0]), 'utf8'), 'existing temporary upload')
+  } else if (fault.startsWith('readback-')) {
+    assert.equal(r.status, 1)
+    assert.match(r.stderr, /^WRITE:/)
+    assert.match(r.stderr, /保留文件供核验/)
+    assert.equal(files.length, 1)
+    assert.equal(w.chain(w.first()).status, 0, 'readback uncertainty retains the artifact for investigation')
+  } else if (fault === 'cleanup-final' || fault === 'cleanup-temp') {
+    assert.equal(r.status, 1)
+    assert.match(r.stderr, /^WRITE:/)
+    assert.match(r.stderr, /EACCES/)
+    assert.match(r.stderr, /可能残留/)
+    for (const file of files) if (fault === 'cleanup-temp' ? file.startsWith('.') : !file.startsWith('.')) assert.ok(r.stderr.includes(path.join(w.dest, file)), 'report the path whose cleanup failed')
+    if (fault === 'cleanup-final') {
+      assert.match(r.stderr, /ENOSPC/)
+      assert.equal(files.length, 1)
+      assert.equal(readFileSync(path.join(w.dest, files[0]), 'utf8'), 'partial')
+    } else { assert.equal(files.length, 2); assert.equal(w.chain(w.first()).status, 0) }
+  } else if (['disk-full', 'temp-disk-full', 'close-error', 'write-close-error'].includes(fault)) {
+    assert.equal(r.status, 1)
+    assert.match(r.stderr, fault === 'close-error' ? /EIO/ : /ENOSPC/)
+    if (fault === 'write-close-error') assert.match(r.stderr, /EIO/)
+    assert.deepEqual(files, [], 'neither a partial final nor a temporary file may remain after a handled write error')
+  } else {
+    assert.equal(r.status, 1)
+    assert.equal(files.length, 1)
+    assert.equal(readFileSync(path.join(w.dest, files[0]), 'utf8'), 'existing anchor')
+  }
 })
 
 test('anchor: second run never overwrites the first (write-once) and the chain advancing still verifies the older anchor', (t) => {
@@ -312,7 +364,10 @@ const i=a.indexOf('--');const alias=a[i+1];const cmd=a.slice(i+2).join(' ');
 if(alias!=='backup-box'){console.error('ssh: Could not resolve hostname '+alias);process.exit(255)}
 let x;
 if((x=/^test -d '([^']+)'$/.exec(cmd))){process.exit(fs.existsSync(m(x[1]))&&fs.statSync(m(x[1])).isDirectory()?0:1)}
-if((x=/^test ! -e '([^']+)' && mv -- '([^']+)' '([^']+)'$/.exec(cmd))&&x[1]===x[3]){if(fs.existsSync(m(x[1])))process.exit(1);fs.renameSync(m(x[2]),m(x[3]));process.exit(0)}
+const race=p=>{if(process.env.FAKE_ANCHOR_RACE==='1')fs.writeFileSync(m(p),'existing anchor from another writer',{flag:'wx'});if(process.env.FAKE_ANCHOR_COLLISION==='directory')fs.mkdirSync(m(p));if(process.env.FAKE_ANCHOR_COLLISION==='symlink')fs.symlinkSync('missing-original-target',m(p))};
+// 保留旧协议反例：在存在性检查后插入竞争者，若实现退回 test/mv，保留旧文件的断言必须失败。
+if((x=/^test ! -e '([^']+)' && mv -- '([^']+)' '([^']+)'$/.exec(cmd))&&x[1]===x[3]){if(fs.existsSync(m(x[1])))process.exit(1);race(x[3]);fs.renameSync(m(x[2]),m(x[3]));process.exit(0)}
+if((x=/^ln -T -- '([^']+)' '([^']+)'$/.exec(cmd))){race(x[2]);if(process.env.FAKE_LINK_UNSUPPORTED==='1'){console.error('ENOTSUP');process.exit(1)}if(process.platform==='linux'){const r=require('node:child_process').spawnSync('ln',['-T','--',m(x[1]),m(x[2])],{encoding:'utf8'});process.stderr.write(r.stderr||'');process.exit(r.status??1)}try{fs.linkSync(m(x[1]),m(x[2]));process.exit(0)}catch(e){console.error(e.code);process.exit(1)}}
 if((x=/^cat -- '([^']+)'$/.exec(cmd))){process.stdout.write(fs.readFileSync(m(x[1])));process.exit(0)}
 if((x=/^rm -f -- '([^']+)'$/.exec(cmd))){fs.rmSync(m(x[1]),{force:true});process.exit(0)}
 console.error('fake ssh: unexpected command '+cmd);process.exit(97)
@@ -364,6 +419,42 @@ test('ssh destination: hostile aliases and paths are rejected before any ssh/scp
   assert.deepEqual(f.called(), [], 'no process was spawned for any hostile destination')
   assert.deepEqual(readdirSync(path.join(f.remote, 'backups/anchors')), [])
   w.db.close()
+})
+
+test('ssh destination: a competing writer cannot have its anchor overwritten during publication', (t) => {
+  const w = world(t)
+  t.after(() => w.db.close())
+  const f = fakeRemote(t)
+  const r = run(ANCHOR, ['--data-dir', w.data, '--dest', 'ssh://backup-box/backups/anchors', '--log', w.log, '--key', w.k.priv], { ...f.env, FAKE_ANCHOR_RACE: '1' })
+  const dir = path.join(f.remote, 'backups/anchors')
+  const files = readdirSync(dir)
+  assert.equal(files.length, 1, 'only the competing anchor remains; our temporary upload is removed')
+  assert.equal(readFileSync(path.join(dir, files[0]), 'utf8'), 'existing anchor from another writer', 'the previous anchor bytes must survive')
+  assert.equal(r.status, 1, 'a publication collision must be reported as a failure')
+})
+
+for (const kind of ['directory', 'symlink']) test(`ssh destination: publication refuses an existing ${kind} without following or changing it`, (t) => {
+  const w = world(t)
+  t.after(() => w.db.close())
+  const f = fakeRemote(t)
+  const r = run(ANCHOR, ['--data-dir', w.data, '--dest', 'ssh://backup-box/backups/anchors', '--log', w.log, '--key', w.k.priv], { ...f.env, FAKE_ANCHOR_COLLISION: kind })
+  assert.equal(r.status, 1)
+  const dir = path.join(f.remote, 'backups/anchors')
+  const files = readdirSync(dir)
+  assert.equal(files.length, 1, 'our temporary upload is removed')
+  const final = path.join(dir, files[0])
+  if (kind === 'directory') assert.deepEqual(readdirSync(final), [], 'the upload must not be placed inside the existing directory')
+  else { assert.ok(lstatSync(final).isSymbolicLink()); assert.equal(readlinkSync(final), 'missing-original-target') }
+})
+
+test('ssh destination: unsupported hard links fail closed and remove the temporary upload', (t) => {
+  const w = world(t)
+  t.after(() => w.db.close())
+  const f = fakeRemote(t)
+  const r = run(ANCHOR, ['--data-dir', w.data, '--dest', 'ssh://backup-box/backups/anchors', '--log', w.log, '--key', w.k.priv], { ...f.env, FAKE_LINK_UNSUPPORTED: '1' })
+  assert.equal(r.status, 1)
+  assert.match(r.stderr, /ENOTSUP/)
+  assert.deepEqual(readdirSync(path.join(f.remote, 'backups/anchors')), [])
 })
 
 test('ssh destination: unknown alias, missing remote directory, a failing scp, and OS_ERP_SSH without OS_ERP_SCP all fail without a partial anchor', (t) => {
