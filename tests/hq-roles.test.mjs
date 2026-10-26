@@ -7,7 +7,7 @@
  *      POS 与门店要货各自的路由闸名单与改动前逐项相同（行为不变），pos.js / requisitions.js 不再自带字面量名单；
  *   ② `/api/docflow/*` 默认严格：未绑门店、非总部角色、data_scope=all 的内部账号读不到 RC / YQ / SH 单据与留痕；
  *      总部角色 / admin / is_super 豁免；绑了门店者仍只限本店；
- *   ③ 危险设置键 `docflow_strict_store_binding`：默认开，关则恢复改动前行为（两态都测）。
+ *   ③ 危险设置键 `docflow_strict_store_binding`：默认开，关仅取消未绑定检查，已绑定账号仍限本店（两态都测）。
  *
  * 【夹具口径】test 运行时 + 全新临时数据目录 + 随机回环端口；账号经 `/api/auth/users` 建，单据 / 事件直接写库。
  * ============================================================================
@@ -167,7 +167,7 @@ test('docflow strict store binding: both switch states, HQ exemption, bound acco
     assert.deepEqual(mine(await events(boundBoss.token)), sorted('rc1', 'po'))
   })
 
-  await t.test('switch off restores the previous behaviour (unbound non-HQ all-scope sees everything)', async () => {
+  await t.test('switch off lifts the unbound check while bound accounts remain narrowed', async () => {
     setSwitch('0')
     for (const who of [boss, viewer, finance]) assert.deepEqual(mine(await events(who.token)), sorted('rc1', 'rc2', 'po'), who.username)
     assert.equal((await api(`/api/docflow/history/RC/${rc2}`, { token: boss.token })).status, 200)
