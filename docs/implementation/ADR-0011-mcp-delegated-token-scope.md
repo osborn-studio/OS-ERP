@@ -177,3 +177,23 @@
 **验收**：`tests/mcp-delegation.test.mjs` 新增五条（失权后重放返回 `TOKEN_OWNER_PERM_DENIED` + `cache_denied` + 业务行不变、恢复后回放缓存且不新增行；范围缩小后重放 `ORG_OUT_OF_SCOPE`；旧缓存行受限范围下 fail-closed；他令牌复用键仍 `IDEMPOTENCY_CONFLICT`；确认单失权 / 缩范围保持未消费、恢复后恰好执行一次、用过的不再执行）。`tests/mcp-tool-matrix.test.mjs` 增加 `replay_after_permission_loss` 状态：对每个首次成功的写型工具，用同一幂等键依次在"权限被撤""范围被缩""全部恢复"下重放，断言前两格得到当前错误、不带 `_idempotent_replay`、业务表行数不变，第三格回放缓存且行数不变。
 
 **契约变化**：范围缩小后的幂等重放由"回放旧结果"变为 `ORG_OUT_OF_SCOPE`；`mcp_idempotency.result_json` 的内部格式带了范围快照（只被 `server.js` 读写）。
+
+## AB7 补充：RC / YQ / SH 的门店绑定进入 DOC_SCOPE_RESOLVERS（与 HTTP 同一判据）
+
+**缺口**：Y6 把门店 / 经销商绑定写在 `doc-perms.js` 一处（`bindingWhere` / `rowInBinding`），而 `DOC_SCOPE_RESOLVERS`（`/api/docflow/*`、`doc.get` / `doc.query` / `order.trace_document` 共用的范围注册表）对 RC（日结）/ YQ（门店要货）/ SH（门店发货）只按组织范围收口：账号绑了门店、`data_scope=all` 的非 admin 用户在注册表眼里是"全局范围"，别家门店的这三类单据（及其流转留痕）不会被挡。绑定因此只靠 MCP 读工具各自再调一次 `rowInBinding`，新增读路径漏调就泄露。
+
+**决定**：
+1. **判据单点**：新增 `server/lib/store-binding.js`（`boundStoreId(user)`、`storeBindingExempt(user)`，纯函数、不碰库、不拼 SQL）。POS 路由 `storeCtx`、门店要货路由 `storeCtx`、注册表的 `store` 构建器都调它；SQL 谓词仍只在 `docflow.js` 的 `store` 构建器里有一份（`t.store_id = 绑定门店`），没有复制。
+2. **注册表声明**：`DOC_SCOPE_RESOLVERS` 的 RC / YQ / SH 行加 `binding: 'store'`。`docScopeOf` 对带 `binding` 的类型在**任何数据范围（含 all）**下先过绑定闸：admin 与无主上下文豁免（HTTP `requireStore` 对 admin 放行）；已绑门店 ⇒ 谓词收窄到本店；`docEventScope` 在全局范围下对被收窄的类型改为按谓词过滤、其余类型照旧整类放行。`doc.get` / `doc.query` / `order.trace_document` 的范围上下文统一为 `docScopeCtx`（`doc.get` 原来手写了一份），自动生效，各工具 handler 其余部分不动。
+3. **未绑门店 = 严格模式**：HTTP 对未绑门店的总部角色按**角色名**放行（`HQ_ROLES` / `HQ`），MCP 仍不复刻角色名（见 Y6 "有意比 HTTP 严"）。注册表上下文带 `strictBinding: true`（仅 MCP 的 `docScopeCtx` 设置）时，未绑门店的非 admin 所有者在这三类上**整类不可见**（`docScopeOf` 返回 null，`docInScope` 为 false）；`/api/docflow/*` 不设该标志，行为不变（除第 2 点的"已绑门店 + 全局范围"收窄）。
+4. **与 Y6 的关系**：`doc-perms.js` 的类型级 `TOKEN_OWNER_BINDING_REQUIRED` 与 `rowInBinding` 保留（错误码与 `doc.list_types` 隐藏仍由它负责），注册表是第二道、且是 `/api/docflow` 也共用的一道；`check-mcp-coverage` 校验两处声明不漂移。
+
+**豁免口径**：`storeBindingExempt` = `role==='admin'` 或 `users.is_super`，与 `doc-perms.js` 的 `isSuper` 豁免同口径（Codex 审计 medium：此前注册表只认 admin，会把非 admin 超管所有者新挡掉）。
+
+**已知残余（Codex 审计 high，非本次引入、HTTP 侧）**：`/api/docflow/*` 的上下文不设 `strictBinding`，所以"未绑门店、`data_scope=all`、非总部角色名"的内部自定义角色账号仍可经 docflow 读 RC / YQ / SH 的留痕——门店路由会拒它、总部路由因角色名拒它，但 docflow 只看数据范围。要在 HTTP 侧收紧必须先复刻总部角色名闸（`HQ_ROLES` / `HQ` 两份名单并不相同），会改变 finance 等总部角色现有的可见性，需单独的产品决定，登记到 backlog，不在 AB7 范围。
+
+**HTTP 行为变化（需知悉）**：`/api/docflow/{events,overview,history,trace}` 对"绑了门店的非 admin 账号 + `data_scope=all`"不再放行别家门店的 RC / YQ / SH 单据与留痕；此前该组合在注册表层面等同全局范围。未绑门店的总部角色不受影响。
+
+**仍无绑定规则的类型（残余）**：PS / PSF 的 `store` 构建器已按 `ctx.user.store_id` 在受限范围内收窄，但全局范围下尚未带 `binding` 标记（读工具仍由 Y6 的 `rowInBinding` 挡住）；DR（经销商）、OC / OCS（订货主体）、DS / RB（无自视图）未并入注册表绑定。后续如要把它们并入，沿用同一个 `binding` 字段与 `strictBinding` 约定。
+
+**验收**：`tests/mcp-doc-perms.test.mjs` 的 AB7 用例——三类 × {未绑定、绑本店、绑他店（改绑即时生效）、admin 所有者、无主令牌}：未绑 ⇒ query / get 为 `TOKEN_OWNER_BINDING_REQUIRED`、`order.trace_document` 与注册表 `docInScope` 为不可见；绑定 ⇒ 只见本店、他店 `NOT_FOUND`（get 与 trace）；全程业务表 / `audit_logs` / `doc_events` / 幂等 / 确认表行数不变（零写）；注册表单测覆盖 `data_scope=all` 的绑定收窄、admin 豁免、非严格模式保持 HTTP 角色名口径。`scripts/check-mcp-coverage.mjs` 增三项检查。

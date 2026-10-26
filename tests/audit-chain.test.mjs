@@ -1,0 +1,560 @@
+/**
+ * ============================================================================
+ * 文件标识：tests/audit-chain.test.mjs ｜ AB6 审计日志哈希链（ADR-0049）：写入、规范化、并发、迁移回填、校验脚本、归档脚本、受控改链
+ * 全部在系统临时目录里建库；子进程只用 --data-dir / GML_DATA_DIR 指向临时目录，不监听端口，不碰仓库 data/。
+ * ============================================================================
+ */
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { spawn, spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
+import { mkdtempSync, rmSync, readFileSync, writeFileSync, readdirSync, copyFileSync, mkdirSync, existsSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import Database from 'better-sqlite3'
+import { runMigrations, MIGRATIONS_DIR } from '../server/db/migrations/runner.js'
+import { insertAuditRow, auditStrictRow, deleteAuditRowsAnchored, rehashAuditRow, GENESIS } from '../server/lib/audit-trail.js'
+import { verifyChain, verifyJsonlSegment } from '../server/lib/audit-chain-verify.js'
+import { applyPlan } from '../scripts/lib/privacy-common.mjs'
+
+const ROOT = fileURLToPath(new URL('../', import.meta.url))
+const SCHEMA = readFileSync(path.join(ROOT, 'server/db/schema.sql'), 'utf8')
+const envFor = (dir, extra = {}) => ({ PATH: process.env.PATH, HOME: dir, TMPDIR: dir, GML_RUNTIME_MODE: 'test', GML_DATA_DIR: dir, GML_DB: '', GML_JWT_SECRET: 'a'.repeat(48), ...extra })
+
+function tmp(t, prefix = 'os-ab6-') {
+  const dir = mkdtempSync(path.join(tmpdir(), prefix))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  return dir
+}
+/** 建库：schema + 全部迁移（或除 068 外的迁移，用来模拟升级前的库） */
+function mkDb(dir, { skip068 = false, file = 'gml_cosmetic.db' } = {}) {
+  const db = new Database(path.join(dir, file))
+  db.pragma('journal_mode = WAL')
+  db.pragma('busy_timeout = 5000')
+  db.exec(SCHEMA)
+  if (skip068) {
+    const legacy = path.join(dir, 'mig-legacy')
+    mkdirSync(legacy)
+    for (const f of readdirSync(MIGRATIONS_DIR)) if (f !== '068_audit_hash_chain.cjs' && !f.startsWith('.')) copyFileSync(path.join(MIGRATIONS_DIR, f), path.join(legacy, f))
+    runMigrations(db, { mode: 'test', migrationsDir: legacy })
+  } else runMigrations(db, { mode: 'test' })
+  return db
+}
+const row = (i, extra = {}) => ({ userId: 1 + (i % 5), userName: `u${i % 5}`, action: i % 2 ? 'UPDATE' : 'CREATE', module: 'sales', entity: 'order', entityId: i, detail: { n: i }, ip: '127.0.0.1', ...extra })
+const fill = (db, n, start = 0) => db.transaction(() => { for (let i = start; i < start + n; i++) insertAuditRow(db, row(i)) })()
+const sha = (s) => createHash('sha256').update(s, 'utf8').digest('hex')
+/** 独立于实现的哈希（按规格手写）：八个分量先转字符串，JSON 数组序列化 */
+const spec = (r, prev) => sha(JSON.stringify([r.id, r.created_at, r.user_id, r.action, r.entity, r.entity_id, r.detail, prev].map((v) => (v === null || v === undefined ? null : String(v)))))
+const cli = (script, args, dir, extra = {}) => spawnSync(process.execPath, [script, ...args], { cwd: ROOT, env: envFor(dir, extra), encoding: 'utf8', timeout: 120000 })
+
+test('every inserted row carries prev_hash/row_hash computed per the ADR-0049 spec; genesis is 64 zeros', (t) => {
+  const db = mkDb(tmp(t))
+  fill(db, 5)
+  const rows = db.prepare('SELECT * FROM audit_logs ORDER BY id').all()
+  assert.equal(GENESIS, '0'.repeat(64))
+  assert.equal(rows[0].prev_hash, GENESIS)
+  rows.forEach((r, i) => {
+    if (i) assert.equal(r.prev_hash, rows[i - 1].row_hash, 'prev_hash = previous row_hash')
+    assert.equal(r.row_hash, spec(r, r.prev_hash), `row ${r.id} hash matches the spec formula`)
+  })
+  const v = verifyChain(db)
+  assert.deepEqual([v.ok, v.rows, v.tipHash], [true, 5, rows[4].row_hash])
+})
+
+test('canonical form: NULL differs from "null", field boundaries cannot collide, value types are normalised', (t) => {
+  const db = mkDb(tmp(t))
+  insertAuditRow(db, { action: 'a|b', entity: 'c' })
+  insertAuditRow(db, { action: 'a', entity: 'b|c' })
+  insertAuditRow(db, { action: 'X', detail: null })
+  insertAuditRow(db, { action: 'X', detail: 'null' })
+  insertAuditRow(db, { action: 'N', userId: '5', entityId: 42 }) // 文本 '5' 经 INTEGER 亲和性存成 5
+  insertAuditRow(db, { action: 'N2', userId: '005', entityId: '007' }) // '005' → 5（前导零被亲和性吃掉），entity_id 是 TEXT 保持 '007'
+  insertAuditRow(db, { action: 'U', detail: { s: '含中文 \u{1F600} \ud800' } })
+  const rows = db.prepare('SELECT * FROM audit_logs ORDER BY id').all()
+  assert.equal(new Set(rows.map((r) => r.row_hash)).size, 7)
+  assert.equal(rows[4].user_id, 5)
+  assert.equal(rows[5].user_id, 5)
+  assert.equal(rows[5].entity_id, '007')
+  assert.equal(verifyChain(db).ok, true, 'bound-value hash equals read-back hash')
+})
+
+test('tampering is located: edited detail, edited hash, deleted middle/first row, restored row; tip truncation needs --expect-tip', (t) => {
+  const db = mkDb(tmp(t))
+  fill(db, 40)
+  const ids = db.prepare('SELECT id FROM audit_logs ORDER BY id').all().map((r) => r.id)
+  const tip = db.prepare('SELECT row_hash FROM audit_logs ORDER BY id DESC LIMIT 1').get().row_hash
+  const brk = () => verifyChain(db).brk
+  // 1 改明细
+  db.prepare("UPDATE audit_logs SET detail='{\"n\":999}' WHERE id=?").run(ids[10])
+  assert.deepEqual([brk().id, brk().kind], [ids[10], 'content'])
+  db.prepare("UPDATE audit_logs SET detail='{\"n\":10}' WHERE id=?").run(ids[10])
+  assert.equal(verifyChain(db).ok, true)
+  // 2 改动 user_name/module/ip 不在哈希内（已知限制，写进 ADR）
+  db.prepare("UPDATE audit_logs SET user_name='x', module='y', ip='z' WHERE id=?").run(ids[11])
+  assert.equal(verifyChain(db).ok, true)
+  // 3 改 row_hash（连同下一行 prev 不动）⇒ 该行 content
+  db.prepare("UPDATE audit_logs SET row_hash=? WHERE id=?").run('f'.repeat(64), ids[12])
+  assert.deepEqual([brk().id, brk().kind], [ids[12], 'content'])
+  db.prepare('UPDATE audit_logs SET row_hash=? WHERE id=?').run(spec(db.prepare('SELECT * FROM audit_logs WHERE id=?').get(ids[12]), db.prepare('SELECT prev_hash FROM audit_logs WHERE id=?').get(ids[12]).prev_hash), ids[12])
+  assert.equal(verifyChain(db).ok, true)
+  // 4 删中间行 ⇒ 下一行 link
+  const gone = db.prepare('SELECT * FROM audit_logs WHERE id=?').get(ids[20])
+  db.prepare('DELETE FROM audit_logs WHERE id=?').run(ids[20])
+  assert.deepEqual([brk().id, brk().kind], [ids[21], 'link'])
+  db.prepare('INSERT INTO audit_logs (id,user_id,user_name,action,module,entity,entity_id,detail,ip,created_at,prev_hash,row_hash) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')
+    .run(gone.id, gone.user_id, gone.user_name, gone.action, gone.module, gone.entity, gone.entity_id, gone.detail, gone.ip, gone.created_at, gone.prev_hash, gone.row_hash)
+  assert.equal(verifyChain(db).ok, true, 'restoring the exact row heals the break')
+  // 5 删第一行 ⇒ 新的第一行 prev 不是 genesis
+  db.prepare('DELETE FROM audit_logs WHERE id=?').run(ids[0])
+  assert.deepEqual([brk().id, brk().kind], [ids[1], 'link'])
+  // 6 尾部截断：链本身看不出，--expect-tip 看得出
+  const db2 = mkDb(tmp(t))
+  fill(db2, 10)
+  const tip2 = db2.prepare('SELECT row_hash FROM audit_logs ORDER BY id DESC LIMIT 1').get().row_hash
+  db2.prepare('DELETE FROM audit_logs WHERE id > (SELECT MAX(id)-3 FROM audit_logs)').run()
+  assert.equal(verifyChain(db2).ok, true)
+  const cut = verifyChain(db2, { expectTip: tip2 })
+  assert.deepEqual([cut.ok, cut.brk.kind], [false, 'tip'])
+  assert.ok(tip.length === 64)
+})
+
+test('unchained raw INSERT is reported as the first break (kind unchained)', (t) => {
+  const db = mkDb(tmp(t))
+  fill(db, 3)
+  db.prepare("INSERT INTO audit_logs (user_name, action) VALUES ('raw','RAW')").run()
+  const v = verifyChain(db)
+  assert.equal(v.ok, false)
+  assert.equal(v.brk.kind, 'unchained')
+})
+
+test('rolled-back writes leave no gap; strict audit inside a failing business tx rolls the chain row back too', (t) => {
+  const db = mkDb(tmp(t))
+  fill(db, 3)
+  assert.throws(() => db.transaction(() => { insertAuditRow(db, row(100)); throw new Error('boom') })())
+  fill(db, 2, 3)
+  assert.equal(verifyChain(db).ok, true)
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM audit_logs').get().n, 5)
+  assert.throws(() => auditStrictRow(db, row(1)), { code: 'AUDIT_OUTSIDE_TX' })
+  db.exec("CREATE TRIGGER swallow BEFORE INSERT ON audit_logs WHEN NEW.action='SWALLOW' BEGIN SELECT RAISE(IGNORE); END")
+  assert.throws(() => db.transaction(() => auditStrictRow(db, { action: 'SWALLOW' }))(), { code: 'SECURITY_AUDIT_UNAVAILABLE' })
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM audit_logs').get().n, 5)
+  fill(db, 1, 9)
+  assert.equal(verifyChain(db).ok, true)
+})
+
+test('concurrency: stale deferred snapshot cannot fork the chain (SQLITE_BUSY_SNAPSHOT), autocommit writers on two connections interleave cleanly', (t) => {
+  const dir = tmp(t)
+  const a = mkDb(dir)
+  const b = new Database(path.join(dir, 'gml_cosmetic.db'))
+  b.pragma('busy_timeout = 5000')
+  fill(a, 3)
+  // A 在 DEFERRED 事务里先读（取得读快照），B 随后提交一条审计 ⇒ A 再写必须失败而不是分叉
+  a.exec('BEGIN')
+  a.prepare('SELECT COUNT(*) FROM audit_logs').get()
+  insertAuditRow(b, row(50))
+  assert.throws(() => insertAuditRow(a, row(51)), (e) => /SQLITE_BUSY/.test(e.code))
+  a.exec('ROLLBACK')
+  insertAuditRow(a, row(51))
+  // 交错的 autocommit 写入
+  for (let i = 0; i < 100; i++) { insertAuditRow(i % 2 ? a : b, row(100 + i)) }
+  const v = verifyChain(a)
+  assert.deepEqual([v.ok, v.rows], [true, 105])
+  b.close()
+})
+
+test('concurrency across processes: two writers hammering one file produce one unbroken chain', { timeout: 120000 }, async (t) => {
+  const dir = tmp(t)
+  const db = mkDb(dir)
+  db.close()
+  const code = `
+    import Database from 'better-sqlite3'
+    import { insertAuditRow } from './server/lib/audit-trail.js'
+    const db = new Database(process.argv[1]); db.pragma('busy_timeout = 30000'); db.pragma('journal_mode = WAL')
+    for (let i = 0; i < 300; i++) insertAuditRow(db, { userName: 'p'+process.argv[2], action: 'LOAD', module: 'load', entity: 'e', entityId: i, detail: { i } })
+  `
+  const run = (tag) => new Promise((resolve, reject) => {
+    const p = spawn(process.execPath, ['--input-type=module', '-e', code, path.join(dir, 'gml_cosmetic.db'), tag], { cwd: ROOT, env: envFor(dir), stdio: ['ignore', 'pipe', 'pipe'] })
+    let err = ''
+    p.stderr.on('data', (d) => { err += d })
+    p.on('exit', (c) => (c === 0 ? resolve() : reject(new Error(err))))
+  })
+  await Promise.all([run('A'), run('B')])
+  const check = new Database(path.join(dir, 'gml_cosmetic.db'), { readonly: true })
+  const v = verifyChain(check)
+  assert.deepEqual([v.ok, v.rows], [true, 600])
+  check.close()
+})
+
+test('migration 068 backfills existing rows in id order, is idempotent, heals orphan rows, and coexists with other audit_logs triggers', (t) => {
+  const dir = tmp(t)
+  const db = mkDb(dir, { skip068: true })
+  assert.ok(!db.prepare('PRAGMA table_info(audit_logs)').all().some((c) => c.name === 'row_hash'))
+  // 一个 AB3 风格的影子表 + 触发器：迁移必须照常工作
+  db.exec(`CREATE TABLE shadow (id INTEGER, detail TEXT);
+    CREATE TRIGGER shadow_ai AFTER INSERT ON audit_logs BEGIN INSERT INTO shadow VALUES (NEW.id, NEW.detail); END;
+    CREATE TRIGGER shadow_au AFTER UPDATE ON audit_logs BEGIN UPDATE shadow SET detail=NEW.detail WHERE id=NEW.id; END;`)
+  const ins = db.prepare("INSERT INTO audit_logs (user_id,user_name,action,module,entity,entity_id,detail,created_at) VALUES (?,?,?,?,?,?,?,?)")
+  for (let i = 0; i < 250; i++) ins.run(i % 7, 'legacy', 'OLD', 'm', 'e', String(i), i % 3 ? `{"i":${i}}` : null, `2024-01-01 00:00:${String(i % 60).padStart(2, '0')}`)
+  const res = runMigrations(db, { mode: 'test' })
+  assert.deepEqual(res.applied, ['068_audit_hash_chain'])
+  const rows = db.prepare('SELECT * FROM audit_logs ORDER BY id').all()
+  assert.equal(rows[0].prev_hash, GENESIS)
+  rows.forEach((r, i) => { if (i) assert.equal(r.prev_hash, rows[i - 1].row_hash); assert.equal(r.row_hash, spec(r, r.prev_hash)) })
+  assert.equal(verifyChain(db).ok, true)
+  assert.ok(db.prepare("SELECT 1 FROM sqlite_master WHERE name='audit_chain_anchors'").get())
+  const snapshot = JSON.stringify(rows)
+  const mig = (await_import()).up
+  mig(db); mig(db)
+  assert.equal(JSON.stringify(db.prepare('SELECT * FROM audit_logs ORDER BY id').all()), snapshot, 'up() twice changes nothing')
+  assert.equal((await_import()).verify(db), true)
+  // 之后的新行照常接链，与触发器共存
+  insertAuditRow(db, row(1))
+  assert.equal(verifyChain(db).ok, true)
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM shadow').get().n, 251)
+  // 孤儿行（裸 INSERT 留在表尾）⇒ verify 为假 ⇒ 下次 runMigrations 自愈接上
+  db.prepare("INSERT INTO audit_logs (user_name, action) VALUES ('raw','RAW')").run()
+  assert.equal((await_import()).verify(db), false)
+  assert.equal(verifyChain(db).brk.kind, 'unchained')
+  const heal = runMigrations(db, { mode: 'test' })
+  assert.deepEqual(heal.healed, ['068_audit_hash_chain'])
+  assert.deepEqual([verifyChain(db).ok, verifyChain(db).rows], [true, 252])
+})
+
+test('tail orphans are adopted by the next insertAuditRow; a NULL row_hash in the MIDDLE of the chain is never re-hashed (no self-healing of tampering)', (t) => {
+  const db = mkDb(tmp(t))
+  fill(db, 10)
+  db.prepare("INSERT INTO audit_logs (user_name, action) VALUES ('raw1','RAW')").run()
+  db.prepare("INSERT INTO audit_logs (user_name, action) VALUES ('raw2','RAW')").run()
+  insertAuditRow(db, row(1)) // 先把两条尾部孤儿接上，再追加
+  assert.deepEqual([verifyChain(db).ok, verifyChain(db).rows], [true, 13])
+  // 篡改者把中间一行改掉并把 row_hash 置空，指望下次启动"自愈"把它洗成合法
+  db.prepare("UPDATE audit_logs SET detail='{\"forged\":true}', row_hash=NULL WHERE id=5").run()
+  assert.equal(verifyChain(db).brk.kind, 'unchained')
+  assert.equal((await_import()).verify(db), true, 'nothing healable: the NULL row is mid-chain')
+  const res = runMigrations(db, { mode: 'test' })
+  assert.deepEqual(res.healed, [])
+  assert.equal(db.prepare('SELECT row_hash FROM audit_logs WHERE id=5').get().row_hash, null, 'not re-hashed')
+  insertAuditRow(db, row(2))
+  assert.deepEqual([verifyChain(db).ok, verifyChain(db).brk.id], [false, 5], 'still reported after more writes')
+})
+import { createRequire } from 'node:module'
+function await_import() { return createRequire(import.meta.url)(path.join(MIGRATIONS_DIR, '068_audit_hash_chain.cjs')) }
+
+test('verify() is consistent with up(): missing anchors table or a tail orphan makes it false and up() repairs it', (t) => {
+  const db = mkDb(tmp(t))
+  const mig = await_import()
+  assert.equal(mig.verify(db), true)
+  db.exec('DROP TABLE audit_chain_anchors')
+  assert.equal(mig.verify(db), false)
+  mig.up(db)
+  assert.equal(mig.verify(db), true)
+  db.exec("INSERT INTO audit_logs (user_name, action) VALUES ('raw','RAW')") // 表尾孤儿
+  assert.equal(mig.verify(db), false)
+  mig.up(db)
+  assert.equal(mig.verify(db), true)
+  assert.deepEqual(db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='audit_logs' AND name NOT LIKE 'sqlite_%' ORDER BY name").all().map((r) => r.name),
+    ['idx_audit_entity', 'idx_audit_module_created', 'idx_audit_user_created'], 'migration 068 adds no index on audit_logs')
+})
+
+test('insertAuditRow still works on a pre-068 audit_logs (plain INSERT, no chain columns)', () => {
+  const db = new Database(':memory:')
+  db.exec('CREATE TABLE audit_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, user_name TEXT, action TEXT NOT NULL, module TEXT, entity TEXT, entity_id TEXT, detail TEXT, ip TEXT, created_at TEXT NOT NULL DEFAULT (datetime(\'now\',\'localtime\')))')
+  assert.equal(insertAuditRow(db, row(1)).changes, 1)
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM audit_logs').get().n, 1)
+})
+
+test('audit-verify-chain.mjs: OK exit 0, first break exit 1 with id and kind, absent industries are not created, usage errors exit 2', (t) => {
+  const dir = tmp(t)
+  const db = mkDb(dir)
+  fill(db, 30)
+  const ok = cli('scripts/audit-verify-chain.mjs', ['--data-dir', dir, '--industry', 'cosmetic'], dir)
+  assert.equal(ok.status, 0, ok.stderr)
+  assert.match(ok.stdout, /OK\s+cosmetic: 30 行/)
+  const tip = db.prepare('SELECT row_hash FROM audit_logs ORDER BY id DESC LIMIT 1').get().row_hash
+  assert.equal(cli('scripts/audit-verify-chain.mjs', ['--data-dir', dir, '--industry', 'cosmetic', '--expect-tip', tip], dir).status, 0)
+  assert.equal(cli('scripts/audit-verify-chain.mjs', ['--data-dir', dir, '--industry', 'cosmetic', '--expect-tip', 'a'.repeat(64)], dir).status, 1)
+  db.prepare("UPDATE audit_logs SET action='HACKED' WHERE id=7").run()
+  const bad = cli('scripts/audit-verify-chain.mjs', ['--data-dir', dir, '--industry', 'cosmetic', '--json'], dir)
+  assert.equal(bad.status, 1)
+  const j = JSON.parse(bad.stdout)
+  assert.deepEqual([j.ok, j.industries.cosmetic.break.id, j.industries.cosmetic.break.kind], [false, 7, 'content'])
+  const all = cli('scripts/audit-verify-chain.mjs', ['--data-dir', dir], dir)
+  assert.equal(all.status, 1)
+  assert.match(all.stdout, /BREAK cosmetic: 第一个断点 id=7/)
+  assert.equal(readdirSync(dir).filter((f) => /^gml_.*\.db$/.test(f)).length, 1, 'no other industry db created')
+  assert.equal(cli('scripts/audit-verify-chain.mjs', [], dir, { GML_DATA_DIR: '' }).status, 2)
+  assert.equal(cli('scripts/audit-verify-chain.mjs', ['--data-dir', 'relative/dir'], dir).status, 2)
+  assert.equal(cli('scripts/audit-verify-chain.mjs', ['--data-dir', dir, '--bogus'], dir).status, 2)
+  assert.equal(cli('scripts/audit-verify-chain.mjs', ['--data-dir', path.resolve(ROOT, 'data')], dir).status, 2, 'repository data/ is refused')
+  db.close()
+})
+
+function archiveFixture(t) {
+  const dir = tmp(t)
+  const out = tmp(t, 'os-ab6-out-')
+  const db = mkDb(dir)
+  const ins = db.prepare("UPDATE audit_logs SET created_at=? WHERE id=?")
+  fill(db, 60)
+  // 前 40 行是旧的（2024-01-xx），后 20 行是新的
+  db.transaction(() => { for (let id = 1; id <= 60; id++) ins.run(id <= 40 ? '2024-01-15 10:00:00' : '2026-06-01 10:00:00', id) })()
+  return { dir, out, db }
+}
+
+test('audit-verify: created_at rewrite is detected (created_at is inside the hash)', (t) => {
+  const { dir, db } = archiveFixture(t)
+  // archiveFixture 直接改了 created_at ⇒ 链当然断；这里证明哈希覆盖 created_at
+  const r = cli('scripts/audit-verify-chain.mjs', ['--data-dir', dir, '--industry', 'cosmetic', '--json'], dir)
+  assert.equal(r.status, 1)
+  assert.equal(JSON.parse(r.stdout).industries.cosmetic.break.id, 1)
+  db.close()
+})
+
+/** 归档夹具：用 insertAuditRow 写入，并把时间写在 created_at 里之前先写（时间在插入时给定）——这里直接重建链 */
+function archiveReady(t) {
+  const dir = tmp(t)
+  const out = tmp(t, 'os-ab6-out-')
+  const db = mkDb(dir)
+  fill(db, 60)
+  // 通过受控重建：把 created_at 改好后重新回填整条链（等价于这些行在当时就带着这些时间写入）
+  db.transaction(() => {
+    for (let id = 1; id <= 60; id++) db.prepare('UPDATE audit_logs SET created_at=?, row_hash=NULL, prev_hash=NULL WHERE id=?').run(id <= 40 ? '2024-01-15 10:00:00' : '2026-06-01 10:00:00', id)
+  })()
+  const mig = await_import()
+  mig.up(db)
+  assert.equal(verifyChain(db).ok, true)
+  return { dir, out, db }
+}
+
+test('audit-archive.mjs: dry-run changes nothing and prints a token; wrong token refused; right token exports, verifies, deletes, re-anchors', (t) => {
+  const { dir, out, db } = archiveReady(t)
+  const A = (extra = []) => cli('scripts/audit-archive.mjs', ['--data-dir', dir, '--industry', 'cosmetic', '--before', '2025-01-01', '--out', out, ...extra], dir)
+  const dry = A()
+  assert.equal(dry.status, 0, dry.stderr)
+  assert.match(dry.stdout, /将归档 40 行（id 1\.\.40）/)
+  const token = dry.stdout.match(/口令：(ARCHIVE-[0-9A-F]{16})/)[1]
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM audit_logs').get().n, 60)
+  assert.equal(readdirSync(out).length, 0, 'dry run writes no files')
+  const wrong = A(['--confirm', 'ARCHIVE-0000000000000000'])
+  assert.equal(wrong.status, 2)
+  assert.match(wrong.stderr, /CONFIRM_MISMATCH/)
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM audit_logs').get().n, 60)
+  const tip40 = db.prepare('SELECT row_hash FROM audit_logs WHERE id=40').get().row_hash
+  const first = db.prepare('SELECT row_hash FROM audit_logs WHERE id=1').get().row_hash
+  const done = A(['--confirm', token])
+  assert.equal(done.status, 0, done.stderr + done.stdout)
+  const files = readdirSync(out).sort()
+  assert.equal(files.length, 2)
+  const jsonl = files.find((f) => f.endsWith('.jsonl'))
+  const digest = JSON.parse(readFileSync(path.join(out, files.find((f) => f.endsWith('.digest.json'))), 'utf8'))
+  assert.deepEqual([digest.rows, digest.first_id, digest.last_id, digest.first_row_hash, digest.tip_row_hash, digest.boundary_id], [40, 1, 40, first, tip40, 41])
+  assert.equal(digest.file_sha256, sha(readFileSync(path.join(out, jsonl), 'utf8')))
+  assert.equal(readFileSync(path.join(out, jsonl), 'utf8').trim().split('\n').length, 40)
+  // 库：41 行（20 + 旧段已删 + 归档审计行 = 60-40+1）、锚点、链仍通过
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM audit_logs').get().n, 21)
+  assert.equal(db.prepare('SELECT MIN(id) m FROM audit_logs').get().m, 41)
+  const anchor = db.prepare('SELECT * FROM audit_chain_anchors').get()
+  assert.deepEqual([anchor.kind, anchor.at_row_id, anchor.anchor_hash, anchor.prev_id, anchor.prev_row_hash], ['archive', 41, tip40, null, null])
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM audit_logs WHERE action='AUDIT_ARCHIVE'").get().n, 1)
+  const v = verifyChain(db)
+  assert.deepEqual([v.ok, v.anchorsUsed], [true, 1])
+  insertAuditRow(db, row(1))
+  assert.equal(verifyChain(db).ok, true)
+  assert.equal(cli('scripts/audit-verify-chain.mjs', ['--data-dir', dir, '--industry', 'cosmetic'], dir).status, 0)
+  // 同一个口令不能重放（数据已变）
+  assert.equal(A(['--confirm', token]).status, 0, 'second run has nothing to archive')
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM audit_logs').get().n, 22)
+  db.close()
+})
+
+test('audit-archive.mjs refuses a tampered segment (exit 1, nothing deleted, nothing exported) and an out dir inside the data dir', (t) => {
+  const { dir, out, db } = archiveReady(t)
+  db.prepare("UPDATE audit_logs SET action='HACKED' WHERE id=12").run()
+  const r = cli('scripts/audit-archive.mjs', ['--data-dir', dir, '--industry', 'cosmetic', '--before', '2025-01-01', '--out', out, '--confirm', 'ARCHIVE-0000000000000000'], dir)
+  assert.equal(r.status, 1)
+  assert.match(r.stdout, /CHAIN_BROKEN/)
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM audit_logs').get().n, 60)
+  assert.equal(readdirSync(out).length, 0)
+  const inside = cli('scripts/audit-archive.mjs', ['--data-dir', dir, '--industry', 'cosmetic', '--before', '2025-01-01', '--out', path.join(dir, 'exports')], dir)
+  assert.equal(inside.status, 2)
+  assert.match(inside.stderr, /OUT_DIR_INVALID/)
+  assert.equal(cli('scripts/audit-archive.mjs', ['--data-dir', dir, '--before', 'yesterday', '--out', out], dir).status, 2)
+  db.close()
+})
+
+test('audit-archive.mjs never empties the table: a cutoff newer than every row keeps the last row as the chain tip', (t) => {
+  const { dir, out, db } = archiveReady(t)
+  const dry = cli('scripts/audit-archive.mjs', ['--data-dir', dir, '--industry', 'cosmetic', '--before', '2030-01-01', '--out', out], dir)
+  const token = dry.stdout.match(/口令：(ARCHIVE-[0-9A-F]{16})/)[1]
+  assert.match(dry.stdout, /将归档 59 行/)
+  assert.equal(cli('scripts/audit-archive.mjs', ['--data-dir', dir, '--industry', 'cosmetic', '--before', '2030-01-01', '--out', out, '--confirm', token], dir).status, 0)
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM audit_logs').get().n, 2, 'last original row + AUDIT_ARCHIVE row')
+  assert.equal(verifyChain(db).ok, true)
+  db.close()
+})
+
+test('controlled mutations stay verifiable: retention-style anchored delete and privacy-style rehash', (t) => {
+  const db = mkDb(tmp(t))
+  fill(db, 30)
+  // 删除两段不相邻的区间（含第一行）
+  const n = db.transaction(() => deleteAuditRowsAnchored(db, '(id <= 3 OR id BETWEEN 10 AND 14)', [], { kind: 'retention', reason: 't' }))()
+  assert.equal(n, 8)
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM audit_chain_anchors').get().n, 2)
+  assert.deepEqual([verifyChain(db).ok, verifyChain(db).anchorsUsed], [true, 2])
+  assert.throws(() => deleteAuditRowsAnchored(db, 'id = 20', []), { code: 'AUDIT_OUTSIDE_TX' })
+  // 未锚点的删除仍然被抓到
+  db.prepare('DELETE FROM audit_logs WHERE id=20').run()
+  assert.equal(verifyChain(db).brk.id, 21)
+  // 隐私抹除：改 detail 并 rehash，后一行得到锚点；二次改写同一行仍通过
+  const db2 = mkDb(tmp(t))
+  fill(db2, 10)
+  db2.transaction(() => {
+    applyPlan(db2, { ops: [{ table: 'audit_logs', id: 5, set: { detail: '{"erased":true}' } }, { table: 'audit_logs', id: 6, set: { detail: '{"erased":true}' } }, { table: 'audit_logs', id: 5, set: { detail: '{"erased":2}' } }] })
+  })()
+  assert.equal(verifyChain(db2).ok, true)
+  assert.equal(db2.prepare('SELECT detail FROM audit_logs WHERE id=5').get().detail, '{"erased":2}')
+  // 没有 applyPlan 的裸改仍被抓到
+  db2.prepare("UPDATE audit_logs SET detail='x' WHERE id=8").run()
+  assert.equal(verifyChain(db2).brk.id, 8)
+  assert.equal(rehashAuditRow.length >= 2, true)
+})
+
+test('retention.mjs --execute keeps the chain verifiable (anchors for purged runs) (also covers the retention.mjs wiring)', (t) => {
+  const dir = tmp(t)
+  const db = mkDb(dir)
+  const at = (days) => db.prepare(`SELECT datetime('now','localtime','-${days} days') AS t`).get().t
+  fill(db, 20)
+  // 把中间几行改成"旧的、可清理的 master 模块"，再重建链（等价于它们当时就是这样写入的）
+  db.transaction(() => {
+    for (const id of [3, 4, 5, 9, 15]) db.prepare("UPDATE audit_logs SET module='master', created_at=?, row_hash=NULL, prev_hash=NULL WHERE id=?").run(at(900), id)
+    for (const id of [1, 2]) db.prepare("UPDATE audit_logs SET module='master', created_at=?, row_hash=NULL, prev_hash=NULL WHERE id=?").run(at(900), id)
+    db.prepare('UPDATE audit_logs SET row_hash=NULL, prev_hash=NULL').run() // 整表重建（等价于这些行当时就这样写入）：自愈只接尾部，所以必须全空
+  })()
+  await_import().up(db)
+  assert.equal(verifyChain(db).ok, true)
+  const r = cli('scripts/retention.mjs', ['cosmetic', '--execute', '--json'], dir)
+  assert.equal(r.status, 0, r.stderr)
+  assert.equal(JSON.parse(r.stdout).industries.cosmetic.counts.audit_logs, 7)
+  const v = verifyChain(db)
+  assert.deepEqual([v.ok, v.rows], [true, 14], JSON.stringify(v.brk))
+  assert.ok(v.anchorsUsed >= 3)
+  assert.equal(cli('scripts/audit-verify-chain.mjs', ['--data-dir', dir, '--industry', 'cosmetic'], dir).status, 0)
+  db.close()
+})
+
+test('only insertAuditRow inserts into audit_logs in server code (bootstrap included)', () => {
+  const walk = (d) => readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(path.join(d, e.name)) : /\.(js|cjs|mjs)$/.test(e.name) ? [path.join(d, e.name)] : []))
+  const offenders = walk(path.join(ROOT, 'server')).filter((f) => /INSERT\s+INTO\s+audit_logs/i.test(readFileSync(f, 'utf8'))).map((f) => path.relative(ROOT, f))
+  assert.deepEqual(offenders, ['server/lib/audit-trail.js'])
+})
+
+test('anchors are bound to the surviving predecessor: deleting extra rows next to an anchored gap is still caught', (t) => {
+  const db = mkDb(tmp(t))
+  fill(db, 30)
+  db.transaction(() => deleteAuditRowsAnchored(db, 'id BETWEEN 10 AND 12', [], { kind: 'retention' }))()
+  assert.equal(verifyChain(db).ok, true)
+  db.prepare('DELETE FROM audit_logs WHERE id = 9').run() // 额外多删紧挨着缺口的前一行
+  const v = verifyChain(db)
+  assert.deepEqual([v.ok, v.brk.id, v.brk.kind], [false, 13, 'link'])
+  // 隐私抹除改写后再删被改写的那一行，同样被抓到
+  const db2 = mkDb(tmp(t))
+  fill(db2, 12)
+  db2.transaction(() => applyPlan(db2, { ops: [{ table: 'audit_logs', id: 3, set: { detail: '{"erased":true}' } }] }))()
+  assert.equal(verifyChain(db2).ok, true)
+  db2.prepare('DELETE FROM audit_logs WHERE id = 3').run()
+  assert.equal(verifyChain(db2).ok, false)
+})
+
+test('a row rewritten twice, then deleted by retention, stays verifiable (anchors accumulate per predecessor)', (t) => {
+  const db = mkDb(tmp(t))
+  fill(db, 12)
+  db.transaction(() => {
+    applyPlan(db, { ops: [{ table: 'audit_logs', id: 5, set: { detail: '{"a":1}' } }] })
+    applyPlan(db, { ops: [{ table: 'audit_logs', id: 5, set: { detail: '{"a":2}' } }] })
+  })()
+  assert.equal(verifyChain(db).ok, true)
+  db.transaction(() => deleteAuditRowsAnchored(db, 'id = 5', [], { kind: 'retention' }))()
+  assert.equal(verifyChain(db).ok, true)
+})
+
+test('audit-archive.mjs handles segments that contain retention/erase anchors and an anchored boundary', (t) => {
+  const { dir, out, db } = archiveReady(t)
+  // 段内：先做一次受控删除（id 10..12）和一次抹除改写（id 20）；边界：改写段尾行 id 40
+  db.transaction(() => {
+    deleteAuditRowsAnchored(db, 'id BETWEEN 10 AND 12', [], { kind: 'retention' })
+    applyPlan(db, { ops: [{ table: 'audit_logs', id: 20, set: { detail: '{"erased":1}' } }, { table: 'audit_logs', id: 40, set: { detail: '{"erased":2}' } }] })
+  })()
+  assert.equal(verifyChain(db).ok, true)
+  const A = (extra = []) => cli('scripts/audit-archive.mjs', ['--data-dir', dir, '--industry', 'cosmetic', '--before', '2025-01-01', '--out', out, ...extra], dir)
+  const dry = A()
+  assert.equal(dry.status, 0, dry.stdout + dry.stderr)
+  const token = dry.stdout.match(/口令：(ARCHIVE-[0-9A-F]{16})/)[1]
+  const done = A(['--confirm', token])
+  assert.equal(done.status, 0, done.stdout + done.stderr)
+  const digest = JSON.parse(readFileSync(path.join(out, readdirSync(out).find((f) => f.endsWith('.digest.json'))), 'utf8'))
+  assert.ok(digest.anchors.length >= 2, 'segment anchors travel with the digest')
+  assert.equal(verifyChain(db).ok, true)
+  assert.equal(cli('scripts/audit-verify-chain.mjs', ['--data-dir', dir, '--industry', 'cosmetic'], dir).status, 0)
+  db.close()
+})
+
+test('audit-archive.mjs failure after export removes its files so a retry is not blocked', (t) => {
+  const { dir, out, db } = archiveReady(t)
+  // 让写 AUDIT_ARCHIVE 严格审计失败：BEFORE INSERT 触发器吞掉它 ⇒ 事务回滚 ⇒ 导出文件必须被删
+  db.exec("CREATE TRIGGER no_archive_audit BEFORE INSERT ON audit_logs WHEN NEW.action='AUDIT_ARCHIVE' BEGIN SELECT RAISE(IGNORE); END")
+  const A = (extra = []) => cli('scripts/audit-archive.mjs', ['--data-dir', dir, '--industry', 'cosmetic', '--before', '2025-01-01', '--out', out, ...extra], dir)
+  const token = A().stdout.match(/口令：(ARCHIVE-[0-9A-F]{16})/)[1]
+  const r = A(['--confirm', token])
+  assert.equal(r.status, 1)
+  assert.match(r.stdout, /SECURITY_AUDIT_UNAVAILABLE/)
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM audit_logs').get().n, 60, 'rolled back')
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM audit_chain_anchors').get().n, 0)
+  assert.equal(readdirSync(out).length, 0, 'no leftover export files')
+  db.exec('DROP TRIGGER no_archive_audit')
+  assert.equal(A(['--confirm', token]).status, 0, 'retry succeeds')
+  db.close()
+})
+
+test('controlled delete / rewrite refuse to launder an existing unauthorised gap', (t) => {
+  const db = mkDb(tmp(t))
+  fill(db, 8)
+  db.prepare('DELETE FROM audit_logs WHERE id = 2').run() // 未登记的删除
+  assert.equal(verifyChain(db).ok, false)
+  assert.throws(() => db.transaction(() => deleteAuditRowsAnchored(db, 'id = 4', [], { kind: 'retention' }))(), { code: 'AUDIT_CHAIN_BROKEN' })
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM audit_logs WHERE id = 4').get().n, 1, 'nothing deleted')
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM audit_chain_anchors').get().n, 0)
+  // 改写某行时，它与下一行之间若本来就断了，不登记锚点
+  const db2 = mkDb(tmp(t))
+  fill(db2, 8)
+  db2.prepare('DELETE FROM audit_logs WHERE id = 4').run()
+  assert.throws(() => db2.transaction(() => applyPlan(db2, { ops: [{ table: 'audit_logs', id: 3, set: { detail: '{"x":1}' } }] }))(), { code: 'AUDIT_CHAIN_BROKEN' })
+  assert.equal(db2.prepare('SELECT detail FROM audit_logs WHERE id = 3').get().detail, '{"n":2}', 'rolled back')
+})
+
+test('insertAuditRow inside a caller transaction is all-or-nothing even when the hash-correction UPDATE aborts and the caller swallows the error', (t) => {
+  const db = mkDb(tmp(t))
+  fill(db, 3)
+  db.exec("CREATE TRIGGER no_fix BEFORE UPDATE OF row_hash ON audit_logs BEGIN SELECT RAISE(ABORT,'no hash updates'); END")
+  db.transaction(() => {
+    try { insertAuditRow(db, { action: 'N', userId: '005' }) } catch { /* 调用方吞掉异常继续提交 */ }
+  })()
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM audit_logs').get().n, 3, 'the half-written row was rolled back with its savepoint')
+  assert.equal(verifyChain(db).ok, true)
+})
+
+test('verifyJsonlSegment streams: lines straddling 1 MiB read chunks verify, a flipped byte is caught', (t) => {
+  const dir = tmp(t)
+  const db = mkDb(dir)
+  db.transaction(() => { for (let i = 0; i < 700; i++) insertAuditRow(db, { action: 'BIG', module: 'm', entity: 'e', entityId: i, detail: { pad: 'x'.repeat(3000 + (i % 7) * 211), i } }) })()
+  const rows = db.prepare('SELECT * FROM audit_logs ORDER BY id').all()
+  const file = path.join(dir, 'seg.jsonl')
+  writeFileSync(file, rows.map((r) => JSON.stringify(r) + '\n').join(''))
+  assert.ok(readFileSync(file).length > 2 * 1024 * 1024, 'spans several read chunks')
+  const ok = verifyJsonlSegment(file)
+  assert.deepEqual([ok.ok, ok.rows, ok.firstId, ok.lastId], [true, 700, rows[0].id, rows[699].id])
+  const bytes = readFileSync(file)
+  const at = Math.floor(bytes.length / 2)
+  bytes[at] = bytes[at] === 0x78 ? 0x79 : 0x78
+  writeFileSync(file, bytes)
+  assert.equal(verifyJsonlSegment(file).ok, false)
+})

@@ -2,6 +2,14 @@
 
 更新：2026-10-22。全新公开仓库：[osborn-studio/OS-ERP](https://github.com/osborn-studio/OS-ERP)，采用 MIT，仅导入清理后的当前文件快照。旧仓库保留为私有归档，其 PR/Actions/历史对象不导入本仓库。未发布正式 Release、未部署。来源及旧 checkout 使用限制见 [PUBLICATION_HISTORY](../PUBLICATION_HISTORY.md)，MIT 决策不替代第三方权属核验。
 
+## 第十一批当前状态（2026-10-23）
+
+按 [roadmap-v7](roadmap-v7.md) 的 AB1–AB12，12 路 Sonnet 5.5 subagent 并行实现并各自经 Codex（gpt-6.1-sol）审计后集成到 `batch-eleven`（将作为 PR #7）：AB1 主数据仓库下拉、采购订单列表/详情/统计、QC 概览与审计聚合按仓库组织范围（ADR-0046）；AB2 看板 trend/top/todos/inventory-dist 剖析、CROSS JOIN 与单遍扫描改写、按键 LRU 缓存与两进程 `data_version` 失效测试（ADR-0044 补充）；AB3 审计日志 FTS5 trigram 关键词检索（迁移 067，候选再经 LIKE 复核，无 FTS5 时退化）与"仅 action 必须带 module"；AB4 发行候选证据 Ed25519 签名、`release-keygen`、`verify-release --pubkey`（ADR-0047）；AB5 `schema-snapshot.mjs` 产出旧结构备份集供升级演练不截断重放（ADR-0048）；AB6 审计日志哈希链、锚点表、`audit-verify-chain`/`audit-archive`（ADR-0049，迁移 068；保留清理与擦除遇断链即拒绝）；AB7 RC/YQ/SH 门店绑定进入 `DOC_SCOPE_RESOLVERS`，MCP 严格绑定（ADR-0011 补充）；AB8 奇门演示常量清除（迁移 069）、演示模式按安装生成密钥、`qimen-issue-key.mjs`、能力清单只回 app_key 前 4 位（ADR-0033 补充）；AB9 托管 runner 浏览器场景登记与审批模板/POS 结算权限场景；AB10 指标端点按 IP 节流、令牌轮换、缓存/审计写入/MCP 调用指标（ADR-0045 补充）；AB11 `synth-pipeline --profile large-ci` 分批 VACUUM、磁盘与时间预算、`partial` 诚实报告（夜间 `scale=large-ci`）；AB12 操作/安装手册补第十批功能与 `docs/security/dependency-notes.md`。集成修复：`check-route-authz` 用 `process.exitCode` 代替 `process.exit()`（管道截断导致 codemap 测试随机红），`gen-codemap` 校验清单条数；`meta.js` 导入冲突曾整文件取本侧而丢掉 AB3 路由改动，已恢复并补测。OpenAPI 版本 1.39.0。验证以托管 CI 为准。
+
+## 第十批当前状态（2026-10-23）
+
+按 [roadmap-v6](roadmap-v6.md) 的 AA1–AA12，12 路 Sonnet 5.5 subagent 并行实现并各自经 Codex（gpt-6.1-sol）审计后集成到 `batch-ten`（将作为 PR #6）：AA1 MCP `order.trace_document`/`doc.query` 改走 `DOC_SCOPE_RESOLVERS`（ADR-0041）；AA2 OMS 写路由与 MCP 库存工具按仓库组织范围（ADR-0042）；AA3 审批模板维护权限 `system:approval:template`（ADR-0037 补充，迁移 063；0043 编号未使用）；AA4 质检处置/仓库主数据/采购收货退货/POS 门店库存接入仓库范围（ADR-0038 补充）；AA5 低库存口径统一为 `listBelowSafe`、看板剖析与 30 s 缓存（ADR-0044；缓存命中 p95 约 42 ms，未命中约 400 ms）；AA6 审计日志索引与封顶计数（迁移 065）；AA7 发行候选 `--run-tests`/`--ci-run auto` 与证据校验；AA8 浏览器场景 my-scope/audit-logs/inventory-paging；AA9 POS 作废与差异结算权限码（迁移 066）；AA10 Prometheus 指标导出（ADR-0045）；AA11 迁移升级演练脚本与夜间可选步骤；AA12 安装/操作手册补第七至九批功能。集成时合并 AA1/AA2/AA5 在 `mcp/tools.js` 的改动（`stock_alert` 低库存走 `listBelowSafe`，临期行保留 AA2 仓库过滤）。OpenAPI 版本 1.38.0。验证以托管 CI 为准。
+
 ## 第九批当前状态（2026-10-23）
 
 按 [roadmap-v5](roadmap-v5.md) 的 Z1–Z12，12 路 Sonnet 5.5 subagent 并行实现并各自经 Codex（gpt-6.1-sol）审计后集成到 `batch-nine`（将作为 PR #5）：Z1 库存域与采购订单状态/收货按仓库组织范围（ADR-0038）；Z2 OMS 读接口与 MCP `doc.get` 走解析表（ADR-0039）；Z3 热点查询改造与库存列表键集分页（迁移 061，`/inventory/stocks` p95 2078→151 ms）；Z4 `GML_TRUST_PROXY` 统一受信代理（ADR-0040）；Z5 发行候选打包与证据包；Z6 `/api/auth/my-scope` 与"我的数据范围"页；Z7 审计日志查看器与 CSV 导出（迁移 062）；Z8 MCP 幂等/确认缓存命中前重验；Z9 `approval_manager_global` 开关（危险键 17→18）；Z10 夜间容量基线工作流；Z11 依赖补丁刷新（braces 链仍无修复）；Z12 代码地图与 ADR 索引生成并入 CI。集成时合并 Z1 与 Z3 在库存域的改动：`listBelowSafe`/`countBelowSafe` 叠加调用者组织范围。验证以托管 CI 为准。

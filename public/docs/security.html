@@ -125,6 +125,7 @@
 <p>本项目由Tailwind的文件匹配及监听依赖间接引入braces。现有文件匹配模式写在受维护者控制的tailwind.config.js中，普通业务表单没有被设计为接收并执行任意构建glob。基于当前调用方式，主要暴露在开发和构建链，而不是普通业务API；这是对当前代码路径的风险判断，不是漏洞已经修复的结论。</p>
 <p>暂行限制：</p>
 <ul><li>不把开发服务器开放到公网，也不将npm run dev作为客户生产运行方式。</li><li>不把用户上传内容、业务字段或外部传入的字符串拼进Tailwind文件匹配模式。</li><li>仅在可信源码目录构建，不监听未知来源目录、上传目录或可由外部人员修改的源码。</li><li>普通本地安装采用已构建dist和npm ci --omit=dev，运行依赖中不安装Tailwind或braces。</li><li>保留GitHub告警，持续以官方公告和修复版本为准，不标记为“误报”或“已解决”。</li></ul>
+<p>影响评估的依据（<code>npm ls braces --all --package-lock-only</code> 的依赖链输出、运行依赖树中没有 braces、各位置是否可达、重新评估的触发条件和未验证项）记录在仓库内 <code>docs/security/dependency-notes.md</code>。</p>
 <p>彻底移除该依赖需要迁移样式构建链或等待上游补丁。迁移Tailwind主版本会影响全站生成样式和兼容性，需要独立安排界面回归，未在本轮仓促实施。</p>
 <h2 id="三-检查方法与口径">三 检查方法与口径</h2>
 <pre><code>node scripts/test-dependency-security.mjs

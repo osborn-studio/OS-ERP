@@ -2,7 +2,7 @@
  * ============================================================================
  * 文件标识：tests/qimen-auth.test.mjs ｜ 测试：奇门网关每平台密钥、HMAC 签名、时间窗、nonce 防重放、能力清单权限（ADR-0033）
  * ============================================================================
- * 【职责】守住 Y3：
+ * 【职责】守住 Y3 与 AB8（迁移 069、按安装生成密钥、app_key 截断）：
  *   · 迁移 060 可重复执行、verify 通过；平台密钥只以 `enc:v1:` 封存值落库，签发响应是明文唯一出现处；
  *   · 签发/轮换需要 `oms.platform.manage`（非管理员 403、匿名 401）；已有密钥不带 rotate ⇒ 409；轮换后旧密钥立即失效；
  *   · 网关：独立密钥 HMAC 通过；公开演示常量 / 旧 MD5 / 明文落库值 / 他平台密钥 / 篡改 request / 过期或未来时间戳 / 坏 nonce / 重放 一律 401；
@@ -91,12 +91,12 @@ async function server(t) {
     assert.equal(r.status, 200, r.text)
     return { id: r.body.data.id, username, password, token: await login(username, password) }
   }
-  return { dir, api, db, admin, login, account }
+  return { dir, api, db, admin, login, account, output: () => output, jwtSecret: env.GML_JWT_SECRET }
 }
 
-/** 两个 active 平台，保证有 app_key */
+/** 两个 active 平台，保证有 app_key。跳过 id 最小的那个：它是启动时自动获得随机演示密钥的演示平台（AB8），其余平台都未签发。 */
 function twoPlatforms(db) {
-  const rows = db.prepare("SELECT id, app_key FROM platforms WHERE app_key IS NOT NULL AND app_key<>'' AND status='active' ORDER BY id LIMIT 2").all()
+  const rows = db.prepare("SELECT id, app_key FROM platforms WHERE app_key IS NOT NULL AND app_key<>'' AND status='active' ORDER BY id LIMIT 2 OFFSET 1").all()
   assert.equal(rows.length, 2)
   return rows
 }
@@ -110,7 +110,7 @@ function gatewayBody(secret, platform, { method = METHOD, request = { itemCode: 
   return { method, app_key: platform.app_key, timestamp: s.timestamp, nonce: s.nonce, request, sign: signWith(secret, { appKey: platform.app_key, method, request, ...s }) }
 }
 
-test('migration 060 is idempotent, verifies, and platforms start without a secret', { timeout: 300000 }, async (t) => {
+test('migration 060 is idempotent, verifies, and only the demo platform starts with a secret', { timeout: 300000 }, async (t) => {
   const f = await server(t)
   const m060 = require('../server/db/migrations/060_qimen_secrets.cjs')
   assert.equal(m060.verify(f.db), true)
@@ -119,7 +119,7 @@ test('migration 060 is idempotent, verifies, and platforms start without a secre
   assert.equal(m060.verify(f.db), true)
   const cols = f.db.prepare('PRAGMA table_info(platforms)').all().map((c) => c.name)
   assert.ok(cols.includes('app_secret_sealed') && cols.includes('app_secret_rotated_at'))
-  assert.equal(f.db.prepare("SELECT COUNT(*) c FROM platforms WHERE app_secret_sealed IS NOT NULL").get().c, 0, 'no platform gets a secret implicitly')
+  assert.equal(f.db.prepare("SELECT COUNT(*) c FROM platforms WHERE app_secret_sealed IS NOT NULL").get().c, 1, 'only the demo platform gets a per-install secret at startup (AB8)')
   assert.ok(f.db.prepare("SELECT 1 FROM permissions WHERE code='oms.platform.manage'").get())
   assert.ok(f.db.prepare("SELECT 1 FROM role_permissions WHERE role_code='admin' AND perm_code='oms.platform.manage'").get())
   assert.equal(f.db.prepare("SELECT COUNT(*) c FROM role_permissions WHERE perm_code='oms.platform.manage' AND role_code<>'admin'").get().c, 0)
@@ -295,7 +295,10 @@ test('capabilities needs the manage permission and no read surface exposes secre
   assert.equal(cap.status, 200, cap.text)
   assert.ok(!/GML-DEMO-SECRET/.test(cap.text), 'demo constant is gone')
   const row = cap.body.data.platforms.find((p) => p.id === pf.id)
-  assert.equal(row.app_key, pf.app_key)
+  assert.equal(row.app_key, pf.app_key.slice(0, 4), 'capabilities only discloses the first 4 characters of app_key (AB8)')
+  assert.notEqual(row.app_key, pf.app_key)
+  for (const p of cap.body.data.platforms) assert.ok(String(p.app_key || '').length <= 4, 'no full app_key anywhere in capabilities')
+  assert.ok(!cap.text.includes(pf.app_key), 'full app_key is absent from the capabilities response')
   assert.equal(row.has_secret, 1)
   assert.equal(Object.keys(row).filter((k) => /secret/i.test(k)).sort().join(), 'has_secret,secret_rotated_at')
 
@@ -356,4 +359,152 @@ test('front-end debug signer (src/utils/qimen-sign.ts) matches the server contra
   assert.equal(await clientSign('qsk_test', parts), serverSign('qsk_test', parts))
   assert.equal(await clientSign('qsk_test', parts), signWith('qsk_test', { ...parts, request: { z: [3, { b: '中文', a: null }], a: { y: 1.5, x: true } } }))
   assert.match(newNonce(), /^[0-9a-f]{32}$/)
+})
+
+// ===================== AB8：按安装生成的密钥（ADR-0033 补充，迁移 069） =====================
+const DEMO_CONSTANT = 'GML-DEMO-SECRET'
+
+test('migration 069 clears rows holding the public demo constant, records it, and keeps real secrets', { timeout: 300000 }, async (t) => {
+  const f = await server(t)
+  const { sealSecret, openSecret } = await import('../server/lib/secret-box.js')
+  const env = { GML_SECRET_KEY: 'ab8-test-key-0123456789abcdef' }
+  const saved = process.env.GML_SECRET_KEY
+  process.env.GML_SECRET_KEY = env.GML_SECRET_KEY
+  t.after(() => { if (saved === undefined) delete process.env.GML_SECRET_KEY; else process.env.GML_SECRET_KEY = saved })
+  const m069 = require('../server/db/migrations/069_qimen_clear_demo_secret.cjs')
+  const rows = f.db.prepare("SELECT id FROM platforms WHERE app_key IS NOT NULL AND status='active' ORDER BY id LIMIT 4 OFFSET 1").all()
+  const [sealedDemo, plainDemo, real, other] = rows.map((r) => r.id)
+  const set = f.db.prepare('UPDATE platforms SET app_secret_sealed=?, app_secret_rotated_at=?, app_secret_masked=? WHERE id=?')
+  const realSecret = `qsk_${'a1'.repeat(32)}`
+  set.run(sealSecret(DEMO_CONSTANT, env), '2026-01-01 00:00:00', '****CRET', sealedDemo)
+  set.run(DEMO_CONSTANT, '2026-01-01 00:00:00', '****CRET', plainDemo)
+  set.run(sealSecret(realSecret, env), '2026-01-01 00:00:00', '****aaaa', real)
+  set.run(null, null, 'sk_****1234', other)
+  f.db.prepare("DELETE FROM settings WHERE key='qimen_demo_secret_cleared'").run()
+  f.db.prepare('INSERT INTO qimen_nonces (platform_id, nonce, seen_at) VALUES (?,?,?)').run(sealedDemo, 'n'.repeat(20), Date.now())
+  assert.equal(m069.verify(f.db), false, 'verify flags a surviving demo-constant row')
+
+  m069.up(f.db)
+  m069.up(f.db) // idempotent
+  assert.equal(m069.verify(f.db), true)
+  const get = (id) => f.db.prepare('SELECT app_secret_sealed s, app_secret_rotated_at r, app_secret_masked m FROM platforms WHERE id=?').get(id)
+  for (const id of [sealedDemo, plainDemo]) assert.deepEqual(get(id), { s: null, r: null, m: null }, `platform ${id} cleared`)
+  assert.equal(openSecret(get(real).s, env), realSecret, 'a genuinely issued secret is untouched')
+  assert.equal(get(real).r, '2026-01-01 00:00:00')
+  assert.equal(get(other).m, 'sk_****1234')
+  assert.equal(f.db.prepare('SELECT COUNT(*) c FROM qimen_nonces WHERE platform_id=?').get(sealedDemo).c, 0)
+  const fact = f.db.prepare("SELECT value FROM settings WHERE key='qimen_demo_secret_cleared'").get()
+  assert.ok(fact, 'settings row records that the constant was cleared')
+  assert.equal(JSON.parse(fact.value).cleared, 2)
+  assert.ok(!JSON.stringify(f.db.prepare('SELECT * FROM settings').all()).includes(DEMO_CONSTANT), 'constant never stored in settings')
+  assert.ok(f.db.prepare("SELECT 1 FROM schema_migrations WHERE id LIKE '069_%'").get())
+  // 兜底：即便常量被重新写进库（封存形态），网关也拒绝（1005）
+  const pfDemo = f.db.prepare('SELECT id, app_key FROM platforms WHERE id=?').get(sealedDemo)
+  f.db.prepare('UPDATE platforms SET app_secret_sealed=? WHERE id=?').run(sealSecret(DEMO_CONSTANT, { GML_JWT_SECRET: f.jwtSecret, GML_RUNTIME_MODE: 'test' }), sealedDemo)
+  const viaGateway = await f.api('/api/qimen', { body: gatewayBody(DEMO_CONSTANT, pfDemo) })
+  assert.equal(viaGateway.status, 401)
+  assert.equal(viaGateway.body.code, '1005')
+  // 配置审计不把这条事实记录当作"未登记的键"
+  const { auditSettingTrail } = await import('../server/lib/settings.js')
+  const trail = auditSettingTrail(f.db)
+  assert.deepEqual(trail.problems.filter((p) => ['SETTING_KEY_UNKNOWN', 'SETTING_AUDIT_DESYNC'].includes(p.code)), [])
+})
+
+test('migration 069 on a clean database writes no settings row and verifies', { timeout: 300000 }, async (t) => {
+  const f = await server(t)
+  const m069 = require('../server/db/migrations/069_qimen_clear_demo_secret.cjs')
+  assert.equal(m069.verify(f.db), true)
+  assert.equal(f.db.prepare("SELECT COUNT(*) c FROM settings WHERE key='qimen_demo_secret_cleared'").get().c, 0)
+})
+
+test('demo/test startup generates a per-install secret for the demo platform only; it is never printed or reused', { timeout: 300000 }, async (t) => {
+  const f = await server(t)
+  const { openSecret } = await import('../server/lib/secret-box.js')
+  const env = { GML_JWT_SECRET: f.jwtSecret, GML_RUNTIME_MODE: 'test' }
+  const secured = f.db.prepare('SELECT id, app_key, app_secret_sealed s, app_secret_masked m FROM platforms WHERE app_secret_sealed IS NOT NULL').all()
+  assert.equal(secured.length, 1)
+  const lowest = f.db.prepare("SELECT id FROM platforms WHERE app_key IS NOT NULL AND app_key<>'' AND status='active' ORDER BY id LIMIT 1").get().id
+  assert.equal(secured[0].id, lowest)
+  assert.ok(secured[0].s.startsWith('enc:v1:'))
+  const secret = openSecret(secured[0].s, env)
+  assert.match(secret, /^qsk_[0-9a-f]{64}$/)
+  assert.notEqual(secret, DEMO_CONSTANT)
+  assert.equal(secured[0].m, `****${secret.slice(-4)}`)
+  const out = f.output()
+  assert.ok(!out.includes(secret), 'full secret never reaches the log')
+  assert.ok(!out.includes(secret.slice(4, 40)), 'no long fragment of the secret in the log')
+  assert.ok(!out.includes(DEMO_CONSTANT))
+  assert.ok(/qimen-issue-key/.test(out), 'a one-line hint points at the issuance tool')
+  assert.ok(!out.includes(secured[0].app_key), 'app_key is not printed in full')
+  const pf = { id: secured[0].id, app_key: secured[0].app_key }
+  assert.equal((await f.api('/api/qimen', { body: gatewayBody(secret, pf) })).status, 200)
+  assert.equal(f.db.prepare('SELECT COUNT(*) c FROM platforms WHERE id<>? AND app_secret_sealed IS NOT NULL').get(lowest).c, 0)
+  const src = readFileSync(path.join(ROOT, 'server/lib/qimen-auth.js'), 'utf8')
+  assert.ok(!/qsk_[0-9a-f]{16}/.test(src), 'no literal secret in the repo source')
+})
+
+test('ensureDemoQimenSecret is idempotent, skips a demo platform that already has one, and refuses production', async () => {
+  const { ensureDemoQimenSecret } = await import('../server/lib/qimen-auth.js')
+  const { isSealed } = await import('../server/lib/secret-box.js')
+  const env = { GML_RUNTIME_MODE: 'test', GML_JWT_SECRET: randomBytes(32).toString('hex') }
+  const mk = () => {
+    const db = new Database(':memory:')
+    db.exec(`CREATE TABLE platforms (id INTEGER PRIMARY KEY, app_key TEXT, status TEXT DEFAULT 'active', app_secret_sealed TEXT, app_secret_rotated_at TEXT, app_secret_masked TEXT);
+             INSERT INTO platforms (id, app_key) VALUES (1,'ak_alpha_1'),(2,'ak_beta_2');`)
+    return db
+  }
+  const db = mk()
+  const first = ensureDemoQimenSecret(db, { env })
+  assert.equal(first.created, true)
+  assert.equal(first.platform_id, 1)
+  assert.equal(first.app_key_prefix, 'ak_a')
+  assert.ok(!JSON.stringify(first).match(/qsk_[0-9a-f]{16}/), 'return value never carries the secret')
+  const sealed = db.prepare('SELECT app_secret_sealed s FROM platforms WHERE id=1').get().s
+  assert.ok(isSealed(sealed))
+  assert.equal(ensureDemoQimenSecret(db, { env }).created, false)
+  assert.equal(db.prepare('SELECT app_secret_sealed s FROM platforms WHERE id=1').get().s, sealed, 'restart keeps the secret')
+  assert.equal(db.prepare('SELECT app_secret_sealed s FROM platforms WHERE id=2').get().s, null)
+  const db2 = mk()
+  db2.prepare('UPDATE platforms SET app_secret_sealed=? WHERE id=1').run('enc:v1:existing')
+  assert.equal(ensureDemoQimenSecret(db2, { env }).created, false)
+  assert.equal(db2.prepare('SELECT app_secret_sealed s FROM platforms WHERE id=1').get().s, 'enc:v1:existing')
+  const db3 = mk()
+  const prod = ensureDemoQimenSecret(db3, { env: { GML_RUNTIME_MODE: 'production', GML_JWT_SECRET: env.GML_JWT_SECRET } })
+  assert.equal(prod.created, false)
+  assert.equal(db3.prepare('SELECT COUNT(*) c FROM platforms WHERE app_secret_sealed IS NOT NULL').get().c, 0)
+  const db4 = new Database(':memory:')
+  db4.exec('CREATE TABLE platforms (id INTEGER PRIMARY KEY, app_key TEXT, status TEXT, app_secret_sealed TEXT, app_secret_rotated_at TEXT, app_secret_masked TEXT)')
+  assert.equal(ensureDemoQimenSecret(db4, { env }).created, false)
+})
+
+test('issuance CLI is the only way to obtain a usable secret', { timeout: 300000 }, async (t) => {
+  const f = await server(t)
+  const [pf] = twoPlatforms(f.db)
+  const run = (args) => new Promise((resolve) => {
+    const c = spawn(process.execPath, ['scripts/qimen-issue-key.mjs', ...args], {
+      cwd: ROOT,
+      env: { PATH: process.env.PATH, HOME: f.dir, GML_RUNTIME_MODE: 'test', GML_DATA_DIR: f.dir, GML_JWT_SECRET: f.jwtSecret },
+      stdio: ['ignore', 'pipe', 'pipe']
+    })
+    let out = ''
+    c.stdout.on('data', (d) => { out += d })
+    c.stderr.on('data', (d) => { out += d })
+    c.on('close', (code) => resolve({ code, out }))
+  })
+  const first = await run(['--industry', 'cosmetic', '--platform', String(pf.id)])
+  assert.equal(first.code, 0, first.out)
+  const secret = /(qsk_[0-9a-f]{64})/.exec(first.out)?.[1]
+  assert.ok(secret, 'CLI prints the one-time plaintext')
+  assert.equal((await f.api('/api/qimen', { body: gatewayBody(secret, pf) })).status, 200)
+  const dup = await run(['--industry', 'cosmetic', '--platform', String(pf.id)])
+  assert.notEqual(dup.code, 0, 'second issue without --rotate is refused')
+  assert.ok(!dup.out.includes(secret))
+  const rot = await run(['--industry', 'cosmetic', '--platform', String(pf.id), '--rotate'])
+  assert.equal(rot.code, 0, rot.out)
+  const s2 = /(qsk_[0-9a-f]{64})/.exec(rot.out)?.[1]
+  assert.ok(s2 && s2 !== secret)
+  assert.equal((await f.api('/api/qimen', { body: gatewayBody(secret, pf) })).status, 401, 'old secret dies on rotate')
+  assert.equal((await f.api('/api/qimen', { body: gatewayBody(s2, pf) })).status, 200)
+  const noPlat = await run(['--industry', 'cosmetic', '--platform', '999999'])
+  assert.notEqual(noPlat.code, 0)
 })

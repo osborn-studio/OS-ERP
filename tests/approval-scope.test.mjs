@@ -304,3 +304,105 @@ test('MCP approval.approve passes the human signer org scope into decideApproval
   assert.match(src, /resolveOrgScope\(db, \{ uid: signerRow\.id, role: signerRow\.role \}\)/)
   assert.match(src, /decideApproval\(db, \{[\s\S]*?scopeCtx: \{ orgScope: signerScope/)
 })
+
+// ---------------------------------------------------------------------------
+// AA3：模板维护权限（system:approval:template，迁移 063）+ 全局范围 + 审批人范围校验，堵 Z9 的模板自授权逃逸
+// ---------------------------------------------------------------------------
+test('AA3: template maintenance needs system:approval:template AND global scope; the Z9 self-assignment escape fails', { timeout: 300000 }, async (t) => {
+  const f = await server(t)
+  const { db, api } = f
+  const whs = db.prepare(`SELECT w.id, w.org_id, o.path, o.parent_id FROM warehouses w JOIN orgs o ON o.id = w.org_id
+                          WHERE w.status='active' GROUP BY w.org_id ORDER BY w.id`).all()
+  const whA = whs[0]
+  const whB = whs.find((w) => !w.path.startsWith(whA.path) && !whA.path.startsWith(w.path) &&
+    !w.path.startsWith(db.prepare('SELECT path FROM orgs WHERE id=?').get(whA.parent_id).path))
+  const id = (sql, ...a) => Number(db.prepare(sql).run(...a).lastInsertRowid)
+  const docB = id(`INSERT INTO purchase_requisitions (doc_no, org_id, req_date, status, total_amount, warehouse_id) VALUES ('PRQ-AA3-B', ?, date('now'),'submitted',100,?)`, whB.org_id, whB.id)
+  const tpl = id(`INSERT INTO approval_templates (code,name,doc_type,action,enabled) VALUES ('APV-AA3-PRQ','prq aa3','PRQ','approve',1)`)
+  db.prepare(`INSERT INTO approval_steps (template_id,step_no,step_name,approver_type,approver_value) VALUES (?,1,'一级','role','finance')`).run(tpl)
+  const instB = id(`INSERT INTO approval_instances (template_id,template_code,doc_type,doc_id,doc_no,action,action_name,amount,total_steps,current_step,status,submitted_by_id)
+     VALUES (?,'APV-AA3-PRQ','PRQ',?,'PRQ-AA3-B','approve','审批',100,1,1,'pending',1)`, tpl, docB)
+  const steps = () => db.prepare('SELECT approver_type, approver_value FROM approval_steps WHERE template_id=? ORDER BY step_no').all(tpl)
+  const body = (u) => ({ code: 'APV-AA3-PRQ', name: 'prq aa3', doc_type: 'PRQ', action: 'approve', steps: [{ approver_type: 'user', approver_value: String(u) }] })
+  const grant = (role, perm) => db.prepare('INSERT OR IGNORE INTO role_permissions (role_code, perm_code) VALUES (?,?)').run(role, perm)
+  const revoke = (role, perm) => db.prepare('DELETE FROM role_permissions WHERE role_code=? AND perm_code=?').run(role, perm)
+
+  await t.test('migration 063: permission exists and only admin holds it', () => {
+    assert.ok(db.prepare("SELECT 1 FROM permissions WHERE code='system:approval:template'").get())
+    const holders = db.prepare("SELECT role_code FROM role_permissions WHERE perm_code='system:approval:template'").all().map((r) => r.role_code)
+    assert.deepEqual(holders, ['admin'])
+    assert.ok(!db.prepare("SELECT 1 FROM role_permissions WHERE role_code='boss' AND perm_code='system:approval:template'").get())
+  })
+
+  await t.test('Z9 escape: a restricted manager cannot make themselves approver of a template, with or without the new permission', async () => {
+    const mgr = await f.account('aa3_mgr_a', 'viewer', { org_id: whA.org_id, data_scope: 'org' })
+    const before = steps()
+    grant('viewer', 'system:approval:manage')
+    try {
+      db.prepare("INSERT OR REPLACE INTO settings (key,value) VALUES ('approval_manager_global','0')").run()
+      // manage alone: no longer enough
+      let r = await api('/api/approval/templates', { token: mgr.token, body: body(mgr.id) })
+      assert.equal(r.status, 403, JSON.stringify(r.body))
+      assert.deepEqual(steps(), before)
+      // even holding the new permission, a restricted data scope is refused
+      grant('viewer', 'system:approval:template')
+      r = await api('/api/approval/templates', { token: mgr.token, body: body(mgr.id) })
+      assert.equal(r.status, 403, JSON.stringify(r.body))
+      assert.match(r.body.message || r.body.error || JSON.stringify(r.body), /全部数据范围|GLOBAL_DATA_FORBIDDEN|范围/)
+      assert.deepEqual(steps(), before)
+      const tg = await api(`/api/approval/templates/${tpl}/toggle`, { token: mgr.token, body: {} })
+      assert.equal(tg.status, 403)
+      assert.equal(db.prepare('SELECT enabled FROM approval_templates WHERE id=?').get(tpl).enabled, 1)
+      // the foreign-org pending instance stays invisible to the manager (queue + detail + todos)
+      const p = okData(await api('/api/approval/pending', { token: mgr.token }))
+      assert.ok(!p.list.some((x) => x.doc_no === 'PRQ-AA3-B'), 'foreign pending must not appear in the manager queue')
+      notFound(await api(`/api/approval/instances/${instB}`, { token: mgr.token }), 'foreign instance detail')
+      assert.equal(okData(await api('/api/approval/todos', { token: mgr.token })).count, 0)
+    } finally {
+      db.prepare("DELETE FROM settings WHERE key='approval_manager_global'").run()
+      revoke('viewer', 'system:approval:manage'); revoke('viewer', 'system:approval:template')
+    }
+  })
+
+  await t.test('a global-scope account needs the new permission: manage alone is 403, with template perm it works', async () => {
+    const g = await f.account('aa3_glob', 'viewer', { data_scope: 'all' })
+    grant('viewer', 'system:approval:manage')
+    try {
+      assert.equal((await api('/api/approval/templates', { token: g.token, body: body(g.id) })).status, 403)
+      grant('viewer', 'system:approval:template')
+      okData(await api('/api/approval/templates', { token: g.token, body: body(g.id) }))
+      assert.deepEqual(steps(), [{ approver_type: 'user', approver_value: String(g.id) }])
+      okData(await api(`/api/approval/templates/${tpl}/toggle`, { token: g.token, body: {} }))
+      okData(await api(`/api/approval/templates/${tpl}/toggle`, { token: g.token, body: {} }))
+    } finally {
+      revoke('viewer', 'system:approval:manage'); revoke('viewer', 'system:approval:template')
+    }
+  })
+
+  await t.test('admin can still maintain templates; a nonexistent approver user is rejected (400, no write)', async () => {
+    const bad = await api('/api/approval/templates', { token: f.admin, body: body(987654) })
+    assert.equal(bad.status, 400, JSON.stringify(bad.body))
+    assert.notDeepEqual(steps(), [{ approver_type: 'user', approver_value: '987654' }])
+    const good = await api('/api/approval/templates', { token: f.admin, body: { ...body(1), steps: [{ approver_type: 'role', approver_value: 'finance' }] } })
+    okData(good)
+    assert.deepEqual(steps(), [{ approver_type: 'role', approver_value: 'finance' }])
+  })
+
+  await t.test('lib: approver assignment is validated against the maintainer org scope; template visibility predicate', async () => {
+    const lib = await import('../server/lib/approval.js')
+    const uA = id("INSERT INTO users (username,name,password_hash,role,org_id) VALUES ('aa3_ua','a','x','viewer',?)", whA.org_id)
+    const uB = id("INSERT INTO users (username,name,password_hash,role,org_id) VALUES ('aa3_ub','b','x','viewer',?)", whB.org_id)
+    const orgA = { scope: 'org', orgIds: [whA.org_id] }
+    const stp = (type, v) => [{ approver_type: type, approver_value: String(v) }]
+    const code = (fn) => { try { fn(); return null } catch (e) { return e.code } }
+    assert.equal(code(() => lib.validateApproverScope(db, stp('user', uA), orgA)), null)
+    assert.equal(code(() => lib.validateApproverScope(db, stp('user', uB), orgA)), 'APPROVER_OUT_OF_SCOPE')
+    assert.equal(code(() => lib.validateApproverScope(db, stp('role', 'finance'), orgA)), 'APPROVER_OUT_OF_SCOPE')
+    assert.equal(code(() => lib.validateApproverScope(db, stp('perm', 'x'), { scope: 'none', orgIds: [] })), 'APPROVER_OUT_OF_SCOPE')
+    assert.equal(code(() => lib.validateApproverScope(db, stp('user', uB), { scope: 'all', orgIds: null })), null)
+    assert.equal(code(() => lib.validateApproverScope(db, stp('user', 999999), { scope: 'all', orgIds: null })), 'APPROVER_NOT_FOUND')
+    assert.equal(lib.templateIsGlobal({ id: 1 }), true)
+    assert.equal(lib.templateIsGlobal({ id: 1, org_id: null }), true)
+    assert.equal(lib.templateIsGlobal({ id: 1, org_id: whA.org_id }), false)
+  })
+})

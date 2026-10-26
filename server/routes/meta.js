@@ -15,16 +15,20 @@
 
 import { Router } from 'express'
 import { getDb } from '../db/index.js'
-import { ok, wrap, fail, failFromError, paged, pageParams } from '../lib/http.js'
+import { ok, wrap, fail, bizFail, failFromError, paged, pageParams } from '../lib/http.js'
 import { requireAuth, requireRole, requirePerm, requireGlobalData, sessionToken } from '../middleware/auth.js'
 import { auditStrict } from '../middleware/audit.js'
 import {
   AUDIT_EXPORT_MAX_ROWS,
+  AUDIT_COUNT_CAP,
   AUDIT_PAGE_MAX,
   AuditViewError,
   CSV_HEADER,
   buildWhere,
-  csvLine,
+  countCapped,
+  keywordUsesFts,
+  exportChunks,
+  orderOf,
   parseFilters,
   viewRow
 } from '../lib/audit-view.js'
@@ -36,6 +40,11 @@ import { WAREHOUSE_TYPES } from '../lib/warehouse.js'
 import { versionInfo } from '../version.js'
 // 运维健康（ADR-0029）：详情只给 admin，匿名只拿 status
 import { computeOpsStatus, opsCounters } from '../lib/ops-status.js'
+// Prometheus 文本导出（ADR-0045）：admin JWT 或 GML_METRICS_TOKEN Bearer
+import { renderPrometheus, metricsTokenOk, PROMETHEUS_CONTENT_TYPE } from '../lib/metrics-export.js'
+import { counterSnapshot, histogramSnapshot } from '../lib/process-counters.js'
+import { createMetricsThrottle } from '../lib/metrics-throttle.js'
+import { writeRetryStats } from '../lib/tx.js'
 import { DATA_DIR } from '../db/index.js'
 import { ROLES } from '../middleware/auth.js'
 // 配置的唯一出处与唯一写入点（批次 R）：
@@ -121,13 +130,53 @@ r.get(
   })
 )
 
-/** 运维计数器（admin）：备份年龄 / 迁移校验和不一致数 / 节流存储 / 磁盘。未知值为 -1。 */
+/** `Authorization: Bearer <x>` 里的 x；形状不对 ⇒ null（不回显、不记录） */
+function bearerOf(req) {
+  const m = /^Bearer ([^\s]+)$/.exec(String(req.headers.authorization || ''))
+  return m ? m[1] : null
+}
+
+/**
+ * 指标鉴权（ADR-0045）：仅 `?format=prometheus` 接受 `GML_METRICS_TOKEN` 的 Bearer（抓取端没有用户会话）；
+ * 令牌不对 / 未配置 ⇒ 落到 `requireAuth`（admin JWT），所以错误令牌得 401，与"没带凭据"不可区分。
+ * 令牌对 JSON 形态与其它任何路由都无效。
+ */
+/**
+ * AB10：按来源 IP 的节流（独立桶，鉴权之前 —— 猜令牌的请求同样计数）。429 带业务码 + Retry-After。
+ * 策略在进程启动时由环境变量读定（`GML_METRICS_IP_LIMIT` / `GML_METRICS_IP_WINDOW_MS`）。
+ */
+const metricsThrottle = createMetricsThrottle()
+function metricsRateLimit(req, res, next) {
+  const verdict = metricsThrottle.consume(req.ip)
+  if (verdict.allowed) return next()
+  res.set('Retry-After', String(verdict.retryAfter))
+  return bizFail(res, Object.assign(new Error('指标抓取过于频繁，请稍后重试'), { status: 429, code: 'METRICS_RATE_LIMITED' }))
+}
+
+function metricsAuth(req, res, next) {
+  if (req.query?.format === 'prometheus' && metricsTokenOk(bearerOf(req))) return next()
+  return requireAuth(req, res, next)
+}
+
+/**
+ * 运维计数器。默认 JSON（ADR-0029）；`?format=prometheus` 返回 text exposition（ADR-0045）。
+ * 令牌放行时 `req.user` 为空：仅此处的处理器跳过 isOpsAdmin。
+ */
 r.get(
   '/metrics',
-  requireAuth,
+  metricsRateLimit,
+  metricsAuth,
   wrap((req, res) => {
-    if (!isOpsAdmin(req.user)) return fail(res, '需要管理员权限', 403, 403)
-    return ok(res, { counters: opsCounters(computeOpsStatus({ db: getDb(), dataDir: DATA_DIR })) })
+    const format = req.query?.format
+    if (format !== undefined && format !== 'json' && format !== 'prometheus') return fail(res, 'format 只能是 json 或 prometheus', 400, 400)
+    const viaToken = !req.user && format === 'prometheus'
+    if (!viaToken && !isOpsAdmin(req.user)) return fail(res, '需要管理员权限', 403, 403)
+    const ops = computeOpsStatus({ db: getDb(), dataDir: DATA_DIR })
+    if (format !== 'prometheus') return ok(res, { counters: opsCounters(ops) })
+    res.status(200)
+    res.setHeader('Content-Type', PROMETHEUS_CONTENT_TYPE)
+    res.setHeader('Cache-Control', 'no-store')
+    return res.end(Buffer.from(renderPrometheus({ ops, retry: writeRetryStats(), counters: counterSnapshot(), histograms: histogramSnapshot(), version: versionInfo().version }), 'utf8'))
   })
 )
 
@@ -327,7 +376,7 @@ function filtersOf(req, res) {
   try {
     return parseFilters(req.query || {})
   } catch (e) {
-    if (e instanceof AuditViewError) { fail(res, e.message, 400, 400); return null }
+    if (e instanceof AuditViewError) { bizFail(res, e); return null }
     throw e
   }
 }
@@ -344,13 +393,20 @@ r.get(
     const db = getDb()
     const { page, pageSize: ps } = pageParams(req)
     const pageSize = Math.min(ps, AUDIT_PAGE_MAX)
-    const { where, args } = buildWhere(filters)
-    const total = db.prepare(`SELECT COUNT(*) c FROM audit_logs ${where}`).get(...args).c
+    const { where, args } = buildWhere(filters, { fts: keywordUsesFts(db, filters.keyword) })
+    const offset = (page - 1) * pageSize
+    // 总数是封顶估算，翻页深度同封顶：想看更早的行请加过滤条件或导出
+    if (offset >= AUDIT_COUNT_CAP) return fail(res, `翻页超过 ${AUDIT_COUNT_CAP} 条上限，请加过滤条件缩小范围或使用导出`, 400, 400)
+    const { total, has_more } = countCapped(db, where, args)
     const rows = db
-      .prepare(`SELECT * FROM audit_logs ${where} ORDER BY id DESC LIMIT ? OFFSET ?`)
-      .all(...args, pageSize, (page - 1) * pageSize)
+      .prepare(`SELECT * FROM audit_logs ${where} ORDER BY ${orderOf(filters).sql} LIMIT ? OFFSET ?`)
+      .all(...args, pageSize, offset)
       .map(viewRow)
-    return paged(res, { rows, total, page, pageSize, retention: auditRetention(db), export_max_rows: AUDIT_EXPORT_MAX_ROWS })
+    return paged(res, {
+      rows, total, page, pageSize, has_more, total_cap: AUDIT_COUNT_CAP,
+      totalPages: Math.ceil(Math.min(total, AUDIT_COUNT_CAP) / pageSize) || 1,
+      retention: auditRetention(db), export_max_rows: AUDIT_EXPORT_MAX_ROWS
+    })
   })
 )
 
@@ -364,7 +420,7 @@ r.get(
     const filters = filtersOf(req, res)
     if (!filters) return
     const db = getDb()
-    const { where, args } = buildWhere(filters)
+    const { where, args } = buildWhere(filters, { fts: keywordUsesFts(db, filters.keyword) })
     const rows = db.prepare(`SELECT COUNT(*) c FROM (SELECT 1 FROM audit_logs ${where} LIMIT ?)`).get(...args, AUDIT_EXPORT_MAX_ROWS + 1).c
     const truncated = rows > AUDIT_EXPORT_MAX_ROWS
     // 快照上界：导出自己的审计行与导出期间的新行不进文件
@@ -382,17 +438,7 @@ r.get(
     res.setHeader('X-Export-Truncated', truncated ? '1' : '0')
     res.setHeader('X-Export-Max-Rows', String(AUDIT_EXPORT_MAX_ROWS))
     res.write(`﻿${CSV_HEADER.map((h) => `"${h}"`).join(',')}\r\n`)
-    const BATCH = 1000
-    const step = db.prepare(`SELECT * FROM audit_logs ${where ? `${where} AND` : 'WHERE'} id < ? ORDER BY id DESC LIMIT ?`)
-    let cursor = snapshotMax + 1
-    let sent = 0
-    while (sent < exported) {
-      const batch = step.all(...args, cursor, Math.min(BATCH, exported - sent))
-      if (!batch.length) break
-      let chunk = ''
-      for (const row of batch) chunk += csvLine(viewRow(row))
-      cursor = batch[batch.length - 1].id
-      sent += batch.length
+    for (const chunk of exportChunks(db, { where, args, order: orderOf(filters), snapshotMax, exported })) {
       if (!res.write(chunk)) {
         await new Promise((resolve) => { res.once('drain', resolve); res.once('close', resolve) })
         if (res.destroyed) return

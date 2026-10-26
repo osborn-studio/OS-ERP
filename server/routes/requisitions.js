@@ -18,6 +18,7 @@ import { localDate } from '../lib/dates.js'
 import { getDb } from '../db/index.js'
 import { ok, fail, wrap, pageParams, paged } from '../lib/http.js'
 import { requireAuth, requireRole, currentUser } from '../middleware/auth.js'
+import { boundStoreId } from '../lib/store-binding.js'
 import { audit } from '../middleware/audit.js'
 import { nextDocNo } from '../lib/docno.js'
 import { advanceStatus, tryTransition, nowText, logEvent, allowedActions } from '../lib/docflow.js'
@@ -53,8 +54,9 @@ const SHIP_STATUS = {
 function storeCtx(req) {
   const db = getDb()
   const u = req.user || {}
-  if (!u.store_id) throw Object.assign(new Error('当前账号未绑定门店'), { status: 403 })
-  const store = db.prepare('SELECT * FROM stores WHERE id=?').get(u.store_id)
+  const storeId = boundStoreId(u)
+  if (storeId == null) throw Object.assign(new Error('当前账号未绑定门店'), { status: 403 })
+  const store = db.prepare('SELECT * FROM stores WHERE id=?').get(storeId)
   if (!store) throw Object.assign(new Error('门店不存在'), { status: 404 })
   const wh = db
     .prepare("SELECT * FROM warehouses WHERE store_id=? AND status='active' ORDER BY id LIMIT 1")

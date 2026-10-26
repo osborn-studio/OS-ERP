@@ -171,7 +171,7 @@ export const TABLES = [
   'outsourcing_order_items', 'outsourcing_orders',
   'store_requisition_items', 'store_requisitions',
   // qimen_nonces（060）按 platform_id 记已接受的 nonce；重建后平台 id 会被复用，旧 nonce 会让新一代平台的合法请求被判重放，所以必须清
-  'ai_query_logs', 'audit_logs', 'oms_sync_logs', 'oms_order_items', 'oms_orders', 'qimen_nonces', 'platforms',
+  'ai_query_logs', 'audit_logs', 'audit_chain_anchors', 'oms_sync_logs', 'oms_order_items', 'oms_orders', 'qimen_nonces', 'platforms',
   'mall_cart_items', 'mall_customers', 'pos_daily_closes', 'pos_shifts', 'pos_order_items', 'pos_orders',
   // 模块 17 交班缴款（024）：三张新表必须登记 —— 缴款明细引用班次 id、班次差异行引用班次 id，
   // 而重建后 `pos_shifts` 的 id 会被**复用**，旧明细看起来仍然「指向一个存在的班次」，
@@ -361,6 +361,9 @@ export const TABLES = [
  */
 export const KEEP_TABLES = [
   'os_egp_runtime',
+  // D. FTS5 外部内容表的影子表（迁移 067）：由 audit_logs 上的触发器与 FTS 引擎维护，
+  //    清 audit_logs 时触发器同步清索引；**绝不直接 DELETE** 这些表（会让索引与内容表失配）。
+  'audit_logs_fts', 'audit_logs_fts_data', 'audit_logs_fts_idx', 'audit_logs_fts_docsize', 'audit_logs_fts_config',
   // A. 迁移与定义
   'schema_migrations', 'schema_def_fingerprints',
   // B. satellite seed 自清（procure-seed 的 ownedTables / oc-seed / quote-seed）

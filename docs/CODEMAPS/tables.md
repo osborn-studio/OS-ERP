@@ -3,7 +3,7 @@
 <!-- generated -->
 <!-- 由 `node scripts/gen-codemap.mjs` 生成，勿手改；CI 校验不漂移 -->
 
-共 198 张表、59 个迁移。“建于”= schema.sql / 迁移编号 / 运行时建表的文件；“改于”= ALTER、addColumn（无后缀）、建索引（·idx）、触发器（·trg）、DROP（·drop）所在迁移编号。“触达”= 该文件的 SQL 文本里出现这张表（server/db/ 下的种子与启动文件不计）。
+共 199 张表、65 个迁移。“建于”= schema.sql / 迁移编号 / 运行时建表的文件；“改于”= ALTER、addColumn（无后缀）、建索引（·idx）、触发器（·trg）、DROP（·drop）所在迁移编号。“触达”= 该文件的 SQL 文本里出现这张表（server/db/ 下的种子与启动文件不计）。
 
 ## 扫描边界（必读）
 
@@ -27,7 +27,8 @@
 | `ar_documents` | 019 | 019·idx, 020·idx | lib/ar.js, lib/credit-release.js, lib/docflow.js, lib/invoice.js, lib/report.js | routes/ar.js |
 | `assembly_order_items` | schema.sql | — | — | routes/inventory.js |
 | `assembly_orders` | schema.sql | — | lib/docflow.js | routes/inventory.js, routes/master.js |
-| `audit_logs` | schema.sql | — | lib/admin-bootstrap.js, lib/audit-trail.js | routes/auth.js, routes/meta.js |
+| `audit_chain_anchors` | 068 | 068·idx | lib/audit-chain-verify.js, lib/audit-trail.js | — |
+| `audit_logs` | schema.sql | 067·trg, 068 | lib/audit-chain-verify.js, lib/audit-trail.js, lib/audit-view.js | routes/auth.js, routes/meta.js |
 | `biz_flow_steps` | 008 | — | lib/order-center.js | routes/docflow.js, routes/order-center.js, routes/purchase-chain.js |
 | `biz_flows` | 008 | — | lib/order-center.js | routes/docflow.js, routes/order-center.js, routes/purchase-chain.js |
 | `bom_items` | 023 | 023·idx | lib/bom.js | — |
@@ -132,7 +133,7 @@
 | `price_group_targets` | 007 | — | lib/pricing.js | — |
 | `price_groups` | 007 | 007·idx | lib/pricing.js | routes/pricing.js |
 | `price_rules` | 007 | — | — | routes/pricing.js |
-| `product_skus` | schema.sql | 007 | lib/agreement.js, lib/bom.js, lib/catalog.js, lib/checkout.js, lib/costing.js, lib/invoice.js, lib/metrics.js, lib/mfg.js, lib/order-center.js, lib/pos2.js, lib/pricing.js, lib/purchase.js, lib/qc.js, lib/qc2.js, lib/quote.js, lib/rebate.js, lib/returns.js, lib/stock.js, mcp/tools.js | routes/ai.js, routes/dashboard.js, routes/dealers.js, routes/demand.js, routes/inventory.js, routes/mall.js, routes/master.js, routes/oms.js, routes/outsourcing.js, routes/pos.js, routes/pricing.js, routes/purchase-chain.js, routes/purchase.js, routes/qimen.js, routes/requisitions.js, routes/sales.js |
+| `product_skus` | schema.sql | 007 | lib/agreement.js, lib/bom.js, lib/catalog.js, lib/checkout.js, lib/costing.js, lib/invoice.js, lib/mfg.js, lib/order-center.js, lib/pos2.js, lib/pricing.js, lib/purchase.js, lib/qc.js, lib/qc2.js, lib/quote.js, lib/rebate.js, lib/returns.js, lib/stock.js, mcp/tools.js | routes/ai.js, routes/dashboard.js, routes/dealers.js, routes/demand.js, routes/inventory.js, routes/mall.js, routes/master.js, routes/oms.js, routes/outsourcing.js, routes/pos.js, routes/pricing.js, routes/purchase-chain.js, routes/purchase.js, routes/qimen.js, routes/requisitions.js, routes/sales.js |
 | `production_order_items` | schema.sql | — | lib/mfg.js | routes/demand.js |
 | `production_orders` | schema.sql | — | lib/bom.js, lib/docflow.js, lib/mfg.js, lib/qc2.js | routes/demand.js |
 | `products` | schema.sql | 007 | lib/agreement.js, lib/bom.js, lib/catalog.js, lib/checkout.js, lib/mfg.js, lib/order-center.js, lib/pos2.js, lib/purchase.js, lib/quote.js, lib/rebate.js, lib/stock.js, mcp/tools.js | routes/ai.js, routes/dashboard.js, routes/dealers.js, routes/demand.js, routes/inventory.js, routes/mall.js, routes/master.js, routes/meta.js, routes/oms.js, routes/outsourcing.js, routes/pos.js, routes/purchase-chain.js, routes/purchase.js, routes/requisitions.js, routes/sales.js |
@@ -276,3 +277,9 @@
 | 060 | `060_qimen_secrets.cjs` | 奇门网关每平台密钥（封存）、防重放 nonce 表与 oms.platform.manage 权限点 | qimen_nonces | platforms, qimen_nonces |
 | 061 | `061_hot_query_indexes.cjs` | 大库热点查询索引（低库存预警 / 看板待办计数） | — | — |
 | 062 | `062_audit_view_permission.cjs` | 审计日志查看权限点 system:audit:view | — | — |
+| 063 | `063_approval_template_perm.cjs` | 审批模板维护权限点 system:approval:template | — | — |
+| 065 | `065_audit_log_indexes.cjs` | 审计日志检索索引（module/user/entity） | — | — |
+| 066 | `066_pos_settle_permission.cjs` | 交班差异结案权限点 pos.shift.settle | — | — |
+| 067 | `067_audit_fts.cjs` | 审计日志关键词检索（FTS5 外部内容表 + 触发器） | — | audit_logs, temp |
+| 068 | `068_audit_hash_chain.cjs` | 审计日志哈希链（prev_hash/row_hash + 锚点表） | audit_chain_anchors | audit_chain_anchors, audit_logs |
+| 069 | `069_qimen_clear_demo_secret.cjs` | 清除库内公开奇门演示签名常量并记录事实 | — | — |

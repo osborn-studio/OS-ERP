@@ -34,7 +34,8 @@
 import { Router } from 'express'
 import { getDb } from '../db/index.js'
 import { ok, paged, pageParams } from '../lib/http.js'
-import { requireAuth, requireRole } from '../middleware/auth.js'
+import { requireAuth, requireRole, requireGlobalData, attachOrgScope } from '../middleware/auth.js'
+import { stockScopeSql, warehouseInScope } from '../lib/stock.js'
 import { audit } from '../middleware/audit.js'
 import {
   WAREHOUSE_STATUS,
@@ -45,6 +46,10 @@ import {
 
 const r = Router()
 const WRITE = ['admin', 'warehouse']
+// ADR-0038 补充（AA4）：仓库主数据是库存范围谓词的根（warehouses.org_id）。
+//   · 读：受限范围只看见 org_id 在自己范围内的仓（org 为 NULL 的仓对受限范围不可见），范围外与不存在同形 404；
+//   · 写（新建 / 修改 / 停用 / 删除拒绝）：仅全局数据范围 —— 受限账号改仓库的 org_id / 状态 / 类型会改写别组织的库存可见性。
+const GLOBAL_ONLY = requireGlobalData('仓库主数据维护')
 
 /** 可写字段（`code` 单独处理：新建可填、改不可变）。列名清单只在这里写一份。 */
 const EDITABLE = ['name', 'type', 'store_id', 'address', 'manager', 'phone', 'status']
@@ -100,6 +105,7 @@ function assertCodeFree(db, code, exceptId = null) {
 r.get(
   '/',
   requireAuth,
+  attachOrgScope,
   (req, res) => {
     const db = getDb()
     const { page, pageSize, offset } = pageParams(req)
@@ -118,6 +124,9 @@ r.get(
         params.push(v)
       }
     }
+    const scope = stockScopeSql(req.orgScope, 'warehouses', 'id')
+    conds.push(scope.sql)
+    params.push(...scope.params)
     const where = conds.length ? `WHERE ${conds.join(' AND ')}` : ''
     const total = db.prepare(`SELECT COUNT(*) c FROM warehouses ${where}`).get(...params).c
     const limitSql = req.query.all === '1' ? '' : 'LIMIT ? OFFSET ?'
@@ -132,10 +141,12 @@ r.get(
 r.get(
   '/:id',
   requireAuth,
+  attachOrgScope,
   (req, res, next) => {
     try {
       const db = getDb()
-      const row = findWarehouse(db, req.params.id)
+      let row = findWarehouse(db, req.params.id)
+      if (row && !warehouseInScope(db, row.id, req.orgScope)) row = null
       if (!row) return next(new WarehouseError('WAREHOUSE_NOT_FOUND', `仓库不存在：id=${req.params.id}`, 404))
       return ok(res, row)
     } catch (e) {
@@ -151,6 +162,7 @@ r.post(
   '/',
   requireAuth,
   requireRole(...WRITE),
+  GLOBAL_ONLY,
   (req, res, next) => {
     try {
       const db = getDb()
@@ -186,6 +198,7 @@ r.put(
   '/:id',
   requireAuth,
   requireRole(...WRITE),
+  GLOBAL_ONLY,
   (req, res, next) => {
     try {
       const db = getDb()
@@ -245,6 +258,7 @@ r.delete(
   '/:id',
   requireAuth,
   requireRole(...WRITE),
+  GLOBAL_ONLY,
   (req, res, next) => {
     try {
       const db = getDb()

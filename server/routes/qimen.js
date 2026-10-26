@@ -23,7 +23,7 @@ import { ok, fail, wrap } from '../lib/http.js'
 import { requireAuth, requirePerm, requireInternal } from '../middleware/auth.js'
 import { auditStrict } from '../middleware/audit.js'
 import { redactValue } from '../lib/redact.js'
-import { verifyQimenRequest, issuePlatformSecret } from '../lib/qimen-auth.js'
+import { verifyQimenRequest, issuePlatformSecret, appKeyPrefix } from '../lib/qimen-auth.js'
 
 const r = Router()
 const MANAGE_PERM = 'oms.platform.manage'
@@ -136,7 +136,7 @@ r.get(
   requirePerm(MANAGE_PERM),
   wrap((_req, res) => {
     const db = getDb()
-    // 只列公开标识（app_key）与"是否已签发"；密钥永不出现在任何读接口（ADR-0033）
+    // 只列 app_key 前 4 位与"是否已签发"；密钥永不出现在任何读接口（ADR-0033）
     const platforms = db
       .prepare(
         `SELECT pf.id, pf.code, pf.platform_code, pf.name, pf.shop_name, pf.adapter, pf.app_key, pf.qimen_url, pf.qimen_wh, pf.shop_code, pf.status,
@@ -145,6 +145,8 @@ r.get(
          FROM platforms pf LEFT JOIN warehouses w ON w.id=pf.warehouse_id ORDER BY pf.id`
       )
       .all()
+    // AB8：app_key 只给前 4 位（对号入座够用，冒充不行）；完整值在平台档案页（/oms/platforms）里按权限查看
+    const masked = platforms.map((p) => ({ ...p, app_key: appKeyPrefix(p.app_key), app_key_masked: true }))
     return ok(res, {
       protocol: '奇门标准化协议 V3.9.5（演示实现）',
       gateway: '/api/qimen',
@@ -152,7 +154,7 @@ r.get(
         'sign = 大写十六进制 HMAC-SHA256(平台密钥, app_key\\nmethod\\ntimestamp\\nnonce\\nSHA256(request 的键名排序紧凑 JSON))；timestamp 为 13 位毫秒时间戳（±5 分钟），nonce 16-64 位且窗口内只能用一次；app_key / timestamp / nonce / sign 均必填，缺失或错误一律 401',
       methods: METHODS,
       platformCodes: PLATFORM_CODES,
-      platforms
+      platforms: masked
     })
   })
 )

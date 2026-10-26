@@ -31,10 +31,24 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
 /** 已登记「文件标识块」的文件。补一个加一行。 */
 const DECLARED = [
+  'tests/verify-release-args.test.mjs',
+  'tests/mcp-trace-ledger-scope.test.mjs',
   'server/index.js',
   'server/lib/audit-trail.js',
+  // 审计哈希链（AB6，ADR-0049）
+  'server/db/migrations/_audit_chain.cjs',
+  'server/lib/audit-chain-verify.js',
+  'server/db/migrations/068_audit_hash_chain.cjs',
+  'scripts/audit-verify-chain.mjs',
+  'scripts/audit-archive.mjs',
+  'scripts/lib/audit-chain-cli.mjs',
+  'tests/audit-chain.test.mjs',
   'server/lib/logger.js',
+  'server/lib/profile.js',
+  'server/lib/db-ttl-cache.js',
   'server/lib/trust-proxy.js',
+  'server/lib/process-counters.js',
+  'server/lib/metrics-export.js',
   'server/lib/redact.js',
   'server/middleware/audit.js',
   'server/middleware/security-headers.js',
@@ -51,6 +65,8 @@ const DECLARED = [
   'scripts/check-mcp-coverage.mjs',
   'scripts/gen-sbom.mjs',
   'scripts/release-candidate.mjs',
+  'scripts/release-keygen.mjs',
+  'scripts/lib/evidence-sign.mjs',
   'scripts/gen-changelog.mjs',
   'scripts/gen-codemap.mjs',
   'scripts/lib/runtime-closure.mjs',
@@ -68,6 +84,13 @@ const DECLARED = [
   'scripts/lib/drill-common.mjs',
   'scripts/db-restore-drill.mjs',
   'scripts/upgrade-rollback-drill.mjs',
+  // 迁移升级演练（AA11）：逐迁移耗时 + 写锁探针 + 失败回退
+  'scripts/upgrade-rehearsal.mjs',
+  'scripts/lib/lock-probe.mjs',
+  'tests/upgrade-rehearsal.test.mjs',
+  // 旧结构快照备份集（AB5 / ADR-0048）
+  'scripts/schema-snapshot.mjs',
+  'tests/schema-snapshot.test.mjs',
   'src/App.tsx',
   'src/api/client.ts',
   'src/components/Layout.tsx',
@@ -82,6 +105,7 @@ const DECLARED = [
   'server/db/migrations/052_credit_release_ledger.cjs',
   'tests/credit-reversal.test.mjs',
   'tests/release-candidate.test.mjs',
+  'tests/release-signing.test.mjs',
   'tests/credit-effect-format.test.mjs',
   'src/utils/credit-effect.ts',
   // 前端 403 / 空范围 / 功能关闭提示（W3）

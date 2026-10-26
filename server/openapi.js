@@ -39,7 +39,12 @@ export function buildOpenApi() {
       get: { tags: ['系统'], summary: '健康检查（匿名只返回 status/版本/构建 SHA/时间；带 admin 令牌另返回 database 与 ops 运维块，ADR-0029）', security: [], responses: { 200: jsonResp(null, '服务状态') } }
     },
     '/api/meta/metrics': {
-      get: { tags: ['系统'], summary: '运维计数器（备份年龄/迁移校验和不一致/节流存储/磁盘；仅 admin 或 is_super，ADR-0029）', responses: { 200: jsonResp(null, '计数器') } }
+      get: {
+        tags: ['系统'],
+        summary: '运维计数器（备份年龄/迁移校验和不一致/节流存储/磁盘；仅 admin 或 is_super，ADR-0029）。format=prometheus 返回 text/plain 指标（os_erp_ 前缀），另接受 GML_METRICS_TOKEN Bearer（仅此格式，ADR-0045）',
+        parameters: [q('format', 'json（默认）或 prometheus；其它值 400')],
+        responses: { 200: jsonResp(null, '计数器（json）或 Prometheus 文本（prometheus）'), 400: jsonResp(null, 'format 非法'), 401: jsonResp(null, '未认证'), 403: jsonResp(null, '非管理员') }
+      }
     },
     '/api/meta/dict': {
       get: { tags: ['系统'], summary: '枚举字典（状态/角色/单据类型）', security: [], responses: { 200: jsonResp(null, '字典') } }
@@ -87,14 +92,14 @@ export function buildOpenApi() {
     '/api/meta/audit-logs': {
       get: {
         tags: ['系统'], summary: '审计日志查询（权限 system:audit:view；分页 + 模块/动作/用户/对象/日期/关键字过滤；detail 读取时再脱敏；附保留策略提示）',
-        parameters: [q('module', '模块（精确）'), q('action', '动作（精确）'), q('user', '操作人：纯数字按 user_id 或用户名精确，否则按用户名包含'), q('entity', '对象类型（精确）'), q('entity_id', '对象 ID（精确）'), q('from', '起始日期 YYYY-MM-DD（含）'), q('to', '截止日期 YYYY-MM-DD（含）'), q('keyword', '关键字（动作/模块/对象/操作人/明细包含）'), q('page', '页码'), q('pageSize', '每页条数，上限 200')],
-        responses: { 200: jsonResp(null, '{ list, total, page, pageSize, totalPages, retention, export_max_rows }'), 400: { description: '日期格式或区间不合法' }, 403: { description: '缺 system:audit:view' } }
+        parameters: [q('module', '模块（精确）'), q('action', '动作（精确）'), q('user', '操作人：纯数字按 user_id（走索引），否则按用户名包含'), q('entity', '对象类型（精确）'), q('entity_id', '对象 ID（精确）'), q('from', '起始日期 YYYY-MM-DD（含）'), q('to', '截止日期 YYYY-MM-DD（含）'), q('keyword', '关键字：至少 2 个有效字符，只搜 action / entity / user_name（子串，不搜 detail）；不足返回 400'), q('page', '页码'), q('pageSize', '每页条数，上限 200')],
+        responses: { 200: jsonResp(null, '{ list, total（封顶估算，最多 10001）, has_more（total>10000）, total_cap, page, pageSize, totalPages, retention, export_max_rows }'), 400: { description: '日期格式或区间不合法 / 关键字太短 / 翻页超过 10000 条上限' }, 403: { description: '缺 system:audit:view' } }
       }
     },
     '/api/meta/audit-logs/export.csv': {
       get: {
         tags: ['系统'], summary: '审计日志 CSV 导出（同一过滤；分批流式；行数封顶；公式注入安全；导出动作写严格审计 AUDIT_LOG_EXPORT）',
-        parameters: [q('module', '模块（精确）'), q('action', '动作（精确）'), q('user', '操作人'), q('entity', '对象类型'), q('entity_id', '对象 ID'), q('from', '起始日期'), q('to', '截止日期'), q('keyword', '关键字')],
+        parameters: [q('module', '模块（精确）'), q('action', '动作（精确）'), q('user', '操作人'), q('entity', '对象类型'), q('entity_id', '对象 ID'), q('from', '起始日期'), q('to', '截止日期'), q('keyword', '关键字（至少 2 个有效字符，同列表）')],
         responses: { 200: { description: 'text/csv（UTF-8 BOM；响应头 X-Export-Truncated 表示是否被行数上限截断）' }, 403: { description: '缺 system:audit:view' } }
       }
     },
@@ -368,14 +373,14 @@ export function buildOpenApi() {
     '/api/oms/orders/{id}': { get: { tags: ['线上 OMS'], summary: '线上订单详情；范围外与不存在同形 404（ADR-0039）', parameters: [idParam], responses: { 200: jsonResp(null), 404: jsonResp(null) } } },
     '/api/oms/orders/{id}/convert': { post: { tags: ['线上 OMS'], summary: '线上订单转销售订单（占库）；销售订单归平台绑定组织的履约仓，平台未绑定 422，平台范围外 404', parameters: [idParam], responses: { 200: jsonResp(null), 404: jsonResp(null), 422: jsonResp(null) } } },
     '/api/oms/orders/convert-batch': { post: { tags: ['线上 OMS'], summary: '批量转单（逐单同上：范围外按「订单不存在」、未绑定平台按原因计入 failed）', responses: { 200: jsonResp(null) } } },
-    '/api/oms/orders/{id}/ship': { post: { tags: ['线上 OMS'], summary: '发货并回传平台（同时出库）', parameters: [idParam], responses: { 200: jsonResp(null) } } },
-    '/api/oms/orders/{id}/refund': { post: { tags: ['线上 OMS'], summary: '退款处理（释放占用）', parameters: [idParam], responses: { 200: jsonResp(null) } } },
+    '/api/oms/orders/{id}/ship': { post: { tags: ['线上 OMS'], summary: '发货并回传平台（同时出库）；订单须在平台绑定组织范围内（范围外 404），关联销售订单的出货仓须在范围内（403，ADR-0042）', parameters: [idParam], responses: { 200: jsonResp(null), 403: jsonResp(null), 404: jsonResp(null) } } },
+    '/api/oms/orders/{id}/refund': { post: { tags: ['线上 OMS'], summary: '退款处理（释放占用）；范围口径同发货（范围外 404、出货仓越界 403，ADR-0042）', parameters: [idParam], responses: { 200: jsonResp(null), 403: jsonResp(null), 404: jsonResp(null) } } },
     // 线上订单完成（OM shipped → completed）。平台侧早就完成了，系统里一直显示「已发货」
     // （三库停在 shipped 的 88/64/93 张）⇒ 看不出哪些真的结了。
     // ⚠️ `OM` 内核里**没有 `closed` 状态**（`STATES.OM` = pending/shipped/completed/refunded/cancelled），
     //    别照 `meta.js` 里那条历史遗留的 `closed` 文案去写这个动作。
-    '/api/oms/orders/{id}/complete': { post: { tags: ['线上 OMS'], summary: '完成线上订单（OM shipped → completed；纯状态，不动库存）', parameters: [idParam], responses: { 200: jsonResp(null), 404: jsonResp(null), 409: jsonResp(null) } } },
-    '/api/oms/stock-push': { post: { tags: ['线上 OMS'], summary: '推送可售库存至平台', responses: { 200: jsonResp(null) } } },
+    '/api/oms/orders/{id}/complete': { post: { tags: ['线上 OMS'], summary: '完成线上订单（OM shipped → completed；纯状态，不动库存）；订单须在平台绑定组织范围内，范围外 404（ADR-0042）', parameters: [idParam], responses: { 200: jsonResp(null), 404: jsonResp(null), 409: jsonResp(null) } } },
+    '/api/oms/stock-push': { post: { tags: ['线上 OMS'], summary: '推送可售库存至平台；只推范围内平台、库存合计只含范围内仓，指定平台在范围外 404（ADR-0042）', responses: { 200: jsonResp(null), 404: jsonResp(null) } } },
     '/api/oms/sync-logs': { get: { tags: ['线上 OMS'], summary: '同步日志；只含范围内平台（ADR-0039）', parameters: [q('platform_id', '平台'), q('sync_type', '类型 order/stock/shipment/refund/price')], responses: { 200: jsonResp(null) } } },
     '/api/oms/stats': { get: { tags: ['线上 OMS'], summary: '线上经营分析（平台 GMV/趋势/热销）；只统计范围内平台（ADR-0039）', parameters: [q('days', '统计天数')], responses: { 200: jsonResp(null) } } },
 
@@ -630,9 +635,9 @@ export function buildOpenApi() {
     '/api/approval/instances/{id}/cancel': { post: { tags: ['审批中心'], summary: '撤回审批（提交人本人或管理员）', parameters: [idParam], responses: { 200: jsonResp(null) } } },
     '/api/approval/templates': {
       get: { tags: ['审批中心'], summary: '审批模板列表（含级次）', responses: { 200: jsonResp(null) } },
-      post: { tags: ['审批中心'], summary: '新建 / 修改审批模板（级次整体重建；需 system:approval:manage）', responses: { 200: jsonResp(null) } }
+      post: { tags: ['审批中心'], summary: '新建 / 修改审批模板（级次整体重建；需 system:approval:template 且全局数据范围；指定人员须存在，AA3）', responses: { 200: jsonResp(null) } }
     },
-    '/api/approval/templates/{id}/toggle': { post: { tags: ['审批中心'], summary: '启用 / 停用模板（未标记需审批的动作不允许启用）', parameters: [idParam], responses: { 200: jsonResp(null) } } },
+    '/api/approval/templates/{id}/toggle': { post: { tags: ['审批中心'], summary: '启用 / 停用模板（未标记需审批的动作不允许启用；需 system:approval:template 且全局数据范围）', parameters: [idParam], responses: { 200: jsonResp(null) } } },
     '/api/approval/todos': { get: { tags: ['审批中心'], summary: '审批待办（按单据类型分组）。门：审批中心任一权限点；只统计当前级指到本人的 pending 实例，admin / system:approval:manage 全见（ADR-0015）', responses: { 200: jsonResp(null), 403: jsonResp(null) } } },
 
     // —— 模块 23 数据口径字典 ——
@@ -1185,7 +1190,7 @@ export function buildOpenApi() {
     openapi: '3.0.3',
     info: {
       title: 'GML 供应链协同系统 API',
-      version: '1.37.0',
+      version: '1.39.0',
       description:
         '化妆品 / 服装 双行业轻量级供应链协同系统接口文档。覆盖主数据、采购、销售、存货、经销商、门店要货、委外管理、计划与生产、生产制造（BOM / 领料 / 完工入库）、质量检验、线上 OMS 与经营看板。\n\n' +
         '**多行业**：登录 `POST /api/auth/login` 时传 `industry`（`cosmetic` / `apparel`）选择行业版本；' +

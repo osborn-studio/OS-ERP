@@ -3,7 +3,7 @@
 <!-- generated -->
 <!-- 由 `node scripts/gen-codemap.mjs` 生成，勿手改；CI 校验不漂移 -->
 
-共 40 个 ADR 文件。批次来自 `scripts/gen-changelog.mjs` 的 BATCHES（编号区间）；状态是 ADR 原文“状态：”一句的摘录（没有就如实标注），**不代表验收**；“守卫 / 测试”是 ADR 正文里提到的文件路径（静态正则提取，路径不存在时标注“（不存在）”），不证明该测试覆盖了 ADR 的全部决定。
+共 48 个 ADR 文件。批次来自 `scripts/gen-changelog.mjs` 的 BATCHES（编号区间）；状态是 ADR 原文“状态：”一句的摘录（没有就如实标注），**不代表验收**；“守卫 / 测试”是 ADR 正文里提到的文件路径（静态正则提取，路径不存在时标注“（不存在）”），不证明该测试覆盖了 ADR 的全部决定。
 
 | 编号 | 标题 | 批次 | 状态（原文摘录） | 守卫（scripts/） | 测试（tests/） |
 |---|---|---|---|---|---|
@@ -39,11 +39,19 @@
 | 0030 | [ADR-0030：日志保留清理与个人信息处理](ADR-0030-retention-and-privacy.md) | 第七批 | （ADR 未写出状态） | `lib/privacy-common.mjs`<br>`privacy-erase.mjs`<br>`privacy-export.mjs`<br>`retention.mjs`<br>`test-setting-audit.mjs` | — |
 | 0031 | [ADR-0031：采购链动作路由与 MCP 采购工具的单据范围](ADR-0031-purchase-action-scope.md) | 第八批（进行中） | 开发实现，尚非产品上线验收 | `check-route-authz.mjs`<br>`test-mcp-purchase.mjs` | — |
 | 0032 | [ADR-0032：单据流读接口按账号数据范围过滤](ADR-0032-docflow-scope.md) | 第八批（进行中） | （ADR 未写出状态） | `check-route-authz.mjs` | — |
-| 0033 | [ADR-0033：奇门网关平台凭据、签名契约与重新开放验收清单](ADR-0033-qimen-credentials.md) | 第八批（进行中） | 开发实现，尚非产品上线验收 | `check-route-authz.mjs` | — |
+| 0033 | [ADR-0033：奇门网关平台凭据、签名契约与重新开放验收清单](ADR-0033-qimen-credentials.md) | 第八批（进行中） | 开发实现，尚非产品上线验收 | `check-route-authz.mjs`<br>`qimen-issue-key.mjs` | — |
 | 0034 | [ADR-0034：报价、MCP 销售工具与 OMS 入口按组织范围收口](ADR-0034-quote-sales-mcp-scope.md) | 第八批（进行中） | 开发实现，尚非产品上线验收 | `check-route-authz.mjs` | — |
 | 0035 | [ADR-0035：写路径并发与 SQLITE_BUSY 治理](ADR-0035-write-contention.md) | 第八批（进行中） | （ADR 未写出状态） | `lib/bench-contender.mjs` | — |
 | 0036 | [ADR-0036 安全响应头与后台会话传输（Y11）](ADR-0036-security-headers-and-session-transport.md) | 第八批（进行中） | 已采纳 | — | — |
 | 0037 | [ADR-0037：审批域按指向单据的组织范围收口](ADR-0037-approval-scope.md) | 第八批（进行中） | 开发实现，尚非产品上线验收 | `test-setting-audit.mjs` | — |
-| 0038 | [ADR-0038：库存域与采购订单状态/收货路由按组织范围收口](ADR-0038-inventory-scope.md) | 第九批（进行中） | 开发实现，尚非产品上线验收 | `check-route-authz.mjs` | — |
-| 0039 | [ADR-0039：OMS 读接口与 MCP 单据历史工具按组织范围收口](ADR-0039-oms-mcp-history-scope.md) | 第九批（进行中） | 开发实现，尚非产品上线验收 | `check-route-authz.mjs` | — |
-| 0040 | [ADR-0040 受信代理配置（Z4）](ADR-0040-trust-proxy.md) | 第九批（进行中） | 已采纳 | — | — |
+| 0038 | [ADR-0038：库存域与采购订单状态/收货路由按组织范围收口](ADR-0038-inventory-scope.md) | 第九批 | 开发实现，尚非产品上线验收 | `check-route-authz.mjs` | — |
+| 0039 | [ADR-0039：OMS 读接口与 MCP 单据历史工具按组织范围收口](ADR-0039-oms-mcp-history-scope.md) | 第九批 | 开发实现，尚非产品上线验收 | `check-route-authz.mjs` | — |
+| 0040 | [ADR-0040 受信代理配置（Z4）](ADR-0040-trust-proxy.md) | 第九批 | 已采纳 | — | — |
+| 0041 | [ADR-0041：MCP `order.trace_document` 与 `doc.query` 按单据解析器表判归属](ADR-0041-mcp-trace-query-scope.md) | 第十批 | 开发实现，尚非产品上线验收 | `check-mcp-coverage.mjs` | — |
+| 0042 | [ADR-0042：OMS 写路由与 MCP 库存工具按组织范围收口](ADR-0042-oms-write-mcp-inventory-scope.md) | 第十批 | 开发实现，尚非产品上线验收 | `check-mcp-coverage.mjs`<br>`check-route-authz.mjs`<br>`test-mcp.mjs`<br>`test-stock-v2.mjs` | — |
+| 0044 | [ADR-0044：低库存口径统一与看板热点块（AA5）](ADR-0044-dashboard-hot-blocks.md) | 第十批 | 开发实现，尚非产品上线验收 | `explain-audit.mjs` | — |
+| 0045 | [ADR-0045 Prometheus 指标导出与抓取令牌（AA10）](ADR-0045-metrics-export.md) | 第十批 | 开发实现，尚非产品上线验收 | — | — |
+| 0046 | [ADR-0046：主数据下拉仓库项、采购订单读与 QC 聚合按仓库组织范围收口](ADR-0046-master-options-qc-scope.md) | 第十一批（进行中） | 开发实现，尚非产品上线验收 | `check-route-authz.mjs` | — |
+| 0047 | [ADR-0047：发行候选证据 Ed25519 签名（AB4）](ADR-0047-evidence-signing.md) | 第十一批（进行中） | 开发实现，尚非产品上线验收 | `lib/evidence-sign.mjs`<br>`release-keygen.mjs` | — |
+| 0048 | [ADR-0048：旧结构快照备份集与免截断的升级演练（AB5）](ADR-0048-schema-snapshot-rehearsal.md) | 第十一批（进行中） | 开发实现，尚非产品上线验收 | `schema-snapshot.mjs` | — |
+| 0049 | [ADR-0049 审计日志防篡改哈希链与归档（AB6）](ADR-0049-audit-hash-chain.md) | 第十一批（进行中） | 开发实现，尚非产品上线验收 | `audit-archive.mjs`<br>`audit-verify-chain.mjs`<br>`lib/audit-chain-cli.mjs`<br>`lib/privacy-common.mjs`<br>`retention.mjs` | — |

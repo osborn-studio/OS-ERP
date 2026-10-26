@@ -20,6 +20,7 @@ import fs from 'node:fs'
 import Database from 'better-sqlite3'
 import { INDUSTRIES, dbPathFor } from '../../server/db/index.js'
 import { keyedPseudonym } from '../../server/lib/secret-box.js'
+import { rehashAuditRow } from '../../server/lib/audit-trail.js'
 
 export const PHONE_RE = /^1\d{10}$/
 export const ERASED_PREFIX = 'erased:'
@@ -395,6 +396,8 @@ export function applyPlan(db, plan) {
     const cols = Object.keys(op.set)
     const r = db.prepare(`UPDATE ${op.table} SET ${cols.map((k) => `${k}=?`).join(',')} WHERE id=?`).run(...cols.map((k) => op.set[k]), op.id)
     done[op.table] = (done[op.table] || 0) + r.changes
+    // audit_logs.detail 被改写 ⇒ 该行哈希重算并给后一行登记锚点（ADR-0049）；无哈希链列的旧库为空操作
+    if (op.table === 'audit_logs' && r.changes) rehashAuditRow(db, op.id, { kind: 'erase', reason: 'privacy-erase' })
   }
   return done
 }

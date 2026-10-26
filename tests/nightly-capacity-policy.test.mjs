@@ -30,9 +30,10 @@ test('workflow triggers on a daily schedule and manual dispatch with a scale cho
   assert.doesNotMatch(code, /:\s*write\s*$/m, 'no write permissions')
 })
 
-test('job runs on ubuntu-latest with a 60 minute timeout', () => {
+test('job runs on ubuntu-latest with a 60 minute timeout (355 only for the AB11 large-ci scale)', () => {
   assert.match(code, /^\s+runs-on:\s*ubuntu-latest\s*$/m)
-  assert.equal(Number(code.match(/^\s+timeout-minutes:\s*(\d+)\s*$/m)?.[1]), 60)
+  const m = code.match(/^\s+timeout-minutes:\s*\$\{\{\s*inputs\.scale == 'large-ci' && (\d+) \|\| (\d+)\s*\}\}\s*$/m)
+  assert.deepEqual([Number(m?.[1]), Number(m?.[2])], [355, 60])
 })
 
 test('every action is pinned to a 40-hex SHA with a version comment', () => {
@@ -157,4 +158,15 @@ test('docs/implementation/ci.md has a nightly capacity section stating hosted nu
   assert.match(section, /趋势指示/)
   assert.match(section, /nightly-capacity\.yml/)
   assert.match(section, /尚未在 GitHub 上执行/)
+})
+
+test('AB5: snapshot_upto is an optional string input, off by default, validated and never interpolated into a script', () => {
+  assert.match(code, /^\s+snapshot_upto:[\s\S]*?default:\s*''[\s\S]*?type:\s*string/m)
+  assert.match(code, /SNAPSHOT_UPTO_INPUT:\s*\$\{\{\s*inputs\.snapshot_upto\s*\}\}/)
+  const runBlocks = [...code.matchAll(/run:\s*\|\n([\s\S]*?)(?=\n\s+- (?:name|uses):|\n\S|$)/g)].map((m) => m[1]).join('\n')
+  assert.doesNotMatch(runBlocks, /\$\{\{\s*inputs\.snapshot_upto/, 'the input only enters through an environment variable')
+  assert.match(code, /\[0-9\]\|\[0-9\]\[0-9\]\|\[0-9\]\[0-9\]\[0-9\]\)/, 'value is matched against 1-3 digits')
+  assert.match(code, /schema-snapshot\.mjs --upto="\$snap" --synth="\$profile" --out="\$CAP_RUN\/snapshot"/)
+  assert.match(code, /upgrade-rehearsal\.mjs --from="\$snap" --backup-dir="\$CAP_RUN\/snapshot\/data\/backups"/)
+  assert.match(code, /if:\s*inputs\.rehearsal == 'true'/, 'snapshot_upto only matters inside the optional rehearsal step')
 })

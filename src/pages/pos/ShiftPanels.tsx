@@ -720,7 +720,7 @@ function ShiftDetailModal({
               <button className="btn-ghost btn-sm" disabled={!act.shift_reject.enabled} title={act.shift_reject.reason || undefined} onClick={onReject}>退回重报</button>
             </>
           )}
-          {detail.can_settle && (
+          {detail.can_settle && act.variance_settle.visible && (
             <button className="btn-primary btn-sm" onClick={onSettle}>长短款落案</button>
           )}
           {s.status !== 'closed' && s.status !== 'cancelled' && act.shift_cancel.visible && (

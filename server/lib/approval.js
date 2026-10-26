@@ -136,6 +136,40 @@ const stepOfInstance = (db, inst) =>
   db.prepare('SELECT * FROM approval_steps WHERE template_id=? AND step_no=?').get(inst.template_id, inst.current_step)
 
 /**
+ * 模板是否为全局模板（AA3）。目前 `approval_templates` 没有组织列，所有模板都是全局的；
+ * 若日后加 `org_id`，非空即组织本地模板：它的审批人队列只对"目标单据在范围内"的实例生效。
+ * 判据只有这一处——可见性（instanceVisibleTo / pendingInstancesFor）都从这里取。
+ */
+export const templateIsGlobal = (tpl) => !tpl || tpl.org_id == null
+const templateOfInstance = (db, inst) => db.prepare('SELECT * FROM approval_templates WHERE id=?').get(inst.template_id)
+
+/** 受限范围下，审批人队列命中还需"模板全局 或 目标单据在范围内"（AA3，堵 Z9 模板自授权逃逸） */
+function inQueueScope(db, inst, scopeCtx) {
+  return templateIsGlobal(templateOfInstance(db, inst)) || approvalDocScope(db, inst.doc_type, inst.doc_id, scopeCtx)
+}
+
+/**
+ * 模板维护者给级次指派审批人时的范围校验（AA3）：
+ *   · 指定人员：用户必须存在；维护者范围受限时，该用户的组织必须在维护者范围内；
+ *   · 角色 / 权限点：覆盖面不可按组织验证，受限范围的维护者一律拒绝（路由本身已要求全局范围，这是第二道）。
+ * 全局范围维护者不受组织限制，但指定的用户必须存在。
+ */
+export function validateApproverScope(db, steps, orgScope) {
+  const restricted = !!orgScope && orgScope.scope !== 'all'
+  for (const s of steps) {
+    if (s.approver_type === 'user') {
+      const u = db.prepare('SELECT id, org_id FROM users WHERE id=?').get(Number(s.approver_value))
+      if (!u) throw new ApprovalError(`审批人用户 #${s.approver_value} 不存在`, { code: 'APPROVER_NOT_FOUND', httpStatus: 400 })
+      if (restricted && !(u.org_id != null && (orgScope.orgIds || []).includes(u.org_id))) {
+        throw new ApprovalError(`审批人用户 #${s.approver_value} 不在您的组织范围内`, { code: 'APPROVER_OUT_OF_SCOPE', httpStatus: 403 })
+      }
+    } else if (restricted) {
+      throw new ApprovalError('受限数据范围的账号只能指定范围内的具体人员作为审批人', { code: 'APPROVER_OUT_OF_SCOPE', httpStatus: 403 })
+    }
+  }
+}
+
+/**
  * 实例对调用者可见吗？全局范围 ∪ 提交人本人 ∪ pending 且当前级审批人是我（自己的待办不受组织限制）∪ 单据在组织范围内。
  * 读（列表 / 详情 / 历史记录）与撤回、决定的 404 判据都从这里取。
  */
@@ -143,7 +177,7 @@ export function instanceVisibleTo(db, inst, actor, scopeCtx = null) {
   if (isGlobalCtx(scopeCtx)) return true
   if (actor?.id != null && inst.submitted_by_id != null && Number(inst.submitted_by_id) === Number(actor.id)) return true
   if (inst.status === 'pending') {
-    if (canApproveStep(db, stepOfInstance(db, inst), actor)) return true
+    if (canApproveStep(db, stepOfInstance(db, inst), actor) && inQueueScope(db, inst, scopeCtx)) return true
     // 审批管理员的"待我审批"全见（ADR-0015）是既有契约：pending 队列不受组织限制；非 pending 与决定仍按单据范围
     if (scopeCtx._mgr === undefined) scopeCtx._mgr = managerSeesAll(db, actor, scopeCtx)
     if (scopeCtx._mgr) return true
@@ -639,7 +673,7 @@ export function pendingInstancesFor(db = getDb(), actor, scopeCtx = null) {
     .all()
   if (seesAll) return rows
   const stepOf = db.prepare('SELECT * FROM approval_steps WHERE template_id=? AND step_no=?')
-  const mine = (r) => canApproveStep(db, stepOf.get(r.template_id, r.current_step), actor)
+  const mine = (r) => canApproveStep(db, stepOf.get(r.template_id, r.current_step), actor) && (isGlobalCtx(scopeCtx) || inQueueScope(db, r, scopeCtx))
   // Z9：管理员全见被关掉时，受限范围的管理员 = 自己的审批队列 ∪ 范围内单据（与 instanceVisibleTo 同一判据）
   if (!isGlobalCtx(scopeCtx) && isApprovalManager(db, actor)) {
     return rows.filter((r) => mine(r) || approvalDocScope(db, r.doc_type, r.doc_id, scopeCtx))
@@ -758,7 +792,7 @@ export function approvalTodosFor(db = getDb(), actor, scopeCtx = null) {
 }
 
 export default {
-  ApprovalError, amountOf, matchTemplate, stepsOfTemplate, describeApprover, approvalDocScope, instanceVisibleTo,
+  ApprovalError, amountOf, matchTemplate, templateIsGlobal, validateApproverScope, stepsOfTemplate, describeApprover, approvalDocScope, instanceVisibleTo,
   approvalGate, submitApproval, getInstance, canApproveStep,
   decideApproval, cancelApproval, listInstances, pendingForMe, pendingInstancesFor,
   listTemplates, approvalOverview, approvalTodos, approvalTodosFor, approvalTodoItems

@@ -33,7 +33,7 @@ import {
   normalizePurchaseOrderLines,
   getPurchaseOrder as loadOrder,
   PURCHASE_ORDER_SELECT, PURCHASE_ORDER_FROM,
-  PurchaseError, DocFlowError, PO_READ_PERMS, assertPurchaseDocInScope
+  PurchaseError, DocFlowError, PO_READ_PERMS, assertPurchaseDocInScope, purchaseScopeSql
 } from '../lib/purchase.js'
 
 const r = Router()
@@ -77,11 +77,14 @@ r.get(
   '/orders',
   requireAuth,
   requirePerm(...PO_READ_PERMS),
+  attachOrgScope,
   wrap((req, res) => {
     const db = getDb()
     const { page, pageSize, offset } = pageParams(req)
-    const conds = []
-    const params = []
+    // ADR-0046：订单归属经入库仓的组织（与 assertPurchaseDocInScope 同一谓词）；空范围 ⇒ 空列表
+    const scope = purchaseScopeSql(req.orgScope, 'po')
+    const conds = [scope.wh]
+    const params = [...scope.params]
     if (req.query.status) {
       conds.push('po.status = ?')
       params.push(req.query.status)
@@ -115,8 +118,11 @@ r.get(
   '/orders/:id',
   requireAuth,
   requirePerm(...PO_READ_PERMS),
-  wrap((req, res) => {
+  attachOrgScope,
+  guard((req, res) => {
     const db = getDb()
+    // ADR-0046：范围外与不存在同形 404（DOC_NOT_FOUND）
+    assertPurchaseDocInScope(db, 'PO', Number(req.params.id), req.orgScope)
     const order = loadOrder(db, Number(req.params.id))
     if (!order) return fail(res, '采购订单不存在', 404)
     return ok(res, order)
@@ -269,11 +275,14 @@ r.get(
   '/receipts',
   requireAuth,
   requirePerm(...PO_READ_PERMS),
+  attachOrgScope,
   wrap((req, res) => {
     const db = getDb()
     const { page, pageSize, offset } = pageParams(req)
-    const conds = []
-    const params = []
+    // ADR-0038 补充（AA4）：收货单 / 退货单经 warehouse_id → warehouses.org_id 判范围（同 purchaseScopeSql.wh）
+    const scope = purchaseScopeSql(req.orgScope, 'pr')
+    const conds = [scope.wh]
+    const params = [...scope.params]
     if (req.query.keyword) {
       conds.push('(pr.doc_no LIKE ? OR s.name LIKE ?)')
       params.push(`%${req.query.keyword}%`, `%${req.query.keyword}%`)
@@ -296,8 +305,10 @@ r.get(
   '/receipts/:id',
   requireAuth,
   requirePerm(...PO_READ_PERMS),
-  wrap((req, res) => {
+  attachOrgScope,
+  guard((req, res) => {
     const db = getDb()
+    assertPurchaseDocInScope(db, 'GR', Number(req.params.id), req.orgScope)
     const head = db
       .prepare(
         `SELECT pr.*, s.name AS supplier_name, w.name AS warehouse_name, po.doc_no AS order_no
@@ -326,9 +337,11 @@ r.post(
   '/receipts/:id/close',
   requireAuth,
   requireRole(...W),
-  wrap((req, res) => {
+  attachOrgScope,
+  guard((req, res) => {
     const db = getDb()
     const id = Number(req.params.id)
+    assertPurchaseDocInScope(db, 'GR', id, req.orgScope)
     const head = db.prepare('SELECT id, doc_no FROM purchase_receipts WHERE id=?').get(id)
     if (!head) return fail(res, '收货单不存在', 404)
     const out = advanceStatus(db, req, {
@@ -347,16 +360,18 @@ r.get(
   '/returns',
   requireAuth,
   requirePerm(...PO_READ_PERMS),
+  attachOrgScope,
   wrap((req, res) => {
     const db = getDb()
     const { page, pageSize, offset } = pageParams(req)
+    const scope = purchaseScopeSql(req.orgScope, 't')
     const FROM = 'purchase_returns t LEFT JOIN suppliers s ON s.id=t.supplier_id LEFT JOIN warehouses w ON w.id=t.warehouse_id'
-    const total = db.prepare(`SELECT COUNT(*) c FROM ${FROM}`).get().c
+    const total = db.prepare(`SELECT COUNT(*) c FROM ${FROM} WHERE ${scope.wh}`).get(...scope.params).c
     const rows = db
       .prepare(
-        `SELECT t.*, s.name AS supplier_name, w.name AS warehouse_name FROM ${FROM} ORDER BY t.id DESC LIMIT ? OFFSET ?`
+        `SELECT t.*, s.name AS supplier_name, w.name AS warehouse_name FROM ${FROM} WHERE ${scope.wh} ORDER BY t.id DESC LIMIT ? OFFSET ?`
       )
-      .all(pageSize, offset)
+      .all(...scope.params, pageSize, offset)
     return paged(res, { rows, total, page, pageSize })
   })
 )
@@ -365,12 +380,15 @@ r.post(
   '/returns',
   requireAuth,
   requireRole(...W),
+  attachOrgScope,
   wrap((req, res) => {
     const db = getDb()
     const u = currentUser(req)
     const { supplier_id, warehouse_id, return_date, reason, items = [] } = req.body || {}
     if (!supplier_id || !warehouse_id) return fail(res, '请选择供应商与退货仓库')
     if (!items.length) return fail(res, '请添加退货明细')
+    // ADR-0038 补充：退货出库的仓必须在范围内（不存在的仓对受限范围同为 403），先于任何库存写入
+    assertWarehouseInScope(db, warehouse_id, req.orgScope)
     // 单据日期兜底，避免未传日期时触发 NOT NULL 约束错误。
     // 建单、出库、走内核三件事都在 lib/purchase.js 的 createPurchaseReturn 里 ——
     // 质检判退要走同一处，否则「退货单怎么生成」迟早有两套实现。
@@ -398,9 +416,11 @@ r.post(
   '/returns/:id/cancel',
   requireAuth,
   requireRole(...W),
-  wrap((req, res) => {
+  attachOrgScope,
+  guard((req, res) => {
     const db = getDb()
     const id = Number(req.params.id)
+    assertPurchaseDocInScope(db, 'PRT', id, req.orgScope)
     const head = db.prepare('SELECT id, doc_no, status FROM purchase_returns WHERE id=?').get(id)
     if (!head) return fail(res, '采购退货单不存在', 404)
     const out = advanceStatus(db, req, {
@@ -421,9 +441,11 @@ r.post(
   '/returns/:id/complete',
   requireAuth,
   requireRole(...W),
-  wrap((req, res) => {
+  attachOrgScope,
+  guard((req, res) => {
     const db = getDb()
     const id = Number(req.params.id)
+    assertPurchaseDocInScope(db, 'PRT', id, req.orgScope)
     const head = db.prepare('SELECT id, doc_no, status FROM purchase_returns WHERE id=?').get(id)
     if (!head) return fail(res, '采购退货单不存在', 404)
     const out = advanceStatus(db, req, {
@@ -442,27 +464,30 @@ r.get(
   '/stats',
   requireAuth,
   requirePerm(...PO_READ_PERMS),
+  attachOrgScope,
   wrap((req, res) => {
     const db = getDb()
     const days = Number(req.query.days || 30)
-    const byStatus = db.prepare('SELECT status, COUNT(*) cnt, COALESCE(SUM(total_amount),0) amount FROM purchase_orders GROUP BY status').all()
+    // ADR-0046（Codex 审计）：统计与列表同一订单范围谓词
+    const sc = purchaseScopeSql(req.orgScope, 'po')
+    const byStatus = db.prepare(`SELECT status, COUNT(*) cnt, COALESCE(SUM(total_amount),0) amount FROM purchase_orders po WHERE ${sc.wh} GROUP BY status`).all(...sc.params)
     const trend = db
       .prepare(
         `SELECT order_date AS date, COUNT(*) orders, COALESCE(SUM(total_amount),0) amount
-         FROM purchase_orders WHERE order_date >= date('now','localtime', ?) GROUP BY order_date ORDER BY order_date`
+         FROM purchase_orders po WHERE ${sc.wh} AND order_date >= date('now','localtime', ?) GROUP BY order_date ORDER BY order_date`
       )
-      .all(`-${days} day`)
+      .all(...sc.params, `-${days} day`)
     const topSuppliers = db
       .prepare(
         `SELECT s.name, COUNT(po.id) orders, COALESCE(SUM(po.total_amount),0) amount
          FROM purchase_orders po JOIN suppliers s ON s.id=po.supplier_id
-         WHERE po.order_date >= date('now','localtime', ?)
+         WHERE ${sc.wh} AND po.order_date >= date('now','localtime', ?)
          GROUP BY s.id ORDER BY amount DESC LIMIT 10`
       )
-      .all(`-${days} day`)
+      .all(...sc.params, `-${days} day`)
     const pending = db
-      .prepare("SELECT COUNT(*) c FROM purchase_orders WHERE status IN ('submitted','approved')")
-      .get().c
+      .prepare(`SELECT COUNT(*) c FROM purchase_orders po WHERE ${sc.wh} AND status IN ('submitted','approved')`)
+      .get(...sc.params).c
     return ok(res, { byStatus, trend, topSuppliers, pending })
   })
 )
@@ -472,11 +497,12 @@ r.get(
   '/orders/:id/receive-suggest',
   requireAuth,
   requirePerm(...PO_READ_PERMS),
-  wrap((req, res) => {
+  attachOrgScope,
+  guard((req, res) => {
     const db = getDb()
     const id = Number(req.params.id)
-    const order = db.prepare('SELECT * FROM purchase_orders WHERE id=?').get(id)
-    if (!order) return fail(res, '采购订单不存在', 404)
+    // ADR-0038 补充：收货建议带出订单行，与订单收货同一道范围判据（范围外 404）
+    assertPurchaseDocInScope(db, 'PO', id, req.orgScope)
     const rows = db
       .prepare(
         `SELECT i.id AS item_id, i.sku_id, sk.sku_code, sk.name AS sku_name, p.shelf_life_months,

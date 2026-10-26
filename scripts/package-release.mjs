@@ -12,6 +12,7 @@ import { createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { zipSync } from 'fflate'
+import { listTestsTree, hashEntries, TESTS_TREE_FILE } from './lib/tests-tree.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const stamp = new Date().toISOString().slice(0, 10).replaceAll('-', '')
@@ -40,6 +41,11 @@ for (const file of ['package.json', 'package-lock.json', 'index.html', 'vite.con
   'tailwind.config.js', 'postcss.config.js', 'Dockerfile', 'docker-compose.yml', '.dockerignore', '.gitignore', 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'CHANGELOG.md']) copy(file)
 fs.mkdirSync(path.join(dest, 'release'), { recursive: true })
 run(['scripts/gen-sbom.mjs', '--out', path.join(dest, 'release/sbom.cdx.json')])
+// tests/ 不随包分发（含 TLS 私钥夹具）；只写逐文件哈希清单，供 verify-release --evidence 把"跑过的测试树"绑定到本包（AA7）。
+{
+  const entries = listTestsTree(ROOT)
+  fs.writeFileSync(path.join(dest, TESTS_TREE_FILE), JSON.stringify({ note: 'sha256 of every file under tests/ at package time; tests/ itself is not shipped', tree_sha256: hashEntries(entries), files: entries }, null, 2))
+}
 copy('docs/本地交付', 'docs/本地交付')
 copy('docs/implementation', 'docs/implementation') // CHANGELOG.md 链接的 ADR、整改跟踪与开发进度；接收方也能重跑 gen-changelog --check
 copy('public/docs', '手册')

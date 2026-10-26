@@ -203,7 +203,7 @@ test('qimen gateway never passes through unauthenticated or badly signed calls',
   const f = await server(t)
   const { api, db } = f
   const pf = db.prepare("SELECT id, app_key FROM platforms WHERE app_key IS NOT NULL AND app_key<>'' AND status='active' LIMIT 1").get()
-  const issued = await api(`/api/qimen/platforms/${pf.id}/secret`, { token: f.admin, body: {} })
+  const issued = await api(`/api/qimen/platforms/${pf.id}/secret`, { token: f.admin, body: { rotate: true } }) // AB8：id 最小的演示平台启动时已有随机密钥，这里显式轮换
   assert.equal(issued.status, 200, JSON.stringify(issued.body))
   const platformSecret = issued.body.data.secret
   const method = 'taobao.qimen.itemmapping.query'

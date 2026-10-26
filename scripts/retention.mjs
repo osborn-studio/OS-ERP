@@ -26,7 +26,7 @@ import fs from 'node:fs'
 import Database from 'better-sqlite3'
 import { INDUSTRIES, requireExplicitDataDir, dbPathFor } from '../server/db/index.js'
 import { SETTING_RULES, settingRow, normalizeSettingValue, castSettingValue } from '../server/lib/settings.js'
-import { auditStrictRow } from '../server/lib/audit-trail.js'
+import { auditStrictRow, deleteAuditRowsAnchored } from '../server/lib/audit-trail.js'
 
 // 白名单而非黑名单：审计行里几乎每个业务模块的 CREATE/UPDATE/pay/approve/void 都是账务证据（purchase/sales/pos/dealer/
 // inventory/…），逐个列"不许删"必然漏。所以只有**明确登记为无账务 / 无授权影响**的模块才可被清理；
@@ -110,7 +110,7 @@ for (const code of codes) {
     const counts = db.transaction(() => {
       const off = (d) => `-${d} days`
       const done = {
-        audit_logs: db.prepare(`DELETE FROM audit_logs WHERE ${AUDIT_ELIGIBLE}`).run(off(days.audit), ...PURGEABLE_AUDIT_MODULES).changes,
+        audit_logs: deleteAuditRowsAnchored(db, AUDIT_ELIGIBLE, [off(days.audit), ...PURGEABLE_AUDIT_MODULES], { kind: 'retention', reason: 'retention-purge' }),
         notify_logs: db.prepare(`DELETE FROM notify_logs WHERE ${NOTIFY_ELIGIBLE}`).run(off(days.notify)).changes,
         mcp_call_logs: db.prepare(`DELETE FROM mcp_call_logs WHERE ${MCP_ELIGIBLE}`).run(off(days.mcp)).changes
       }

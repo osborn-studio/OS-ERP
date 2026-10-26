@@ -54,6 +54,7 @@ const section = (t) => console.log(`\n\x1b[36m${t}\x1b[0m`)
 const { TOOLS } = await import('../server/mcp/tools.js')
 const { GENERIC_DOC_TOOLS, ownershipColumns } = await import('../server/mcp/catalog.js')
 const { DOC_VIEW_PERMS, viewPermsOf } = await import('../server/mcp/doc-perms.js')
+const { DOC_SCOPE_RESOLVERS } = await import('../server/lib/docflow.js')
 
 const db = new Database(DB_PATH, { readonly: true })
 
@@ -166,6 +167,16 @@ for (const [code, e] of Object.entries(DOC_VIEW_PERMS)) {
   if (!['store', 'dealer', 'subject'].includes(e.binding) || !cols.includes(e.bindCol)) badBind.push(`${code}:${e.binding}/${e.bindCol}`)
 }
 ok('DOC_VIEW_PERMS 的绑定声明合法且归属列真实存在（Y6）', badBind.length === 0, badBind.join(' / '))
+// AB7：门店绑定类型在注册表里也声明 `binding: 'store'`（RC / YQ / SH 必须有），且读工具的范围上下文开了严格模式
+const resolverBind = ['RC', 'YQ', 'SH'].filter((c) => DOC_SCOPE_RESOLVERS[c]?.binding !== 'store')
+ok('RC / YQ / SH 在 DOC_SCOPE_RESOLVERS 声明 binding: store（AB7，与 HTTP 同一判据 store-binding.js）', resolverBind.length === 0, resolverBind.join(' / '))
+const bindDrift = Object.entries(DOC_SCOPE_RESOLVERS).filter(([c, sp]) => sp.binding === 'store' && DOC_VIEW_PERMS[c]?.binding !== 'store').map(([c]) => c)
+// 反向：DOC_VIEW_PERMS 的门店绑定类型里，注册表尚未声明的只允许是登记过的残余（PS / PSF，ADR-0011 AB7 补充"仍无绑定规则的类型"）
+const AB7_RESIDUAL = new Set(['PS', 'PSF'])
+const bindUndeclared = Object.entries(DOC_VIEW_PERMS).filter(([c, e]) => e.binding === 'store' && DOC_SCOPE_RESOLVERS[c]?.binding !== 'store' && !AB7_RESIDUAL.has(c)).map(([c]) => c)
+bindDrift.push(...bindUndeclared)
+ok('门店绑定类型在注册表与 DOC_VIEW_PERMS 两处一致（除登记的残余 PS / PSF；两处不漂移）', bindDrift.length === 0, bindDrift.join(' / '))
+ok('读工具的范围上下文启用 strictBinding（docScopeCtx，AB7）', /strictBinding:\s*true/.test((await import('node:fs')).readFileSync(new URL('../server/mcp/tools.js', import.meta.url), 'utf8')), 'docScopeCtx 没有 strictBinding')
 
 // ---------------------------------------------------------------- ③ 覆盖结论
 section('③ 覆盖结论（打印给人看，可复算）')

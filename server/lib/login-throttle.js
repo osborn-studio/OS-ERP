@@ -12,6 +12,7 @@ import path from 'node:path'
 import { isIP } from 'node:net'
 import { runtimeMode, requireDataDirectory } from '../runtime.js'
 import { classifyEmptyDatabase } from '../db/runtime-policy.js'
+import { incCounter } from './process-counters.js'
 
 export const DEFAULT_LOGIN_THROTTLE_POLICY = Object.freeze({
   ipLimit: 60, ipWindowMs: 60000,
@@ -184,9 +185,12 @@ export function createLoginThrottle({ dataDir = requireDataDirectory(), mode = r
       const keys = requestKeys(input, salt)
       let outcome
       try { outcome = consume.immediate(keys) } catch { throw unavailable() }
-      if (typeof outcome === 'number') throw Object.assign(new Error('Too many login attempts; try again later'), {
-        status: 429, code: 'LOGIN_RATE_LIMITED', retryAfter: outcome
-      })
+      if (typeof outcome === 'number') {
+        incCounter('login_throttle_rejections_total', 'rate_limited')
+        throw Object.assign(new Error('Too many login attempts; try again later'), {
+          status: 429, code: 'LOGIN_RATE_LIMITED', retryAfter: outcome
+        })
+      }
       return { allowed: true, reservation: Object.freeze({ key: keys[1], epoch: outcome.accountEpoch, settledFailures: outcome.settledFailures }) }
     },
     /** Best effort and never throws: on any storage error the reservation simply stays counted (fail closed). */
@@ -217,6 +221,7 @@ export function consumeLoginAttempt(input) {
     return { allowed: true, settle: success => limiter.settleLoginAttempt(result.reservation, success) }
   } catch (error) {
     if (['LOGIN_RATE_LIMITED', 'LOGIN_THROTTLE_INPUT_INVALID'].includes(error.code)) throw error
+    incCounter('login_throttle_rejections_total', 'unavailable')
     throw unavailable()
   }
 }
