@@ -63,3 +63,27 @@ MCP 令牌除了"近 1 小时调用数"这一条粗粒度上限（`agent_tokens.
 | medium | 后台清理在事件循环上用同步写重试，库被占着写锁时最多可阻塞约 20 秒（4 × busy_timeout） | 已修：先做只读探测，无过期行则不拿写锁；有过期行时把该连接的 `busy_timeout` 临时降到 250 ms、`maxAttempts: 1`，拿不到锁就放弃本轮（计 `purge_failed`，下一分钟再来），`finally` 里恢复原 `busy_timeout`；测试：另一连接占着写锁时 purge 在 2.5 s 内返回失败、`busy_timeout` 已恢复、锁释放后的下一轮成功删除 |
 | — | 迁移 073 与常规 fail-closed 路径无发现（审计环境 ABI 不匹配，仅静态审阅） | — |
 
+## 补充 2（AF9，roadmap-v11）：真实定时器测试、写锁等待直方图、并发写下的基准
+
+**问题。** AE9 的清理定时器只有结构性断言（源码里注册了、`unref` 了），没有在活的服务里观察过一次真实清理；`db` 模式的写锁等待没有任何线上可观测量，也没有在业务写入争用下测过尾延迟；`synchronous` 与何时该退回 `memory` 没有写进运维文档。
+
+**决定。**
+- **测试专用旋钮。** `GML_TEST_MCP_RATE_WINDOW_MS`（500..60000）缩短滑动窗口，`GML_TEST_MCP_RATE_PURGE_MS`（100..3600000）缩短清理周期；由 `mcpRatePolicy` 统一读取（限流器、清理线、管理端只读展示共用同一份策略）。**只在 `GML_RUNTIME_MODE === 'test'`（精确匹配，缺省 = production）下生效**；其它模式下只要设置了非空值就在模块加载时抛 `MCP_RATE_TEST_KNOB_FORBIDDEN`（服务启动即失败，不静默忽略——静默忽略会让人以为生产里窗口被缩短了）；取值非整数 / 越界抛 `MCP_RATE_TEST_KNOB_INVALID`；空串 = 未设置。窗口下限 500 ms 保证 `Retry-After` 与滑动折算仍有意义。清理线仍是「当前窗口起点 − 2 个窗口」，只是窗口变短。
+- **真实定时器测试。** `tests/mcp-rate-store-db.test.mjs` 起一台活的服务（`GML_RUNTIME_MODE=test`、窗口 1 s、清理周期 0.5 s、`db` 模式），通过真实 `/mcp` 调用写出桶行，持续调用保持当前窗口有行，轮询数据库直到最早那行被服务内的定时器删掉（截止 15 s，实测数秒），并断言活窗口的行存活、行数有界、直方图在 `/api/meta/metrics` 里有观测。另有一例：`demo` 模式下带旋钮启动服务必须失败且不监听。
+- **直方图 `os_erp_mcp_rate_store_wait_seconds`。** 在 `consumeDb` 里围绕整个 `withWriteRetry` 计时（`finally`，放行、拒绝、存储失败都计；`memory` 模式不计）。**无 label ⇒ 基数固定**（只有 14 个桶 + `+Inf` + sum + count）；桶 0.5 ms … 10 s（10 s 约等于 4 次尝试 × 默认 `busy_timeout` 的量级上界）。口径写明是"等锁 + 重试 + 事务体"的墙钟，不单独拆等锁——事务体本身是几十微秒，拆开没有信息量。告警 `OsErpMcpRateStoreWaitHigh`（warning，p95 > 100 ms 且调用量 > 0.1 次/秒，持续 15 分钟）；要求有流量，避免空闲时的单个慢样本触发。
+- **并发写下的基准。** 新脚本 `scripts/bench-mcp-rate-contention.mjs`：4 个调用者进程 + 1 个合成风格写者进程（多行事务、带索引），场景 baseline / oltp / bulk / saturating，输出 p50 / p95 / p99 / max、fail-closed 数、重试与用尽数、写者吞吐与最长事务；结果与机器负载（loadavg 48–77）写入 capacity-baseline「AF9」。结论：调用者自己的尾延迟基本不受写者影响（紧循环 p95 约 40 µs；有节奏且遇到不间断的 200 行事务写者时 p95 约 25 ms / p99 约 150 ms）；**反向才是问题**——紧循环调用者会把业务写者饿住（oltp 写者 45–51 行/秒，本可达约 500）；该压力是人为上界，生产有逐令牌 RPM 约束。所有场景 fail-closed 为 0、无 `withWriteRetry` 重试。
+- **文档。** `monitoring.md` 写明直方图、告警、`synchronous` 现状（实测 NORMAL；连接级 pragma，不要为限速单独调低；`FULL` 会延长写锁持有）以及何时选 `memory`。
+
+**不变 / 边界。** 默认行为与默认窗口 / 周期不变；旋钮不进入 `/api/mcp/limits` 的任何可写面；不改限流判定与 fail-closed 语义；未改应用的 `synchronous` 设置（文档说明，不改代码）。
+
+**验证。** 新增用例（`tests/mcp-rate-store-db.test.mjs`）：旋钮在测试模式生效、在 production / 缺省 / demo / 大小写不同（`TEST`）下被拒、非法值被拒、空串视为未设置；缩短窗口同时驱动 memory 与 db 判定及清理线；直方图登记 / 无 label / db 每次放行与失败都观测 / memory 不观测；持有写锁时等待落在慢桶；告警块含 p95、流量条件、`for`；文档断言；活服务清理；demo 模式带旋钮启动失败。`tests/metrics-export.test.mjs` 的告警总数 12 → 13，且告警引用的序列必须是已导出序列。
+
+### Codex 审计（AF9，gpt-6.1-sol，只读，对 AF9 提交）
+
+| 级别 | 发现 | 处理 |
+|---|---|---|
+| high | 无 | — |
+| medium | 清理周期旋钮最低 100 ms 时，同步清理（等锁最多 250 ms、逐行业库、至多 20 块）可能让事件循环几乎没有空闲给 HTTP | 接受并记录：只在显式 `GML_RUNTIME_MODE=test` 下可达，生产/演示模式设置即启动失败；测试用的是 500 ms 周期。未加让出/时间预算（会改 AE9 已审计的清理路径），如日后放宽旋钮范围再做 |
+| low | 告警把所有 target 标签聚合掉，多实例时一台退化会被另一台稀释且告警不带实例 | 已修：`sum by (instance, le)` 与 `sum by (instance)`，两侧标签一致 |
+| — | 旋钮：精确匹配 `test`，空串 = 未设置，空白/大小写变体不能启用，限流器与管理端 `mcpRatePolicy()` 同一校验；直方图基数固定 17 条/目标，`finally` 覆盖放行 / 拒绝 / 失败，memory 不观测；清理线严格小于「当前窗口起点 − 2 窗口」，`busy_timeout` 在 `finally` 恢复；PromQL 合法。注：计时含语句预编译与失败日志，是整个 db consume 的墙钟（文档已如此表述） | — |
+

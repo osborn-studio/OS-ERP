@@ -198,14 +198,14 @@ export function resolveCiRun(commit, { gh = process.env.OS_ERP_GH || 'gh', cwd =
   try { runs = JSON.parse(r.stdout) } catch { return none('gh run list returned unparseable output') }
   if (!Array.isArray(runs)) return none('gh run list returned unexpected output')
   if (!runs.length) return none(`no ci.yml run recorded for commit ${commit.slice(0, 7)}`)
-  const ok = runs.filter(x => x && x.conclusion === 'success' && Number.isInteger(x.databaseId) && x.headSha === commit && !(x.event === 'push' && /^v\d/.test(String(x.headBranch ?? ''))))
-    // AE10：v* 标签推送的 run 只跑候选 job（其余 job 被跳过），它的 success 不是 ci.yml 检查通过的证据，查询时排除
+  // AF1：ci.yml 不再有标签触发，只认 pull_request / push（分支）事件的成功 run（push 仅限 main：ci.yml 的 push 触发只有 main，AF1 之前遗留的标签推送 run 的 headBranch 是标签名，一律排除）；其他事件（含 workflow_dispatch 的候选 run、标签推送）不是检查通过的证据
+  const ok = runs.filter(x => x && x.conclusion === 'success' && Number.isInteger(x.databaseId) && x.headSha === commit && (x.event === 'pull_request' || (x.event === 'push' && x.headBranch === 'main')))
     .sort((a, b) => String(b.createdAt ?? '').localeCompare(String(a.createdAt ?? '')) || b.databaseId - a.databaseId)
-  if (!ok.length) return none(`${runs.length} ci.yml run(s) for ${commit.slice(0, 7)}, none with conclusion success, v* tag-push runs excluded (${[...new Set(runs.map(x => x?.conclusion || x?.status || 'unknown'))].join(', ')})`)
+  if (!ok.length) return none(`${runs.length} ci.yml run(s) for ${commit.slice(0, 7)}, none with conclusion success on a pull_request or main push event (${[...new Set(runs.map(x => x?.conclusion || x?.status || 'unknown'))].join(', ')})`)
   return { id: String(ok[0].databaseId), lookup: { mode: 'auto', source: 'gh run list', conclusion: 'success', head_sha: commit, run_created_at: ok[0].createdAt ?? null, ...(process.env.OS_ERP_GH ? { gh_override: true } : {}) } }
 }
 
-/** AE10：托管 CI 上找不到该提交的成功 ci.yml run 时（标签推送不跑 ci.yml 的其余 job），退而记录**当前 run**。
+/** AE10/AF1：托管 CI 上找不到该提交的成功 ci.yml run 时（发行候选工作流 release-candidate.yml 不属于 ci.yml），退而记录**当前 run**。
  *  这是自指引用：该 run 正在运行，本身不是通过的验证，所以不写 conclusion success；evidence 里以 ci_run_origin 与 note 写明。 */
 export function selfCiRun(commit, env = process.env) {
   if (env.GITHUB_ACTIONS !== 'true' || !/^\d{1,20}$/.test(String(env.GITHUB_RUN_ID ?? ''))) return null

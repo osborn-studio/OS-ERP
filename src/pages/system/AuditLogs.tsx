@@ -23,7 +23,8 @@ import { ACTION_NEEDS_MODULE_HINT, KEYWORD_HINTS, actionNeedsModule, effectiveKe
 
 const AUDIT_COUNT_CAP = 10000 // 与 server/lib/audit-view.js 的 AUDIT_COUNT_CAP 一致
 type Draft = { module: string; action: string; user: string; entity: string; entity_id: string; from: string; to: string; keyword: string }
-type FtsState = { setting_enabled: boolean; index_present: boolean; env_disabled: boolean; active: boolean }
+// fallback_total：AF4 的「索引查询失败 / 维护中回退到普通匹配」累计（可选；服务端没有该字段时整块不画）。AF4-ADAPTER: 字段名以 AF4 合入为准
+type FtsState = { setting_enabled: boolean; index_present: boolean; env_disabled: boolean; active: boolean; fallback_total?: number }
 type AuditMeta = { retention?: any; max?: number; ok?: boolean; fts?: FtsState }
 const EMPTY: Draft = { module: '', action: '', user: '', entity: '', entity_id: '', from: '', to: '', keyword: '' }
 
@@ -156,6 +157,16 @@ function ftsVerdict(f: FtsState): { state: 'on' | 'off' | 'converging_off' | 'en
   return { state: 'on', text: '已启用：≥3 个字符且命中稀少的关键词走索引，其余走普通匹配（LIKE），两条路径结果一致。', hint: `停用（减少审计写入开销）：${disable}；停用后检索仍可用，只是更慢。` }
 }
 
+/** 「维护中 / 回退」槽位（AF11）：`fallback_total` > 0 才显示；没有字段或为 0 时只留一个空容器（data-count=0），便于场景断言。 */
+function FtsFallbackSlot({ total }: { total?: number }) {
+  const n = Number.isFinite(total) && (total as number) > 0 ? Math.floor(total as number) : 0
+  return (
+    <div data-testid="audit-fts-fallback" data-count={n}>
+      {n > 0 && <div className="mt-1 text-[12px] text-amber-700" data-testid="audit-fts-fallback-text">维护中 / 回退：关键词索引查询累计 {n} 次回退到普通匹配（LIKE）。结果仍然正确，只是更慢；持续增长请核对索引维护是否在执行。</div>}
+    </div>
+  )
+}
+
 function FtsStateCard({ fts }: { fts: FtsState }) {
   const v = ftsVerdict(fts)
   const tone = v.state === 'on' ? 'text-emerald-700' : v.state === 'off' ? 'text-slate-600' : 'text-amber-700'
@@ -164,6 +175,7 @@ function FtsStateCard({ fts }: { fts: FtsState }) {
       <div data-testid="audit-fts-state" data-state={v.state} data-setting={fts.setting_enabled ? '1' : '0'} data-index={fts.index_present ? '1' : '0'} className="text-[13px] leading-relaxed">
         <div className={tone}><b>关键词索引（FTS5）：</b><span data-testid="audit-fts-state-text">{v.text}</span></div>
         <div className="mt-1 text-[12px] text-slate-500" data-testid="audit-fts-maintain-hint">维护提示：{v.hint}</div>
+        <FtsFallbackSlot total={fts.fallback_total} />
       </div>
     </Card>
   )

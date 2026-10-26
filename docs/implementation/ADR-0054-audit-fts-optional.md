@@ -74,3 +74,29 @@ Codex 审计（gpt-6.1-sol，只读，针对相对 batch-twelve 的差异）：�
 - 中：`--disable` 与在途检索请求的竞态 ⇒ **未修，记录为已知窗口**（见上，修复要改 `meta.js` 的路径选择或加 LIKE 重试，超出 AE4 范围）。
 - 中：启动自愈与重叠维护脚本的 `SQLITE_BUSY_SNAPSHOT`，以及本补充原稿"后到者等锁、必看到收敛状态"的过度表述 ⇒ 表述已更正；代码未改，无重叠测试。
 - 中：测试清理顺序（目录先于服务与连接被删）⇒ 已修：单个有序清理钩子（停服务 → 关连接 → 删目录）。
+
+---
+
+## 补充 2（AF4，第十五批）：关闭两个已记录的竞态窗口
+
+状态：开发实现，尚非产品上线验收｜相关：roadmap-v11 AF4；收口 AE4 补充里「未修，记录在案」的两项
+
+### 做了什么
+1. **在途请求的 LIKE 重试**（`server/lib/audit-view.js`，`meta.js` 只换成调用它）：新增 `auditQueryPlan(db, filters)`，它是一次请求内 `where`/`args` 的唯一持有者；`plan.run(fn)` 以当前计划执行 `fn`，若计划用了 FTS 且抛出 `SQLITE_ERROR: no such table: audit_logs_fts`（`isFtsMissingError`，不认其它表、其它错误码、非 SqliteError 形态之外的误匹配），就把计划换成 LIKE、`os_erp_audit_fts_fallback_total{reason}` +1，**只重跑一次**；重跑再失败原样抛出，LIKE 计划上的任何错误都不重试。列表的计数 + 取页放在同一次 `run` 里（同一份计划，不会出现总数走 FTS、行走 LIKE）；导出的起始计数是一次 `run`，之后**每个批次**经 `run(…, 'export_batch')`，索引在批次之间消失则从原游标继续（FTS 与 LIKE 同序同结果：FTS 只缩小候选集，同一个 LIKE 谓词仍然过滤，见 `buildWhere`），行不重不漏。计数器的 `reason` 是封闭集合 `query | export_batch`。
+2. **启动自愈与维护脚本的写锁**：运行器的自愈改走 `withWriteRetry`（`tx.js` 的唯一重试实现：`BEGIN IMMEDIATE`，仅 BUSY/LOCKED 族，含 `SQLITE_BUSY_SNAPSHOT`，有上限与抖动）；锁内**先重读** `verify`，已收敛则什么都不做（日志 `heal-skip`，不计入 `healed`），否则按**此刻**的设置重跑 `up`。旧实现是延迟事务「先读设置再写」，维护脚本在两步之间提交会得到 `SQLITE_BUSY_SNAPSHOT`，`busy_timeout` 解决不了陈旧快照。`scripts/audit-fts-maintain.mjs --enable|--disable` 同样：`BEGIN IMMEDIATE`、遇 BUSY 有上限地重试（最多 5 次且总等待不超过 `--busy-ms`，每次重试前 ROLLBACK 并重新取锁），锁内重读设置值与对象，已与目标一致 → 回滚空事务、报告 `already_in_state: true`、`changed_objects`/`setting_changed` 为 false。**未改**：`--optimize/--rebuild/--integrity-check`。
+3. **确定性测试钩子** `server/lib/test-pause.js`：环境变量指向一个目录，进程在暂停点写 `.<名>-paused` 并同步等待 `.<名>-continue`；仅 `GML_RUNTIME_MODE=test`（其它模式设置即抛 `PAUSE_HOOK_FORBIDDEN`），有 60 s 上限；未设置时零成本。三个暂停点：`GML_TEST_AUDIT_FTS_PAUSE`（审计检索，选定 FTS 之后、执行之前）、`GML_TEST_MIGRATE_HEAL_PAUSE`（自愈，锁外判定之后、取锁之前）、`GML_TEST_FTS_MAINTAIN_PAUSE`（脚本，读完状态之后、开事务之前）。
+4. 测试 `tests/audit-fts-races.test.mjs`（10 个用例）：判据单测；计划在「prepare 之后、execute 之前由另一连接删索引」时恰好重跑一次、行相同、计数 +1；LIKE 计划 / 其它错误 / 第二次失败不重试不吞错；导出批次间删索引仍每行恰好一次且同序；**真实服务进程 + 真实 `--disable` 子进程**把删除排在请求暂停处（列表与导出各一次，均 200，`/metrics` 上计数为 2）；**启动自愈 vs `--enable`**（自愈已判定、脚本先提交 → 启动成功、无 `heal 071`、FTS 行数 = 审计行数）与 **启动自愈 vs `--disable`**（自愈不得撤销关闭）；两个脚本重叠（输家 `already_in_state`）；暂停钩子在非 test 模式被拒。已确认：去掉重试逻辑后「在途请求」用例转红。
+5. 文档：`audit-search.md` 第 5 节（替换「已知窗口（未修）」）、`monitoring.md` 指标表。
+
+### 诚实边界
+- 重试只覆盖「表不存在」这一种形态。`--disable` 同时删三个触发器：写入路径（`insertAuditRow`）上的触发器引用已删表的窗口由 SQLite 的单写者串行化挡住（`DROP` 与 `INSERT` 在同一把写锁下排队），未发现需要额外处理的形态，但没有对写入路径单独做压力竞态测试。
+- 在途请求窗口里，`--enable`（只新增对象）本来就不会让查询失败，没有对应重试。
+- 重叠的 `--enable` 仍持写锁到回填结束（100 万行约 1.5 s，见 capacity-baseline「AE4」）；等待超过 `--busy-ms` / 自愈重试上限的一方失败（脚本 `busy`；启动失败，重启即可）。这是有意的上限，不是无限等待。
+- 暂停钩子是同步阻塞的测试设施；"确定性"指的是进程间提交顺序由文件标记排定，不是对任意交错的穷举。
+- 托管 runner（ubuntu）上的结果未验证；本批只在本机 macOS / Node 22 / 带 FTS5 的 better-sqlite3 上跑，无 FTS5 构建（`audit-no-fts5` job）上的新测试按原因跳过。
+
+### 审计记录（AF4，Codex gpt-6.1-sol 只读，针对 AF4 提交的差异）
+无高危；确认执行期回退只重试一次且不吞错、列表计数与取页同一份计划、导出游标与排序连续、自愈在写锁内重读不会撤销较新的 `--disable`、切换在同一事务内无审计行丢失或索引分叉、覆盖路径中无遗漏的 `no such table` 逃逸。
+- 中：脚本 `--busy-ms` 并不约束总等待（重试退避可越过截止时间；提交阶段沿用的超时可能被取锁阶段耗尽）⇒ 已修：退避不超过剩余预算；提交前把 `busy_timeout` 重设为完整的 `--busy-ms`（提交阶段另算一份预算，这样耗时的回填不会让提交以 0 超时失败）。文档的表述相应改为「取锁阶段的总预算」。
+- 低：自愈暂停点的守卫读的是 `runMigrations` 的 `mode` 选项而非真实进程环境，内部调用 `runMigrations(db,{mode:'test'})` 可在生产进程里激活钩子（无 HTTP 可达路径）⇒ 已修：钩子只看真实 `process.env.GML_RUNTIME_MODE`。
+- 审计方未能在其沙箱内运行代码（better-sqlite3 的 Node ABI 不符），结论为静态阅读；运行证据来自本机测试。

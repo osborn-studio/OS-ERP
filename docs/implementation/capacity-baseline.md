@@ -613,6 +613,12 @@ node scripts/upgrade-rehearsal.mjs --from=58 --backup-dir=/abs/new-dir/data/back
 - 结果：已派发 0 次（`nightly-capacity.yml` 0/3，`capacity-smoke` 0/1，`candidate` 0/1）；没有 run id，上面的结果登记表保持待填，本节没有任何托管 runner 数字。`capacity-smoke` 过渡 job 也不能删除：它尚未在 `main` 上，且从未跑过。未修改任何工作流或仓库设置。
 - 等待项：合入 `main` 的顺序决定首跑条件。`nightly-capacity.yml` 与 `capacity-smoke`/`candidate` 到达 `main` 后，再按下方命令各派发一次；全部成功且 `nightly-capacity.yml` 在 `main` 上时，才删除 `capacity-smoke`（整块）及其策略测试。
 
+### AF8 复查（2026-10-24）：仍未派发（main 上不可用）
+- 检查：`main`（提交 `a524d3b`，合并 PR #3）的 `.github/workflows/nightly-capacity.yml` 经 `gh api …/contents/…?ref=main` 返回 HTTP 404；`main` 的 `ci.yml` 只含 `checks`、`docker`、`regression` 三个 job，**没有** `capacity-smoke`、`candidate`、`dependency-review`、`audit-no-fts5`（工作流目录里只有 `ci.yml` 与 `linux-validation.yml`）。
+- PR 状态（`gh pr list --state all`）：#1–#3 MERGED；#4、#5、#6、#7、#8、#9 全部 OPEN、未合并；`gh` 查不到 #10（`gh pr view 10` 与 issues API 均 404；`batch-fourteen` 分支在远端也不存在），所以第十四批的候选尚无 PR。这解释了为何上述工作流/job 都没到 `main`。
+- 结果：已派发 0 次（`nightly-capacity.yml` 0/3，`capacity-smoke` 0/1，`candidate` 0/1，`dependency-review` 0/1，`audit-no-fts5` 0/1）；没有 run id，结果登记表保持待填，本节没有任何托管 runner 数字。`capacity-smoke` 过渡 job 因此保留（它不在 `main` 上，也从未跑过，且 `nightly-capacity.yml` 也不在 `main` 上）。未修改任何工作流或仓库设置。
+- 等待项不变：合入顺序决定首跑条件；到达 `main` 后各派发一次，全部成功且 `nightly-capacity.yml` 在 `main` 上时才删除 `capacity-smoke`（整块）及其策略测试。
+
 ### 触发（合入 `main` 之后；只用 `gh workflow run`，不改仓库设置）
 ```bash
 gh workflow run nightly-capacity.yml --ref main -f rehearsal=true -f snapshot_upto=58
@@ -766,6 +772,34 @@ gh run view <run-id> --log-failed
 - 未覆盖：`dmserver`；多进程同时写时的锁等待分布（正确性由 `tests/mcp-rate-store-db.test.mjs` 的 4 进程竞速用例验证：恰好放行 `rpm` 次，不是性能数据）；与业务写入争用下的尾延迟；`synchronous=FULL` / 网络盘；表在长期运行后的体积（每令牌每分钟至多 2 个窗口 × 2 种 kind 的行，清理线之外的行由定时器删除）。
 
 
+## AF9 MCP 限速 db 模式在并发业务写入下的尾延迟与写锁等待（**Mac mini M4 10 核 / 临时 WAL 库 / 非目标主机 / 整机负载极高：loadavg 约 48–77（本批其它工作流并行）/ 3 次运行**）
+
+脚本：`node scripts/bench-mcp-rate-contention.mjs [--seconds=8] [--pace-ms=0|5]`。同一个 WAL 库文件上起 **4 个调用者进程**（各自连续 `consume`，db 模式、额度开到 1e6 只走放行路径、读写交替、20 个令牌轮转）和 **1 个写者进程**（"合成风格"：往一张带两个索引的类 `inventory_transactions` 表做多行事务插入；**不是** `synth-data.mjs` 的领域函数全流程）。每个场景 8 秒。`synchronous` 实测为 `1`（NORMAL，better-sqlite3 在 WAL 下的默认），`busy_timeout=5000`，`withWriteRetry` 默认 4 次。延迟 = 每次 `consume()` 的墙钟（含等锁与退避重试）。场景：baseline（无写者）、oltp（1 行/事务，间隔 2 ms）、bulk（200 行/事务，间隔 20 ms）、saturating（200 行/事务，不留间隔）。
+
+### 紧循环调用者（最坏情况：4 个进程各自不停 `consume`，约 3–4 万次/秒；运行 1，运行 2 趋势一致）
+| 场景 | consume/s | p50 | p95 | p99 | max | fail-closed | 重试 / 用尽 | 写者 rows/s（最长事务） |
+|---|---|---|---|---|---|---|---|---|
+| baseline | 46614 | 14 µs | 37 µs | 64 µs | 2317 ms | 0 | 0 / 0 | — |
+| oltp | 38129 | 14 µs | 40 µs | 88 µs | 1543 ms | 0 | 0 / 0 | 51（1416 ms） |
+| bulk | 28033 | 15 µs | 44 µs | 116 µs | 1028 ms | 0 | 0 / 0 | 1867（1091 ms） |
+| saturating | 25785 | 14 µs | 42 µs | 107 µs | 2390 ms | 0 | 0 / 0 | 21733（1633 ms） |
+
+运行 2（同参数）：p95 38–39 µs、p99 66–76 µs 各场景相当，max 1.5–2.0 s，写者 oltp 45 rows/s、bulk 1533、saturating 22956。**读法**：调用者自己的 p50/p95/p99 几乎不受写者影响（写者事务很短，调用者拿锁快）；反过来，**紧循环的调用者把写者饿住了**——oltp 写者按间隔本可达约 500 行/秒，实测 45–51；写者最长一次事务 0.8–2.0 s。`max` 在无写者的 baseline 也有 1.0–2.3 s，说明它主要是整机负载下进程被调度走的停顿（loadavg 50+），不是锁等待；SQLite 的 busy 处理器是轮询睡眠，不公平，多个紧循环进程互相也会饿。生产里单令牌受 `GML_MCP_TOKEN_RPM`（默认 600/分 = 10/s）约束，这个压力是人为的上界，不是预期负载。
+
+### 有节奏的调用者（每次 `consume` 后睡 5 ms，4 个进程约 300–600 次/秒；单次运行）
+| 场景 | consume/s | p50 | p95 | p99 | max | fail-closed | 重试 / 用尽 | 平均等待 | 写者 rows/s（最长事务） |
+|---|---|---|---|---|---|---|---|---|---|
+| baseline | 592 | 0.15 ms | 1.7 ms | 4.7 ms | 46 ms | 0 | 0 / 0 | 0.40 ms | — |
+| oltp | 542 | 0.15 ms | 3.6 ms | 10.9 ms | 63 ms | 0 | 0 / 0 | 0.81 ms | 300（57 ms） |
+| bulk | 544 | 0.16 ms | 3.0 ms | 8.7 ms | 52 ms | 0 | 0 / 0 | 0.71 ms | 8244（49 ms） |
+| saturating | 300 | 0.17 ms | 24.9 ms | 149 ms | 727 ms | 0 | 0 / 0 | 7.0 ms | 43422（178 ms） |
+
+读法：有节奏时调用者的 p50 不变（约 0.15 ms，主要是定时器抖动），尾部随写者占锁时间增长：写者每事务 200 行且不留间隙时 p95 约 25 ms、p99 约 150 ms，平均等待 7 ms；有间隔的 oltp / bulk 写者只把 p95 抬到 3–4 ms。**所有场景 fail-closed 为 0、`withWriteRetry` 没有触发重试**——5 s 的 `busy_timeout` 在这些压力下足够。这与 `OsErpMcpRateStoreWaitHigh`（p95 > 100 ms 持续 15 分钟）的阈值相比：只有"写者几乎不间断占锁"这种极端场景才会接近。
+
+- 未覆盖：`dmserver`；真实业务写（领域函数 + 审计 + 触发器，事务更大更慢）；`synchronous=FULL` 对比（本批只测库默认 NORMAL）；多个业务写者；长期运行后的表体积；负载低时的数字（本机负载 50–77，绝对值与抖动都被放大，只看量级与场景间趋势）。
+- 该告警阈值（100 ms、15 分钟）**不是**用生产流量标定的，上线后按一周 `histogram_quantile(0.95, …)` 的分布复核。
+
+
 ## AE3 OMS `/stats` 与 AI 平台分析：区间谓词前后（**Mac mini / 合成 20 万 OMS 单 + 每单一行明细 / 非目标主机 / 整机负载 8–21**）
 
 脚本：`node scripts/bench-oms-order-time.mjs --rows 200000 --span 365|60 --repeat 21|31`（输出 `ae3` 键；全新临时目录；不跑 `ANALYZE`）。"前"= AE3 之前的 SQL（`date(order_time) >= …`，无迁移 070 索引）；"后"= `server/lib/oms-sql.js` 的新 SQL + 迁移 070 索引。新旧 SQL 在全局与受限组织范围（org 1 = 平台 1、2）、30 / 90 天窗口上逐条返回相同行（脚本断言 `ae3.results_identical: true`，三次运行均为真）。**负载高、同机并行，绝对值抖动可达 2×，只看量级；同计划的语句（`stats_top_skus`、受限范围）前后差异是噪声，不是改动效果。不是 `dmserver` 结果。**
@@ -809,3 +843,77 @@ gh run view <run-id> --log-failed
 - `dmserver` 与生产规模副本；机器空闲时的数字；真实订单时间分布。
 - 受限范围与 topSkus 仍不走 `idx_oms_order_time`：前者要把范围子查询改写成对 `platform_id` 的非等值形式，后者要改连接顺序（浮点求和顺序可能变，不能保证逐位相同）——均未做，见 ADR-0044 补充 4。
 - explain-audit（合成库，见 ADR 补充 4 记录）：`oms.stats_trend`、`oms.stats_total`、`ai.platform_analysis` 声明 `expectIndex` + `expectSearch`；其余六条 `oms.stats_*` 登记只守"无裸 SCAN"，`oms.stats_top_skus*` 的明细表扫描有书面豁免。
+
+## AF6 备份故障矩阵：Linux CI 登记与本机耗时（**Mac mini / 非目标主机；Linux 结果：尚未运行**）
+
+- **Linux CI 上的 `tests/fs-fault.test.mjs`：尚未运行。** 2026-10-24 用 `gh run view` 只读核对 PR #9（`feat/batch-thirteen`）的 CI：run `40111488028` 在“Audit view tests without FTS”步骤失败，其后的 “Focused tests (tests/*.test.mjs)” 步骤被跳过（`-`），所以该文件没有在 ubuntu 上执行；run `40112658832` 当时仍在进行（“Typecheck, build, focused tests” 未完成，日志尚不可读）。PR #10 不存在。因此 AE6 文档里“Linux 由 CI `checks` job 在 ubuntu-latest 上跑同一文件”仍是**待验证**，没有 Linux 通过/失败的证据；目录 fsync、rename 覆盖、`wx` 等 `platform:` 用例的 Linux 行为未被实测。
+- 本机（macOS）：`tests/fs-fault.test.mjs` 在加入 `backup.after-enc-rename-fsync` / `backup.after-manifest-fsync` 与多库 × 4 点用例后全部通过；其中 fsync 顺序用例只断言调用顺序，不是断电实验。
+
+
+## AF3 OMS `/stats` 平台维度、热销与受限范围语句改走时间索引：改写 + 迁移 074（**Mac mini / 合成 20 万 OMS 单 + 每单一行明细 / 非目标主机 / 整机负载 12–25 / 同机轮转计时**）
+
+脚本：`node scripts/bench-oms-order-time.mjs --rows 200000 --span 365 --ordered --writes 4000 --rounds 5 --repeat 31 --out result.json`（输出 `af3` 键；`--span 60 --no-write` 为密集窗口最坏情形；`--ordered` = 订单时间随 id 递增 ±6 h，更接近真实落库，不加则时间与 id 无关、对窗口驱动计划偏不利）。全新临时目录；不跑 `ANALYZE`。四种索引状态各用一份库副本、各开一个连接：S0（仅迁移 070，即 AE3 现状）、S0+B（再加被否决的 `oms_orders(platform_id, order_time, status, pay_amount)`）、S1（+迁移 074，已发布）、S1+B；每条语句**轮转**所有（状态 × 写法）配置计时（每轮每配置一次，31 轮取 p50 / p95），整机负载漂移落在所有配置上，比逐配置连续计时可比。新写法与最初的 `date(order_time)` 旧 SQL 逐条核对：整数 / 文本 / 行序严格相同，浮点列相对误差 `af3.max_rel_diff = 0`（脚本断言 `af3.identical: true`，所有运行均为真）。**负载高，p95 含抖动，只看量级；不是 `dmserver` 结果。**
+
+### 计划（全局范围；受限范围同形）
+| 语句 | AF3 之前（AE3） | AF3 之后 |
+|---|---|---|
+| `/stats` byPlatform | `SCAN pf` + `SEARCH o USING INDEX sqlite_autoindex_oms_orders_1 (platform_id=?) LEFT-JOIN`（逐平台读全部历史订单） | `MATERIALIZE w` ← `SEARCH oms_orders USING COVERING INDEX idx_oms_order_time (order_time>?)` + 分组，`SCAN pf` + `SEARCH w USING AUTOMATIC COVERING INDEX`（≤ 平台数行的派生表） |
+| `/stats` topSkus | `SCAN i` + `SEARCH o USING INTEGER PRIMARY KEY (rowid=?)`（ALLOW 豁免） | `SEARCH o USING COVERING INDEX idx_oms_order_time (order_time>?)` + `SEARCH i USING INDEX idx_oms_items_order (oms_order_id=?)`（无豁免） |
+| 受限范围的 trend / total / topSkus | `SEARCH oms_orders USING INDEX sqlite_autoindex_oms_orders_1 (platform_id=?)`（范围内全部历史订单） | `SEARCH oms_orders USING COVERING INDEX idx_oms_order_time (order_time>?)`（范围谓词包 `likely()`） |
+| 受限范围的 byPlatform | 同全局（平台驱动） | 同全局（窗口子查询先聚合，范围谓词在外层平台上） |
+
+### 延迟（ms，p50 / p95；数据跨 365 天、时间随 id 递增；负载 25）
+| 语句 | AE3 现状 | (a) 只改写 | (b) 只加平台复合索引（被否决） | **已发布 = (a) + 074** |
+|---|---|---|---|---|
+| byPlatform 全局 30 天 | 89.1 / 219 | 5.2 / 13.3 | 2.6 / 19.4 | **6.3 / 20.2** |
+| byPlatform 全局 90 天 | 87.8 / 113 | 19.2 / 33.3 | 11.6 / 18.6 | **18.3 / 29.0** |
+| byPlatform 受限 30 天 | 32.5 / 46.5 | 4.3 / 10.7 | 1.1 / 3.9 | **7.2 / 9.8** |
+| byPlatform 受限 90 天 | 38.5 / 48.7 | 19.3 / 29.7 | 5.3 / 14.2 | **19.4 / 38.3** |
+| topSkus 全局 30 天 | 30.7 / 46.5 | 27.3 / 55.7（仍 SCAN 明细表） | 28.1 / 50.7（仍 SCAN） | **13.4 / 21.9** |
+| topSkus 全局 90 天 | 37.1 / 48.7 | 39.2 / 52.5（仍 SCAN） | 35.3 / 48.3（仍 SCAN） | **39.3 / 48.9** |
+| topSkus 受限 30 天 | 23.8 / 31.5 | 22.5 / 33.8 | 25.0 / 34.6 | **6.7 / 11.9** |
+| topSkus 受限 90 天 | 39.4 / 75.2 | 41.1 / 63.4 | 41.0 / 77.1 | **24.2 / 50.0** |
+| trend 受限 30 天 | 30.7 / 45.9 | 2.5 / 6.2 | 1.4 / 3.9 | **2.5 / 6.3** |
+| trend 受限 90 天 | 39.3 / 55.1 | 9.9 / 21.2 | 5.7 / 11.4 | **9.7 / 26.0** |
+| total 受限 30 天 | 31.7 / 41.7 | 2.0 / 4.4 | 0.8 / 2.0 | **2.3 / 4.9** |
+| total 受限 90 天 | 44.4 / 99.1 | 8.7 / 34.4 | 2.5 / 9.4 | **8.5 / 34.4** |
+| trend / total 全局（计划未变） | 2.9–16 / 8–23 | 同 | 同 | 同（噪声内） |
+
+读法：byPlatform 与所有受限形态 (a) 即获得 4–20× 收益，零写入成本；(b) 的 p95 还要再低几毫秒到十几毫秒，但 (b) 单独解决不了 topSkus（仍 SCAN 明细表，且无论 (a) 还是 (b) 都需要明细索引）。topSkus 由 074 改成订单窗口驱动：30 天窗口快约 2.3–3.6×，90 天全局与扫描持平（39 vs 37 ms），受限 90 天快约 1.6×。
+
+### 密集窗口最坏情形（数据全在最近 60 天，窗口覆盖几乎全部行；`--span 60 --ordered`，负载 22）
+| 语句 | AE3 现状 | **已发布** | (b) 只加平台复合索引 |
+|---|---|---|---|
+| byPlatform 全局 30 / 90 天 | 99 / 139；114 / 153 | 44 / 69；71 / 84 | 27 / 47；45 / 57 |
+| byPlatform 受限 30 / 90 天 | 38 / 56；45 / 53 | 34 / 45；**67 / 98** | 9.6 / 14；17 / 22 |
+| topSkus 全局 30 / 90 天 | 55 / 68；93 / 106 | **89 / 113；186 / 216** | 59 / 75；97 / 110 |
+| topSkus 受限 30 / 90 天 | 36 / 46；53 / 63 | 41 / 52；**78 / 99** | 38 / 53；56 / 69 |
+| trend / total 受限 30 / 90 天 | 34–50 / 40–60 | 13–37 / 20–54 | 5–23 / 10–33 |
+
+**这是真实回退，不是噪声**：窗口覆盖多数行时，订单窗口驱动要对每个窗口内订单探测一次明细索引（随机读），比"顺序扫描明细表 + 主键查找"慢约 2×（topSkus 全局 +34 / +93 ms；受限 byPlatform 90 天 +22 ms）。读量因此随窗口内订单数而不是全部历史订单数增长——3 年历史同量级库（随机序、CPU 时间）topSkus 30 天窗口 5.8 vs 19 ms，90 天持平（19.5 vs 22.6 ms）。取舍同 AD3，但最坏情形是 ~2× 回退而非持平，已写入 ADR-0044 补充 5。
+
+### 明细索引形状：单列（已发布）vs 覆盖 `(oms_order_id, title, qty, amount)`（否决）
+| 语句 | 扫描（AE3） | 单列 | 覆盖 |
+|---|---|---|---|
+| topSkus 全局 30 / 90 天（CPU p50 / p95） | 25.1 / 34.3；35.3 / 41.9 | 11.2 / 14.8；36.2 / 45.2 | 8.7 / 12.7；28.8 / 37.3 |
+| topSkus 受限 30 / 90 天 | 21.9 / 27.4；29.5 / 36.7 | 6.2 / 9.4；19.1 / 26.2 | 4.3 / 7.6；15.5 / 23.5 |
+| 索引体积（20 万明细行） | — | 2.36 MB | 5.99 MB（标题仅 7 字符，真实标题更长则更大） |
+| 写入 CPU（µs/单，中位数） | 99.9 | 106.8（+7%） | 103.0（+3%） |
+
+覆盖版读快约 20%，体积 2.5×；单列版已满足目标，选更小的。
+
+### 建索引与写放大（独立库、逐单自动提交；一单 = 1 行 `oms_orders` + 2 行 `oms_order_items`；种子 10 万单，5 轮 × 4000 单，状态交替；µs/单，中位数）
+| 状态 | 墙钟 | CPU（user+sys） | CPU 相对基线 | 新增索引体积（20 万行） | `CREATE INDEX` |
+|---|---|---|---|---|---|
+| 基线（070 only） | 142.6 | 99.9 | 1.00 | — | — |
+| + 074 单列（已发布） | 137.9 | 106.8 | **1.07** | +2.36 MB | 29–76 ms |
+| + 074 覆盖（否决） | 139.5 | 103.0 | 1.03 | +5.99 MB | 76 ms |
+| + (b) 平台复合索引（否决） | 191.8 | 122.8 | **1.23** | +9.48 MB | 137–225 ms |
+| + 074 + (b) | 186.5 | 132.3 | 1.32 | +11.8 MB | — |
+
+墙钟噪声大（负载 25，(b) 的中位数含离群），**CPU 时间更可靠**：已发布的 074 每单约 +7 µs（每明细行约 +3.5 µs）；(b) 每单约 +23 µs（表中基线已含 070 的覆盖索引，其自身写放大见 AD3 一节）。写入成本是选 (a) + 074 而不是 (b) 的主要依据。
+
+### 复现与未覆盖
+- 复现：见脚本头；`--ordered`（时间随 id）、`--span 60|365|1095`、`--no-write`。
+- 未覆盖：`dmserver` 与生产规模副本；真实标题长度下的明细索引体积；真实订单 / 明细的写入并发争用；空闲机器上的数字；有 `sqlite_stat1` 统计信息时的计划（见 `docs/operations/query-planner.md`）。
+- explain-audit（合成库）见下方验证记录；九条 `oms.stats_*` / `ai.platform_analysis` 无豁免。

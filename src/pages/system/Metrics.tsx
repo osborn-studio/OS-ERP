@@ -26,7 +26,7 @@ import MetricsHiddenNote from './MetricsHiddenNote'
 import { RefreshCw, ShieldCheck, ShieldAlert, Calculator, Search, Layers } from 'lucide-react'
 import {
   fmtMetricValue, isMetricError, syncMetricDefs,
-  type MetricGroup, type MetricItem, type MetricsDictResponse, hiddenMetricsNote
+  type MetricGroup, type MetricItem, type MetricsDictResponse, hiddenMetricsNote, callerRestricted, showsScopedMarker
 } from '../../api/metrics'
 
 /**
@@ -87,6 +87,7 @@ export default function Metrics() {
       .filter((g) => g.items.length > 0)
   }, [groups, kw])
 
+  const restricted = callerRestricted(data, groups.flatMap((g) => g.items))
   const errCount = groups.flatMap((g) => g.items).filter((m) => isMetricError(m.value)).length
 
   const doSync = async () => {
@@ -198,9 +199,10 @@ export default function Metrics() {
                   { key: 'value', title: '当前值', width: 160, align: 'right', render: (r) => {
                     if (isMetricError(r.value)) return <span className="text-amber-600" title={(r.value as any).error}>算不出</span>
                     return (
-                      <span>
+                      <span data-testid={`metric-value-${r.key}`}>
                         <strong className={r.value === 0 ? 'text-ink-400' : 'text-ink-900'}>{fmtMetricValue(r.value, r.unit)}</strong>
                         {r.scoped === false && <span className="ml-1 text-[11px] text-amber-600" title="该指标尚未按组织范围过滤，受限账号看到的是全局数字">全局口径</span>}
+                        {showsScopedMarker(r, restricted) && <span data-testid="metric-scoped-marker" data-key={r.key} className="ml-1 text-[11px] text-emerald-700" title="受限账号：该数只统计你数据范围内的单据，不是全局数字">按范围计算</span>}
                       </span>
                     )
                   } },

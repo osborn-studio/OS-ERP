@@ -3,7 +3,7 @@
 <!-- generated -->
 <!-- 由 `node scripts/gen-codemap.mjs` 生成，勿手改；CI 校验不漂移 -->
 
-共 88 个模块。“路由”只列在处理器区域内直接引用该函数的路由（路由超过 5 条时按路由文件汇总，明细见 [routes.md](routes.md)）；“MCP 工具”来自 `server/mcp/tools.js` 的 40 个工具；“被模块调用”是其它 lib/mcp 模块里的跨文件引用。“—”表示静态扫描没找到调用方，不等于死代码。
+共 89 个模块。“路由”只列在处理器区域内直接引用该函数的路由（路由超过 5 条时按路由文件汇总，明细见 [routes.md](routes.md)）；“MCP 工具”来自 `server/mcp/tools.js` 的 40 个工具；“被模块调用”是其它 lib/mcp 模块里的跨文件引用。“—”表示静态扫描没找到调用方，不等于死代码。
 
 ## 扫描边界（必读）
 
@@ -214,10 +214,15 @@
 |---|---|---|---|---|
 | `MANIFEST_FORMAT` | const | — | — | — |
 | `anchorsDigest` | fn | — | — | — |
+| `archiveEvidence` | fn | — | — | — |
+| `archivedAnchorsSince` | fn | — | — | — |
+| `archivedRowLookup` | fn | — | — | — |
 | `buildManifest` | fn | — | — | — |
 | `compareLiveToBackup` | fn | — | — | — |
+| `connectedArchive` | fn | — | — | — |
 | `forEachJsonlRow` | fn | — | — | — |
 | `loadBackupManifest` | fn | — | — | — |
+| `openArchiveIndex` | fn | — | — | — |
 | `sha256FileSync` | fn | — | — | — |
 | `summarizeAuditChain` | fn | — | — | — |
 | `withoutAnchorList` | fn | — | — | — |
@@ -264,9 +269,10 @@
 | `KEYWORD_FTS_MIN_CHARS` | const | — | — | — |
 | `KEYWORD_MIN_CHARS` | const | — | — | — |
 | `assertKeyword` | fn | — | — | — |
-| `buildWhere` | fn | GET /api/meta/audit-logs<br>GET /api/meta/audit-logs/export.csv | — | — |
+| `auditQueryPlan` | fn | GET /api/meta/audit-logs<br>GET /api/meta/audit-logs/export.csv | — | — |
+| `buildWhere` | fn | — | — | — |
 | `countCapped` | fn | GET /api/meta/audit-logs | — | — |
-| `countSql` | fn | — | — | — |
+| `countSql` | fn | GET /api/meta/audit-logs/export.csv | — | — |
 | `csvCell` | fn | — | — | — |
 | `csvLine` | fn | — | — | — |
 | `exportChunks` | fn | GET /api/meta/audit-logs/export.csv | — | — |
@@ -275,7 +281,8 @@
 | `ftsEnvDisabled` | fn | — | — | — |
 | `ftsPhrase` | fn | — | — | — |
 | `ftsState` | fn | GET /api/meta/audit-logs | — | — |
-| `keywordUsesFts` | fn | GET /api/meta/audit-logs<br>GET /api/meta/audit-logs/export.csv | — | — |
+| `isFtsMissingError` | fn | — | — | — |
+| `keywordUsesFts` | fn | — | — | — |
 | `orderOf` | fn | GET /api/meta/audit-logs<br>GET /api/meta/audit-logs/export.csv | — | — |
 | `parseFilters` | fn | GET /api/meta/audit-logs<br>GET /api/meta/audit-logs/export.csv | — | — |
 | `redactDetail` | fn | — | — | — |
@@ -742,6 +749,7 @@ MCP 按令牌的速率限制与日配额（ADR-0056 / AD9）
 | `dailyQuotaState` | fn | — | — | — |
 | `mcpRatePolicy` | fn | — | — | — |
 | `rateStoreFromEnv` | fn | — | — | — |
+| `recentLimitedByToken` | fn | — | — | — |
 
 ## `server/lib/member.js`
 
@@ -819,6 +827,7 @@ Prometheus 文本指标渲染 + 抓取令牌校验（ADR-0045）
 | `METRICS_GLOBAL_MODE_KEY` | const | — | — | — |
 | `METRIC_BY_KEY` | const | — | — | — |
 | `METRIC_DEFS_FINGERPRINT_ID` | const | — | — | — |
+| `boundAllows` | fn | — | — | — |
 | `isScopeRestricted` | fn | — | — | — |
 | `metricCatalog` | fn | GET /api/metrics/catalog | — | — |
 | `metricDefinitions` | fn | GET /api/ai/metrics<br>GET /api/metrics/defs<br>GET /api/metrics/stale | — | — |
@@ -899,7 +908,7 @@ Prometheus 文本指标渲染 + 抓取令牌校验（ADR-0045）
 
 ## `server/lib/oms-sql.js`
 
-OMS /stats 与 AI 平台分析的 SQL 唯一来源（AE3，ADR-0044 补充 4）
+OMS /stats 与 AI 平台分析的 SQL 唯一来源（AE3，ADR-0044 补充 4；AF3 补充 5）
 
 | 导出 | 类型 | 路由 | MCP 工具 | 被模块调用 |
 |---|---|---|---|---|
@@ -948,11 +957,12 @@ OMS /stats 与 AI 平台分析的 SQL 唯一来源（AE3，ADR-0044 补充 4）
 | `getOrder` | fn | GET /api/order-center/orders/:id<br>GET /api/order-center/orders/:id/repeat<br>GET /api/order-center/orders/:id/actions<br>POST /api/order-center/orders/:id/:action | — | — |
 | `getStatement` | fn | GET /api/order-center/statements/:id<br>POST /api/order-center/statements/:id/confirm | — | — |
 | `ocAccessCheck` | fn | POST /api/order-center/orders/:id/:action | — | — |
-| `ocScope` | fn | 6 条：order-center.js×6 | — | lib/approval.js |
+| `ocScope` | fn | 6 条：order-center.js×6 | — | lib/approval.js, lib/metrics.js |
 | `overview` | fn | — | — | — |
 | `pickWarehouse` | fn | POST /api/order-center/quote | — | — |
 | `quoteItems` | fn | POST /api/order-center/quote | — | — |
 | `selfCustomerId` | fn | 6 条：order-center.js×6 | — | — |
+| `selfCustomerIdReadOnly` | fn | — | — | lib/metrics.js |
 | `settleStatement` | fn | POST /api/order-center/statements/:id/settle | — | — |
 | `statementBalance` | fn | — | — | — |
 | `transitionOrder` | fn | POST /api/order-center/orders/:id/:action | — | — |
@@ -1086,10 +1096,10 @@ OMS /stats 与 AI 平台分析的 SQL 唯一来源（AE3，ADR-0044 补充 4）
 | `MCP_RESULT_CODES` | const | — | — | — |
 | `counterSnapshot` | fn | GET /api/meta/metrics | — | — |
 | `histogramSnapshot` | fn | GET /api/meta/metrics | — | — |
-| `incCounter` | fn | — | — | lib/audit-trail.js, lib/db-ttl-cache.js, lib/login-throttle.js, lib/mcp-rate-limit.js, mcp/server.js |
+| `incCounter` | fn | — | — | lib/audit-trail.js, lib/audit-view.js, lib/db-ttl-cache.js, lib/login-throttle.js, lib/mcp-rate-limit.js, mcp/server.js |
 | `incMcpToolCall` | fn | — | — | mcp/server.js |
 | `mcpCodeTotal` | fn | — | — | — |
-| `observeHistogram` | fn | — | — | lib/audit-trail.js |
+| `observeHistogram` | fn | — | — | lib/audit-trail.js, lib/mcp-rate-limit.js |
 | `registerMcpTools` | fn | — | — | mcp/server.js |
 | `resetCounters` | fn | — | — | — |
 
@@ -1492,10 +1502,10 @@ OMS /stats 与 AI 平台分析的 SQL 唯一来源（AE3，ADR-0044 补充 4）
 | `assertSalesDocInScope` | fn | 11 条：sales.js×11 | — | lib/quote.js |
 | `assertSalesTargetInScope` | fn | 9 条：oms.js×3, sales.js×6 | — | — |
 | `cancelOrder` | fn | POST /api/sales/orders/:id/cancel | sales.cancel_order | mcp/tools.js |
-| `omsOrderScopeSql` | fn | 7 条：oms.js×7 | — | — |
+| `omsOrderScopeSql` | fn | 7 条：oms.js×7 | — | lib/metrics.js |
 | `omsPlatformScopeSql` | fn | GET /api/oms/platforms<br>POST /api/oms/stock-push<br>GET /api/oms/sync-logs<br>GET /api/oms/stats<br>GET /api/oms/qimen-stock-message/:platformId | — | — |
 | `quoteScopeSql` | fn | — | — | lib/quote.js |
-| `salesScopeSql` | fn | GET /api/sales/orders<br>GET /api/sales/deliveries<br>GET /api/sales/returns<br>GET /api/sales/stats | sales.list_orders | lib/approval.js, mcp/tools.js |
+| `salesScopeSql` | fn | GET /api/sales/orders<br>GET /api/sales/deliveries<br>GET /api/sales/returns<br>GET /api/sales/stats | sales.list_orders | lib/approval.js, lib/metrics.js, mcp/tools.js |
 
 ## `server/lib/secret-box.js`
 
@@ -1583,9 +1593,17 @@ OMS /stats 与 AI 平台分析的 SQL 唯一来源（AE3，ADR-0044 补充 4）
 | 导出 | 类型 | 路由 | MCP 工具 | 被模块调用 |
 |---|---|---|---|---|
 | `boundDealerId` | fn | GET /api/metrics<br>GET /api/metrics/values<br>GET /api/metrics/catalog | — | lib/approval.js, lib/docflow.js |
-| `boundStoreId` | fn | 39 条：metrics.js×3, pos.js×31, requisitions.js×5 | — | lib/approval.js, lib/docflow.js |
-| `isExternalSubject` | fn | GET /api/metrics<br>GET /api/metrics/values<br>GET /api/metrics/catalog | — | lib/approval.js, lib/docflow.js |
+| `boundStoreId` | fn | 39 条：metrics.js×3, pos.js×31, requisitions.js×5 | — | lib/approval.js, lib/docflow.js, lib/metrics.js |
+| `isExternalSubject` | fn | GET /api/metrics<br>GET /api/metrics/values<br>GET /api/metrics/catalog | — | lib/approval.js, lib/docflow.js, lib/metrics.js |
 | `storeBindingExempt` | fn | GET /api/metrics<br>GET /api/metrics/values<br>GET /api/metrics/catalog | — | lib/approval.js, lib/docflow.js |
+
+## `server/lib/test-pause.js`
+
+仅测试模式的"暂停点"：写标记文件并同步等放行文件（AF4，ADR-0054 补充 2）
+
+| 导出 | 类型 | 路由 | MCP 工具 | 被模块调用 |
+|---|---|---|---|---|
+| `testPause` | fn | — | — | lib/audit-view.js |
 
 ## `server/lib/transfer.js`
 
@@ -1728,6 +1746,7 @@ MCP 服务端：以标准 MCP（2026-07-28 无状态版）暴露系统业务能�
 | 导出 | 类型 | 路由 | MCP 工具 | 被模块调用 |
 |---|---|---|---|---|
 | `CACHE_DENIED` | const | — | — | — |
+| `mcpRatePurgeMs` | const | — | — | — |
 | `mcpRateStore` | const | — | — | — |
 | `purgeMcpRateBuckets` | fn | — | — | — |
 | `redactArgs` | fn | — | — | — |
@@ -1796,9 +1815,9 @@ MCP 工具入参校验（唯一实现）。
 | `inventory.stock_alert` | read | inventory.stock.view | lib/stock.js: getInvParam, listBelowSafe, stockScopeSql | inventory_stocks, product_skus, warehouses | inv_params, products |
 | `purchase.list_orders` | read | purchase.order.view, purchase.inbound, purchase.return | lib/purchase.js: purchaseOrderScopeSql | purchase_order_items, purchase_orders, suppliers | warehouses |
 | `sales.list_orders` | read | sales.order.view | lib/sales-order.js: salesScopeSql | sales_order_items, sales_orders | stores, warehouses |
-| `order.trace_document` | read | sales.order.view, purchase.order.view, inventory.stock.view | lib/docflow.js: docInScope<br>lib/stock.js: warehouseInScope<br>mcp/doc-perms.js: canViewDocType, rowInBinding | dealers, doc_types, inventory_transactions, stores, users, warehouses | ar_documents, assembly_orders, cost_adjustments, dealer_rebates, dealer_requisitions, dealer_statements, material_issues, oc_customers, oc_orders, oc_statements, oms_orders, outsourcing_materials, outsourcing_orders, outsourcing_receipts, pos_daily_closes, pos_orders, pos_shifts, production_orders, purchase_inspections, purchase_invoices, purchase_orders, purchase_payments, purchase_receipts, purchase_requisitions, purchase_returns, purchase_settlements, qc_defect_handlings, qc_inspections, qc_requests, receipts, refunds, role_permissions, sales_deliveries, sales_invoices, sales_orders, sales_quotes, sales_returns, stock_checks, stock_transfers, store_requisitions, store_shipments, user_roles, vouchers |
+| `order.trace_document` | read | sales.order.view, purchase.order.view, inventory.stock.view | lib/docflow.js: docInScope<br>lib/stock.js: warehouseInScope<br>mcp/doc-perms.js: canViewDocType, rowInBinding | dealers, doc_types, inventory_transactions, stores, users, warehouses | ar_documents, assembly_orders, cost_adjustments, dealer_rebates, dealer_requisitions, dealer_statements, material_issues, oc_customers, oc_orders, oc_statements, oms_orders, outsourcing_materials, outsourcing_orders, outsourcing_receipts, pos_daily_closes, pos_orders, pos_shifts, production_orders, purchase_inspections, purchase_invoices, purchase_orders, purchase_payments, purchase_receipts, purchase_requisitions, purchase_returns, purchase_settlements, qc_defect_handlings, qc_inspections, qc_requests, receipts, refunds, role_permissions, roles, sales_deliveries, sales_invoices, sales_orders, sales_quotes, sales_returns, stock_checks, stock_transfers, store_requisitions, store_shipments, user_roles, vouchers |
 | `report.sales_summary` | read | sales.order.view | lib/dates.js: localDate | dealers, sales_orders, stores, warehouses | — |
-| `report.dashboard_kpi` | read | — | lib/purchase.js: purchaseOrderScopeSql<br>lib/stock.js: stockScopeSql | dealers, inventory_stocks, product_skus, purchase_orders, sales_orders, stores, warehouses | role_permissions, user_roles, users |
+| `report.dashboard_kpi` | read | — | lib/purchase.js: purchaseOrderScopeSql<br>lib/stock.js: stockScopeSql | dealers, inventory_stocks, product_skus, purchase_orders, sales_orders, stores, warehouses | role_permissions, roles, user_roles, users |
 | `org.tree` | read | — | — | orgs | — |
 | `inventory.stock_in` | write | purchase.inbound | lib/dates.js: localDate<br>lib/stock.js: resolveOwnerOrg, warehouseInScope | warehouses | — |
 | `inventory.stock_out` | write | sales.outbound | lib/dates.js: localDate<br>lib/stock.js: pickBatches, resolveOwnerOrg, warehouseInScope | warehouses | inv_params, inventory_batches, inventory_stocks, product_skus, products |
@@ -1808,20 +1827,20 @@ MCP 工具入参校验（唯一实现）。
 | `pricing.update_price` | danger | master.price.edit | lib/pricing.js: logPriceChange | — | price_change_logs |
 | `sales.cancel_order` | danger | sales.order.edit | lib/sales-order.js: cancelOrder | — | credit_accounts, credit_ledger, dealers, doc_actions, doc_events, doc_states, doc_types, inv_params, inventory_batches, inventory_reservations, inventory_stocks, oc_customers, product_skus, products, sales_deliveries, sales_order_items, sales_orders, sales_returns, stores, warehouses |
 | `approval.approve` | danger | approval.instance.act | lib/approval.js: decideApproval | approval_instances, dealers, doc_types, stores, users, warehouses | approval_records, approval_steps, ar_documents, assembly_orders, brands, cost_adjustments, dealer_rebates, dealer_requisitions, dealer_statements, doc_actions, doc_events, doc_states, doc_transition_policy, material_issues, oc_addresses, oc_customers, oc_orders, oc_statements, oms_orders, orgs, outsourcing_materials, outsourcing_orders, outsourcing_receipts, permissions, pos_daily_closes, pos_orders, pos_shifts, product_skus, production_orders, products, purchase_inspections, purchase_invoices, purchase_order_items, purchase_orders, purchase_payments, purchase_receipts, purchase_requisitions, purchase_returns, purchase_settlements, qc_defect_handlings, qc_inspections, qc_requests, receipts, refunds, role_permissions, roles, sales_deliveries, sales_invoices, sales_orders, sales_quotes, sales_returns, stock_checks, stock_transfers, store_requisitions, store_shipments, suppliers, user_roles, vouchers |
-| `purchase.create_requisition` | write | purchase.req.edit | lib/purchase.js: createRequisition, resolvePurchasePrices | users | doc_no_counters, doc_no_rules, doc_types, product_skus, products, purchase_order_items, purchase_orders, purchase_requisition_items, purchase_requisitions, role_permissions, supplier_products, user_roles |
-| `purchase.create_order` | write | purchase.order.edit | lib/purchase.js: createPurchaseOrder | users | brands, doc_no_counters, doc_no_rules, doc_types, product_skus, products, purchase_order_items, purchase_orders, purchase_receipts, role_permissions, settings, suppliers, user_roles, warehouses |
-| `purchase.create_invoice` | write | purchase.invoice.edit | lib/purchase.js: createInvoice | users | doc_no_counters, doc_no_rules, doc_types, product_skus, purchase_invoice_items, purchase_invoices, purchase_order_items, purchase_orders, purchase_receipts, purchase_settlement_items, purchase_settlements, role_permissions, suppliers, user_roles |
-| `purchase.build_settlement` | write | purchase.settle.edit | lib/purchase.js: buildSettlement | users | doc_no_counters, doc_no_rules, doc_types, product_skus, purchase_invoice_items, purchase_invoices, purchase_order_items, purchase_orders, purchase_payment_items, purchase_payments, purchase_receipt_items, purchase_receipts, purchase_return_items, purchase_returns, purchase_settlement_items, purchase_settlements, role_permissions, settings, suppliers, user_roles, warehouses |
-| `purchase.create_payment` | write | purchase.payment.edit | lib/purchase.js: createPayment | users | doc_no_counters, doc_no_rules, doc_types, purchase_payment_items, purchase_payments, purchase_settlements, role_permissions, suppliers, user_roles, warehouses |
-| `purchase.create_return` | write | purchase.return | lib/purchase.js: createPurchaseReturn | purchase_returns, users | cost_periods, doc_actions, doc_events, doc_no_counters, doc_no_rules, doc_states, doc_types, inv_params, inv_txn_types, inventory_batches, inventory_stocks, inventory_transactions, product_skus, products, purchase_order_items, purchase_orders, purchase_receipt_items, purchase_receipts, purchase_return_items, role_permissions, settings, stock_cost_ledger, user_roles, warehouses |
-| `purchase.advance_requisition` | danger | — | lib/docflow.js: dispatchTransition<br>lib/purchase.js: assertNotParamOnly | dealers, purchase_invoices, purchase_orders, purchase_payments, purchase_receipts, purchase_requisitions, purchase_returns, purchase_settlements, stores, users, warehouses | doc_actions, doc_events, doc_states, doc_transition_policy, doc_types, role_permissions, user_roles |
-| `purchase.convert_requisition` | danger | — | lib/purchase.js: convertRequisitionToOrder | dealers, purchase_invoices, purchase_orders, purchase_payments, purchase_receipts, purchase_requisitions, purchase_returns, purchase_settlements, stores, users, warehouses | doc_actions, doc_events, doc_no_counters, doc_no_rules, doc_states, doc_types, product_skus, products, purchase_order_items, purchase_requisition_items, role_permissions, settings, supplier_products, user_roles |
-| `purchase.advance_order` | danger | — | lib/docflow.js: assertEdgePermitted, getDocType<br>lib/purchase.js: assertNotParamOnly, transitionPurchaseOrder | dealers, purchase_invoices, purchase_orders, purchase_payments, purchase_receipts, purchase_requisitions, purchase_returns, purchase_settlements, stores, users, warehouses | brands, doc_actions, doc_events, doc_states, doc_types, product_skus, products, purchase_order_items, role_permissions, suppliers, user_roles |
-| `purchase.receive_order` | danger | — | lib/purchase.js: receivePurchaseOrder | dealers, purchase_invoices, purchase_orders, purchase_payments, purchase_receipts, purchase_requisitions, purchase_returns, purchase_settlements, stores, users, warehouses | brands, cost_periods, doc_actions, doc_events, doc_no_counters, doc_no_rules, doc_states, doc_types, inv_params, inv_txn_types, inventory_batches, inventory_stocks, inventory_transactions, payment_release_ledger, product_skus, products, purchase_invoice_items, purchase_order_items, purchase_payment_items, purchase_receipt_items, purchase_settlement_items, receipts, role_permissions, stock_cost_ledger, supplier_products, suppliers, user_roles |
-| `purchase.advance_invoice` | danger | — | lib/docflow.js: dispatchTransition | dealers, purchase_invoices, purchase_orders, purchase_payments, purchase_receipts, purchase_requisitions, purchase_returns, purchase_settlements, stores, users, warehouses | doc_actions, doc_events, doc_states, doc_transition_policy, doc_types, role_permissions, user_roles |
-| `purchase.advance_settlement` | danger | — | lib/docflow.js: dispatchTransition | dealers, purchase_invoices, purchase_orders, purchase_payments, purchase_receipts, purchase_requisitions, purchase_returns, purchase_settlements, stores, users, warehouses | doc_actions, doc_events, doc_states, doc_transition_policy, doc_types, role_permissions, user_roles |
-| `purchase.advance_payment` | danger | — | lib/docflow.js: dispatchTransition | dealers, purchase_invoices, purchase_orders, purchase_payments, purchase_receipts, purchase_requisitions, purchase_returns, purchase_settlements, stores, users, warehouses | doc_actions, doc_events, doc_states, doc_transition_policy, doc_types, role_permissions, user_roles |
-| `doc.list_types` | read | — | mcp/doc-perms.js: canViewDocType | doc_actions, doc_states, doc_types | role_permissions, user_roles, users |
-| `doc.query` | read | — | lib/docflow.js: docScopeOf<br>mcp/doc-perms.js: assertCanViewDocType, bindingWhere | doc_types, users | ar_documents, assembly_orders, cost_adjustments, dealer_rebates, dealer_requisitions, dealer_statements, dealers, material_issues, oc_customers, oc_orders, oc_statements, oms_orders, outsourcing_materials, outsourcing_orders, outsourcing_receipts, pos_daily_closes, pos_orders, pos_shifts, production_orders, purchase_inspections, purchase_invoices, purchase_orders, purchase_payments, purchase_receipts, purchase_requisitions, purchase_returns, purchase_settlements, qc_defect_handlings, qc_inspections, qc_requests, receipts, refunds, role_permissions, sales_deliveries, sales_invoices, sales_orders, sales_quotes, sales_returns, stock_checks, stock_transfers, store_requisitions, store_shipments, stores, user_roles, vouchers, warehouses |
-| `doc.get` | read | — | lib/docflow.js: docInScope<br>mcp/doc-perms.js: assertCanViewDocType, rowInBinding | doc_events, doc_types, users | ar_documents, assembly_orders, cost_adjustments, dealer_rebates, dealer_requisitions, dealer_statements, dealers, material_issues, oc_customers, oc_orders, oc_statements, oms_orders, outsourcing_materials, outsourcing_orders, outsourcing_receipts, pos_daily_closes, pos_orders, pos_shifts, production_orders, purchase_inspections, purchase_invoices, purchase_orders, purchase_payments, purchase_receipts, purchase_requisitions, purchase_returns, purchase_settlements, qc_defect_handlings, qc_inspections, qc_requests, receipts, refunds, role_permissions, sales_deliveries, sales_invoices, sales_orders, sales_quotes, sales_returns, stock_checks, stock_transfers, store_requisitions, store_shipments, stores, user_roles, vouchers, warehouses |
-| `doc.transition` | write | — | lib/docflow.js: assertEdgePermitted, dispatchTransition | dealers, doc_actions, doc_types, stores, users, warehouses | doc_events, doc_states, doc_transition_policy, role_permissions, user_roles |
+| `purchase.create_requisition` | write | purchase.req.edit | lib/purchase.js: createRequisition, resolvePurchasePrices | users | doc_no_counters, doc_no_rules, doc_types, product_skus, products, purchase_order_items, purchase_orders, purchase_requisition_items, purchase_requisitions, role_permissions, roles, supplier_products, user_roles |
+| `purchase.create_order` | write | purchase.order.edit | lib/purchase.js: createPurchaseOrder | users | brands, doc_no_counters, doc_no_rules, doc_types, product_skus, products, purchase_order_items, purchase_orders, purchase_receipts, role_permissions, roles, settings, suppliers, user_roles, warehouses |
+| `purchase.create_invoice` | write | purchase.invoice.edit | lib/purchase.js: createInvoice | users | doc_no_counters, doc_no_rules, doc_types, product_skus, purchase_invoice_items, purchase_invoices, purchase_order_items, purchase_orders, purchase_receipts, purchase_settlement_items, purchase_settlements, role_permissions, roles, suppliers, user_roles |
+| `purchase.build_settlement` | write | purchase.settle.edit | lib/purchase.js: buildSettlement | users | doc_no_counters, doc_no_rules, doc_types, product_skus, purchase_invoice_items, purchase_invoices, purchase_order_items, purchase_orders, purchase_payment_items, purchase_payments, purchase_receipt_items, purchase_receipts, purchase_return_items, purchase_returns, purchase_settlement_items, purchase_settlements, role_permissions, roles, settings, suppliers, user_roles, warehouses |
+| `purchase.create_payment` | write | purchase.payment.edit | lib/purchase.js: createPayment | users | doc_no_counters, doc_no_rules, doc_types, purchase_payment_items, purchase_payments, purchase_settlements, role_permissions, roles, suppliers, user_roles, warehouses |
+| `purchase.create_return` | write | purchase.return | lib/purchase.js: createPurchaseReturn | purchase_returns, users | cost_periods, doc_actions, doc_events, doc_no_counters, doc_no_rules, doc_states, doc_types, inv_params, inv_txn_types, inventory_batches, inventory_stocks, inventory_transactions, product_skus, products, purchase_order_items, purchase_orders, purchase_receipt_items, purchase_receipts, purchase_return_items, role_permissions, roles, settings, stock_cost_ledger, user_roles, warehouses |
+| `purchase.advance_requisition` | danger | — | lib/docflow.js: dispatchTransition<br>lib/purchase.js: assertNotParamOnly | dealers, purchase_invoices, purchase_orders, purchase_payments, purchase_receipts, purchase_requisitions, purchase_returns, purchase_settlements, stores, users, warehouses | doc_actions, doc_events, doc_states, doc_transition_policy, doc_types, role_permissions, roles, user_roles |
+| `purchase.convert_requisition` | danger | — | lib/purchase.js: convertRequisitionToOrder | dealers, purchase_invoices, purchase_orders, purchase_payments, purchase_receipts, purchase_requisitions, purchase_returns, purchase_settlements, stores, users, warehouses | doc_actions, doc_events, doc_no_counters, doc_no_rules, doc_states, doc_types, product_skus, products, purchase_order_items, purchase_requisition_items, role_permissions, roles, settings, supplier_products, user_roles |
+| `purchase.advance_order` | danger | — | lib/docflow.js: assertEdgePermitted, getDocType<br>lib/purchase.js: assertNotParamOnly, transitionPurchaseOrder | dealers, purchase_invoices, purchase_orders, purchase_payments, purchase_receipts, purchase_requisitions, purchase_returns, purchase_settlements, stores, users, warehouses | brands, doc_actions, doc_events, doc_states, doc_types, product_skus, products, purchase_order_items, role_permissions, roles, suppliers, user_roles |
+| `purchase.receive_order` | danger | — | lib/purchase.js: receivePurchaseOrder | dealers, purchase_invoices, purchase_orders, purchase_payments, purchase_receipts, purchase_requisitions, purchase_returns, purchase_settlements, stores, users, warehouses | brands, cost_periods, doc_actions, doc_events, doc_no_counters, doc_no_rules, doc_states, doc_types, inv_params, inv_txn_types, inventory_batches, inventory_stocks, inventory_transactions, payment_release_ledger, product_skus, products, purchase_invoice_items, purchase_order_items, purchase_payment_items, purchase_receipt_items, purchase_settlement_items, receipts, role_permissions, roles, stock_cost_ledger, supplier_products, suppliers, user_roles |
+| `purchase.advance_invoice` | danger | — | lib/docflow.js: dispatchTransition | dealers, purchase_invoices, purchase_orders, purchase_payments, purchase_receipts, purchase_requisitions, purchase_returns, purchase_settlements, stores, users, warehouses | doc_actions, doc_events, doc_states, doc_transition_policy, doc_types, role_permissions, roles, user_roles |
+| `purchase.advance_settlement` | danger | — | lib/docflow.js: dispatchTransition | dealers, purchase_invoices, purchase_orders, purchase_payments, purchase_receipts, purchase_requisitions, purchase_returns, purchase_settlements, stores, users, warehouses | doc_actions, doc_events, doc_states, doc_transition_policy, doc_types, role_permissions, roles, user_roles |
+| `purchase.advance_payment` | danger | — | lib/docflow.js: dispatchTransition | dealers, purchase_invoices, purchase_orders, purchase_payments, purchase_receipts, purchase_requisitions, purchase_returns, purchase_settlements, stores, users, warehouses | doc_actions, doc_events, doc_states, doc_transition_policy, doc_types, role_permissions, roles, user_roles |
+| `doc.list_types` | read | — | mcp/doc-perms.js: canViewDocType | doc_actions, doc_states, doc_types | role_permissions, roles, user_roles, users |
+| `doc.query` | read | — | lib/docflow.js: docScopeOf<br>mcp/doc-perms.js: assertCanViewDocType, bindingWhere | doc_types, users | ar_documents, assembly_orders, cost_adjustments, dealer_rebates, dealer_requisitions, dealer_statements, dealers, material_issues, oc_customers, oc_orders, oc_statements, oms_orders, outsourcing_materials, outsourcing_orders, outsourcing_receipts, pos_daily_closes, pos_orders, pos_shifts, production_orders, purchase_inspections, purchase_invoices, purchase_orders, purchase_payments, purchase_receipts, purchase_requisitions, purchase_returns, purchase_settlements, qc_defect_handlings, qc_inspections, qc_requests, receipts, refunds, role_permissions, roles, sales_deliveries, sales_invoices, sales_orders, sales_quotes, sales_returns, stock_checks, stock_transfers, store_requisitions, store_shipments, stores, user_roles, vouchers, warehouses |
+| `doc.get` | read | — | lib/docflow.js: docInScope<br>mcp/doc-perms.js: assertCanViewDocType, rowInBinding | doc_events, doc_types, users | ar_documents, assembly_orders, cost_adjustments, dealer_rebates, dealer_requisitions, dealer_statements, dealers, material_issues, oc_customers, oc_orders, oc_statements, oms_orders, outsourcing_materials, outsourcing_orders, outsourcing_receipts, pos_daily_closes, pos_orders, pos_shifts, production_orders, purchase_inspections, purchase_invoices, purchase_orders, purchase_payments, purchase_receipts, purchase_requisitions, purchase_returns, purchase_settlements, qc_defect_handlings, qc_inspections, qc_requests, receipts, refunds, role_permissions, roles, sales_deliveries, sales_invoices, sales_orders, sales_quotes, sales_returns, stock_checks, stock_transfers, store_requisitions, store_shipments, stores, user_roles, vouchers, warehouses |
+| `doc.transition` | write | — | lib/docflow.js: assertEdgePermitted, dispatchTransition | dealers, doc_actions, doc_types, stores, users, warehouses | doc_events, doc_states, doc_transition_policy, role_permissions, roles, user_roles |

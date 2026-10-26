@@ -24,7 +24,14 @@ curl -sS -H "Authorization: Bearer $GML_METRICS_TOKEN" 'http://127.0.0.1:3000/ap
 
 **MCP 速率限制与日配额（AD9，ADR-0056）**：每个 MCP 令牌（按验签后的令牌 id 计，与 IP 无关）有两个 60 秒滑动窗口额度：`GML_MCP_TOKEN_RPM`（全部工具调用与 `resources/read`，默认 600）与 `GML_MCP_WRITE_RPM`（`level: write` 工具，默认 60；写调用同时计入总额度）。取值范围 1..1000000，非法值回退默认。超限返回 HTTP 429、`Retry-After`、业务码 `MCP_RATE_LIMITED`（在 `detail.code`；响应仍带 JSON-RPC 外壳与 `result.isError`，无顶层 `error`），并计入 `os_erp_mcp_tool_calls_total{code="MCP_RATE_LIMITED"}`；被限流的调用不写 `mcp_call_logs`。可选日配额：设置键 `mcp_token_daily_quota`（系统设置 > 运维，危险键，改动须写理由；默认 0 = 关闭），按令牌统计本地当日的调用审计行，过本地午夜归零，超出同样返回 429（`detail.reason=daily_quota`）。限流桶在进程内存（重启清零、多进程各自计数），桶数上限 10000，满了且无可清理项时拒绝新桶（fail closed）。告警见 `OsErpMcpRateLimited`。
 
+**限速读数（AE11）**：`GET /api/mcp/limits`（只读，需要 `system.mcp.manage`）返回 `rpm`、`write_rpm`、`window_seconds`、`daily_quota`、`rate_limited_total` 五个数字和字符串 `counter_scope`（恒为 `process`）；不含令牌信息。`rate_limited_total` 是本进程自启动以来的 429 累计（重启归零、多进程各自计数）。MCP 控制台 `/system/mcp` 的"人工确认与审计"标签页上方以"限速与日配额"卡展示。操作员视角的说明见操作手册第四十七章。
+
 **限速桶存到数据库（AE9）**：`GML_MCP_RATE_STORE=memory|db`（默认 `memory`，行为不变；其它取值启动即报 `MCP_RATE_STORE_INVALID`）。`db` 模式把窗口计数放在表 `mcp_rate_buckets`（迁移 073），多个进程共用同一份数据目录时**共享额度**，重启不清零；每次放行多一个短写事务（`withWriteRetry`，单进程基准见 capacity-baseline「AE9」，约 +13 µs 中位 / +38 µs p95）。过期桶由服务内的后台定时器每分钟清理（请求路径不删除）。存储写入失败时 **fail closed**：该次调用返回 429 `MCP_RATE_LIMITED`、`detail.reason=store_unavailable`，并使 `os_erp_mcp_rate_store_failures_total{reason="write_failed"}` +1（后台清理失败为 `purge_failed`，不影响放行）。告警见 `OsErpMcpRateStoreUnavailable`。注意：开启 `db` 模式后，高频 MCP 调用与业务写入争用同一个 SQLite 写锁；日配额与影子计数的口径不变。
+
+**`db` 模式的写锁等待观测与取舍（AF9，ADR-0056 补充 2）**：`os_erp_mcp_rate_store_wait_seconds`（histogram，无 label，桶 0.5 ms … 10 s）记录 `db` 模式下每次 `consume` 的墙钟耗时（等写锁 + `busy_timeout` 重试 + 事务体；放行、拒绝与存储失败都计入；`memory` 模式不观测）。告警 `OsErpMcpRateStoreWaitHigh`：5 分钟窗口 p95 > 100 ms 且调用量 > 0.1 次/秒，持续 15 分钟。本机基准（capacity-baseline「AF9」）：无争用时 p95 约 40 µs；有节奏的调用者 + 200 行/事务且不留间隙的写者时 p95 约 25 ms、p99 约 150 ms；紧循环调用者会把业务写者饿住（上界场景，生产有 `GML_MCP_TOKEN_RPM` 约束）。
+- **`synchronous` 建议**：库在 WAL 下的 `synchronous` 实测为 `1`（NORMAL，better-sqlite3 默认；应用不设置它）。WAL + `synchronous=NORMAL` 不会损坏数据库，掉电最多丢最后几次提交——对限速桶（不是账务）可以接受，但这个 pragma 是**连接级**的，同一连接上的业务写入也一起受影响，所以**不要为了限速把 `synchronous=OFF`/`NORMAL` 的取舍单独拧到更低**；若运维把它设成 `FULL`（每次提交 fsync），`db` 模式每次放行都会多一次 fsync，写锁持有时间显著变长，等待直方图会先抬头。要把 `FULL` 与 `db` 模式同时用，先在目标主机上用 `scripts/bench-mcp-rate-contention.mjs` 复测。
+- **何时选 `GML_MCP_RATE_STORE=memory`（默认）**：单进程部署（没有多个服务进程共享额度的需求）；重启后额度清零可以接受；业务写入密集且 `OsErpMcpRateStoreWaitHigh` 出现，或 `os_erp_write_retries_total` 与等待直方图同时上升；磁盘慢 / 网络盘 / `synchronous=FULL`。**何时选 `db`**：多个服务进程共用同一数据目录并要求总额度一致，或要求重启后限流不清零。切换只需改环境变量并重启，表 `mcp_rate_buckets` 留着无害（`memory` 模式不碰它）。
+- 测试专用旋钮 `GML_TEST_MCP_RATE_WINDOW_MS` / `GML_TEST_MCP_RATE_PURGE_MS` 仅在 `GML_RUNTIME_MODE=test` 下可设；生产 / 演示模式下设置任一个（非空）**服务启动即失败**（`MCP_RATE_TEST_KNOB_FORBIDDEN`），不会被静默忽略。
 
 ## 2. Prometheus 抓取配置
 
@@ -58,6 +65,7 @@ scrape_configs:
 | `os_erp_disk_free_bytes` | gauge | 数据卷可用字节；未知 -1 |
 | `os_erp_login_throttle_rejections_total{reason}` | counter | `rate_limited` / `unavailable` |
 | `os_erp_audit_strict_write_failures_total{reason}` | counter | `insert_error` / `no_row` / `outside_tx` / `mcp_call_log` |
+| `os_erp_audit_fts_fallback_total{reason}` | counter | 审计检索选了 FTS 路径、执行时索引表已被 `--disable` 删掉，本次改走 LIKE 重跑一次（`query` = 列表 / 导出起始；`export_batch` = 导出中途批次）。正常为 0；`--disable` 期间出现个位数属预期，持续增长说明有人反复开关索引 |
 | `os_erp_security_audit_unavailable_total` | counter | 因安全审计写不进去而回滚的业务变更次数 |
 | `os_erp_write_calls_total`、`_retries_total`、`_retry_exhausted_total`、`_non_retryable_errors_total` | counter | 写事务重试统计（ADR-0035） |
 | `os_erp_csp_violation_reports_total` | counter | **恒 0：未采集**（CSP 为 Report-Only 且没有报告端点，ADR-0036）；不要据此告警 |
@@ -69,11 +77,12 @@ AB10 新增：
 |---|---|---|
 | `os_erp_dashboard_cache_total{result="hit\|miss"}` | counter | 总部看板 TTL 缓存命中 / 未命中（汇总、趋势、排行、待办、库存分布；AC4 起含渠道，`/recent` 不缓存、不计数；`GML_DASHBOARD_CACHE_MS=0` 关闭缓存时不计数） |
 | `os_erp_audit_write_duration_seconds_bucket{le}` / `_sum` / `_count` | histogram | `audit_logs` INSERT 耗时（秒，含失败的尝试）；固定桶 0.0005 … 1 与 `+Inf` |
+| `os_erp_mcp_rate_store_wait_seconds_bucket{le}` / `_sum` / `_count` | histogram | AF9：`GML_MCP_RATE_STORE=db` 时每次限速 `consume` 的墙钟耗时（等写锁 + 重试 + 事务体，秒）；固定桶 0.0005 … 10 与 `+Inf`；无 label；`memory` 模式恒为 0 |
 | `os_erp_mcp_tool_calls_total{tool,code}` | counter | MCP 工具调用（以调用审计行成功落地为准；`MCP_RATE_LIMITED` 例外，被限流的调用不写审计行但照常计数），`code` 为 `ok` 或登记的错误码；未登记的工具名折成 `unknown`、未登记的码折成 `other`，基数固定 |
 
 计数器是进程内的，重启归零；用 `increase()`/`rate()`，不要直接比较绝对值。收到 `SIGTERM`（`kill`、`docker stop`、systemd 停止）时，服务在优雅退出前向标准输出写**一行** JSON 快照（`"msg":"metrics_snapshot","event":"shutdown"`，含计数器、直方图、写重试；不含路径与账号），重启前后可据此对账。`SIGKILL` 与崩溃不会有快照。
 
-## 4. 告警规则（6 条 + AB10 的 4 条 + AD9 的 1 条 + AE9 的 1 条，见 4.1）
+## 4. 告警规则（6 条 + AB10 的 4 条 + AD9 的 1 条 + AE9 的 1 条 + AF9 的 1 条，见 4.1）
 
 以上 6 条规则在 `docs/operations/alerts/os-erp.yml`（CI 的 docker job 用 `promtool check rules` 校验；Prometheus 的 `rule_files` 直接引用该文件）。
 

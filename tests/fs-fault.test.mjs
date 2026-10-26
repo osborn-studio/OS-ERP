@@ -42,7 +42,7 @@ function assertDied(r, mode, what) {
 // ---------------------------------------------------------------- 库本身
 test('fs-fault: unset env is a no-op; outside test mode any setting is refused; unknown point / bad mode refused', () => {
   const all = Object.values(FAULT_POINTS).flat()
-  assert.equal(all.length, 11)
+  assert.equal(all.length, 13)
   for (const p of all) faultPoint(p, { GML_RUNTIME_MODE: 'test' })
   assert.equal(assertFsFaultAllowed({}), null)
   for (const mode of [undefined, 'production', 'demo']) {
@@ -209,15 +209,18 @@ for (const point of FAULT_POINTS.backup) {
           assert.equal(partials.length, 0); assert.equal(failedFiles.length, 1)
           assert.equal(r.status, 1); assert.match(r.stdout + r.stderr, /BACKUP_SNAPSHOT_FAILED/)
         }
-      } else if (point === 'backup.before-sidecar') {
-        // abort ⇒ 已验证的 .db 没有清单（孤儿，可用但缺链清单）；throw ⇒ 清单失败路径删掉它
-        if (mode === 'abort') {
+      } else if (point === 'backup.before-sidecar' || point === 'backup.after-enc-rename-fsync' || point === 'backup.after-manifest-fsync') {
+        // abort ⇒ 已验证的 .db 没有清单（孤儿，可用但缺链清单；after-manifest-fsync 时清单已 fsync 落盘，备份完整）；throw ⇒ 清单失败路径删掉它
+        if (mode === 'abort' && point === 'backup.after-manifest-fsync') {
+          assert.equal(f.dbs().length, 2)
+          assertGoodBackup(f, f.dbs().find((n) => !good.includes(n)), point)
+        } else if (mode === 'abort') {
           assert.equal(f.dbs().length, 2)
           const orphan = f.dbs().find((n) => !good.includes(n))
           assert.ok(!existsSync(`${path.join(f.bdir, orphan)}.audit-manifest.json`), 'verified snapshot without its manifest')
         } else {
-          assert.equal(f.dbs().length, 1, 'MANIFEST_FAILED removes the half-finished backup')
-          assert.equal(r.status, 1); assert.match(r.stdout + r.stderr, /BACKUP_MANIFEST_FAILED/)
+          assert.equal(f.dbs().length, 1, 'MANIFEST_FAILED / FINALIZE_FAILED removes the half-finished backup')
+          assert.equal(r.status, 1); assert.match(r.stdout + r.stderr, /BACKUP_(MANIFEST|FINALIZE)_FAILED/)
         }
         assert.equal(partials.length + failedFiles.length, 0)
       } else {
@@ -307,7 +310,7 @@ for (const point of FAULT_POINTS.backup) {
         // 密文已落盘并已擦除明文：任何模式下都不应有明文临时文件或明文快照
         assert.equal(tmps.length, 0, 'plaintext temp already shredded before the sidecar step'); assert.deepEqual(plain, [])
         const sidecars = names.filter((n) => n.includes('.audit-manifest.'))
-        if (point === 'backup.before-sidecar') {
+        if (point === 'backup.before-sidecar' || point === 'backup.after-enc-rename-fsync') {
           if (mode === 'abort') {
             assert.equal(encs.length, 1, 'verified ciphertext without manifests (usable, chain manifest missing)')
             assert.equal(sidecars.filter((n) => n.startsWith(encs[0])).length, 0)
@@ -315,9 +318,13 @@ for (const point of FAULT_POINTS.backup) {
             const chk = new Database(dec, { readonly: true })
             try { assert.equal(chk.pragma('integrity_check', { simple: true }), 'ok') } finally { chk.close() }
           } else {
-            assert.equal(encs.length, 0, 'MANIFEST_FAILED removes the half-finished ciphertext')
-            assert.equal(r.status, 1); assert.match(r.stdout + r.stderr, /BACKUP_MANIFEST_FAILED/)
+            assert.equal(encs.length, 0, 'MANIFEST_FAILED / FINALIZE_FAILED removes the half-finished ciphertext')
+            assert.equal(r.status, 1); assert.match(r.stdout + r.stderr, /BACKUP_(MANIFEST|FINALIZE)_FAILED/)
           }
+        } else if (point === 'backup.after-manifest-fsync' && mode === 'throw') {
+          assert.equal(encs.length, 0, 'a failure after the manifests were written removes the backup and both manifests')
+          assert.equal(sidecars.filter((n) => !n.startsWith(good[0])).length, 0)
+          assert.equal(r.status, 1); assert.match(r.stdout + r.stderr, /BACKUP_MANIFEST_FAILED/)
         } else {
           assert.equal(encs.length, 1)
           const mj = path.join(f.bdir, `${encs[0]}.audit-manifest.json`); const me = path.join(f.bdir, `${encs[0]}.audit-manifest.enc`)
@@ -343,24 +350,99 @@ for (const point of FAULT_POINTS.backup) {
   }
 }
 
-// 多库：三库的明文快照在同一冻结窗口内**先全部生成**，之后才逐库加密。因此 abort 于第一库的任何注入点时，其余库的 0600 `.plain.tmp` 仍在盘上。
-for (const point of ['backup.before-sidecar', 'backup.after-sidecar']) {
-  test(`db-backup fault ${point} (encrypted, all three industries): abort leaves the not-yet-encrypted databases' 0600 plaintext temps (documented); throw leaves none`, { timeout: 180000 }, (t) => {
+// 多库（AF6）：三库的明文快照在同一冻结窗口内先全部生成，但随后**所有库先完成加密 + 目录 fsync + 擦除明文**，之后才进入清单阶段。
+// 因此 after-db-copy 之后的每个注入点（abort 也一样）都不留任何明文临时文件；唯一的明文窗口是 after-db-copy 本身与冻结窗口内（kill -9 / 断电）。
+for (const point of FAULT_POINTS.backup.filter((p) => p !== 'backup.after-db-copy')) {
+  test(`db-backup fault ${point} (encrypted, all three industries): abort leaves NO plaintext for any database; throw leaves none`, { timeout: 180000 }, (t) => {
     const f = backupFixture(t, ['cosmetic', 'food', 'apparel'])
     const ab = f.B([], { ...KEY, ...fault(point, 'abort') })
     assertDied(ab, 'abort', point)
-    const tmps = f.names().filter((n) => n.endsWith('.plain.tmp'))
-    assert.equal(tmps.length, 2, 'the two databases after the first one are still plaintext')
-    assert.deepEqual(plaintextSnapshots(f).sort(), tmps.sort(), 'those temps are the only plaintext')
-    for (const n of tmps) assert.equal(statSync(path.join(f.bdir, n)).mode & 0o777, 0o600)
-    assert.equal(f.names().filter((n) => n.endsWith('.db.enc')).length, 1, 'only the first database reached ciphertext')
+    assert.equal(f.names().filter((n) => n.endsWith('.plain.tmp')).length, 0, 'no plaintext temp for any of the three databases')
+    assert.deepEqual(plaintextSnapshots(f), [], 'no plaintext SQLite file in the backup directory at all')
+    assert.equal(f.names().filter((n) => n.endsWith('.db.enc')).length, 3, 'all three databases reached ciphertext before the sidecar phase')
+    for (const n of f.names().filter((x) => x.endsWith('.db.enc'))) decryptFile(path.join(f.bdir, n), null, KEY_BYTES)
+    // 清单只写到第一个库：before-sidecar 之前的点没有任何清单；其后的点只有第一个库有清单，其余两个是已验证但缺清单的孤儿
+    const manifested = f.names().filter((n) => n.endsWith('.audit-manifest.json')).length
+    assert.equal(manifested, point === 'backup.after-manifest-fsync' || point === 'backup.after-sidecar' ? 1 : 0, 'abort: manifests exist only for the first database')
     const f2 = backupFixture(t, ['cosmetic', 'food', 'apparel'])
     const th = f2.B([], { ...KEY, ...fault(point, 'throw') })
     assert.notEqual(th.status, 0)
     assert.deepEqual(plaintextSnapshots(f2), [], 'handled failure and the exit-time shredder leave no plaintext for any database')
     assert.equal(f2.names().filter((n) => n.endsWith('.plain.tmp')).length, 0)
+    if (point === 'backup.after-sidecar') {
+      // 未捕获异常：第一个库的备份 + 清单完整，其余两个只有终名密文（缺清单，documented）
+      assert.equal(f2.names().filter((n) => n.endsWith('.db.enc')).length, 3)
+      assert.equal(f2.names().filter((n) => n.endsWith('.audit-manifest.json')).length, 1)
+    } else {
+      // 已处理的失败：三个库的半成品备份与清单全部被清掉，三个都计入失败
+      assert.equal(f2.names().filter((n) => n.endsWith('.db.enc') || n.includes('.audit-manifest.')).length, 0, 'handled throw leaves no manifestless ciphertext')
+      const rep = JSON.parse(readFileSync(path.join(f2.bdir, f2.reports().at(-1)), 'utf8'))
+      assert.equal(rep.failed, 3); assert.equal(new Set(rep.results.map((x) => x.code)).size, 3); assert.ok(rep.results.every((x) => x.status === 'failed'))
+    }
   })
 }
+
+// ---------------------------------------------------------------- fsync 顺序（AF6）
+// 预加载一个只读的 fs 追踪器（只记录，不改变行为）：open/fsync/rename/rm/write 事件写入 JSONL，断言落盘顺序。
+const TRACER = `
+import fs from 'node:fs'
+import path from 'node:path'
+const out = process.env.AF6_TRACE
+const paths = new Map()
+const log = (e) => fs.appendFileSync(out, JSON.stringify(e) + '\\n')
+const wrap = (name, fn) => { const orig = fs[name]; fs[name] = function (...a) { const r = orig.apply(this, a); fn(a, r); return r } }
+wrap('openSync', (a, fd) => { if (typeof a[0] === 'string' && !a[0].startsWith(out)) { paths.set(fd, a[0]); log({ op: 'open', path: a[0], flags: a[1] ?? 'r' }) } })
+wrap('fsyncSync', (a) => log({ op: 'fsync', path: paths.get(a[0]) ?? null }))
+wrap('renameSync', (a) => log({ op: 'rename', from: a[0], to: a[1] }))
+wrap('rmSync', (a) => log({ op: 'rm', path: a[0] }))
+wrap('unlinkSync', (a) => log({ op: 'rm', path: a[0] }))
+wrap('writeFileSync', (a) => { if (typeof a[0] === 'string' && !a[0].startsWith(out)) log({ op: 'write', path: a[0] }) })
+`
+function traceRun(t, f, env) {
+  const hook = path.join(tmp(t, 'os-af6-hook-'), 'trace.mjs')
+  writeFileSync(hook, TRACER)
+  const trace = path.join(tmp(t, 'os-af6-trace-'), 'trace.jsonl')
+  const r = spawnSync(process.execPath, ['--import', pathToFileURL(hook).href, BACKUP, 'cosmetic'], { cwd: ROOT, env: envFor(f.dir, { AF6_TRACE: trace, ...env }), encoding: 'utf8', timeout: 120000 })
+  assert.equal(r.status, 0, r.stdout + r.stderr)
+  return readFileSync(trace, 'utf8').trim().split('\n').map((l) => JSON.parse(l))
+}
+const idx = (ev, pred, from = 0) => { const i = ev.findIndex((e, k) => k >= from && pred(e)); assert.ok(i >= 0, 'expected event not found'); return i }
+
+test('fsync order (encrypted): ciphertext fsync -> rename -> directory fsync BEFORE the first plaintext overwrite; manifests fsynced, then directory, all before the report; new backup dir parent fsynced', (t) => {
+  const f = backupFixture(t)
+  const ev = traceRun(t, f, KEY)
+  const enc = idx(ev, (e) => e.op === 'rename' && e.to.endsWith('.db.enc'))
+  const encPartial = ev[enc].from
+  const cSync = idx(ev, (e) => e.op === 'fsync' && e.path === encPartial)
+  assert.ok(cSync < enc, 'ciphertext partial fsynced before the rename')
+  const dirSync = idx(ev, (e) => e.op === 'fsync' && e.path === f.bdir, enc)
+  const plainOpen = idx(ev, (e) => e.op === 'open' && e.path.endsWith('.plain.tmp') && !e.path.includes('.manifest.') && e.flags === 'r+', enc)
+  assert.ok(enc < dirSync && dirSync < plainOpen, 'rename, then directory fsync, then the first plaintext overwrite (shred opens r+)')
+  const mkParent = idx(ev, (e) => e.op === 'fsync' && e.path === f.dir)
+  assert.ok(mkParent < enc, 'the freshly created backup directory entry (in its parent) is fsynced before any backup is finalised')
+  const mj = idx(ev, (e) => (e.op === 'open' || e.op === 'write') && e.path.endsWith('.audit-manifest.json'))
+  const mjSync = idx(ev, (e) => e.op === 'fsync' && e.path.endsWith('.audit-manifest.json'), mj)
+  const menc = idx(ev, (e) => e.op === 'rename' && e.to.endsWith('.audit-manifest.enc'))
+  const mencSync = idx(ev, (e) => e.op === 'fsync' && e.path === ev[menc].from)
+  assert.ok(mencSync < menc, 'encrypted manifest partial fsynced before its rename')
+  const mDir = idx(ev, (e) => e.op === 'fsync' && e.path === f.bdir, Math.max(mjSync, menc))
+  const report = idx(ev, (e) => e.op === 'write' && /backup-report-.*\.json$/.test(e.path))
+  assert.ok(mj < mjSync && mjSync < mDir && menc < mDir && mDir < report, 'manifest fsync + enc-manifest rename, then directory fsync, then the report write')
+})
+
+test('fsync order (plaintext mode): snapshot fsync -> rename -> directory fsync; manifest fsynced, then the directory, before the report', (t) => {
+  const f = backupFixture(t)
+  const ev = traceRun(t, f, {})
+  const ren = idx(ev, (e) => e.op === 'rename' && e.to.endsWith('.db') && e.from.endsWith('.db.partial'))
+  const pSync = idx(ev, (e) => e.op === 'fsync' && e.path === ev[ren].from)
+  const rDir = idx(ev, (e) => e.op === 'fsync' && e.path === f.bdir, ren)
+  assert.ok(pSync < ren && ren < rDir)
+  const mj = idx(ev, (e) => (e.op === 'open' || e.op === 'write') && e.path.endsWith('.audit-manifest.json'))
+  const mjSync = idx(ev, (e) => e.op === 'fsync' && e.path.endsWith('.audit-manifest.json'), mj)
+  const mDir = idx(ev, (e) => e.op === 'fsync' && e.path === f.bdir, mjSync)
+  const report = idx(ev, (e) => e.op === 'write' && /backup-report-.*\.json$/.test(e.path))
+  assert.ok(rDir < mj && mjSync < mDir && mDir < report)
+})
 
 // ---------------------------------------------------------------- 平台差异（macOS / Linux）
 // 脚本依赖的文件系统原语：同目录 rename 覆盖已有文件、目录 fsync、rename 到目录上的错误码、大小写折叠。

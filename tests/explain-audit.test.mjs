@@ -153,3 +153,44 @@ test('automatic PARTIAL indexes are caught as well', (t) => {
   const r = auditStatements(db, [{ id: 'p', mirrors: 'test', sql: 'SELECT a.id FROM a LEFT JOIN b ON b.a_id = a.id AND b.flag = 1' }], { threshold: 200, allow: [] })
   assert.ok(r.violations.some(v => /AUTOMATIC/.test(v.detail)), JSON.stringify(r.statements[0].plan))
 })
+
+test('AF3 an automatic index on a MATERIALIZEd derived table is not a missing real index, while the base-table scan feeding it is still judged', (t) => {
+  const db = new Database(':memory:')
+  t.after(() => db.close())
+  db.exec("CREATE TABLE dim_t (id INTEGER PRIMARY KEY, name TEXT); INSERT INTO dim_t (id, name) VALUES (1,'a'),(2,'b'),(3,'c')")
+  db.exec('CREATE TABLE fact_t (id INTEGER PRIMARY KEY, dim_id INTEGER, ts TEXT, amt REAL)')
+  const ins = db.prepare('INSERT INTO fact_t (dim_id, ts, amt) VALUES (?,?,?)')
+  db.transaction(() => { for (let i = 0; i < 400; i++) ins.run(1 + (i % 3), `2026-01-${String(1 + (i % 28)).padStart(2, '0')}`, i) })()
+  const sql = 'SELECT d.name, COALESCE(w.s,0) s FROM dim_t d LEFT JOIN (SELECT dim_id, SUM(amt) s FROM fact_t WHERE ts >= ? GROUP BY +dim_id) w ON w.dim_id = d.id ORDER BY d.id'
+  const stmt = { id: 'derived', mirrors: 'test', sql, params: ['2026-01-10'] }
+  // 没有 ts 索引：派生表内部对 fact_t 的整表 SCAN 照样违规（派生表豁免只针对"在派生表结果上自建的自动索引"）
+  const red = auditStatements(db, [stmt], { threshold: 200, allow: [] })
+  assert.ok(red.violations.some((v) => v.table === 'fact_t'), JSON.stringify(red.violations))
+  assert.ok(!red.violations.some((v) => /AUTOMATIC/.test(v.detail)), 'derived-table automatic index is not reported')
+  db.exec('CREATE INDEX idx_fact_ts ON fact_t(ts, dim_id, amt)')
+  const green = auditStatements(db, [{ ...stmt, expectIndex: 'idx_fact_ts', expectSearch: true }], { threshold: 200, allow: [] })
+  assert.deepEqual(green.violations, [], JSON.stringify(green.statements[0].plan))
+  // 变异：同样的自动索引出现在真实表上仍然违规（上面既有用例）；这里确认派生表名不会误吞真实表名
+  const real = auditStatements(db, [{ id: 'real', mirrors: 'test', sql: 'SELECT d.id FROM dim_t d LEFT JOIN fact_t f ON f.amt = d.id' }], { threshold: 200, allow: [] })
+  assert.ok(real.violations.some((v) => /AUTOMATIC/.test(v.detail) && v.table === 'fact_t'), JSON.stringify(real.statements[0].plan))
+})
+
+test('AF3 (Codex) derived-table exemption is per alias: a same-named real-table alias in another UNION branch is still flagged', (t) => {
+  const db = new Database(':memory:')
+  t.after(() => db.close())
+  db.exec('CREATE TABLE dim (id INTEGER PRIMARY KEY); CREATE TABLE source (id INTEGER PRIMARY KEY); CREATE TABLE fact (id INTEGER PRIMARY KEY, dim_id INTEGER)')
+  db.exec('INSERT INTO dim (id) VALUES (1),(2),(3)')
+  const ins = db.prepare('INSERT INTO fact (dim_id) VALUES (?)')
+  db.transaction(() => { for (let i = 0; i < 400; i++) ins.run(i % 3) })()
+  const sql = 'SELECT d.id FROM dim d LEFT JOIN (SELECT id FROM source GROUP BY id) w ON w.id = d.id UNION ALL SELECT d.id FROM dim d LEFT JOIN fact w ON w.dim_id = d.id'
+  const r = auditStatements(db, [{ id: 'collide', mirrors: 'test', sql }], { threshold: 200, allow: [] })
+  assert.ok(r.violations.some((v) => /AUTOMATIC/.test(v.detail) && v.table === 'fact'), JSON.stringify(r.statements[0].plan))
+})
+
+test('AF3 (Codex) expectSearch: an unrelated constrained SEARCH of the same index does not excuse a full scan of that index elsewhere in the statement', (t) => {
+  const db = migrated(t)
+  const sql = "SELECT SUM(main.pay_amount), (SELECT COUNT(*) FROM oms_orders probe WHERE probe.order_time >= ?) FROM oms_orders main WHERE date(main.order_time) >= ?"
+  const r = auditStatements(db, [{ id: 'probe', mirrors: 'test', sql, params: ['2026-01-01', '2026-01-01'], expectIndex: 'idx_oms_order_time', expectSearch: true }], { threshold: 1, allow: [] })
+  assert.equal(r.ok, false, JSON.stringify(r.statements[0].plan))
+  assert.ok(r.violations.some((v) => /整条索引扫描|索引全扫|不是带约束/.test(v.reason || '')), JSON.stringify(r.violations))
+})

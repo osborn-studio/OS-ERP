@@ -91,6 +91,51 @@ test('keygen writes a 0600 Ed25519 pair into a fresh directory and refuses repo 
   assert.notEqual(keygen(path.join(tempDir(t, 'os-erp-sign-x-'), 'k'), ['--bogus']).status, 0)
 })
 
+test('AF5 keygen --purpose anchor-intent writes anchor-intent.* with the same refusals; the key signs intents through GML_ANCHOR_INTENT_KEY; unknown or repeated purposes are refused', async (t) => {
+  const dir = path.join(tempDir(t, 'os-erp-intent-keys-'), 'keys')
+  const r = keygen(dir, ['--purpose', 'anchor-intent'])
+  assert.equal(r.status, 0, r.stderr)
+  assert.deepEqual(readdirSync(dir).sort(), ['anchor-intent.key.pem', 'anchor-intent.pub.pem'])
+  const priv = path.join(dir, 'anchor-intent.key.pem')
+  assert.equal(statSync(priv).mode & 0o777, 0o600)
+  assert.equal(statSync(dir).mode & 0o077, 0)
+  const out = JSON.parse(r.stdout)
+  assert.equal(out.purpose, 'anchor-intent')
+  assert.match(out.note, /GML_ANCHOR_INTENT_KEY/)
+  assert.match(out.note, /not.*GML_RELEASE_SIGN_KEY|separate/i, 'tells the operator to keep it apart from the release key')
+  assert.doesNotMatch(r.stdout, /PRIVATE/)
+  // 默认用途不变
+  const def = path.join(tempDir(t, 'os-erp-intent-def-'), 'k')
+  assert.equal(keygen(def, ['--purpose', 'release']).status, 0)
+  assert.deepEqual(readdirSync(def).sort(), ['release-sign.key.pem', 'release-sign.pub.pem'])
+  // 同样的拒绝：非空目录、仓库内、任意 git 工作树、相对路径
+  assert.notEqual(keygen(dir, ['--purpose', 'anchor-intent']).status, 0)
+  const inRepo = path.join(ROOT, 'tmp-intent-keys-should-not-exist')
+  const bad = keygen(inRepo, ['--purpose', 'anchor-intent'])
+  assert.notEqual(bad.status, 0)
+  assert.match(bad.stderr, /repository|git/i)
+  assert.ok(!existsSync(inRepo))
+  const other = tempDir(t, 'os-erp-intent-git-')
+  assert.equal(spawnSync('git', ['init', '-q'], { cwd: other }).status, 0)
+  assert.notEqual(keygen(path.join(other, 'keys'), ['--purpose', 'anchor-intent']).status, 0)
+  assert.ok(!existsSync(path.join(other, 'keys')))
+  assert.notEqual(keygen('relative/dir', ['--purpose', 'anchor-intent']).status, 0)
+  // 用途校验
+  const x = path.join(tempDir(t, 'os-erp-intent-x-'), 'k')
+  for (const extra of [['--purpose', 'constructor'], ['--purpose', 'toString'], ['--purpose', '__proto__'], ['--purpose', 'bogus'], ['--purpose'], ['--purpose', 'anchor-intent', '--purpose', 'release'], ['--purpose=']]) {
+    const bad2 = keygen(x, extra)
+    assert.notEqual(bad2.status, 0, extra.join(' '))
+    assert.ok(!existsSync(x), 'nothing created for a refused purpose')
+  }
+  assert.equal(keygen(x, ['--purpose=anchor-intent']).status, 0)
+  // 这把钥匙真的能被意图签名器加载并签 / 验
+  const { loadIntentSigner } = await import(pathToFileURL(path.join(ROOT, 'scripts/lib/anchor-intent-signer.mjs')).href)
+  const signer = loadIntentSigner({ GML_ANCHOR_INTENT_KEY: priv })
+  assert.equal(signer.asymmetricKeyType, 'ed25519')
+  // 配置在仓库内的意图私钥被加载器拒绝（与证据签名一致）
+  assert.throws(() => loadIntentSigner({ GML_ANCHOR_INTENT_KEY: path.join(ROOT, 'package.json') }), /GML_ANCHOR_INTENT_KEY/)
+})
+
 test('sign/verify round-trip; any byte change, other key, malformed signature or downgrade is rejected', async (t) => {
   const { signEvidence, verifyEvidenceSignature, publicKeyId, loadSigningKey, loadPublicKey } = await lib()
   const k1 = newKeys(t); const k2 = newKeys(t)

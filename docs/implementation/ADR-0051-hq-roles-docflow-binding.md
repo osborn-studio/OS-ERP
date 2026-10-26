@@ -120,3 +120,32 @@ ADR-0011 AB7 补充登记过一条既有的高危发现：`/api/docflow/*` 的�
 
 `gpt-6.1-sol`（只读）审阅 `batch-thirteen...HEAD`：无 high / medium / low。确认：聚合字段仅管理员出口、不含账号标识；自定义角色走同一 `accessOf`，停用角色不入列；生成器与接口共用 `buildRoleMatrix`，`--check` 只用内置角色的隔离临时库，`--db` 只读打开；`my_union` 仅含调用者自己持有的 active 角色。仍属已记载的边界：小账号数组合对管理员可推断（管理员本就可查账号）、并集与主角色口径的差异、停用角色权限点仍生效而矩阵不列。
 
+## AF10 补充 3：权限上下文只合并 active 角色（第十五批）
+
+### 决定
+
+- **单一规则**：`permContext` / `userPermissions`（`server/middleware/auth.js`）只合并 `roles.status='active'` 的角色，**主角色也不例外**：主角色停用时账号只保留其它 active 角色的权限点。判据是新增的 `splitRolesByStatus(db, userId, primary)`（user_roles 并上 users.role，再按 `roles.status` 拆 active / inactive；库里没有该角色行按停用处理）。MCP 委托、`requirePerm`、待办过滤、指标等所有 `permContext` 消费者自动跟随；按角色指派的审批步骤（`approval.canApproveStep`，原先直接查 `user_roles`）改用同一函数，停用角色不再能审。
+- **无权限账号照常登录**：账号因此一个权限都没有时仍能登录（**不新增 4xx**），所有权限门照旧逐请求 403。理由：登录失败会让管理员停用一个角色就把持有者整号锁在门外（连看提示、改密码都做不到），而权限门本来就逐请求拒绝，登录拒绝没有增加任何保护，只会丢掉提示。
+- **披露**：登录响应的 `data`、`/api/auth/me`、`/api/auth/my-scope` 带 `roles_inactive: [...]`（只含**调用者自己**被授予且已停用的角色码，按字典序）、`notice_code`（有停用角色时为 `ROLE_INACTIVE_NOTICE`，否则 `null`）、`notice_message`。它是成功响应里的提示字段，不是失败码，所以不经 `bizFail`；码常量 `ROLE_INACTIVE_NOTICE` 在 `auth.js`。
+- **矩阵同口径**：`buildRoleMatrix` 只列 active 角色，多角色并集与 `my_union` 都按 `known`（= active 角色）过滤，所以矩阵本来就是 active-only；本次把差异的另一端（`permContext`）补齐，AE2 补充里"停用角色权限点仍生效而矩阵不列"的边界不再成立。
+- **缓存审计**：权限上下文**没有任何缓存**——`permContext` 每次请求回库，令牌里只有 uid / role / auth_version。因此角色状态一改，旧令牌的下一次请求立刻按新状态判；没有需要失效的缓存。当前也没有改 `roles.status` 的 HTTP 路由（状态由库 / 种子 / 运维脚本改），所以不涉及 `auth_version` 递增；将来若加角色启停路由，不需要为本规则递增 `auth_version`，但应写审计。
+
+### 诚实边界
+
+- `roles_inactive` 只说"被授予但已停用"，不区分是主角色还是附加角色；`notice_message` 是固定中文提示，不含权限点。
+- `describeCaller` / `/auth/my-scope` 的数据范围仍按主角色字段（`users.role`、`roles.data_scope`）解释，不随主角色停用改变；本次只改功能权限轴，不改数据范围轴。
+- `agent_token_roles` 等令牌自带角色表不在本次范围（令牌权限已由所有者的 `permContext` 与令牌上限共同收窄）。
+
+### 验收
+
+- `tests/authz-followups.test.mjs`（红先）：附加角色停用 -> 权限点集合精确等于其余 active 角色的并集且受该角色独占权限的门 403；主角色停用 -> 只剩其它角色；只有一个角色且停用 -> 登录 200、`roles_inactive` / `ROLE_INACTIVE_NOTICE` 出现、`permissions=[]`、门全 403、`my-scope` 同带；管理员 / 无停用角色账号披露为空；按角色指派的审批步骤同口径；复活后立即恢复（证明无缓存）。
+- `tests/role-matrix.test.mjs`（红先）：含一个停用角色的夹具上，`permContext` 推出的查看权限点、接口列、生成器 `tenant` 列逐单据类型一致；停用角色不入列、不入任何并集。
+
+### Codex 审计（AF10）
+
+`gpt-6.1-sol`（只读，防御性审阅 `batch-fourteen...HEAD`）：
+
+- **high，已修**：旧闸 `requireRole`（只比对主角色名，例如 `POST /api/purchase/orders`）在主角色停用后仍放行，与"无权限账号所有闸都拒绝"的决定矛盾。现在 `requireRole` 对非 admin 要求主角色 `roles.status='active'`，否则 403；`requireWrite`（当前无路由使用）在账号所有角色都停用时拒写；admin 例外保留。测试覆盖（停用主角色的账号写采购订单 403、admin 不受影响、复活后恢复到不再是 403）。
+- 无 medium / low：`permContext` / `userPermissions` / `canApproveStep` 只会收窄不会放宽；没有服务端权限缓存（MCP 重放结果在返回前复核所有者的当前权限）；`roles_inactive` / `notice_code` 仅在凭据校验成功后、且只含调用者自己的角色，无跨账号披露与枚举面。
+- 记载的剩余边界：其它直接用 `req.user.role` 做业务分支（非闸）的代码（如数据范围解释、外部主体判定）仍按主角色字段，不随角色停用改变；前端暂不展示 `notice_message`。
+

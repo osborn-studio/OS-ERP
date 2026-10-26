@@ -291,17 +291,17 @@ test('parseTestSummary needs every count exactly once; resolveCiRun is honest ab
   assert.equal(empty.id, null)
   assert.match(empty.lookup.reason, /no ci\.yml run recorded/)
   // 只有失败/进行中
-  const bad = resolveCiRun(HEAD40, { gh: fakeGh(t, { stdout: JSON.stringify([{ databaseId: 9, conclusion: 'failure', status: 'completed', headSha: HEAD40, createdAt: '2026-01-02T00:00:00Z' }, { databaseId: 8, conclusion: '', status: 'in_progress', headSha: HEAD40, createdAt: '2026-01-03T00:00:00Z' }]) }).file })
+  const bad = resolveCiRun(HEAD40, { gh: fakeGh(t, { stdout: JSON.stringify([{ databaseId: 9, conclusion: 'failure', status: 'completed', headSha: HEAD40, createdAt: '2026-01-02T00:00:00Z', event: 'push', headBranch: 'main' }, { databaseId: 8, conclusion: '', status: 'in_progress', headSha: HEAD40, createdAt: '2026-01-03T00:00:00Z', event: 'push', headBranch: 'main' }]) }).file })
   assert.equal(bad.id, null)
   assert.match(bad.lookup.reason, /none with conclusion success/)
   // 乱码输出
   assert.match(resolveCiRun(HEAD40, { gh: fakeGh(t, { stdout: 'oops' }).file }).lookup.reason, /unparseable/)
   // 选最新成功，忽略其他提交与失败；并验证传给 gh 的参数
   const gh = fakeGh(t, { stdout: JSON.stringify([
-    { databaseId: 100, conclusion: 'failure', status: 'completed', headSha: HEAD40, createdAt: '2026-01-05T00:00:00Z' },
-    { databaseId: 101, conclusion: 'success', status: 'completed', headSha: HEAD40, createdAt: '2026-01-02T00:00:00Z' },
-    { databaseId: 102, conclusion: 'success', status: 'completed', headSha: HEAD40, createdAt: '2026-01-04T00:00:00Z' },
-    { databaseId: 103, conclusion: 'success', status: 'completed', headSha: 'c'.repeat(40), createdAt: '2026-01-09T00:00:00Z' }
+    { databaseId: 100, conclusion: 'failure', status: 'completed', headSha: HEAD40, createdAt: '2026-01-05T00:00:00Z', event: 'push', headBranch: 'main' },
+    { databaseId: 101, conclusion: 'success', status: 'completed', headSha: HEAD40, createdAt: '2026-01-02T00:00:00Z', event: 'push', headBranch: 'main' },
+    { databaseId: 102, conclusion: 'success', status: 'completed', headSha: HEAD40, createdAt: '2026-01-04T00:00:00Z', event: 'push', headBranch: 'main' },
+    { databaseId: 103, conclusion: 'success', status: 'completed', headSha: 'c'.repeat(40), createdAt: '2026-01-09T00:00:00Z', event: 'push', headBranch: 'main' }
   ]) })
   const ok = resolveCiRun(HEAD40, { gh: gh.file })
   assert.equal(ok.id, '102')
@@ -310,7 +310,7 @@ test('parseTestSummary needs every count exactly once; resolveCiRun is honest ab
   assert.equal(ok.lookup.head_sha, HEAD40)
   assert.equal(ok.lookup.gh_override, undefined) // 单测直接传 gh 参数，不经环境变量
   // 缺 headSha 的记录不被信任
-  assert.equal(resolveCiRun(HEAD40, { gh: fakeGh(t, { stdout: JSON.stringify([{ databaseId: 5, conclusion: 'success' }]) }).file }).id, null)
+  assert.equal(resolveCiRun(HEAD40, { gh: fakeGh(t, { stdout: JSON.stringify([{ databaseId: 5, conclusion: 'success', event: 'push', headBranch: 'main' }]) }).file }).id, null)
   const args = readFileSync(path.join(gh.dir, 'args.txt'), 'utf8')
   assert.match(args, new RegExp(`run list --commit ${HEAD40} --workflow ci\\.yml --json databaseId,conclusion`))
 })
@@ -337,7 +337,7 @@ test('--run-tests with a failing test aborts and writes no candidate', { timeout
 test('--run-tests --ci-run auto records produced results bound to the package tests tree; gh stand-in supplies the run id', { timeout: 290000 }, (t) => {
   const src = guardedSource(t, { 'zz-ok.test.mjs': "import test from 'node:test'\nimport assert from 'node:assert/strict'\ntest('stub ok', () => assert.equal(1, 1))\ntest('stub skipped', { skip: true }, () => {})\n" })
   const head = git(src, 'rev-parse', 'HEAD').stdout.trim()
-  const gh = fakeGh(t, { stdout: JSON.stringify([{ databaseId: 424242, conclusion: 'success', status: 'completed', headSha: head, createdAt: '2026-01-04T00:00:00Z' }]) })
+  const gh = fakeGh(t, { stdout: JSON.stringify([{ databaseId: 424242, conclusion: 'success', status: 'completed', headSha: head, createdAt: '2026-01-04T00:00:00Z', event: 'push', headBranch: 'main' }]) })
   const out = path.join(tempDir(t, 'os-erp-rc-out-'), 'release')
   const r = candidate(src, out, ['--run-tests', '--ci-run', 'auto'], { OS_ERP_GH: gh.file })
   assert.equal(r.status, 0, r.stderr.slice(-3000) + r.stdout.slice(-3000))
@@ -461,14 +461,18 @@ test('--ci-run=auto on hosted CI without a successful ci.yml run records the cur
   }
 })
 
-test('resolveCiRun ignores successful runs of v* tag pushes (candidate-only runs are not ci.yml check evidence)', async (t) => {
+test('AF1: resolveCiRun accepts only ci.yml pull_request/push runs; dispatch runs and legacy v* tag-push runs are not check evidence', async (t) => {
   const { resolveCiRun } = await import(pathToFileURL(path.join(ROOT, 'scripts/release-candidate.mjs')).href)
   const run = (id, event, headBranch) => ({ databaseId: id, conclusion: 'success', status: 'completed', headSha: HEAD40, createdAt: `2026-01-0${id - 200}T00:00:00Z`, event, headBranch })
-  const r = resolveCiRun(HEAD40, { gh: fakeGh(t, { stdout: JSON.stringify([run(204, 'push', 'v1.2.3'), run(203, 'push', 'main'), run(202, 'pull_request', 'feat/x')]) }).file })
+  const r = resolveCiRun(HEAD40, { gh: fakeGh(t, { stdout: JSON.stringify([run(206, 'workflow_dispatch', 'main'), run(205, 'schedule', 'main'), run(204, 'push', 'v1.2.3'), run(203, 'push', 'main'), run(202, 'pull_request', 'feat/x')]) }).file })
   assert.equal(r.id, '203')
-  const only = resolveCiRun(HEAD40, { gh: fakeGh(t, { stdout: JSON.stringify([run(204, 'push', 'v1.2.3')]) }).file })
-  assert.equal(only.id, null)
-  assert.match(only.lookup.reason, /none with conclusion success/)
+  const pr = resolveCiRun(HEAD40, { gh: fakeGh(t, { stdout: JSON.stringify([run(204, 'push', 'v1.2.3'), run(203, 'push', 'vnext'), run(202, 'pull_request', 'v2-fix')]) }).file })
+  assert.equal(pr.id, '202')
+  for (const bad of [run(204, 'push', 'v1.2.3'), run(208, 'push', 'vnext'), run(209, 'push', 'feat/x'), run(206, 'workflow_dispatch', 'main'), { databaseId: 207, conclusion: 'success', status: 'completed', headSha: HEAD40, createdAt: '2026-01-07T00:00:00Z' }]) {
+    const only = resolveCiRun(HEAD40, { gh: fakeGh(t, { stdout: JSON.stringify([bad]) }).file })
+    assert.equal(only.id, null)
+    assert.match(only.lookup.reason, /none with conclusion success on a pull_request or main push event/)
+  }
 })
 
 test('outside hosted CI a missing successful run stays null (no self record is invented locally)', { timeout: 290000 }, (t) => {

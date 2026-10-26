@@ -85,7 +85,7 @@ async function server(t) {
   return { dir, api, mcp, db, admin, login, account }
 }
 
-const KEYS = ['data_scope_effective', 'data_scope_source', 'dealer', 'explanations', 'is_admin', 'org', 'org_ids_in_scope', 'role', 'role_default_scope', 'role_name', 'store', 'user_data_scope']
+const KEYS = ['data_scope_effective', 'data_scope_source', 'dealer', 'explanations', 'is_admin', 'notice_code', 'notice_message', 'org', 'org_ids_in_scope', 'role', 'role_default_scope', 'role_name', 'roles_inactive', 'store', 'user_data_scope']
 const okData = (r) => { assert.equal(r.status, 200, JSON.stringify(r.body)); return r.body.data }
 
 test('GET /api/auth/my-scope describes only the caller', { timeout: 300000 }, async (t) => {

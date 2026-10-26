@@ -24,9 +24,9 @@ import {
   AUDIT_PAGE_MAX,
   AuditViewError,
   CSV_HEADER,
-  buildWhere,
+  auditQueryPlan,
   countCapped,
-  keywordUsesFts,
+  countSql,
   ftsState,
   exportChunks,
   orderOf,
@@ -403,15 +403,19 @@ r.get(
     const db = getDb()
     const { page, pageSize: ps } = pageParams(req)
     const pageSize = Math.min(ps, AUDIT_PAGE_MAX)
-    const { where, args } = buildWhere(filters, { fts: keywordUsesFts(db, filters.keyword) })
+    const plan = auditQueryPlan(db, filters)
     const offset = (page - 1) * pageSize
     // 总数是封顶估算，翻页深度同封顶：想看更早的行请加过滤条件或导出
     if (offset >= AUDIT_COUNT_CAP) return fail(res, `翻页超过 ${AUDIT_COUNT_CAP} 条上限，请加过滤条件缩小范围或使用导出`, 400, 400)
-    const { total, has_more } = countCapped(db, where, args)
-    const rows = db
-      .prepare(`SELECT * FROM audit_logs ${where} ORDER BY ${orderOf(filters).sql} LIMIT ? OFFSET ?`)
-      .all(...args, pageSize, offset)
-      .map(viewRow)
+    // AF4：选 FTS 与执行之间索引被删 → plan.run 换 LIKE 整体重跑一次（计数 + 行读取同一份计划）
+    const { total, has_more, rows } = plan.run(({ where, args }) => {
+      const { total, has_more } = countCapped(db, where, args)
+      const rows = db
+        .prepare(`SELECT * FROM audit_logs ${where} ORDER BY ${orderOf(filters).sql} LIMIT ? OFFSET ?`)
+        .all(...args, pageSize, offset)
+        .map(viewRow)
+      return { total, has_more, rows }
+    })
     return paged(res, {
       rows, total, page, pageSize, has_more, total_cap: AUDIT_COUNT_CAP,
       totalPages: Math.ceil(Math.min(total, AUDIT_COUNT_CAP) / pageSize) || 1,
@@ -430,8 +434,8 @@ r.get(
     const filters = filtersOf(req, res)
     if (!filters) return
     const db = getDb()
-    const { where, args } = buildWhere(filters, { fts: keywordUsesFts(db, filters.keyword) })
-    const rows = db.prepare(`SELECT COUNT(*) c FROM (SELECT 1 FROM audit_logs ${where} LIMIT ?)`).get(...args, AUDIT_EXPORT_MAX_ROWS + 1).c
+    const plan = auditQueryPlan(db, filters)
+    const rows = plan.run(({ where, args }) => db.prepare(countSql(where)).get(...args, AUDIT_EXPORT_MAX_ROWS + 1).c)
     const truncated = rows > AUDIT_EXPORT_MAX_ROWS
     // 快照上界：导出自己的审计行与导出期间的新行不进文件
     const snapshotMax = db.prepare('SELECT COALESCE(MAX(id),0) m FROM audit_logs').get().m
@@ -448,7 +452,7 @@ r.get(
     res.setHeader('X-Export-Truncated', truncated ? '1' : '0')
     res.setHeader('X-Export-Max-Rows', String(AUDIT_EXPORT_MAX_ROWS))
     res.write(`﻿${CSV_HEADER.map((h) => `"${h}"`).join(',')}\r\n`)
-    for (const chunk of exportChunks(db, { where, args, order: orderOf(filters), snapshotMax, exported })) {
+    for (const chunk of exportChunks(db, { plan, order: orderOf(filters), snapshotMax, exported })) {
       if (!res.write(chunk)) {
         await new Promise((resolve) => { res.once('drain', resolve); res.once('close', resolve) })
         if (res.destroyed) return

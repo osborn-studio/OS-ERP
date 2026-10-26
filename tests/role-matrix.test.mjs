@@ -284,3 +284,54 @@ test('AE2: custom roles, scope-override distribution (counts only), multi-role u
     }
   })
 })
+
+// ---- AF10（ADR-0051 补充 3）：矩阵并集、接口、permContext 对停用角色同一口径 ----
+test('AF10: role-matrix union, endpoint and permContext agree on a fixture with one inactive role', { timeout: 300000 }, async (t) => {
+  const f = await server(t)
+  const { db, api } = f
+  const mkRole = (code, status, perms) => {
+    db.prepare("INSERT INTO roles (code, name, is_builtin, data_scope, sort_order, status) VALUES (?, ?, 0, 'org', 900, ?)").run(code, code, status)
+    for (const p of perms) db.prepare('INSERT OR IGNORE INTO role_permissions (role_code, perm_code) VALUES (?, ?)').run(code, p)
+  }
+  mkRole('af10_on', 'active', ['sales.order.view'])
+  mkRole('af10_off', 'inactive', [DOC_VIEW_PERMS.VOUCHER.perms[0]])
+  const acct = await f.account('af10_u', 'af10_on')
+  const uid = db.prepare("SELECT id FROM users WHERE username='af10_u'").get().id
+  db.prepare('INSERT OR IGNORE INTO user_roles (user_id, role_code) VALUES (?, ?)').run(uid, 'af10_off')
+  const get = (token) => api('/api/meta/role-matrix', { token })
+
+  const admin = (await get(f.admin)).body.data
+  const mine = (await get(acct.token)).body.data
+  const tenant = JSON.parse(execFileSync(process.execPath, ['scripts/gen-role-matrix.mjs', '--json', `--db=${db.name}`], { cwd: ROOT, env: { PATH: process.env.PATH }, timeout: 120000, maxBuffer: 16 * 1024 * 1024 }).toString()).tenant
+  const { permContext, hasPerm } = await import('../server/middleware/auth.js')
+  // permContext 直接在同一个库上跑（只读判定）：停用角色的权限点不入并集
+  const ctx = permContext(db, { uid, role: 'af10_on' })
+
+  await t.test('permContext: only the active role contributes', () => {
+    assert.ok(hasPerm(ctx, 'sales.order.view'))
+    assert.ok(!hasPerm(ctx, DOC_VIEW_PERMS.VOUCHER.perms[0]), 'inactive role permission must not be effective')
+  })
+  await t.test('matrix: inactive role is not a column and not part of any union (admin, caller, generator)', () => {
+    assert.ok(!admin.roles.some((r) => r.code === 'af10_off') && admin.roles.some((r) => r.code === 'af10_on'))
+    assert.ok(!admin.multi_role.combos.some((c) => c.roles.includes('af10_off')), 'inactive role in no combo')
+    assert.equal(mine.my_union, null, 'one active role left: no multi-role union for the caller')
+    assert.ok(!JSON.stringify(mine).includes('af10_off'))
+    assert.deepEqual(tenant.roles, admin.roles)
+    assert.deepEqual(tenant.cells, admin.cells)
+    assert.deepEqual(tenant.multi_role, admin.multi_role)
+  })
+  await t.test('all three agree per doc type: access derived from permContext == endpoint column == generator column', () => {
+    for (const d of admin.doc_types) {
+      const need = DOC_VIEW_PERMS[d.code].perms
+      const viaCtx = need.some((p) => hasPerm(ctx, p))
+      const cell = mine.cells.af10_on[d.code]
+      assert.equal(viaCtx, cell !== 'none', `${d.code}: permContext=${viaCtx} endpoint=${cell}`)
+      assert.equal(tenant.cells.af10_on[d.code], cell, d.code)
+    }
+    assert.equal(mine.cells.af10_on.VOUCHER, 'none')
+  })
+  await t.test('the caller\'s own inactive roles are reported on the account, not in the matrix payload', async () => {
+    const me = (await api('/api/auth/me', { token: acct.token })).body.data
+    assert.deepEqual(me.roles_inactive, ['af10_off'])
+  })
+})

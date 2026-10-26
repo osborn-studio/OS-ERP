@@ -74,6 +74,9 @@ const DECLARED = [
   'server/lib/backup-crypto.js',
   'scripts/check-mcp-coverage.mjs',
   'scripts/gen-sbom.mjs',
+  'scripts/sbom-diff.mjs',
+  'scripts/lib/sbom-diff.mjs',
+  'tests/sbom-diff.test.mjs',
   'scripts/release-candidate.mjs',
   'scripts/evidence-log-ingest.mjs',
   'tests/evidence-log-ingest.test.mjs',
@@ -87,6 +90,7 @@ const DECLARED = [
   'scripts/check-audit-allowlist.mjs',
   'tests/audit-allowlist.test.mjs',
   'tests/dependency-review-policy.test.mjs',
+  'tests/release-candidate-policy.test.mjs',
   'scripts/db-backup.mjs',
   // 文件系统写入序列的故障注入点（AD6）
   'scripts/lib/fs-fault.mjs',

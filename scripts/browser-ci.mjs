@@ -24,7 +24,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url))
-const SCENARIOS = ['runtime-capabilities', 'session', 'user-editor', 'funds-review', 'scope-notice', 'my-scope', 'audit-logs', 'inventory-paging', 'approval-template-perm', 'pos-settle-perm', 'audit-fts-hint', 'dashboard-cache-stamp', 'role-matrix', 'audit-fts-state', 'mcp-token-limits', 'metrics-hidden-note']
+const SCENARIOS = ['runtime-capabilities', 'session', 'user-editor', 'funds-review', 'scope-notice', 'my-scope', 'audit-logs', 'inventory-paging', 'approval-template-perm', 'pos-settle-perm', 'audit-fts-hint', 'dashboard-cache-stamp', 'role-matrix', 'audit-fts-state', 'mcp-token-limits', 'metrics-hidden-note', 'metrics-scoped-marker', 'mcp-token-429']
 const SCENARIO_TIMEOUT_MS = 5 * 60 * 1000
 const redact = (text) => text.replace(/[A-Za-z0-9_.-]{32,}/g, '[REDACTED]')
 const tail = (text, n) => text.split('\n').slice(-n).join('\n')

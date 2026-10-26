@@ -82,7 +82,7 @@ import imRoutes from './routes/im.js'
 // 这里显式引入一次，保证任何流转发生前闸门一定已挂上 ——
 // 只靠路由挂载的话，加载顺序一变闸门就会静默失效。
 import './lib/approval.js'
-import mcpRoutes, { purgeMcpRateBuckets, mcpRateStore } from './mcp/server.js'
+import mcpRoutes, { purgeMcpRateBuckets, mcpRateStore, mcpRatePurgeMs } from './mcp/server.js'
 import mcpAdminRoutes from './mcp/admin.js'
 import { buildOpenApi } from './openapi.js'
 import { installCapabilityGates, runtimeCapabilities } from './capabilities.js'
@@ -319,7 +319,7 @@ if (mcpRateStore === 'db') {
         logger.error('mcp rate purge tick failed', { component: 'mcp', industry: code, err_message: e?.message })
       }
     }
-  }, 60_000)
+  }, mcpRatePurgeMs)
   purgeTimer.unref()
 }
 

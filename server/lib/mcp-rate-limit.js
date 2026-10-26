@@ -16,6 +16,8 @@
  *   · 滑动窗口用"当前窗口 + 上一窗口按比例折算"的计数器近似：每个桶 O(1) 内存，窗口边界处不会出现 2 倍突发。
  *   · 日配额读库失败 ⇒ fail closed（拒绝并标 `unavailable`），不会因为库出问题而静默放开。
  * 【不持久（memory 模式，默认）】速率桶在进程内存，重启清零（限流不是账务；日配额读审计表，是持久的）。多进程部署各自计数。
+ * 【db 模式观测（AF9）】`os_erp_mcp_rate_store_wait_seconds` 直方图记录 db 模式每次 `consume` 的 `withWriteRetry` 墙钟耗时（含等锁与退避重试）；memory 模式不观测。
+ *   测试专用旋钮 `GML_TEST_MCP_RATE_WINDOW_MS` / `GML_TEST_MCP_RATE_PURGE_MS` 只在 `GML_RUNTIME_MODE=test` 生效，其它模式设置即启动失败。
  * 【db 模式（AE9，`GML_MCP_RATE_STORE=db`）】桶落在表 `mcp_rate_buckets`（迁移 073），多进程共享、重启不清零：
  *   · 一次放行 = 一个 `withWriteRetry` 的 IMMEDIATE 事务：先读当前 / 上一窗口计数、做与内存模式**同一个**滑动窗口判定，
  *     通过才 `INSERT … ON CONFLICT DO UPDATE SET count=count+1`（总额度与写额度同事务，要么都记要么都不记）。写锁串行化各进程，所以不会超发。
@@ -29,15 +31,14 @@
  */
 import { createBucketStore, envInt } from './metrics-throttle.js'
 import { withWriteRetry } from './tx.js'
-import { incCounter } from './process-counters.js'
+import { incCounter, observeHistogram } from './process-counters.js'
 import { logger } from './logger.js'
 import { SETTING_RULES, normalizeSettingValue, castSettingValue, readSetting } from './settings.js'
 
 export const DEFAULT_MCP_RATE = Object.freeze({ rpm: 600, writeRpm: 60, windowMs: 60000, maxBuckets: 10000 })
 const MAX_RATE = 1_000_000
 
-function makeWindow(limit, now, maxBuckets) {
-  const W = DEFAULT_MCP_RATE.windowMs
+function makeWindow(limit, now, maxBuckets, W = DEFAULT_MCP_RATE.windowMs) {
   const store = createBucketStore({ maxBuckets, now })
   const roll = (b, t) => {
     const ws = t - (t % W)
@@ -64,6 +65,30 @@ function makeWindow(limit, now, maxBuckets) {
     record(b) { b.cur += 1 },
     retryAfter() { const t = now(); return Math.min(60, Math.max(1, Math.ceil((W - (t % W)) / 1000))) }
   }
+}
+
+/**
+ * AF9：仅测试用的旋钮（ADR-0056 补充 2）。`GML_TEST_MCP_RATE_WINDOW_MS`（500..60000）缩短滑动窗口，`GML_TEST_MCP_RATE_PURGE_MS`（100..3600000）缩短清理周期，
+ * 让"真实定时器清理"能在几秒内被活的服务进程观测到。只在 `GML_RUNTIME_MODE === 'test'`（精确匹配）时生效；
+ * 其它模式（含缺省 = production）只要设置了非空值就**启动即抛** `MCP_RATE_TEST_KNOB_FORBIDDEN`——不静默忽略，免得有人误以为生产里缩短了窗口。
+ * 空串视为未设置。取值非法抛 `MCP_RATE_TEST_KNOB_INVALID`（不回退默认，测试里拼错应当立刻暴露）。
+ */
+const TEST_KNOBS = {
+  GML_TEST_MCP_RATE_WINDOW_MS: { min: 500, max: DEFAULT_MCP_RATE.windowMs },
+  GML_TEST_MCP_RATE_PURGE_MS: { min: 100, max: 3_600_000 }
+}
+function testKnob(env, name, fallback) {
+  const raw = env[name]
+  if (raw === undefined || raw === '') return fallback
+  if (env.GML_RUNTIME_MODE !== 'test') {
+    throw Object.assign(new Error(`${name} 只允许在 GML_RUNTIME_MODE=test 下设置（生产/演示模式拒绝）`), { code: 'MCP_RATE_TEST_KNOB_FORBIDDEN' })
+  }
+  const { min, max } = TEST_KNOBS[name]
+  const n = /^[0-9]{1,9}$/.test(String(raw)) ? Number(raw) : NaN
+  if (!Number.isInteger(n) || n < min || n > max) {
+    throw Object.assign(new Error(`${name} 必须是 ${min}..${max} 的整数毫秒，收到「${String(raw).slice(0, 32)}」`), { code: 'MCP_RATE_TEST_KNOB_INVALID' })
+  }
+  return n
 }
 
 const STORE_MODES = ['memory', 'db']
@@ -101,15 +126,16 @@ export function mcpRatePolicy(env = process.env, override = {}) {
     store: override.store ?? rateStoreFromEnv(env),
     rpm: override.rpm ?? envInt(env.GML_MCP_TOKEN_RPM, 1, MAX_RATE, DEFAULT_MCP_RATE.rpm),
     writeRpm: override.writeRpm ?? envInt(env.GML_MCP_WRITE_RPM, 1, MAX_RATE, DEFAULT_MCP_RATE.writeRpm),
-    windowMs: DEFAULT_MCP_RATE.windowMs,
+    windowMs: testKnob(env, 'GML_TEST_MCP_RATE_WINDOW_MS', DEFAULT_MCP_RATE.windowMs),
+    purgeMs: testKnob(env, 'GML_TEST_MCP_RATE_PURGE_MS', 60_000),
     maxBuckets: override.maxBuckets ?? DEFAULT_MCP_RATE.maxBuckets
   }
 }
 
 export function createMcpRateLimiter({ env = process.env, now = Date.now, ...override } = {}) {
   const policy = mcpRatePolicy(env, override)
-  const all = makeWindow(policy.rpm, now, policy.maxBuckets)
-  const writes = makeWindow(policy.writeRpm, now, policy.maxBuckets)
+  const all = makeWindow(policy.rpm, now, policy.maxBuckets, policy.windowMs)
+  const writes = makeWindow(policy.writeRpm, now, policy.maxBuckets, policy.windowMs)
   const shadow = createBucketStore({ maxBuckets: policy.maxBuckets, now })
   const deny = (reason, win) => ({ allowed: false, reason, retryAfter: win.retryAfter() })
   const W = policy.windowMs
@@ -117,6 +143,7 @@ export function createMcpRateLimiter({ env = process.env, now = Date.now, ...ove
   /** db 模式的一次额度申请（见文件头）。→ 与内存模式同形；存储失败 ⇒ reason 'store_unavailable' */
   function consumeDb(tokenId, level, scope, db) {
     const key = `${scope}|${tokenId}`
+    const t0 = process.hrtime.bigint()
     try {
       if (!db || typeof db.prepare !== 'function') throw new Error('no database handle')
       const s = dbStatements(db)
@@ -142,6 +169,9 @@ export function createMcpRateLimiter({ env = process.env, now = Date.now, ...ove
       incCounter('mcp_rate_store_failures_total', 'write_failed')
       logger.error('mcp rate store write failed; refusing call (fail closed)', { component: 'mcp', outcome: 'store_unavailable', err_code: e?.code ?? '-', err_message: e?.message })
       return { allowed: false, reason: 'store_unavailable', retryAfter: 5 }
+    } finally {
+      // AF9：整个 withWriteRetry（等写锁 + 退避重试 + 事务体）的墙钟耗时；成功、拒绝、失败都计入。无 label ⇒ 基数固定。
+      observeHistogram('mcp_rate_store_wait_seconds', Number(process.hrtime.bigint() - t0) / 1e9)
     }
   }
 
@@ -214,6 +244,33 @@ export function createMcpRateLimiter({ env = process.env, now = Date.now, ...ove
   }
 }
 
+/**
+ * db 模式下"近期触顶"统计（AF11，管理端只读展示用）。→ Map<令牌 id, 0..2>。
+ * 桶表只记**已放行**的调用（被拒绝的调用只读不写），所以拿不到 429 的精确次数；这里数的是「当前 + 上一窗口」里该令牌
+ * 总额度（kind='all'）或写额度（kind='write'）已达上限的**窗口数**——触顶的窗口里再来的调用必然是 429。同一窗口两类都触顶只算 1。
+ * memory 模式、表缺失、读失败 ⇒ 空 Map（展示用，永不抛、不影响限流）。
+ */
+export function recentLimitedByToken(db, { scope = '', policy = mcpRatePolicy(), now = Date.now } = {}) {
+  const out = new Map()
+  if (policy.store !== 'db') return out
+  try {
+    const W = policy.windowMs
+    const t = now()
+    const ws = t - (t % W)
+    const rows = db.prepare('SELECT token_key, window_start AS ws, kind, count FROM mcp_rate_buckets WHERE window_start IN (?,?)').all(ws, ws - W)
+    const hit = new Set()
+    for (const r of rows) {
+      if (!r.token_key.startsWith(`${scope}|`)) continue
+      const id = Number(r.token_key.slice(scope.length + 1))
+      if (!Number.isSafeInteger(id) || id <= 0 || r.token_key !== `${scope}|${id}`) continue
+      const limit = r.kind === 'write' ? policy.writeRpm : policy.rpm
+      if (r.count >= limit) hit.add(`${id}|${r.ws}`)
+    }
+    for (const k of hit) { const id = Number(k.split('|')[0]); out.set(id, (out.get(id) ?? 0) + 1) }
+  } catch { /* 展示用统计，读失败按空处理 */ }
+  return out
+}
+
 /** 已配置的日配额（0 = 关闭）。只读展示用：读失败按 0 显示不影响限流（限流自己走 `dailyQuotaState`，读失败 fail closed）。 */
 export function dailyQuotaConfigured(db) {
   const n = Number(readSetting(db, 'mcp_token_daily_quota'))
@@ -251,4 +308,4 @@ export function dailyQuotaState(db, tokenId, { now = () => new Date() } = {}) {
   }
 }
 
-export default { createMcpRateLimiter, rateStoreFromEnv, dailyQuotaState, DEFAULT_MCP_RATE, mcpRatePolicy, dailyQuotaConfigured }
+export default { createMcpRateLimiter, recentLimitedByToken, rateStoreFromEnv, dailyQuotaState, DEFAULT_MCP_RATE, mcpRatePolicy, dailyQuotaConfigured }

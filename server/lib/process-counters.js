@@ -31,6 +31,10 @@ export const COUNTER_DEFS = Object.freeze({
     help: 'MCP rate-limit db store failures by reason (write_failed: a call was refused fail-closed with store_unavailable; purge_failed: background purge of expired buckets failed). Only moves when GML_MCP_RATE_STORE=db.',
     labelName: 'reason', values: ['write_failed', 'purge_failed']
   },
+  audit_fts_fallback_total: {
+    help: 'Audit list/export queries that planned the FTS path but hit "no such table: audit_logs_fts" (the index was dropped by --disable between planning and execution) and were re-run once via LIKE, by reason (query: list or export start; export_batch: mid-export batch).',
+    labelName: 'reason', values: ['query', 'export_batch']
+  },
   security_audit_unavailable_total: {
     help: 'Times a business change was refused with 503 SECURITY_AUDIT_UNAVAILABLE because its security audit row could not be written.',
     labelName: null, values: []
@@ -83,6 +87,10 @@ export const HISTOGRAM_DEFS = Object.freeze({
   audit_write_duration_seconds: {
     help: 'Duration of audit_logs INSERT statements in seconds (includes failed attempts).',
     buckets: [0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1]
+  },
+  mcp_rate_store_wait_seconds: {
+    help: 'Wall-clock seconds of one MCP rate-limit db consume (write-lock wait + busy retries + the short transaction), including refused and failed calls. Only observed when GML_MCP_RATE_STORE=db.',
+    buckets: [0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10]
   }
 })
 const hists = new Map()

@@ -118,16 +118,19 @@ the log only once, re-signing a commit that is already logged (for example by ho
 
 ### Hosted CI candidate (AD10)
 
-The `candidate` job in `.github/workflows/ci.yml` builds a candidate on a GitHub-hosted runner. It runs only for
-`workflow_dispatch` and for pushes of tags matching `v*` (never for pull requests or pushes to `main`), at most one at a time,
+The `candidate` job in `.github/workflows/release-candidate.yml` (AF1: moved out of `ci.yml`) builds a candidate on a GitHub-hosted runner. It runs only for
+`workflow_dispatch` and for pushes of tags matching `v*` (never for pull requests or branch pushes; the workflow has no other trigger), at most one at a time (own concurrency group `candidate-<repo>`, read-only token, no secrets),
 within 90 minutes. It runs `release-candidate --run-tests --ci-run=auto --log=<runner temp> --output=<runner temp>`, then
 `verify-release --evidence --artifact --log` on the extracted package, and uploads exactly three files as a workflow artifact
 kept for 14 days: `RC-<version>-<shortsha>.zip`, `EVIDENCE.json` and `evidence-log-line.jsonl` (the log line this build would
 append). It creates no tag, no GitHub Release, and does not commit the log line back.
 
-On a `v*` tag push the other `ci.yml` jobs (`checks`, `docker`, `browser`, `regression`) are skipped (`if: !startsWith(github.ref, 'refs/tags/')`);
-the candidate job runs the focused suite and the guards itself. Pull requests (`refs/pull/N/merge`) and pushes to `main` are unaffected,
-so the checks that branch protection requires still run for them; tags are not PR heads. Caveat: GitHub treats a skipped job as a passing status context for the same commit SHA, so **tag only commits that have already passed `ci.yml` on `main`**; never tag an unreviewed PR head, or the tag run's skipped contexts could stand in for checks that did not run on that SHA. `--ci-run=auto` excludes `v*` tag-push runs when looking up a successful `ci.yml` run for the same reason. Because no successful `ci.yml` run
+`ci.yml` has no tag trigger and no ref-based job skips (AF1; before AF1 a tag push ran `ci.yml` with its four main jobs skipped, and GitHub treats a
+skipped job as a passing status context for the SHA, which could stand in for checks that never ran). A `v*` tag push now starts only
+`release-candidate.yml`; pull requests and pushes to `main` run `ci.yml` exactly as before, so the checks branch protection requires keep
+their normal meaning. Still tag only commits that have already passed `ci.yml` on `main`. `--ci-run=auto` accepts only a `ci.yml` run
+with `event` `pull_request`, or `push` on `main` (the only branch `ci.yml` pushes run on), `conclusion: success` and `headSha` equal to the commit; `workflow_dispatch` runs,
+legacy `v*` tag-push runs from before AF1 and runs for other commits are ignored. Because no successful `ci.yml` run
 exists for a tagged commit in that case, `--ci-run=auto` falls back (hosted CI only, `GITHUB_ACTIONS=true` and a numeric `GITHUB_RUN_ID`
 for this commit) to recording the current run with `ci_lookup.ci_run_origin: "hosted-ci-self"` and a `SELF-REFERENTIAL` note. That run
 was still in progress when recorded: it is a pointer to the build itself, **not** evidence that the `ci.yml` checks passed, carries no
@@ -149,11 +152,14 @@ not prove the evidence true: check the line against the run that produced it.
 **托管候选未签名，正式发行须持钥者在受控机器重签** (hosted candidates are unsigned: `built_by: hosted-ci`, `signature: null`;
 the job never holds `GML_RELEASE_SIGN_KEY`). The artifact is a development candidate, not release or production acceptance.
 
-**Status (AE8, 2026-10-24): not run by AE8; no run is recorded.** `main` has no `candidate` job in `.github/workflows/ci.yml` (only `checks`, `docker`
-and `regression`); the job exists only on unmerged branches (PRs #4 to #8 are still open). `workflow_dispatch` uses the
-workflow file on the ref, so the job cannot be dispatched on `main` until it is merged; nothing was dispatched, there is no run
-id, and no hosted-candidate result is recorded here. After the merge, dispatch it once (`gh workflow run ci.yml --ref main`),
+**Status (AF1, 2026-10-24): not run; no run is recorded.** The workflow file exists only on unmerged branches, and `workflow_dispatch` uses the
+workflow file on the ref, so it cannot be dispatched on `main` until merged; nothing was dispatched, there is no run
+id, and no hosted-candidate result is recorded here. After the merge, dispatch it once (`gh workflow run release-candidate.yml --ref main`),
 poll with `gh run view <id>`, and record run id, conclusion, duration and the three uploaded files; the first run is unverified.
+
+**Status (AF8, 2026-10-24): still not run; no run is recorded.** `main` (commit `a524d3b`) still has only `checks`, `docker` and
+`regression` in `ci.yml` (no `candidate`, `capacity-smoke`, `dependency-review` or `audit-no-fts5`) and no `nightly-capacity.yml`.
+PRs #1 to #3 are merged; #4 to #9 are open and unmerged; `gh` cannot find a PR #10. Dispatched 0 times; no run id exists.
 
 ## RELEASE-NOTES.md
 
@@ -168,3 +174,39 @@ under a header that repeats the commit and that this is a candidate.
 - Review `RELEASE-NOTES.md`, the dependency alerts and the open items in the backlog.
 - Explicit owner authorization to tag, publish a GitHub release, or deploy. None of that is done by this script.
 - Transfer the zip with its `.sha256` and re-check the hash on the receiving side.
+
+## Supply-chain self-checks (AF7)
+
+Two steps of the hosted candidate job (after the self-verify step, before the upload) check the dependency supply chain. Both are
+read-only toward the repository and need network access.
+
+- **`npm audit signatures --registry=https://registry.npmjs.org`** verifies the registry signatures (and provenance attestations
+  where published) of the installed packages. A verification failure **fails the job**. The registry is given on the command line
+  because `.npmrc` points installs at `registry.npmmirror.com`, which has no audit or signature endpoint. Consequence, stated
+  honestly: with that override, a local run audited 42 packages against 36 npmjs.org lockfile entries (341 entries resolve from
+  npmmirror), so the npmmirror-resolved entries are probably **not** covered, but npm's selection logic is not a guarantee and the
+  check verifies registry metadata by name and version; it does not bind the installed tarball to the signed integrity. `audit-signatures.txt` therefore ends with the lockfile entry count per registry
+  host next to npm's own "audited N packages" summary. A local run on 2026-10-24 reported 42 packages with verified signatures and
+  13 with verified attestations (lockfile: 36 npmjs.org entries, 341 npmmirror.com entries). Moving the remaining entries to the
+  npmjs registry is a separate decision (it changes `package-lock.json` and install reachability).
+- **SBOM diff vs the previous candidate artifact.** The step looks up the newest earlier successful run of the candidate workflow
+  on `main` or on a `v*` tag with event `push` or `workflow_dispatch` (pull-request runs and runs from other branches are ignored, the current run is excluded), downloads its
+  `os-erp-candidate-*` artifact with `gh run download`, and diffs its SBOM (`sbom.cdx.json`, or for artifacts from before AF7 the single
+  `<package>/release/sbom.cdx.json` entry of the zip) against this package's SBOM with `scripts/sbom-diff.mjs`. If no such run or
+  artifact exists (14-day retention), the output says **first candidate**. The downloaded content is treated as data only: it is
+  parsed as JSON with a 32 MB cap, never executed, and the table is sanitised against control characters. A malformed previous SBOM is
+  reported in `sbom-diff.txt` and as a warning but does not fail the build. The uploaded artifact additionally carries
+  `sbom.cdx.json`, `sbom-diff.json`, `sbom-diff.txt` and `audit-signatures.txt`.
+
+Manual use, anywhere:
+
+```
+node scripts/verify-release.mjs --sbom-diff <previous.cdx.json>          # run in the extracted package; prints the table and a sbom-diff-json line
+node scripts/sbom-diff.mjs <previous.cdx.json> [<current.cdx.json>] [--json-out=<file>] [--table-out=<file>]
+```
+
+Both use `scripts/lib/sbom-diff.mjs`. Components are keyed by `group/name`; a name only on one side is added/removed, a different
+version set is a `version` change, and the same `name@version` with a different integrity hash on both sides is an `integrity`
+change (the one to look at first). Exit code is 0 with or without differences; it is non-zero only when the previous (or current)
+SBOM is missing, unreadable or not a structurally valid CycloneDX 1.x document (or, for `verify-release`, when any other check fails).
+This is an informational comparison, not a vulnerability or licence analysis, and the hosted steps have not run on GitHub yet.

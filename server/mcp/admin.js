@@ -15,14 +15,14 @@
 
 // Agent Token 管理（管理员）：签发 / 列表 / 吊销 / 调用审计
 import { Router } from 'express'
-import { getDb } from '../db/index.js'
+import { getDb, getCurrentIndustry } from '../db/index.js'
 import { ok, fail, wrap } from '../lib/http.js'
 import { requireAuth, requirePerm } from '../middleware/auth.js'
 import { createToken, revokeToken, SCOPE_LABEL, listTokensWithStatus, getTokenWithStatus, sweepOwnerRevokedTokens } from './tokens.js'
 import { TOOLS } from './tools.js'
 // 「AI 能力目录」的唯一口径（单据矩阵 + 工具清单 + 安全边界都由它算，页面不自己编）
 import { buildMcpCatalog } from './catalog.js'
-import { mcpRatePolicy, dailyQuotaConfigured } from '../lib/mcp-rate-limit.js'
+import { mcpRatePolicy, dailyQuotaConfigured, recentLimitedByToken } from '../lib/mcp-rate-limit.js'
 import { mcpCodeTotal } from '../lib/process-counters.js'
 
 const r = Router()
@@ -74,6 +74,37 @@ r.get(
       rate_limited_total: mcpCodeTotal('MCP_RATE_LIMITED'),
       counter_scope: 'process'
     })
+  })
+)
+
+/**
+ * 每令牌近期限流（AF11，只读，仅 system.mcp.manage）：`db` 模式下按桶表算出每张令牌在「当前 + 上一窗口」里触顶的窗口数
+ * （`rate_limited_recent`，0..2；桶表只记放行的调用，所以这是触顶窗口数而不是 429 精确次数）。`memory` 模式返回空列表。
+ * 只含令牌 id / 名称与计数，不含前缀、哈希、明文；与 `/limits` 同权限，因为逐令牌的触顶情况会暴露调用方的活动节奏。
+ */
+r.get(
+  '/limits/tokens',
+  requireAuth,
+  requirePerm('system.mcp.manage'),
+  wrap((_req, res) => {
+    const p = mcpRatePolicy()
+    const base = { store: p.store, window_seconds: Math.round(p.windowMs / 1000) }
+    if (p.store !== 'db') return ok(res, { ...base, truncated: false, tokens: [] })
+    const db = getDb()
+    const hits = recentLimitedByToken(db, { scope: getCurrentIndustry() ?? '', policy: p })
+    const CAP = 500
+    // 先按资格筛再限量：触顶的令牌（含已吊销的）一定在内，其余取在用令牌；超出上限时 truncated=true，页面据此提示
+    const hitIds = [...hits.keys()]
+    const hitRows = hitIds.length ? db.prepare(`SELECT id, name FROM agent_tokens WHERE id IN (${hitIds.map(() => '?').join(',')})`).all(...hitIds) : []
+    const active = db.prepare("SELECT id, name FROM agent_tokens WHERE status='active' ORDER BY id LIMIT ?").all(CAP + 1)
+    const seen = new Set(hitRows.map((t) => t.id))
+    const merged = [...hitRows, ...active.filter((t) => !seen.has(t.id))]
+    const truncated = merged.length > CAP
+    const tokens = merged
+      .slice(0, CAP)
+      .map((t) => ({ id: t.id, name: t.name, rate_limited_recent: hits.get(t.id) ?? 0 }))
+      .sort((a, b) => b.rate_limited_recent - a.rate_limited_recent || a.id - b.id)
+    return ok(res, { ...base, truncated, tokens })
   })
 )
 

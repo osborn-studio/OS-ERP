@@ -3,7 +3,7 @@
 <!-- generated -->
 <!-- 由 `node scripts/gen-codemap.mjs` 生成，勿手改；CI 校验不漂移 -->
 
-共 201 张表、69 个迁移。“建于”= schema.sql / 迁移编号 / 运行时建表的文件；“改于”= ALTER、addColumn（无后缀）、建索引（·idx）、触发器（·trg）、DROP（·drop）所在迁移编号。“触达”= 该文件的 SQL 文本里出现这张表（server/db/ 下的种子与启动文件不计）。
+共 201 张表、70 个迁移。“建于”= schema.sql / 迁移编号 / 运行时建表的文件；“改于”= ALTER、addColumn（无后缀）、建索引（·idx）、触发器（·trg）、DROP（·drop）所在迁移编号。“触达”= 该文件的 SQL 文本里出现这张表（server/db/ 下的种子与启动文件不计）。
 
 ## 扫描边界（必读）
 
@@ -201,12 +201,12 @@
 | `store_requisitions` | schema.sql | — | lib/docflow.js | routes/requisitions.js |
 | `store_shipment_items` | schema.sql | — | — | routes/requisitions.js |
 | `store_shipments` | schema.sql | — | lib/docflow.js | routes/requisitions.js |
-| `stores` | schema.sql | 001 | lib/accounting.js, lib/credit.js, lib/dashboard-sql.js, lib/docflow.js, lib/invoice.js, lib/order-center.js, lib/pos2.js, lib/quote.js, lib/refund.js, lib/sales-order.js, mcp/tools.js | routes/ai.js, routes/ar.js, routes/auth.js, routes/dashboard.js, routes/master.js, routes/pos.js, routes/requisitions.js, routes/sales.js |
+| `stores` | schema.sql | 001 | lib/accounting.js, lib/credit.js, lib/dashboard-sql.js, lib/docflow.js, lib/invoice.js, lib/metrics.js, lib/order-center.js, lib/pos2.js, lib/quote.js, lib/refund.js, lib/sales-order.js, mcp/tools.js | routes/ai.js, routes/ar.js, routes/auth.js, routes/dashboard.js, routes/master.js, routes/pos.js, routes/requisitions.js, routes/sales.js |
 | `supplier_price_logs` | 011 | 011·idx | lib/purchase.js | — |
 | `supplier_products` | 011 | 011·idx | lib/purchase.js | routes/purchase-chain.js |
 | `suppliers` | schema.sql | 005 | lib/accounting.js, lib/approval.js, lib/costing.js, lib/dashboard-sql.js, lib/purchase.js, lib/qc.js, lib/qc2.js, mcp/tools.js | routes/ai.js, routes/dashboard.js, routes/inventory.js, routes/master.js, routes/outsourcing.js, routes/purchase-chain.js, routes/purchase.js |
 | `user_orgs` | 005 | 005·idx | lib/account-security.js, lib/admin-bootstrap.js | — |
-| `user_roles` | 005 | 005·idx | lib/account-security.js, lib/admin-bootstrap.js, lib/approval.js, lib/role-matrix.js, middleware/auth.js | — |
+| `user_roles` | 005 | 005·idx | lib/account-security.js, lib/admin-bootstrap.js, lib/role-matrix.js, middleware/auth.js | — |
 | `users` | schema.sql | 005, 050 | lib/account-security.js, lib/admin-bootstrap.js, lib/approval.js, lib/im-sync.js, lib/qc2.js, lib/role-matrix.js, mcp/delegation.js, mcp/doc-perms.js, mcp/tokens.js, mcp/tools.js, middleware/auth.js | routes/approval.js, routes/auth.js, routes/im.js, routes/sales.js |
 | `voucher_entries` | 032 | 032·idx, 041·idx | lib/accounting.js, lib/annual.js, lib/closing.js, lib/report.js | — |
 | `voucher_template_entries` | 032 | 032·idx | lib/accounting.js | — |
@@ -289,3 +289,4 @@
 | 071 | `071_audit_fts_optional.cjs` | 审计日志 FTS5 索引可选化（设置 audit_fts_enabled） | — | — |
 | 072 | `072_audit_anchor_intents.cjs` | 审计锚点操作意图表（audit_anchor_intents） | audit_anchor_intents | audit_anchor_intents, audit_anchor_intents_old |
 | 073 | `073_mcp_rate_buckets.cjs` | MCP 限速桶表（mcp_rate_buckets，db 存储模式） | if | — |
+| 074 | `074_oms_items_order_index.cjs` | 线上订单明细按订单号索引（oms_order_items.oms_order_id） | — | — |
