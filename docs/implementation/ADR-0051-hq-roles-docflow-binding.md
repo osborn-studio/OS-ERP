@@ -38,7 +38,9 @@ ADR-0011 AB7 补充登记过一条既有的高危发现：`/api/docflow/*` 的�
 
 ### 3. 危险设置键 `docflow_strict_store_binding`
 
-`bool`、默认 `1`（开）、`is_danger: true`（改动必须写理由）。关闭 = 恢复本 ADR 之前的行为（docflow 只看数据范围）。读取走 `readSetting`（库里值非法时回落默认开，失败关闭）。危险键集合十八 → 十九（`scripts/test-setting-audit.mjs` 已同步）。
+`bool`、默认 `1`（开）、`is_danger: true`（改动必须写理由）。关闭仅取消 HTTP docflow 对非总部内部账号的「未绑定则不可见」检查，仍按组织数据范围读取；不会取消已绑定账号的本店 / 本经销商限制，也不改变 MCP 的严格绑定。读取走 `readSetting`（库里值非法时回落默认开，失败关闭）。危险键集合十八 → 十九（`scripts/test-setting-audit.mjs` 已同步）。
+
+与 AC3 集成后的范围：未绑定检查覆盖 RC / YQ / SH / PS / PSF（门店）及 DR（经销商）。OC / OCS 的订货主体限制与 DS / RB 的总部专属限制独立于此开关，关闭时仍生效。因此关闭不是将整个 docflow 恢复到第十一批的权限行为。AC2 最初只覆盖 RC / YQ / SH，以下历史验收描述应结合该集成范围阅读。
 
 ## 行为变化（需知悉）
 

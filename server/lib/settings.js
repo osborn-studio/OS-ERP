@@ -384,9 +384,9 @@ export const SETTING_RULES = {
   // ---- 单据流门店绑定（ADR-0051） ----
   docflow_strict_store_binding: {
     group: 'ops', label: '单据流严格门店绑定', type: 'bool', default: '1', is_danger: true, wired: true,
-    impact: '**打开（默认）**：`/api/docflow/*` 对「未绑定门店、非总部角色（admin / finance / sales / warehouse / purchase / scm 以外）、数据范围=全部」的内部账号，'
-      + '不再返回日结（RC）/ 门店要货（YQ）/ 门店发货（SH）的单据与流转留痕；总部角色、admin、超管不受影响，已绑门店的账号仍只看本店。'
-      + '**关闭**：恢复本项出现之前的行为（只看数据范围，未绑门店的非总部账号在 docflow 里仍可读这三类）。'
+    impact: '**打开（默认）**：`/api/docflow/*` 对非总部角色（admin / finance / sales / warehouse / purchase / scm 以外）的内部账号，'
+      + '未绑定门店时不返回日结（RC）/ 门店要货（YQ）/ 门店发货（SH）/ POS 订单（PS）/ POS 班次（PSF），未绑定经销商时不返回经销商要货（DR）的单据与流转留痕；总部角色、admin、超管豁免未绑定检查。'
+      + '**关闭**：仅取消上述未绑定检查，恢复按组织数据范围读取这些类型。已绑定门店 / 经销商的账号仍限本方；订货主体（OC / OCS）及总部专属（DS / RB）的限制始终生效，MCP 严格绑定不受此开关影响。'
       + '⚠️ 关闭 = 放宽读权限；改动必须写理由，且应只在确认有「非总部角色需要跨店只读」时临时使用。'
   },
 
