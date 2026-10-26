@@ -49,6 +49,9 @@ export function buildOpenApi() {
     '/api/meta/dict': {
       get: { tags: ['系统'], summary: '枚举字典（状态/角色/单据类型）', security: [], responses: { 200: jsonResp(null, '字典') } }
     },
+    '/api/meta/role-matrix': {
+      get: { tags: ['系统'], summary: '角色与单据可见度矩阵（管理员全表，其余账号仅自己的角色列；说明性视图，不作为授权判据）', responses: { 200: jsonResp(null, 'roles、doc_types、cells、restricted 与调用者 me'), 401: jsonResp(null, '未认证') } }
+    },
     // ---- 系统参数（批次 R）：配置的定义、当前值与**变更历史** ----
     // 这组端点在此之前**没有登记进契约**（`GET/PUT /api/meta/settings` 一直存在，
     // 但只在路由里），本批一并补齐 —— 配置是会计政策的载体，它不该躲在契约之外。

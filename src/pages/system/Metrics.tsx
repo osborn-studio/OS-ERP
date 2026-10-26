@@ -183,8 +183,6 @@ export default function Metrics() {
                 rowKey={(r) => r.key}
                 onRowClick={(r) => setDetail(r as MetricItem)}
                 columns={[
-                  // TODO(AD1): 本分支的 MetricDef 还没有 `scoped` 字段（AD1 引入）。AD1 合入后，`scoped === false` 的指标在此处加
-                  //   <span className="tag bg-violet-100 text-violet-700">全局口径</span>，说明该数不随账号数据范围收窄。
                   { key: 'name', title: '指标', width: 180, render: (r) => (
                     <div>
                       <div className="text-ink-900">{r.name}</div>
