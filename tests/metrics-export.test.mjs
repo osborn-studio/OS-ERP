@@ -507,7 +507,7 @@ test('AC9 alert rule files: docs/operations/alerts/*.yml exist, monitoring.md po
     }
   }
   assert.equal(new Set(alerts).size, alerts.length, 'alert names unique')
-  assert.equal(alerts.length, 11)
+  assert.equal(alerts.length, 12) // 6 + AB10 的 4 + AD9 的 1 + AE9 的 1
   // 引用 label 值必须是登记的封闭集合成员
   const all = files.map((f) => readFileSync(path.join(dir, f), 'utf8')).join('\n')
   for (const m of all.matchAll(/os_erp_mcp_tool_calls_total\{code(=~?)"([^"]+)"\}/g)) {

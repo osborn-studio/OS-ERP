@@ -333,6 +333,33 @@ const EFFECTIVE_LABEL: Record<string, { text: string; cls: string }> = {
   revoked_by_owner_change: { text: '所有者已变更·失效', cls: 'bg-red-100 text-red-600' }
 }
 
+type McpLimits = { rpm: number; write_rpm: number; window_seconds: number; daily_quota: number; rate_limited_total: number; counter_scope: string }
+
+/**
+ * 限速与配额读数（AE11，只读，仅 system.mcp.manage）。数字来自 `GET /api/mcp/limits`：与限流器同一份策略，不在页面里写死。
+ * 429 计数是**本进程自启动以来**的累计（重启归零、多进程各自计数），不是历史统计；要看明细用 /metrics 的
+ * os_erp_mcp_tool_calls_total{code="MCP_RATE_LIMITED"}。读取失败（含 403）时整块不显示，不画默认值。
+ */
+function McpLimitsCard({ nonce }: { nonce: number }) {
+  const { data, error } = useFetch<McpLimits>('/mcp/limits', undefined, [nonce])
+  if (!data || error) return null
+  const quotaOn = data.daily_quota > 0
+  return (
+    <Card>
+      <SectionTitle
+        title="限速与日配额"
+        desc="按令牌计，键是验签后的令牌 id。超限返回 HTTP 429 + Retry-After（业务码 MCP_RATE_LIMITED）。调整：环境变量 GML_MCP_TOKEN_RPM / GML_MCP_WRITE_RPM（需重启），日配额在系统设置 mcp_token_daily_quota。"
+      />
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3" data-testid="mcp-limits" data-rpm={data.rpm} data-write-rpm={data.write_rpm} data-daily-quota={data.daily_quota} data-limited={data.rate_limited_total}>
+        <StatCard label="每分钟调用上限" value={data.rpm} sub={`每令牌，${data.window_seconds} 秒滑动窗口，含写调用`} />
+        <StatCard label="每分钟写调用上限" value={data.write_rpm} sub="写型工具另计，同时占用总额度" />
+        <StatCard label="每日配额" value={quotaOn ? data.daily_quota : '未开启'} sub={quotaOn ? '每令牌每本地日历日，过午夜归零' : '设置 mcp_token_daily_quota = 0'} />
+        <StatCard label="被限流（429）" value={data.rate_limited_total} tone={data.rate_limited_total > 0 ? 'amber' : 'default'} sub="本进程自启动以来，重启归零" />
+      </div>
+    </Card>
+  )
+}
+
 function McpOperations() {
   const [confirmations, setConfirmations] = useState<any[]>([])
   const [logs, setLogs] = useState<any[]>([])
@@ -347,6 +374,7 @@ function McpOperations() {
       setConfirmations(pending.data || [])
       setLogs(calls.data || [])
       setTokens(list.data || [])
+      setLimitsNonce((n) => n + 1)
     } catch (e: any) { toast(e.message, 'error') }
     finally { setBusy(false) }
   }
@@ -368,6 +396,7 @@ function McpOperations() {
       await load()
     } catch (e: any) { toast(e.message, 'error'); setBusy(false) }
   }
+  const [limitsNonce, setLimitsNonce] = useState(0)
   const stale = tokens.filter((t) => t.status === 'active' && (t.effective_status === 'revoked_by_owner_change' || t.effective_status === 'owner_missing')).length
   useEffect(() => { load() }, [])
   const decide = async (row: any, decision: 'approve' | 'reject') => {
@@ -385,6 +414,7 @@ function McpOperations() {
   }
   return <div className="space-y-3">
     <div className="flex justify-end"><button className="btn-ghost btn-sm" disabled={busy} onClick={load}>刷新记录</button></div>
+    <McpLimitsCard nonce={limitsNonce} />
     <Card>
       <SectionTitle
         title="Agent Token"

@@ -976,3 +976,234 @@ test('AC7 hardening: --resume after a completed archive is idempotent even when 
   assert.equal(g.db.prepare('SELECT COUNT(*) n FROM audit_logs').get().n, rows)
   g.db.close()
 })
+
+// ============================================================================
+// AE5（ADR-0055 补充）：锚点操作对账——保留清理 / 归档 / 隐私抹除在新增锚点的同一事务里写 audit_anchor_intents 意图行，
+// 并在操作审计行里引用它；`--offbox` 校验要求已锚定范围内每个新锚点都有匹配意图且意图被审计行印证。迁移 072。
+// ============================================================================
+import { anchorMark, recordAnchorIntent, INTENT_FORMAT } from '../server/lib/audit-anchor-intent.js'
+
+const OFFBOX = 'scripts/offbox-anchor.mjs'
+const KEYGEN = 'scripts/release-keygen.mjs'
+function ae5Keys(t) {
+  const dir = path.join(tmp(t, 'os-ae5-keys-'), 'keys')
+  const r = cli(KEYGEN, ['--out', dir], dir.replace(/keys$/, ''))
+  assert.equal(r.status, 0, r.stderr)
+  return { priv: path.join(dir, 'release-sign.key.pem'), pub: path.join(dir, 'release-sign.pub.pem') }
+}
+/** 60 行（前 40 行是 2024 年）+ 已写好一份签名离机锚点 */
+function ae5World(t) {
+  const f = archiveReady(t)
+  const dest = tmp(t, 'os-ae5-dest-')
+  const k = ae5Keys(t)
+  const anchored = cli(OFFBOX, ['--data-dir', f.dir, '--dest', dest, '--key', k.priv], f.dir) // 不带 --log：用仓库内默认日志路径
+  assert.equal(anchored.status, 0, anchored.stderr)
+  const file = path.join(dest, readdirSync(dest).find((n) => /^anchor-.*\.json$/.test(n)))
+  const verify = (extra = [], env = {}) => cli(VERIFY, ['--data-dir', f.dir, '--industry', 'cosmetic', '--offbox', file, '--pubkey', k.pub, '--json', ...extra], f.dir, env)
+  const archive = (env = {}) => {
+    const A = (extra = []) => cli(ARCHIVE, ['--data-dir', f.dir, '--industry', 'cosmetic', '--before', '2025-01-01', '--out', f.out, ...extra], f.dir, env)
+    const token = A().stdout.match(/口令：(ARCHIVE-[0-9A-F]{16})/)[1]
+    return A(['--confirm', token])
+  }
+  return { ...f, dest, k, file, verify, archive }
+}
+const off = (r) => cos(r).offbox
+/** 攻击者：改第 1 行并重算它，再登记一条把新哈希接回第 2 行原 prev_hash 的桥锚点；返回锚点前的 mark */
+function forgeBridge(db) {
+  const r1 = db.prepare('SELECT * FROM audit_logs WHERE id=1').get()
+  const r2 = db.prepare('SELECT * FROM audit_logs WHERE id=2').get()
+  const newHash = spec({ ...r1, detail: '{"forged":true}' }, GENESIS)
+  const mark = anchorMark(db)
+  db.transaction(() => {
+    db.prepare("UPDATE audit_logs SET detail='{\"forged\":true}', row_hash=? WHERE id=1").run(newHash)
+    db.prepare("INSERT INTO audit_chain_anchors (kind, at_row_id, anchor_hash, prev_id, prev_row_hash, reason) VALUES ('retention', 2, ?, 1, ?, 'forged bridge')").run(r2.prev_hash, newHash)
+  })()
+  assert.equal(verifyChain(db).ok, true, 'the live chain verifies on its own')
+  return mark
+}
+
+test('AE5 forged bridge anchor without an intent is a rewrite, and --accept-new-anchors no longer waves it through', (t) => {
+  const w = ae5World(t)
+  assert.equal(w.verify().status, 0, 'baseline: nothing changed since the offbox anchor')
+  forgeBridge(w.db)
+  for (const extra of [[], ['--accept-new-anchors']]) {
+    const r = w.verify(extra)
+    assert.equal(r.status, 1, r.stdout)
+    assert.deepEqual([off(r).status, off(r).kind], ['rewrite', 'anchor-without-intent'])
+  }
+  w.db.close()
+})
+
+test('AE5 legitimate archive writes an intent in the same transaction as its anchor, references it from AUDIT_ARCHIVE, and verifies ok without any opt-in flag', (t) => {
+  const w = ae5World(t)
+  const r = w.archive()
+  assert.equal(r.status, 0, r.stdout + r.stderr)
+  const intents = w.db.prepare('SELECT * FROM audit_anchor_intents').all()
+  assert.equal(intents.length, 1)
+  const [it] = intents
+  assert.equal(it.operation, 'archive')
+  assert.match(it.range_desc, /ids 1\.\.40/)
+  assert.match(it.intent_hash, /^[0-9a-f]{64}$/)
+  assert.equal(it.signature, null, 'unsigned when no signing key is configured')
+  const arch = w.db.prepare("SELECT id, detail FROM audit_logs WHERE action='AUDIT_ARCHIVE'").get()
+  assert.deepEqual([JSON.parse(arch.detail).anchor_intent.id, JSON.parse(arch.detail).anchor_intent.hash, it.audit_row_id], [it.id, it.intent_hash, arch.id])
+  const anchor = w.db.prepare("SELECT * FROM audit_chain_anchors WHERE kind='archive'").get()
+  assert.ok(JSON.parse(it.anchors_json).some((a) => a[1] === anchor.at_row_id && a[2] === anchor.anchor_hash))
+  const v = w.verify()
+  assert.equal(v.status, 0, v.stdout)
+  assert.equal(off(v).status, 'ok')
+  assert.equal(off(v).anchors_added_in_range, 1)
+  w.db.close()
+})
+
+test('AE5 an intent without a corroborating audit-log row is a rewrite (forged intent, wrong action, wrong hash, row predating the offbox anchor)', (t) => {
+  const w = ae5World(t)
+  const mark = forgeBridge(w.db)
+  // 1) 伪造一条哈希正确的意图，但没有任何审计行
+  const intent = w.db.transaction(() => recordAnchorIntent(w.db, mark, { operation: 'retention', range: 'forged', operatorName: 'mallory' })).immediate()
+  assert.ok(intent.id)
+  let r = w.verify()
+  assert.equal(r.status, 1, r.stdout)
+  assert.deepEqual([off(r).status, off(r).kind], ['rewrite', 'intent-uncorroborated'])
+  assert.equal(w.verify(['--accept-new-anchors']).status, 1, 'the opt-in flag does not cover an intent whose audit row never existed')
+  // 2) 审计行存在但 action 与意图的操作不符
+  const lie = (action, hash = intent.hash, id = intent.id) => {
+    insertAuditRow(w.db, { userName: 'mallory', action, module: 'audit', entity: 'audit_logs', entityId: 'cosmetic', detail: { anchor_intent: { id, hash } } })
+    w.db.prepare('UPDATE audit_anchor_intents SET audit_row_id=(SELECT MAX(id) FROM audit_logs) WHERE id=?').run(intent.id)
+  }
+  lie('LOGIN')
+  r = w.verify()
+  assert.deepEqual([r.status, off(r).kind], [1, 'intent-uncorroborated'], 'wrong action')
+  // 3) action 对，但引用的哈希不是这条意图的
+  lie('RETENTION_PURGE', 'f'.repeat(64))
+  r = w.verify()
+  assert.deepEqual([r.status, off(r).kind], [1, 'intent-uncorroborated'], 'wrong hash')
+  // 4) 一切对得上 ⇒ 通过（说明前面的失败确实来自缺失的印证）
+  lie('RETENTION_PURGE')
+  r = w.verify()
+  assert.equal(r.status, 0, r.stdout)
+  // 5) 意图被改（范围描述）⇒ 哈希对不上
+  w.db.prepare("UPDATE audit_anchor_intents SET range_desc='something else' WHERE id=?").run(intent.id)
+  r = w.verify()
+  assert.deepEqual([r.status, off(r).kind], [1, 'intent-hash-mismatch'])
+  w.db.close()
+})
+
+test('AE5 an audit row that predates the offbox anchor cannot corroborate a later anchor', (t) => {
+  const w = ae5World(t)
+  const mark = forgeBridge(w.db)
+  const intent = w.db.transaction(() => recordAnchorIntent(w.db, mark, { operation: 'erase', range: 'forged', operatorName: 'mallory' })).immediate()
+  // 指向锚定链尾之前就存在的一条真实行，并把引用写进…… 无法写进（哈希覆盖明细）：只能借用一条已有的行，它的 detail 不含引用
+  w.db.prepare('UPDATE audit_anchor_intents SET audit_row_id=5 WHERE id=?').run(intent.id)
+  const r = w.verify()
+  assert.deepEqual([r.status, off(r).kind], [1, 'intent-uncorroborated'])
+  w.db.close()
+})
+
+test('AE5 signed intents: archive signs with GML_ANCHOR_INTENT_KEY, verification checks the signature, tampering and missing signatures are caught under --require-signed-intents', (t) => {
+  const w = ae5World(t)
+  const r = w.archive({ GML_ANCHOR_INTENT_KEY: w.k.priv })
+  assert.equal(r.status, 0, r.stdout + r.stderr)
+  const it = w.db.prepare('SELECT * FROM audit_anchor_intents').get()
+  assert.match(it.signature, /^[A-Za-z0-9+/]{86}==$/)
+  assert.match(it.key_id, /^[0-9a-f]{64}$/)
+  assert.equal(w.verify(['--require-signed-intents']).status, 0)
+  // 签名被换成另一个有效签名位置的垃圾 ⇒ 失败
+  w.db.prepare('UPDATE audit_anchor_intents SET signature=? WHERE id=?').run(it.signature.slice(0, 80) + 'AAAAAA==', it.id)
+  let v = w.verify()
+  assert.deepEqual([v.status, off(v).kind], [1, 'intent-signature-invalid'])
+  // 去掉签名：默认放行（签名可选），--require-signed-intents 失败
+  w.db.prepare('UPDATE audit_anchor_intents SET signature=NULL, key_id=NULL WHERE id=?').run(it.id)
+  assert.equal(w.verify().status, 0)
+  v = w.verify(['--require-signed-intents'])
+  assert.deepEqual([v.status, off(v).kind], [1, 'intent-unsigned'])
+  w.db.close()
+})
+
+test('AE5 an invalid configured signing key fails the archive closed (nothing deleted)', (t) => {
+  const w = ae5World(t)
+  const r = w.archive({ GML_ANCHOR_INTENT_KEY: path.join(w.dir, 'missing.pem') })
+  assert.notEqual(r.status, 0)
+  assert.equal(w.db.prepare('SELECT COUNT(*) n FROM audit_logs').get().n, 60)
+  assert.equal(w.db.prepare('SELECT COUNT(*) n FROM audit_anchor_intents').get().n, 0)
+  w.db.close()
+})
+
+test('AE5 retention writes the intent and the RETENTION_PURGE reference in one transaction; a failing audit write rolls the intent back too', (t) => {
+  const dir = tmp(t)
+  const db = mkDb(dir)
+  const ins = (i) => insertAuditRow(db, { userName: 'u', action: 'UPDATE', module: i % 2 ? 'master' : 'sales', entity: 'e', entityId: i, detail: { i } })
+  for (let i = 0; i < 13; i++) ins(i) // 最后一行（i=12）是 sales 模块：不可清理，保证锚定链尾仍在库里
+  db.exec("UPDATE audit_logs SET created_at='2020-01-01 00:00:00', row_hash=NULL, prev_hash=NULL")
+  await_import().up(db)
+  assert.equal(verifyChain(db).ok, true)
+  const k = ae5Keys(t)
+  const dest = tmp(t, 'os-ae5-dest-')
+  assert.equal(cli(OFFBOX, ['--data-dir', dir, '--dest', dest, '--key', k.priv], dir).status, 0)
+  const file = path.join(dest, readdirSync(dest)[0])
+  const run = (env = {}) => cli('scripts/retention.mjs', ['cosmetic', '--execute', '--json', '--actor', 'ae5'], dir, env)
+  // 审计写不进（BEFORE INSERT 触发器吞掉）⇒ 整个事务回滚，意图行也不留
+  db.exec("CREATE TRIGGER no_purge_audit BEFORE INSERT ON audit_logs WHEN NEW.action='RETENTION_PURGE' BEGIN SELECT RAISE(IGNORE); END")
+  assert.equal(run().status, 1)
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM audit_anchor_intents').get().n, 0)
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM audit_logs').get().n, 13)
+  db.exec('DROP TRIGGER no_purge_audit')
+  const r = run()
+  assert.equal(r.status, 0, r.stdout + r.stderr)
+  const its = db.prepare('SELECT * FROM audit_anchor_intents').all()
+  assert.equal(its.length, 1)
+  assert.equal(its[0].operation, 'retention')
+  assert.equal(its[0].operator_name, 'ae5')
+  const purge = db.prepare("SELECT id, detail FROM audit_logs WHERE action='RETENTION_PURGE'").get()
+  assert.deepEqual([JSON.parse(purge.detail).anchor_intent.id, its[0].audit_row_id], [its[0].id, purge.id])
+  const v = cli(VERIFY, ['--data-dir', dir, '--industry', 'cosmetic', '--offbox', file, '--pubkey', k.pub, '--json'], dir)
+  assert.equal(v.status, 0, v.stdout)
+  assert.equal(cos(v).offbox.status, 'ok')
+  db.close()
+})
+
+test('AE5 migration 072: up() is idempotent, verify() matches up() (missing table or column ⇒ false, up repairs), intents table has no FK to audit_logs', (t) => {
+  const db = mkDb(tmp(t))
+  const mig = createRequire(import.meta.url)(path.join(MIGRATIONS_DIR, '072_audit_anchor_intents.cjs'))
+  assert.equal(mig.verify(db), true)
+  mig.up(db); mig.up(db)
+  assert.equal(mig.verify(db), true)
+  const cols = db.prepare('PRAGMA table_info(audit_anchor_intents)').all().map((c) => c.name)
+  for (const c of ['id', 'created_at', 'operation', 'range_desc', 'operator_user_id', 'operator_name', 'anchors_json', 'intent_hash', 'key_id', 'signature', 'audit_row_id']) assert.ok(cols.includes(c), c)
+  assert.throws(() => db.prepare("INSERT INTO audit_anchor_intents (operation, range_desc, operator_name, anchors_json, intent_hash) VALUES ('bogus','x','y','[]','h')").run(), /CHECK/)
+  db.exec('DROP TABLE audit_anchor_intents')
+  assert.equal(mig.verify(db), false)
+  mig.up(db)
+  assert.equal(mig.verify(db), true)
+  db.exec('DROP TABLE audit_anchor_intents; CREATE TABLE audit_anchor_intents (id INTEGER PRIMARY KEY)') // 列不全的残表
+  assert.equal(mig.verify(db), false)
+  assert.equal(INTENT_FORMAT, 'os-erp-audit-anchor-intent/1')
+})
+
+test('AE5 migration 072 repairs a populated partial table (constant defaults only, CHECK restored, rows kept) and refuses to call a table without id healthy', (t) => {
+  const db = mkDb(tmp(t))
+  const mig = createRequire(import.meta.url)(path.join(MIGRATIONS_DIR, '072_audit_anchor_intents.cjs'))
+  db.exec('DROP TABLE audit_anchor_intents; CREATE TABLE audit_anchor_intents (id INTEGER PRIMARY KEY, operation TEXT)')
+  db.prepare("INSERT INTO audit_anchor_intents (operation) VALUES ('archive')").run()
+  assert.equal(mig.verify(db), false)
+  mig.up(db)
+  assert.equal(mig.verify(db), true)
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM audit_anchor_intents').get().n, 1, 'rows survive the rebuild')
+  assert.throws(() => db.prepare("INSERT INTO audit_anchor_intents (operation, range_desc, operator_name, anchors_json, intent_hash) VALUES ('bogus','x','y','[]','h')").run(), /CHECK/)
+  // 没有 id 列的表不能算健康（校验读 id）
+  db.exec('DROP TABLE audit_anchor_intents; CREATE TABLE audit_anchor_intents (operation TEXT)')
+  assert.equal(mig.verify(db), false)
+  mig.up(db)
+  assert.equal(mig.verify(db), true)
+})
+
+test('AE5 an audit row that is missing without any archive evidence is uncorroborated even under --accept-new-anchors (Codex AE5-M1)', (t) => {
+  const w = ae5World(t)
+  const mark = forgeBridge(w.db)
+  const intent = w.db.transaction(() => recordAnchorIntent(w.db, mark, { operation: 'retention', range: 'forged', operatorName: 'mallory' })).immediate()
+  // 指向一个从未存在的审计行 id（库里没有任何 archive 锚点可以解释它的消失）
+  w.db.prepare('UPDATE audit_anchor_intents SET audit_row_id=61 WHERE id=?').run(intent.id)
+  let r = w.verify(['--accept-new-anchors'])
+  assert.deepEqual([r.status, off(r).kind], [1, 'intent-uncorroborated'], 'row 61 does not exist and nothing was archived')
+  w.db.close()
+})

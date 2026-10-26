@@ -17,6 +17,7 @@
  * ============================================================================
  */
 import { redactValue, redactText } from './redact.js'
+import { readSetting } from './settings.js'
 
 export const AUDIT_EXPORT_MAX_ROWS = 50000
 export const AUDIT_PAGE_MAX = 200
@@ -87,6 +88,21 @@ export function parseFilters(query = {}) {
   }
   if (f.from && f.to && f.from > f.to) throw new AuditViewError('from 不能晚于 to')
   return f
+}
+
+/**
+ * FTS 状态读数（AE11，只读）：设置值 `audit_fts_enabled`、库里索引表是否存在、环境开关是否强制关闭，以及"关键词查询实际可不可能走索引"。
+ * `active` 与查询路径同一判据（`ftsAvailable`：有索引表且未被环境开关 / 测试钩子关掉），**不看设置值**：改设置本身不动索引，
+ * 设置关而索引表还在 = 查询仍会走索引，直到维护脚本或重启收敛——这种不一致由前端据 setting_enabled 与 index_present 如实呈现。
+ * `active` 为真也只表示**能**走索引；是否真走还取决于关键词长度与命中数（见 `keywordUsesFts`）。
+ */
+export function ftsState(db) {
+  let setting = true
+  try { setting = Boolean(readSetting(db, 'audit_fts_enabled')) } catch { /* 读不到按默认开启展示 */ }
+  let present = false
+  try { present = !!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(FTS_TABLE) } catch { /* 无表 */ }
+  const envOff = ftsEnvDisabled()
+  return { setting_enabled: setting, index_present: present, env_disabled: envOff, active: present && !envOff && ftsOverride !== false }
 }
 
 /**

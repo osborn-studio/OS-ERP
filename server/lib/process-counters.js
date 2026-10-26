@@ -27,6 +27,10 @@ export const COUNTER_DEFS = Object.freeze({
     help: 'Dashboard summary TTL cache lookups by result (hit: served from cache; miss: recomputed). Not counted when the cache is disabled (GML_DASHBOARD_CACHE_MS=0).',
     labelName: 'result', values: ['hit', 'miss']
   },
+  mcp_rate_store_failures_total: {
+    help: 'MCP rate-limit db store failures by reason (write_failed: a call was refused fail-closed with store_unavailable; purge_failed: background purge of expired buckets failed). Only moves when GML_MCP_RATE_STORE=db.',
+    labelName: 'reason', values: ['write_failed', 'purge_failed']
+  },
   security_audit_unavailable_total: {
     help: 'Times a business change was refused with 503 SECURITY_AUDIT_UNAVAILABLE because its security audit row could not be written.',
     labelName: null, values: []
@@ -65,6 +69,13 @@ export function incMcpToolCall(tool, code) {
   let m = mcpCalls.get(t)
   if (!m) { m = new Map(); mcpCalls.set(t, m) }
   m.set(c, (m.get(c) || 0) + 1)
+}
+
+/** 某结果码在所有工具上的累计次数（进程内、重启归零）；只读，供管理端展示 */
+export function mcpCodeTotal(code) {
+  let n = 0
+  for (const m of mcpCalls.values()) n += m.get(code) || 0
+  return n
 }
 
 /** 直方图登记：桶边界固定（秒），不由输入决定 */

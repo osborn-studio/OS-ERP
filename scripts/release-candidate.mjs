@@ -191,17 +191,27 @@ function runFocused(cwd) {
 /** `--ci-run=auto`：用 gh 查 HEAD 对应 ci.yml 的最新成功 run。拿不到就 id=null 并写明原因。 */
 export function resolveCiRun(commit, { gh = process.env.OS_ERP_GH || 'gh', cwd = ROOT } = {}) {
   const none = reason => ({ id: null, lookup: { mode: 'auto', source: 'gh run list', reason } })
-  const r = spawnSync(gh, ['run', 'list', '--commit', commit, '--workflow', 'ci.yml', '--json', 'databaseId,conclusion,status,headSha,createdAt', '--limit', '30'], { cwd, encoding: 'utf8', timeout: 60000 })
+  const r = spawnSync(gh, ['run', 'list', '--commit', commit, '--workflow', 'ci.yml', '--json', 'databaseId,conclusion,status,headSha,createdAt,event,headBranch', '--limit', '30'], { cwd, encoding: 'utf8', timeout: 60000 })
   if (r.error) return none(`gh unavailable: ${r.error.code || r.error.message}`)
   if (r.status !== 0) return none(`gh run list failed (exit ${r.status}): ${String(r.stderr).trim().slice(0, 300)}`)
   let runs
   try { runs = JSON.parse(r.stdout) } catch { return none('gh run list returned unparseable output') }
   if (!Array.isArray(runs)) return none('gh run list returned unexpected output')
   if (!runs.length) return none(`no ci.yml run recorded for commit ${commit.slice(0, 7)}`)
-  const ok = runs.filter(x => x && x.conclusion === 'success' && Number.isInteger(x.databaseId) && x.headSha === commit)
+  const ok = runs.filter(x => x && x.conclusion === 'success' && Number.isInteger(x.databaseId) && x.headSha === commit && !(x.event === 'push' && /^v\d/.test(String(x.headBranch ?? ''))))
+    // AE10：v* 标签推送的 run 只跑候选 job（其余 job 被跳过），它的 success 不是 ci.yml 检查通过的证据，查询时排除
     .sort((a, b) => String(b.createdAt ?? '').localeCompare(String(a.createdAt ?? '')) || b.databaseId - a.databaseId)
-  if (!ok.length) return none(`${runs.length} ci.yml run(s) for ${commit.slice(0, 7)}, none with conclusion success (${[...new Set(runs.map(x => x?.conclusion || x?.status || 'unknown'))].join(', ')})`)
+  if (!ok.length) return none(`${runs.length} ci.yml run(s) for ${commit.slice(0, 7)}, none with conclusion success, v* tag-push runs excluded (${[...new Set(runs.map(x => x?.conclusion || x?.status || 'unknown'))].join(', ')})`)
   return { id: String(ok[0].databaseId), lookup: { mode: 'auto', source: 'gh run list', conclusion: 'success', head_sha: commit, run_created_at: ok[0].createdAt ?? null, ...(process.env.OS_ERP_GH ? { gh_override: true } : {}) } }
+}
+
+/** AE10：托管 CI 上找不到该提交的成功 ci.yml run 时（标签推送不跑 ci.yml 的其余 job），退而记录**当前 run**。
+ *  这是自指引用：该 run 正在运行，本身不是通过的验证，所以不写 conclusion success；evidence 里以 ci_run_origin 与 note 写明。 */
+export function selfCiRun(commit, env = process.env) {
+  if (env.GITHUB_ACTIONS !== 'true' || !/^\d{1,20}$/.test(String(env.GITHUB_RUN_ID ?? ''))) return null
+  if (env.GITHUB_SHA && env.GITHUB_SHA !== commit) return null
+  return { id: String(env.GITHUB_RUN_ID), lookup: { mode: 'auto', source: 'GITHUB_RUN_ID', ci_run_origin: 'hosted-ci-self', head_sha: commit, ...(process.env.OS_ERP_GH ? { gh_override: true } : {}),
+    note: 'SELF-REFERENTIAL: no successful ci.yml run exists for this commit, so this is the id of the run that built this candidate. That run was still in progress when recorded; it is NOT evidence that ci.yml checks passed.' } }
 }
 
 function drillReference() {
@@ -292,9 +302,13 @@ function main() {
     if (smoke.result !== 'passed' || smoke.mode !== 'production') throw new Error('Acceptance report is not a passing production run')
     runNode(pkg, ['scripts/verify-release.mjs'], 'verify-release after acceptance')
     // 6. 证据与说明
-    const ci = opts['ci-run'] === 'auto' ? resolveCiRun(commit)
+    let ci = opts['ci-run'] === 'auto' ? resolveCiRun(commit)
       : opts['ci-run'] !== undefined ? { id: opts['ci-run'], lookup: { mode: 'operator-supplied', note: 'reference supplied by the operator; not looked up' } }
       : { id: null, lookup: { mode: 'none', reason: 'no --ci-run given' } }
+    if (opts['ci-run'] === 'auto' && ci.id === null) { // AE10：回退到自指引用（仅托管 CI）；保留查询失败原因
+      const self = selfCiRun(commit)
+      if (self) ci = { id: self.id, lookup: { ...self.lookup, lookup_reason: ci.lookup.reason } }
+    }
     const builtAt = new Date().toISOString()
     const attested = k => opts[`${k}-result`] === undefined ? { source: 'not run', result: 'not run' } : { source: opts[`${k}-source`], result: opts[`${k}-result`], origin: 'operator-attested' }
     const evidence = {

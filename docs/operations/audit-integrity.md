@@ -99,6 +99,35 @@ node scripts/audit-archive.mjs --data-dir /abs/data --industry cosmetic --before
 
 无密钥模式下终名 `.db` 只在 fsync + 校验通过后经 rename 出现，因此“磁盘上有终名 `.db`”总是意味着该快照通过过完整性校验。
 
+#### 加密模式（`GML_BACKUP_KEY`）下同三个注入点（AE6）
+
+加密模式不写 `.partial` / 终名 `.db` / `.failed`：明文只存在于 0600 的 `.plain.tmp`，密文直接写 `<终名>.db.enc`。`tests/fs-fault.test.mjs` 对每点 × 两种模式断言：备份目录里（含点文件）除下表第一行 abort（及下文多库说明）外**没有任何以 `SQLite format 3` 开头的明文文件**，且 `.db.enc` / `.audit-manifest.enc` 能用当前密钥认证解开。
+
+| 注入点 | abort 后磁盘状态 | throw 后 | 恢复 |
+| --- | --- | --- | --- |
+| `backup.after-db-copy` | 唯一明文窗口：一个 0600 `.plain.tmp`（abort 跑不了退出处理器）；无 `.db.enc` | 退出处理器 / 失败路径擦除明文，无 `.failed`；`BACKUP_SNAPSHOT_FAILED`，非零退出 | 之前的密文备份不受影响；abort 遗留的 `.plain.tmp` 必须由运维**擦除**（不是普通删除），之后正常运行即可；本次运行不会新增明文 |
+| `backup.before-sidecar` | 已通过回读认证的 `.db.enc`，明文已擦除；无任何清单（可解密可用，缺链清单） | 清单失败路径删掉这份 `.db.enc`；`BACKUP_MANIFEST_FAILED` | 重新备份生成带清单的新备份；孤儿 `.db.enc` 确认后可删，否则按 keep 裁剪 |
+| `backup.after-sidecar` | `.db.enc` + `.audit-manifest.json` + `.audit-manifest.enc` 齐全且 `.enc` 清单与明文清单内容一致；无明文临时文件；缺本次报告 | 未捕获异常、非零退出，磁盘状态同左 | 备份可用；下一次正常运行写报告并按 keep 裁剪 |
+
+**多库（默认三库一起备份）**：三库的明文快照在同一冻结窗口内先全部生成，之后才逐库加密。因此 `abort` 于**第一个库**的 `before-sidecar` / `after-sidecar` 时，其余库的 0600 `.plain.tmp` 仍在盘上（测试 `all three industries` 用例断言：恰好 2 个，且是仅有的明文）。恢复时三个注入点都要检查并**擦除**备份目录里所有 `*.plain.tmp`；`throw` 路径（退出处理器）不留任何明文。
+
+注意 `.audit-manifest.json` 在加密模式下仍是明文，内容固定为 `format / industry / backup_file / backup_sha256 / created_at / audit_chain`（`audit_chain` 为链尾 id / 行哈希 / 行数与锚点明细，含锚点 reason 与时间戳；不含业务行数据；测试断言键集合），设计如此；需要机密性的离机副本用 `.audit-manifest.enc`。
+
+#### 平台差异：macOS 与 Linux（AE6）
+
+脚本只依赖下列原语；`tests/fs-fault.test.mjs` 的 `platform:` 用例逐条验证（macOS 开发机已跑；Linux 由 CI `checks` job 在 ubuntu-latest 上跑同一文件，本地未验证）：
+
+| 原语 | macOS (APFS) | Linux (ext4/xfs/overlayfs) | 脚本的依赖 |
+| --- | --- | --- | --- |
+| 同目录 `rename` 覆盖已有文件 | 原子；已打开的读者保留旧 inode | 同 | `.partial` → 终名、报告覆盖；两平台一致，严格断言 |
+| `rename` 文件到目录 / 目录到非空目录 | `EISDIR` / `ENOTEMPTY`（或 `EEXIST`） | 同 | 被拒绝而非合并；严格断言 |
+| 目录 `fsync`（只读打开目录） | 成功，但 `fsync` 只保证到磁盘缓存，不保证落盘（需 `F_FULLFSYNC`，Node 不暴露） | 持久化目录项 | db-backup 无密钥路径的 `.partial` → 终名后会 fsync 目录，在 macOS 上是尽力而为；`abort` 模拟（进程死、内核存活）对两者结论相同。**本测试只验证进程崩溃，不验证断电持久性**：加密路径（`encryptFile` 的 rename、明文清单的写入）当前没有目录 fsync / 文件 fsync，因此到达 `after-sidecar` 并不证明整套备份 + 清单在断电后仍在，断电后的备份必须再跑一次校验（`--against-backup` / 重新备份） |
+| 以写方式打开目录 | `EISDIR` | 同 | 目录 fsync 必须只读打开 |
+| 大小写 | 默认大小写不敏感（可格式化为敏感） | 敏感 | 所有备份/报告名都是小写库名 + 数字时间戳 + 固定后缀，冲突检测在两者上一致 |
+| `open(..., 'wx')` / `link` 到已存在名 | `EEXIST` | 同 | 清单边车用 `wx`，不会覆盖遗留清单 |
+
+注意：Windows 不在支持范围（目录 fsync 被跳过，`rename` 覆盖语义不同）。运行时间：故障矩阵（`tests/fs-fault.test.mjs` 全部用例）本机约 25 秒，远低于 3 分钟预算；每个子进程有 120 秒超时，用例级超时 180 秒。
+
 ### 证据日志追加（`release-candidate --log` → `appendEntry`）
 
 追加在独占锁 `<log>.lock` 内进行：读-校验 → 写一行 → fsync → 解锁。
@@ -172,7 +201,17 @@ node scripts/audit-verify-chain.mjs --data-dir /abs/data --offbox /path/anchor-2
 node scripts/verify-release.mjs --log=/abs/repo/docs/release/EVIDENCE-LOG.jsonl --offbox /path/anchor-20261024T020000000Z.json --pubkey /abs/keys/release-sign.pub.pem   # 在发行包里执行
 ```
 
-- 审计链：在用链必须是锚定链尾的后代。`rewrite/tip-row-differs` = 整链被改写并重算（隐私抹除后需对照操作记录）；`rewrite/behind` = 尾部被截或库被回滚；`unverifiable` = 锚定链尾已被保留清理删除或归档（给 `--archive-dir`）。被锚定的行业库不见了也算失败。`anchors-added/in-anchored-range`：锚点之后在已锚定范围内新增了库内锚点——伪造的桥锚点可以洗白对历史行的改写，合法的保留清理 / 归档 / 隐私抹除也会产生；对照操作记录确认后加 `--accept-new-anchors`，或在这些操作之后立刻做一次新锚点，以后用新锚点复核。
+- 审计链：在用链必须是锚定链尾的后代。`rewrite/tip-row-differs` = 整链被改写并重算（隐私抹除后需对照操作记录）；`rewrite/behind` = 尾部被截或库被回滚；`unverifiable` = 锚定链尾已被保留清理删除或归档（给 `--archive-dir`）。被锚定的行业库不见了也算失败。锚点之后在已锚定范围内新增的库内锚点（保留清理 / 归档 / 隐私抹除都会产生）必须各有一条匹配的**操作意图**（§8b）；没有、或意图没有被审计行印证，一律 `rewrite`（`anchor-without-intent` / `intent-hash-mismatch` / `intent-uncorroborated` / `intent-signature-invalid`），不再有“人工对照后一键放行”。
 - 透明日志：必须仍包含锚定的尾（截尾、整份换成另一条有效链、日志被删都失败）；之后新增的行是正常增长。
 - 不通过时**保留所有锚点与当前库 / 日志的副本**再排查；不要用新锚点覆盖旧证据。验证用旧锚点（几天前的）也应通过——它们是更难被同时篡改的参照。
 - 局限：锚点之间的窗口无保护；离机目的地被攻破可删最新锚点；时间是持钥机自述。
+
+### 8b. 锚点操作意图（AE5，ADR-0055 补充，迁移 072）
+
+保留清理（`retention.mjs --execute`）、归档（`audit-archive.mjs --confirm`）和隐私抹除（`privacy-erase.mjs --confirm`）每次**新增**审计锚点时，在同一个事务里写一行 `audit_anchor_intents`（操作类型、范围描述、操作者、本次新增的全部锚点、意图哈希、可选签名），并把意图 id 与哈希写进该操作自己的审计行（`RETENTION_PURGE` / `AUDIT_ARCHIVE` / `PRIVACY_ERASE` 的明细里的 `anchor_intent`），再把审计行 id 回填到意图。三者同提交同回滚：审计写不进，意图与锚点一起撤销。
+
+- `audit-verify-chain --offbox` 对“锚点之后在已锚定范围内新增”的每个锚点要求：有匹配意图 → 意图哈希按字段重算一致 → （有签名且有对应公钥时）验签通过 → 意图指向的审计行存在、晚于离机锚点的链尾、action 与操作类型对应、明细引用的意图 id 与哈希一致。任何一环缺失 = `rewrite`。**正常的清理 / 归档 / 抹除不再需要任何开关**即可通过。
+- **`--accept-new-anchors` 语义变更**：以前是“对照操作记录后放行所有在已锚定范围内新增的锚点”，现在**不再放行没有意图的锚点**；它只接受“意图齐全，但印证它的审计行已被后来的归档搬出库”（`corroboration-archived`）的锚点，供你核对归档摘要后使用。更稳妥的做法仍是：操作之后立刻做一份新的离机锚点，以后用新锚点复核。
+- 签名（可选）：设置 `GML_ANCHOR_INTENT_KEY`（缺省回落 `GML_RELEASE_SIGN_KEY`）指向 Ed25519 私钥（与证据签名同一套检查：仓库外、0600）时，三个脚本给意图签名；配置了却读不出来则脚本在动手前退出，不会写出无签名的意图。复核时 `--require-signed-intents` 要求每个意图都带可验证签名，公钥取 `--intent-pubkey`（缺省同 `--pubkey`）。**生产建议把意图私钥放在业务主机之外的操作机上执行这三个脚本**；不签名的意图只能挡住“只改了锚点表”的伪造，挡不住同时能写审计链的攻击者（见 ADR-0055 补充的诚实边界）。
+- 升级前（迁移 072 之前）产生、且发生在某份离机锚点之后的锚点没有意图：这份旧锚点会判 `anchor-without-intent`。处理：核对操作记录后，做一份新的离机锚点，以后用新锚点复核。
+- 范围：目前只有 `--offbox` 比对做意图对账；`--against-backup` 仍按 §6 列出“备份之后新增的锚点”供人工对照。

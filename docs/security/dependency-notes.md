@@ -112,3 +112,39 @@ os-erp@0.2.0-alpha.1
 - **改动**：从 `package.json` 的 `dependencies` 删除 `zod`；`package-lock.json` 仅删去根包声明与 `node_modules/zod` 条目（无其他包变化，没有升级任何依赖）；重新生成 `THIRD_PARTY_NOTICES.md`；`docs/security/audit-allowlist.json` 的 `allow` 清空为 `[]`，GHSA-mrhx-c7xc-m3w5 不再需要豁免；运行时依赖清单现为 7 个。`release/sbom.cdx.json` 在打包时由锁文件现场生成，仓库内没有提交的 SBOM 文件。
 - `.npmrc` 仍指向镜像 `registry.npmmirror.com`，该镜像不实现审计接口，`npm audit` 仍须用 `--registry=https://registry.npmjs.org`（CI 步骤的做法不变）。
 - 第 8 节中关于 zod 白名单的描述保留为历史记录，已被本节取代。
+
+## 10. 依赖复查节奏与开发依赖审计（AE7，2026-10-24）
+
+**两道审计，范围不同**
+
+| 模式 | 命令 | 门槛 | 白名单段 | 何时跑 |
+|---|---|---|---|---|
+| 运行依赖（默认） | `node scripts/check-audit-allowlist.mjs` | high 及以上 | `allow` | 每次 CI 的 checks job |
+| 开发依赖 | `node scripts/check-audit-allowlist.mjs --include-dev` | 仅 critical | `dev` | 手动 `dependency-review` job（`workflow_dispatch`），本地可随时跑 |
+
+- 两段白名单互不通用：`allow` 里的条目不能豁免开发模式，`dev` 里的条目也不能豁免运行模式。条目格式相同（`advisory` GHSA 编号、`reason` 至少 20 字符、`expires` 晚于今天且不超过 180 天）；`dev` 段缺失或不是数组时，开发模式失败（失败即关闭）。
+- 开发依赖只以 critical 为门槛：它们不进客户运行进程、不进发行包，high 级公告只会出现在审计输出里，不挡 CI。这是策略选择，不是"开发依赖安全"的结论。
+- 审计需要访问 npm 官方 registry（仓库 `.npmrc` 的镜像不实现审计接口，脚本已显式覆盖）。
+
+**复查节奏**
+
+- 每月手动触发一次 CI 的 `dependency-review`（Actions 页面 Run workflow，选 `main`）。两种模式都会运行，任一失败则 job 失败，但摘要无论成败都会上传。
+- 白名单条目到期即失败：到期前要么确认仍无修复并重写 `reason` 后续期（最长再给 180 天），要么升级或移除依赖并删除条目。"白名单里已不再出现的公告"会被提示，应顺手删除。
+- 发现 critical 时先判断可达性（同第 3、4 节的方法：依赖链、入口、输入是否可信），再决定升级、替换或限期豁免；豁免必须写清真实理由，不能只写"开发依赖"。
+
+**怎么读摘要**
+
+artifact 名 `os-erp-dependency-review-<run id>-<attempt>`，保留 30 天，含两个文件：`audit-runtime.json`、`audit-dev.json`。字段：
+
+- `mode`（`runtime`/`dev`）、`threshold`（`high`/`critical`）
+- `ok`：该模式是否通过
+- `failures`：未登记的公告、已过期或格式错误的条目、审计接口出错等，每条一句话；`ok` 为 false 时才非空
+- `covered`：被白名单豁免的公告及其 `expires`
+- `unused`：白名单里有、审计里已没有的条目（应删除）
+
+`failures` 里出现 `audit unusable` 或 `cannot obtain audit output` 说明没有拿到审计结果（网络、registry），不是"没有漏洞"。
+
+**首次本地运行（2026-10-24，Node 22，官方 registry）**
+
+- `npm audit --json`（全部依赖）：info/low/moderate/high/critical 均为 0，总计 0；开发模式与运行模式都通过，`dev` 与 `allow` 段均为空。因此当前没有需要豁免的 critical 开发依赖，也没有登记任何条目。
+- 未验证：`dependency-review` job 尚未在 GitHub 上运行；公告库随时间变化，结果只对该时刻有效。

@@ -3,7 +3,7 @@
 <!-- generated -->
 <!-- 由 `node scripts/gen-codemap.mjs` 生成，勿手改；CI 校验不漂移 -->
 
-共 55 个 ADR 文件。批次来自 `scripts/gen-changelog.mjs` 的 BATCHES（编号区间）；状态是 ADR 原文“状态：”一句的摘录（没有就如实标注），**不代表验收**；“守卫 / 测试”是 ADR 正文里提到的文件路径（静态正则提取，路径不存在时标注“（不存在）”），不证明该测试覆盖了 ADR 的全部决定。
+共 56 个 ADR 文件。批次来自 `scripts/gen-changelog.mjs` 的 BATCHES（编号区间）；状态是 ADR 原文“状态：”一句的摘录（没有就如实标注），**不代表验收**；“守卫 / 测试”是 ADR 正文里提到的文件路径（静态正则提取，路径不存在时标注“（不存在）”），不证明该测试覆盖了 ADR 的全部决定。
 
 | 编号 | 标题 | 批次 | 状态（原文摘录） | 守卫（scripts/） | 测试（tests/） |
 |---|---|---|---|---|---|
@@ -59,6 +59,7 @@
 | 0051 | [ADR-0051 总部角色名单单点与 docflow 严格门店绑定（AC2）](ADR-0051-hq-roles-docflow-binding.md) | 第十二批（进行中） | 开发实现，尚非产品上线验收 | `gen-role-matrix.mjs`<br>`test-setting-audit.mjs` | — |
 | 0052 | [ADR-0052：发行证据透明日志与 CI 签名口径（AC6）](ADR-0052-evidence-transparency-log.md) | 第十二批（进行中） | 开发实现，尚非产品上线验收 | `lib/evidence-log.mjs` | — |
 | 0053 | [ADR-0053：指标接口按范围收口，`report.dashboard_kpi` 与 dealer summary 补功能权限（AD1）](ADR-0053-metrics-scope-and-kpi-permissions.md) | 第十三批（进行中） | 开发实现，尚非产品上线验收 | `test-metrics.mjs` | — |
-| 0054 | [ADR-0054：审计 FTS5 索引可选化与无 FTS5 构建的真实验证（AD4）](ADR-0054-audit-fts-optional.md) | 第十三批（进行中） | 开发实现，尚非产品上线验收 | `audit-fts-maintain.mjs`<br>`test-setting-audit.mjs` | — |
+| 0054 | [ADR-0054：审计 FTS5 索引可选化与无 FTS5 构建的真实验证（AD4）](ADR-0054-audit-fts-optional.md) | 第十三批（进行中） | 开发实现，尚非产品上线验收 | `audit-fts-maintain.mjs`<br>`bench-audit-fts-toggle.mjs`<br>`test-setting-audit.mjs` | — |
 | 0055 | [ADR-0055：透明日志与审计链的离机签名锚点（AD5）](ADR-0055-offbox-anchors.md) | 第十三批（进行中） | 开发实现，尚非产品上线验收 | `lib/offbox-anchor.mjs`<br>`offbox-anchor.mjs` | — |
 | 0056 | [ADR-0056：MCP 工具级速率限制与日配额（AD9）](ADR-0056-mcp-rate-limit-quota.md) | 第十三批（进行中） | 开发实现，尚非产品上线验收 | — | — |
+| 0057 | [ADR-0057：指标按业务查看权限过滤，受限范围默认隐藏无范围语义的指标（AE1）](ADR-0057-metrics-perms-hide.md) | 第十四批（进行中） | 开发实现，尚非产品上线验收 | `test-setting-audit.mjs` | — |

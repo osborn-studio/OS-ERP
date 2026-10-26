@@ -608,6 +608,11 @@ node scripts/upgrade-rehearsal.mjs --from=58 --backup-dir=/abs/new-dir/data/back
 - **它是过渡，不是 `nightly-capacity.yml` 的替代**。`ci.yml` 已在 `main` 上（已有 `workflow_dispatch`），按 GitHub 的规则，`gh workflow run ci.yml --ref <推送后的分支>` 理论上可以在合入前直接运行分支上的新 job；但**本次没有推送、没有触发**，没有任何 run id，所以这里没有它的任何数字（该分支派发方式也未验证）。`nightly-capacity.yml` 合入 `main` 后应删除该 job，按下方命令跑三次规定运行。
 - 未验证：该 job 在 GitHub 上能否 30 分钟内跑完（20 分钟预算只约束生成阶段，备份、两次恢复演练、explain-audit、压测、写档压测在剩余时间内；托管 runner 上没有任何耗时数据）。
 
+### AE8 复查（2026-10-24）：未派发（main 上不可用）
+- 检查：`gh api repos/osborn-studio/OS-ERP/contents/.github/workflows/nightly-capacity.yml?ref=main` 无内容（`main` 的 `.github/workflows` 下没有该文件）；`main` 上 `ci.yml` 只含 `checks`、`docker`、`regression` 三个 job，**没有** `capacity-smoke`，也没有 `candidate`。`gh pr list` 显示 PR #4–#8 仍为 OPEN，仅 #1–#3 已合并（PR #9 的基线 `batch-thirteen` 也未进入 `main`）。
+- 结果：已派发 0 次（`nightly-capacity.yml` 0/3，`capacity-smoke` 0/1，`candidate` 0/1）；没有 run id，上面的结果登记表保持待填，本节没有任何托管 runner 数字。`capacity-smoke` 过渡 job 也不能删除：它尚未在 `main` 上，且从未跑过。未修改任何工作流或仓库设置。
+- 等待项：合入 `main` 的顺序决定首跑条件。`nightly-capacity.yml` 与 `capacity-smoke`/`candidate` 到达 `main` 后，再按下方命令各派发一次；全部成功且 `nightly-capacity.yml` 在 `main` 上时，才删除 `capacity-smoke`（整块）及其策略测试。
+
 ### 触发（合入 `main` 之后；只用 `gh workflow run`，不改仓库设置）
 ```bash
 gh workflow run nightly-capacity.yml --ref main -f rehearsal=true -f snapshot_upto=58
@@ -725,3 +730,82 @@ gh run view <run-id> --log-failed
 - 复现：`node scripts/bench-oms-order-time.mjs --rows 200000 --span 365 --out result.json`（`--span 60` 为最坏情形）。
 - 未覆盖：`dmserver` 与生产规模副本；机器空闲时的数字；真实 OMS 订单的时间分布；并发写入下的索引争用；`oms.js` `/stats` 等其它 `date(order_time)` 查询（未改）。
 - explain-audit（合成库，`synth-data --skus 300 --docs 300 --txns 1500`，只读）：111 条语句，**0 违规**，裸 SCAN 27（豁免 26、小表 1），索引全扫 6；`dash.trend_*` 与 `dash.channel_online` 的计划见上表，`dash.channel_online` 的豁免已移除。
+
+## AE4 审计 FTS 开关：`--enable`（回填）/ `--disable` 在合成 100 万行库上的耗时（**Mac mini / 合成 100 万行 / 非目标主机 / 单次墙钟 / 机器有负载（1 分钟负载约 7）**）
+
+脚本：`node scripts/bench-audit-fts-toggle.mjs --rows 1000000`（用法见 `docs/operations/audit-search.md` 第 5 节）。流程：临时目录建库（schema + 全部迁移）→ 先 `--disable`（空库）→ 用 `bench-audit-logs.mjs` 的 `seed()`（唯一 INSERT 点 `insertAuditRow`，含 AB6 哈希链，此时**没有** FTS 触发器）写入 100 万行（种子 20261024，37.4 s）→ `wal_checkpoint(TRUNCATE)`（库 373 MB）→ 依次 `--enable`、`--integrity-check`、`--disable`、`--enable`、`--integrity-check`；每步都是真实子进程调用维护脚本、读它的 JSON 报告（`elapsed_ms` = BEGIN→COMMIT 墙钟；`lock_probe` = 另一线程每约 1 ms 试 `BEGIN IMMEDIATE`）。临时目录结束即删（脚本打印 `temp dir removed: true`）。
+
+| 步骤 | elapsed_ms | 写入者被挡（下界 / 上界，ms）| 库文件（含 WAL，MB）|
+|---|---|---|---|
+| `--enable`（第 1 次，建表 + 触发器 + 回填 100 万行）| **1637** | **1462 / 1465** | 373 → 489 |
+| `--integrity-check` | 740 | 738 / 741 | 431 → 431 |
+| `--disable`（100 万行时删表 + 触发器）| **18.8** | 17 / 20 | 431 → 431（不缩小）|
+| `--enable`（第 2 次）| **1540** | **1442 / 1445** | 431 → 489 |
+| `--integrity-check` | 774 | 772 / 775 | 431 → 431 |
+
+读法（诚实边界）：
+- **100 万行启用回填约 1.5–1.6 s 持写锁**（一个被挡窗口 = 单次写事务）。比 AC5（`--rebuild` 3–4 s）和 AB3（067 回填 2.7–3.9 s）都快，原因是本次测量时机器负载低得多（约 7，AC5 时约 29–30），不是代码差异；**只看量级**，目标主机更慢或真实库三列文本更长时回填更久，可能超过默认 `busy_timeout` 5 s（届时并发写入收到 `SQLITE_BUSY`）——低峰执行。
+- `--disable` 只是 `DROP`，近乎瞬时（约 19 ms），但**数据库文件不会缩小**（页进入空闲链表，431 → 431 MB）；要回收磁盘需要另行 `VACUUM`（本次未测，大库上要重写整个文件并持写锁）。
+- 启用后库增量约 +116 MB（373 → 489，含 WAL 里待检查点的页；稳定后索引约 +58 MB，见 `--integrity-check` 前后 431 MB 对 373 MB），合成数据的 `detail` 很短，三列文本也短。
+- 未覆盖：`dmserver` 与生产规模副本；服务在满负荷写入下执行 `--enable` 时的写入者失败率；回收磁盘的 `VACUUM`。
+
+## AE9 MCP 限速 db 存储模式：每次调用的额外开销（**Mac mini / 临时 WAL 库 / 单进程单连接 / 非目标主机 / 整机高负载 / 单次运行**）
+
+`GML_MCP_RATE_STORE=db` 把每次放行变成一个 `BEGIN IMMEDIATE` 短事务（读当前与上一窗口计数 → 滑动窗口判定 → `INSERT … ON CONFLICT DO UPDATE SET count=count+1`，写型调用同事务写两行）。基准只量 `consume()` 本身（不含 HTTP / 鉴权 / 工具执行），额度开到最大，只走放行路径；预热 500 次后每组 20000 次，50 个令牌轮转。
+
+| 模式 | 调用类型 | p50 | p95 | p99 | 平均 |
+|---|---|---|---|---|---|
+| memory | read | 0.4 µs | 0.7 µs | 1.3 µs | 0.4 µs |
+| db | read | 13.1 µs | 37.9 µs | 56.0 µs | 17.8 µs |
+| memory | write | 0.7 µs | 0.8 µs | 0.9 µs | 0.7 µs |
+| db | write | 13.8 µs | 36.3 µs | 53.2 µs | 19.4 µs |
+
+读法：`db` 模式比 `memory` 多约 **13 µs（中位）/ 18–19 µs（平均）/ 约 38 µs（p95）**，对一次 MCP 调用（HTTP + 令牌验签 + 工具查询 + 审计写，毫秒级）是小数；写型调用的第二行 UPSERT 几乎不增加（同一事务）。真正的代价不在 CPU 而在**写锁**：每次放行都持一次 SQLite 写锁，MCP 高频调用会与业务写入排队（BUSY 由 `withWriteRetry` 重试，用尽 ⇒ fail closed）。因此默认仍是 `memory`；多进程部署或需要重启后不清零时才开 `db`。
+
+- 复现：`node scripts/bench-mcp-rate-store.mjs [--n=20000] [--tokens=50]`。
+- 未覆盖：`dmserver`；多进程同时写时的锁等待分布（正确性由 `tests/mcp-rate-store-db.test.mjs` 的 4 进程竞速用例验证：恰好放行 `rpm` 次，不是性能数据）；与业务写入争用下的尾延迟；`synchronous=FULL` / 网络盘；表在长期运行后的体积（每令牌每分钟至多 2 个窗口 × 2 种 kind 的行，清理线之外的行由定时器删除）。
+
+
+## AE3 OMS `/stats` 与 AI 平台分析：区间谓词前后（**Mac mini / 合成 20 万 OMS 单 + 每单一行明细 / 非目标主机 / 整机负载 8–21**）
+
+脚本：`node scripts/bench-oms-order-time.mjs --rows 200000 --span 365|60 --repeat 21|31`（输出 `ae3` 键；全新临时目录；不跑 `ANALYZE`）。"前"= AE3 之前的 SQL（`date(order_time) >= …`，无迁移 070 索引）；"后"= `server/lib/oms-sql.js` 的新 SQL + 迁移 070 索引。新旧 SQL 在全局与受限组织范围（org 1 = 平台 1、2）、30 / 90 天窗口上逐条返回相同行（脚本断言 `ae3.results_identical: true`，三次运行均为真）。**负载高、同机并行，绝对值抖动可达 2×，只看量级；同计划的语句（`stats_top_skus`、受限范围）前后差异是噪声，不是改动效果。不是 `dmserver` 结果。**
+
+### 计划（全局范围）
+| 语句 | 前 | 后 |
+|---|---|---|
+| `/stats` trend | `SCAN oms_orders` + 临时 B 树分组 | `SEARCH oms_orders USING COVERING INDEX idx_oms_order_time (order_time>?)` + 分组 |
+| `/stats` total | `SCAN oms_orders` | `SEARCH … COVERING INDEX idx_oms_order_time (order_time>?)` |
+| AI 平台分析 | `SCAN pf` + `SEARCH o USING INDEX sqlite_autoindex_oms_orders_1 (platform_id=?)`（逐平台读该平台全部订单） | `SEARCH o USING COVERING INDEX idx_oms_order_time (order_time>?)` + `SEARCH pf … (rowid=?)` |
+| `/stats` byPlatform | `SCAN pf` + `SEARCH o USING INDEX sqlite_autoindex_oms_orders_1 (platform_id=?) LEFT-JOIN` | **不变**（平台驱动，platform_id 等值走自动索引；区间谓词只作过滤） |
+| `/stats` topSkus | `SCAN i` + `SEARCH o (rowid=?)` | **不变**（明细表驱动） |
+| 受限组织范围的 trend / total / topSkus / byPlatform | 范围子查询 `platform_id IN (…)` → `SEARCH oms_orders … (platform_id=?)` | **不变**（规划器按 platform_id 走；区间谓词只作过滤） |
+
+### 延迟（ms，中位数，20 万行；仅列计划改变的语句）
+数据铺满 365 天（负载 ≈ 8）：
+
+| 窗口 / 语句 | 前 | 后 |
+|---|---|---|
+| 30 天 trend | 21.1 | **3.2** |
+| 30 天 total | 19.3 | **2.0** |
+| 30 天 AI 平台分析 | 64.3 | **3.5** |
+| 90 天 trend | 30.9 | 20.8 |
+| 90 天 total | 22.2 | 10.1 |
+| 90 天 AI 平台分析 | 73.8 | 16.4 |
+
+数据全部在最近 60 天内（窗口覆盖 100% 的行，最坏情形；两次运行，负载 15 / 21）：
+
+| 窗口 / 语句 | 前 | 后（第 1 次 / 第 2 次） |
+|---|---|---|
+| 30 天 trend | 90.3 / 74.4 | 34.6 / 29.0 |
+| 30 天 total | 27.4 / 42.1 | 27.1 / 17.5 |
+| 30 天 AI 平台分析 | 86.5 / 86.1 | 59.9 / 29.0 |
+| 90 天 trend | 120.1 / 108.3 | 96.3 / 58.1 |
+| 90 天 total | 32.4 / 40.6 | 47.6 / 54.5 |
+| 90 天 AI 平台分析 | 79.3 / 87.8 | 126.5 / 77.8 |
+
+读法：窗口较窄时（30 天、数据跨一年）收益显著（trend 约 6×、total 约 10×、AI 约 18×）；窗口覆盖多数行时覆盖索引与整表扫描量级相当，**90 天 total、90 天 AI 在最坏分布下可能略慢于前（47–55 vs 32–41、78–127 vs 79–88，噪声范围内但方向不利）**——与 AD3 对 `/trend`、`/channel` 的结论一致。`/stats` 无缓存，每次请求都付这个代价。受限范围、byPlatform、topSkus 未改计划，没有收益也没有回退声明。
+
+### 未覆盖
+- `dmserver` 与生产规模副本；机器空闲时的数字；真实订单时间分布。
+- 受限范围与 topSkus 仍不走 `idx_oms_order_time`：前者要把范围子查询改写成对 `platform_id` 的非等值形式，后者要改连接顺序（浮点求和顺序可能变，不能保证逐位相同）——均未做，见 ADR-0044 补充 4。
+- explain-audit（合成库，见 ADR 补充 4 记录）：`oms.stats_trend`、`oms.stats_total`、`ai.platform_analysis` 声明 `expectIndex` + `expectSearch`；其余六条 `oms.stats_*` 登记只守"无裸 SCAN"，`oms.stats_top_skus*` 的明细表扫描有书面豁免。

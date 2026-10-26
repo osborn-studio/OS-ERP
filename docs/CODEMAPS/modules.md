@@ -3,7 +3,7 @@
 <!-- generated -->
 <!-- 由 `node scripts/gen-codemap.mjs` 生成，勿手改；CI 校验不漂移 -->
 
-共 86 个模块。“路由”只列在处理器区域内直接引用该函数的路由（路由超过 5 条时按路由文件汇总，明细见 [routes.md](routes.md)）；“MCP 工具”来自 `server/mcp/tools.js` 的 40 个工具；“被模块调用”是其它 lib/mcp 模块里的跨文件引用。“—”表示静态扫描没找到调用方，不等于死代码。
+共 88 个模块。“路由”只列在处理器区域内直接引用该函数的路由（路由超过 5 条时按路由文件汇总，明细见 [routes.md](routes.md)）；“MCP 工具”来自 `server/mcp/tools.js` 的 40 个工具；“被模块调用”是其它 lib/mcp 模块里的跨文件引用。“—”表示静态扫描没找到调用方，不等于死代码。
 
 ## 扫描边界（必读）
 
@@ -191,6 +191,21 @@
 | `syncOcAr` | fn | POST /api/ar/oc/sync | — | — |
 | `voidReceipt` | fn | POST /api/ar/receipts/:id/void | — | — |
 
+## `server/lib/audit-anchor-intent.js`
+
+审计锚点“操作意图”：写入（保留清理 / 归档 / 隐私抹除）与校验（离机锚点比对）（AE5，ADR-0055 补充）
+
+| 导出 | 类型 | 路由 | MCP 工具 | 被模块调用 |
+|---|---|---|---|---|
+| `INTENT_FORMAT` | const | — | — | — |
+| `OPERATION_ACTIONS` | const | — | — | — |
+| `anchorMark` | fn | — | — | — |
+| `intentHash` | fn | — | — | — |
+| `intentRef` | fn | — | — | — |
+| `linkIntentAuditRow` | fn | — | — | — |
+| `recordAnchorIntent` | fn | — | — | — |
+| `verifyAnchorIntents` | fn | — | — | — |
+
 ## `server/lib/audit-anchor-manifest.js`
 
 审计链尾 / 锚点摘要的离机清单：生成、读取、与在用库比对（ADR-0049 补充，AC7）
@@ -259,6 +274,7 @@
 | `ftsAvailable` | fn | — | — | — |
 | `ftsEnvDisabled` | fn | — | — | — |
 | `ftsPhrase` | fn | — | — | — |
+| `ftsState` | fn | GET /api/meta/audit-logs | — | — |
 | `keywordUsesFts` | fn | GET /api/meta/audit-logs<br>GET /api/meta/audit-logs/export.csv | — | — |
 | `orderOf` | fn | GET /api/meta/audit-logs<br>GET /api/meta/audit-logs/export.csv | — | — |
 | `parseFilters` | fn | GET /api/meta/audit-logs<br>GET /api/meta/audit-logs/export.csv | — | — |
@@ -701,7 +717,7 @@ HTTP 响应与错误归一：`ok` / `fail` / `wrap` 的**唯一实现**（统一
 | 导出 | 类型 | 路由 | MCP 工具 | 被模块调用 |
 |---|---|---|---|---|
 | `logFormat` | fn | — | — | — |
-| `logger` | const | — | — | lib/profile.js, lib/tx.js, mcp/server.js |
+| `logger` | const | — | — | lib/mcp-rate-limit.js, lib/profile.js, lib/tx.js, mcp/server.js |
 | `requestLogger` | fn | — | — | — |
 
 ## `server/lib/login-throttle.js`
@@ -722,7 +738,10 @@ MCP 按令牌的速率限制与日配额（ADR-0056 / AD9）
 |---|---|---|---|---|
 | `DEFAULT_MCP_RATE` | const | — | — | — |
 | `createMcpRateLimiter` | fn | — | — | mcp/server.js |
+| `dailyQuotaConfigured` | fn | — | — | — |
 | `dailyQuotaState` | fn | — | — | — |
+| `mcpRatePolicy` | fn | — | — | — |
+| `rateStoreFromEnv` | fn | — | — | — |
 
 ## `server/lib/member.js`
 
@@ -797,6 +816,7 @@ Prometheus 文本指标渲染 + 抓取令牌校验（ADR-0045）
 | 导出 | 类型 | 路由 | MCP 工具 | 被模块调用 |
 |---|---|---|---|---|
 | `METRICS` | const | — | — | — |
+| `METRICS_GLOBAL_MODE_KEY` | const | — | — | — |
 | `METRIC_BY_KEY` | const | — | — | — |
 | `METRIC_DEFS_FINGERPRINT_ID` | const | — | — | — |
 | `isScopeRestricted` | fn | — | — | — |
@@ -806,6 +826,7 @@ Prometheus 文本指标渲染 + 抓取令牌校验（ADR-0045）
 | `metricGroups` | fn | GET /api/metrics | — | — |
 | `metricScopedFlags` | fn | GET /api/metrics/values | — | — |
 | `metricValues` | fn | GET /api/metrics/values | — | — |
+| `metricVisibility` | fn | GET /api/metrics<br>GET /api/metrics/values<br>GET /api/metrics/catalog | — | — |
 | `syncMetricDefs` | fn | POST /api/metrics/sync | — | — |
 
 ## `server/lib/mfg.js`
@@ -875,6 +896,18 @@ Prometheus 文本指标渲染 + 抓取令牌校验（ADR-0045）
 | `releaseByOrder` | fn | — | — | lib/credit-release.js |
 | `reoccupyByOrder` | fn | — | — | lib/credit-release.js |
 | `writeOcCredit` | fn | — | — | lib/order-center.js |
+
+## `server/lib/oms-sql.js`
+
+OMS /stats 与 AI 平台分析的 SQL 唯一来源（AE3，ADR-0044 补充 4）
+
+| 导出 | 类型 | 路由 | MCP 工具 | 被模块调用 |
+|---|---|---|---|---|
+| `aiPlatformAnalysisStmt` | fn | POST /api/ai/query | — | — |
+| `omsStatsByPlatformStmt` | fn | GET /api/oms/stats | — | — |
+| `omsStatsTopSkusStmt` | fn | GET /api/oms/stats | — | — |
+| `omsStatsTotalStmt` | fn | GET /api/oms/stats | — | — |
+| `omsStatsTrendStmt` | fn | GET /api/oms/stats | — | — |
 
 ## `server/lib/ops-status.js`
 
@@ -1053,8 +1086,9 @@ Prometheus 文本指标渲染 + 抓取令牌校验（ADR-0045）
 | `MCP_RESULT_CODES` | const | — | — | — |
 | `counterSnapshot` | fn | GET /api/meta/metrics | — | — |
 | `histogramSnapshot` | fn | GET /api/meta/metrics | — | — |
-| `incCounter` | fn | — | — | lib/audit-trail.js, lib/db-ttl-cache.js, lib/login-throttle.js, mcp/server.js |
+| `incCounter` | fn | — | — | lib/audit-trail.js, lib/db-ttl-cache.js, lib/login-throttle.js, lib/mcp-rate-limit.js, mcp/server.js |
 | `incMcpToolCall` | fn | — | — | mcp/server.js |
+| `mcpCodeTotal` | fn | — | — | — |
 | `observeHistogram` | fn | — | — | lib/audit-trail.js |
 | `registerMcpTools` | fn | — | — | mcp/server.js |
 | `resetCounters` | fn | — | — | — |
@@ -1106,7 +1140,7 @@ Prometheus 文本指标渲染 + 抓取令牌校验（ADR-0045）
 | 导出 | 类型 | 路由 | MCP 工具 | 被模块调用 |
 |---|---|---|---|---|
 | `DocFlowError` | 再导出（未解析） | — | — | — |
-| `PO_READ_PERMS` | const | — | — | — |
+| `PO_READ_PERMS` | const | — | — | lib/metrics.js |
 | `PURCHASE_ORDER_FROM` | const | — | — | — |
 | `PURCHASE_ORDER_SELECT` | const | — | — | — |
 | `PurchaseError` | class | — | — | — |
@@ -1444,6 +1478,7 @@ Prometheus 文本指标渲染 + 抓取令牌校验（ADR-0045）
 | `buildRoleMatrix` | fn | — | — | — |
 | `describeCaller` | fn | — | — | — |
 | `roleMatrixFor` | fn | GET /api/meta/role-matrix | — | — |
+| `unionCells` | fn | — | — | — |
 
 ## `server/lib/sales-order.js`
 
@@ -1497,7 +1532,7 @@ Prometheus 文本指标渲染 + 抓取令牌校验（ADR-0045）
 | `logSettingChange` | fn | — | — | — |
 | `meta` | fn | — | — | — |
 | `normalizeSettingValue` | fn | — | — | lib/mcp-rate-limit.js |
-| `readSetting` | fn | 7 条：docflow.js×5, invoice.js×1, meta.js×1 | — | 15 个：lib/accounting.js, lib/annual.js, lib/approval.js, lib/closing.js, lib/credit.js, lib/funds-review.js … |
+| `readSetting` | fn | 7 条：docflow.js×5, invoice.js×1, meta.js×1 | — | 18 个：lib/accounting.js, lib/annual.js, lib/approval.js, lib/audit-view.js, lib/closing.js, lib/credit.js … |
 | `replaySettings` | fn | — | — | — |
 | `resetSetting` | fn | POST /api/meta/settings/reset | — | — |
 | `settingDef` | fn | — | — | — |
@@ -1547,10 +1582,10 @@ Prometheus 文本指标渲染 + 抓取令牌校验（ADR-0045）
 
 | 导出 | 类型 | 路由 | MCP 工具 | 被模块调用 |
 |---|---|---|---|---|
-| `boundDealerId` | fn | — | — | lib/approval.js, lib/docflow.js |
-| `boundStoreId` | fn | 36 条：pos.js×31, requisitions.js×5 | — | lib/approval.js, lib/docflow.js |
-| `isExternalSubject` | fn | — | — | lib/approval.js, lib/docflow.js |
-| `storeBindingExempt` | fn | — | — | lib/approval.js, lib/docflow.js |
+| `boundDealerId` | fn | GET /api/metrics<br>GET /api/metrics/values<br>GET /api/metrics/catalog | — | lib/approval.js, lib/docflow.js |
+| `boundStoreId` | fn | 39 条：metrics.js×3, pos.js×31, requisitions.js×5 | — | lib/approval.js, lib/docflow.js |
+| `isExternalSubject` | fn | GET /api/metrics<br>GET /api/metrics/values<br>GET /api/metrics/catalog | — | lib/approval.js, lib/docflow.js |
+| `storeBindingExempt` | fn | GET /api/metrics<br>GET /api/metrics/values<br>GET /api/metrics/catalog | — | lib/approval.js, lib/docflow.js |
 
 ## `server/lib/transfer.js`
 
@@ -1588,7 +1623,7 @@ Prometheus 文本指标渲染 + 抓取令牌校验（ADR-0045）
 | `backoffMs` | fn | — | — | — |
 | `isBusyError` | fn | — | — | — |
 | `resetWriteRetryStats` | fn | — | — | — |
-| `withWriteRetry` | fn | 8 条：ar.js×2, inventory.js×3, purchase.js×3 | — | — |
+| `withWriteRetry` | fn | 8 条：ar.js×2, inventory.js×3, purchase.js×3 | — | lib/mcp-rate-limit.js |
 | `writeRetryMaxFromEnv` | fn | — | — | — |
 | `writeRetryStats` | fn | GET /api/meta/metrics | — | — |
 
@@ -1693,6 +1728,8 @@ MCP 服务端：以标准 MCP（2026-07-28 无状态版）暴露系统业务能�
 | 导出 | 类型 | 路由 | MCP 工具 | 被模块调用 |
 |---|---|---|---|---|
 | `CACHE_DENIED` | const | — | — | — |
+| `mcpRateStore` | const | — | — | — |
+| `purgeMcpRateBuckets` | fn | — | — | — |
 | `redactArgs` | fn | — | — | — |
 
 ## `server/mcp/tokens.js`

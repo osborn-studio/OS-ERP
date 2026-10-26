@@ -153,3 +153,19 @@
 | `candidate` job 的 `--ci-run=auto` 在同一提交无成功 CI 时为 null；推 `v*` 标签会同时触发其余 job | AD10 |
 | `boss` 进总部名单后 docflow 可见范围扩大 | 产品确认 | AD2 |
 | `dmserver` 上的所有性能数字均未复测 | 目标主机 | 全批 |
+
+## 第十四批后仍 open 的残留
+
+| 位置 | 残留 | 来源 |
+|---|---|---|
+| `ci.yml` 标签推送跳过 `checks/docker/browser/regression` | 跳过的 job 对同一 SHA 可能被当作已通过的状态；结构性修法是独立的标签专用工作流 | AE10 Codex 审计（高） |
+| 销售/OMS/订货中心指标无 `scopeAware` | `hide` 模式下对受限账号整体隐藏而非按范围计算 | AE1 |
+| `permContext` 仍计入停用角色的权限；矩阵只列启用角色 | 一致性 | AE2 |
+| OMS byPlatform/topSkus 与受限范围语句仍不走 `idx_oms_order_time`；区间谓词对非规范 `order_time` 文本与 `date()` 不等价（已接受） | AE3 |
+| `--disable` 期间在途请求可能 `no such table`；启动自愈与维护脚本并发可能 `SQLITE_BUSY_SNAPSHOT` | 无重试、无重叠测试 | AE4 Codex 审计（中） |
+| 意图对账未用于 `--against-backup`；未签名意图挡不住能写库者；迁移 072 之前的锚点需重新取离机锚点 | AE5 |
+| 加密备份改名后未 fsync 目录、明文清单未 fsync；真实掉电未测 | AE6 Codex 审计（中） |
+| `dependency-review`、`capacity-smoke`、`candidate`、`audit-no-fts5` 等 job 与夜间工作流均未在托管 runner 上实跑（工作流不在 main） | AE7/AE8/AE10 |
+| `db` 限速模式：60 s 清理定时器未在真实服务中观察；高并发业务写下的尾延迟未测 | AE9 |
+| 新浏览器场景（审计 FTS 状态、MCP 限速卡、指标隐藏说明）未执行 | Linux CI | AE11 |
+| `dmserver` 上的所有性能数字均未复测 | 目标主机 | 全批 |

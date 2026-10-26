@@ -46,3 +46,11 @@ groups:
         annotations:
           summary: "MCP 调用持续被速率限制或日配额拒绝（429）"
           description: "到 MCP 调用日志按 token_name 找调用量最大的令牌（被限流的调用不写审计行，看放行的那部分即可）；确认是滥用则吊销令牌，是合理用量则调 GML_MCP_TOKEN_RPM / GML_MCP_WRITE_RPM 或设置键 mcp_token_daily_quota。"
+
+      - alert: OsErpMcpRateStoreUnavailable
+        # AE9：GML_MCP_RATE_STORE=db 时限速桶写入失败。fail closed —— 失败期间对应的 MCP 调用全部被拒（429，detail.reason=store_unavailable），所以不等 for
+        expr: sum(increase(os_erp_mcp_rate_store_failures_total{reason="write_failed"}[5m])) > 0
+        labels: { severity: critical }
+        annotations:
+          summary: "MCP 限速存储（mcp_rate_buckets）写入失败，调用被安全拒绝"
+          description: "检查数据库文件所在磁盘 / 权限 / 写锁争用（日志里 mcp rate store write failed 一行含 err_code）与迁移 073 是否已执行；purge_failed 则是后台清理过期桶失败（不影响放行，但表会变大）。见 ADR-0056 补充。"

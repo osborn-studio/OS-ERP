@@ -47,3 +47,30 @@ Codex 审计（gpt-6.1-sol，只读，针对相对 batch-twelve 的差异）：�
 - 中：071 用 `trim()` 判关，`" 0 "` 会删除索引，与"恰为 0"的约定不符 ⇒ 已修：只认规范串 `"0"`，测试覆盖 `" 0 "`/false/off/空串/junk。
 - 中：脚本的 `ensureSettings` 在 `BEGIN IMMEDIATE` 之前提交，之后失败会留下新播种的设置行与基线日志 ⇒ 已修：移入同一事务，新增失败回滚测试（触发器注入失败，对象、设置行、基线日志均回滚）。
 - 未执行：Linux runner 上的无 FTS5 重编译 job（本地 macOS 试验在复制的 `better-sqlite3` 上通过并跑完两个测试文件：45 个用例，21 通过、23 跳过、1 失败；该失败是 `AA6 explain-audit` 断言 FTS 语句存在，已对无 FTS5 构建改为跳过并复跑通过）。
+
+---
+
+## 补充（AE4，第十四批）：运维闭环的端到端验证、回填实测与无 FTS5 job 的复核
+
+状态：开发实现，尚非产品上线验收｜相关：roadmap-v10 AE4
+
+### 做了什么
+1. **端到端运维闭环测试** `tests/audit-fts-ops-loop.test.mjs`（真实 `server/index.js` 子进程、临时数据目录、随机 loopback 端口，维护脚本也是真实子进程）：服务运行中 `--disable`（对象与触发器删除、设置写 `"0"`、`setting_audit_log` 留痕）→ 关键词检索（含已有行与关闭后新写入的行）仍可用、答案与关闭前一致 → 重启服务，设置为关时不重建（`--integrity-check` 报 `absent`）→ `--enable` 建表 + 触发器 + 回填，关闭期间写入的行被索引（FTS 行数 = `audit_logs` 行数，`keywordUsesFts` 为真，`--integrity-check` 为 `ok`）→ 新写入由触发器维护，再重启仍为开。另有两个用例：缺 `--reason` 退出 2 且什么都不改（无 FTS5 构建上 `--enable` 报 `unsupported`）；`--enable` 遇另一连接持写锁 → `busy`、对象与设置都不变，释放后重试成功并回填。
+2. **基准脚本** `scripts/bench-audit-fts-toggle.mjs`：合成 N 行库上的 `--enable` / `--disable` / `--integrity-check` 耗时，数字写入 capacity-baseline "AE4"（100 万行启用回填 1.5–1.6 s 持写锁；`--disable` 约 19 ms，但库文件不缩小，需要另行 `VACUUM`）。
+3. **无 FTS5 的 CI job**：AD4 已经加了 `audit-no-fts5`（见上文第 4 节），所以本批**不新增 job**，也没有重复在 `node_modules` 副本里重编译；只复核了它依赖的前提在当前锁定的 better-sqlite3 上仍成立（`deps/defines.gypi` 中确有一行 `'SQLITE_ENABLE_FTS5',`，job 的 `sed` 模式可匹配）。该 job 的 `node --test` 命令未改动（避免与 AE6/AE7/AE8/AE10 同改 `ci.yml` 冲突），所以新测试文件里依赖 FTS5 的用例不在该 job 里跑，"无 FTS5 构建上 `--enable` 报 `unsupported`"这一分支也只在本地有 FTS5 的构建上被跳过（未在真实无 FTS5 构建上执行）。
+4. 文档：`docs/operations/audit-search.md` 第 5 节、操作手册第 38.5 节（含并发/失败语义与关闭不回收磁盘的说明）。
+
+### 并发与竞态的结论（设计层面，测试覆盖见上）
+- 设置与对象在同一个 `BEGIN IMMEDIATE` 事务里改：写者（含服务进程的每条审计写入）要么排在事务前（回填会包含它）、要么排在事务后（触发器已在），不存在"行写入了但既没被回填也没触发器"的窗口（回填正确性由测试里"关闭期间写入的行在 `--enable` 后被索引"断言）。
+- 运行中的服务不缓存"FTS 是否可用"（`ftsAvailable` 每次查 `sqlite_master`），所以 `--disable` 后无需重启，新请求立即转 LIKE（测试断言）。
+- **已知窗口（Codex 审计，中，未修，记录在案）**：① `meta.js` 先决定走 FTS 再执行查询；`--disable` 恰好在这两步之间提交时，那一个在途请求会得到 `no such table: audit_logs_fts`（500），CSV 导出若跨多个批次则可能在中途失败。仅限 `--disable`（`--enable` 只是新增对象）、仅限执行脚本的那一刻在途的请求；建议在低峰执行，或先 `GML_AUDIT_FTS=0` 重启切走查询路径再 `--disable`。② 启动自愈（071）在运行器的延迟事务里先读设置再写：若维护脚本恰在这两步之间提交，写升级会得到 `SQLITE_BUSY_SNAPSHOT`（`busy_timeout` 解决不了陈旧快照），启动失败、重试即可。**不能**据此声称"后到者等锁、之后一定看到收敛状态"；这条只在无重叠时成立。两处都没有加重试代码（改 `meta.js`/运行器超出 AE4 范围且与其它工作流同文件），也没有重叠测试。
+
+### 诚实边界
+- 托管 ubuntu runner 上 `audit-no-fts5` 的首次运行结果仍未验证（未触发任何工作流）。
+- 100 万行数字是 Mac mini、合成数据、机器有负载下的单次墙钟，不是目标主机结果；服务满负荷写入时执行 `--enable` 的写入者失败率未测。
+
+### 审计记录（AE4，Codex gpt-6.1-sol 只读，相对 batch-thirteen 的差异）
+无高危。`audit-no-fts5` job 的构建配置未发现缺陷；回填测试的断言有效（显式 `MATCH` + 外部内容 `integrity-check`，不只靠行数）。
+- 中：`--disable` 与在途检索请求的竞态 ⇒ **未修，记录为已知窗口**（见上，修复要改 `meta.js` 的路径选择或加 LIKE 重试，超出 AE4 范围）。
+- 中：启动自愈与重叠维护脚本的 `SQLITE_BUSY_SNAPSHOT`，以及本补充原稿"后到者等锁、必看到收敛状态"的过度表述 ⇒ 表述已更正；代码未改，无重叠测试。
+- 中：测试清理顺序（目录先于服务与连接被删）⇒ 已修：单个有序清理钩子（停服务 → 关连接 → 删目录）。

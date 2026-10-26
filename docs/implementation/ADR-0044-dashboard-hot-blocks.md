@@ -174,3 +174,28 @@ MCP 的范围依据从 `owner_org_id` 改为仓库所属组织，是 ADR-0038 �
 - **低 1（已修）**：小数天窗口的取整与 SQLite 不同（`TZ=UTC`、12:00:00Z、`days=0.500000001`：SQLite `2026-10-24`，JS `2026-10-23`）。→ `sinceDate` 按 SQLite 的毫秒取整（`trunc(N·86400000 + 0.5)`）减；测试加入边界窗口与子进程 UTC 瞬间，变异（去掉取整）使其变红。
 - **低 2（已修）**：`verify()` 只查索引名，`CREATE INDEX idx_oms_order_time ON oms_orders(status)` 会绕过自愈。→ `verify()` 与 `up()` 改为核对所属表、有序键列、非 UNIQUE、非局部；名字被占但定义不对时 `up()` 先 `DROP` 再重建（这个名字归迁移 070 所有）；测试覆盖单列 / UNIQUE / 局部三种漂移。
 - 审计提到的"登记语句的绑定参数在模块加载时取快照"：explain-audit 是一次性 CLI 进程，窗口日期只影响计划里的常量，不影响计划形态，未改。
+
+# 补充 4（AE3，roadmap-v10）：OMS `/stats` 与 AI 平台分析改走 `idx_oms_order_time`
+
+状态：开发实现，尚非产品上线验收｜数字见 `capacity-baseline.md` 的 AE3 一节（Mac mini + 合成 20 万 OMS 单 + 整机负载，量级为准）
+
+## 决定
+1. **SQL 搬进 `server/lib/oms-sql.js`**：`omsStatsByPlatformStmt / omsStatsTrendStmt / omsStatsTotalStmt / omsStatsTopSkusStmt(days, scope)`（`oms.js` GET `/stats`）与 `aiPlatformAnalysisStmt(days)`（`ai.js` `channel_compare` 线上分支）返回 `{ sql, params }`；路由与 `scripts/explain-audit.mjs` 取同一份。窗口参数**直接复用** `dashboard-sql.js` 的 `onlineWindow()`（不复制 `sinceDate` 逻辑），永远排在 params 最前（byPlatform 的窗口在 `LEFT JOIN … ON`，先于 WHERE 里的范围谓词）。范围谓词（`omsPlatformScopeSql` / `omsOrderScopeSql` 的输出）由调用方传入、原样拼接，语义不变。
+2. **谓词**：`date(order_time) >= date('now','localtime','-N day')` → `order_time >= :lo AND date(order_time) >= :since`（AD3 同法，保留 `date()` 复核）。因此对应用自身写入的格式结果与旧 SQL 逐行相同；边界、时区后缀、脏文本、非法 / 超范围窗口的语义与补充 3 完全一致（含其"已知残余"）。
+3. **explain-audit**：`oms.stats_trend`、`oms.stats_total`、`ai.platform_analysis` 声明 `expectIndex: idx_oms_order_time` + `expectSearch`（`SEARCH … COVERING INDEX idx_oms_order_time (order_time>?)`）。`oms.stats_by_platform`、`oms.stats_trend/total/by_platform_scoped`、`oms.stats_top_skus(_scoped)` 也登记（受限范围用 `orgIds: [1]`），但**不**声明索引：规划器对它们不走 `idx_oms_order_time`（见下），声明了就是假绿或常红。`oms.stats_top_skus` 与 `_scoped` 在 `oms_order_items`（增长表）上的 `SCAN i` 有 ALLOW 书面豁免。
+4. **运维**：新增 `docs/operations/query-planner.md`——应用从不执行 `ANALYZE` / `PRAGMA optimize`；若将来引入，先复跑 explain-audit，再按文内顺序处置。
+
+## 诚实边界（计划没有改变的语句）
+- **byPlatform**：`platforms` 驱动，对每个平台按 `(platform_id, platform_order_no)` 自动索引取该平台全部订单；`order_time` 谓词只做过滤。要利用索引需改写成"先按 order_time 聚合再并入平台"的形态，那会改变浮点求和顺序，不能保证逐位相同，未做。
+- **受限组织范围**：范围谓词是 `platform_id IN (子查询)`，规划器选 `platform_id` 等值索引，区间谓词只做过滤；前后延迟在噪声内相同。改写范围谓词会碰权限语义，不在 AE3 范围。
+- **topSkus**：`oms_order_items` 驱动（`SCAN i` → 按主键取订单）；改成订单驱动（`CROSS JOIN`）同样会改变求和顺序。
+- 最坏分布（窗口覆盖几乎全部行）下覆盖索引与扫描量级相当，个别 90 天窗口的 total / AI 平台分析的中位数在噪声范围内偏慢，见 capacity-baseline。
+
+## 测试（tests/oms-sql.test.mjs，6 个）
+新旧 SQL 等价（5 种范围 × 13 种窗口 × 4 条 `/stats` 语句，夹具含窗口边界、`T` 分隔、仅日期、时区后缀、脏文本、儒略日数字串、NULL、空串、未来日期、未知平台、无仓库平台）；AI 平台分析等价；绑定参数顺序与无效窗口绑定 NULL；变异（去掉 `date()` 复核）使结果改变；explain-audit 登记与路由同一份语句、`expectIndex` / `expectSearch`、无豁免、计划是覆盖索引范围 SEARCH、删索引后守卫变红；路由里不再内联 `date(order_time) >=`。
+
+## Codex 审计（AE3，`gpt-6.1-sol`，只读）
+范围：`git diff batch-thirteen...HEAD`；关注 SQL 等价（含边界）、范围谓词保留、explain-audit 保真。
+- **高：无。** 确认：byPlatform 的窗口参数（在 `LEFT JOIN … ON`）排在范围参数之前，绑定顺序正确；受限范围谓词与别名原样保留；无效窗口绑定 NULL；零订单平台仍保留一行；三条全局 `expectIndex` / `expectSearch` 与观测计划一致，两条 top_skus 的 ALLOW 对应真实的明细表扫描；独立重跑审计 0 违规、0 过期豁免。
+- **中（已按文档修正，不改行为）**：区间谓词对 SQLite `date()` 能解析、但文本序低于 `lo` 的非规范值会改变结果（如儒略日数字串 `'2.4613375e6'`）——即补充 3 已登记的残余，AE3 的五条语句继承；`oms-sql.js` 文件头原来写得像无条件等价。→ 文件头与上文"决定 2"改为"对应用自身写入的格式逐行相同，残余同补充 3"。
+- **低（已修）**：bench 脚本只累积 `ae3.results_identical`，不一致时退出码仍为 0 且不指出是哪条。→ 记录 `ae3.mismatches`（`语句.范围.窗口`），不一致时 stderr 报出并以退出码 1 结束。

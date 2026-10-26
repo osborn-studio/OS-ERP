@@ -9,6 +9,7 @@
  *
  * 【说明】非管理员只收到自己角色那一列（其它角色的可见度会反推出它们的权限点分配），管理员收到全表。可见度的推演只在服务端 `server/lib/role-matrix.js`；本页不重算，只展示。五档含义（下面 LEGEND）与该文件的 ACCESS 一一对应。
  *   矩阵是说明性视图，不是授权判据：真正放行与否仍由各接口的权限点与数据范围决定；账号被授予多个角色时取并集，矩阵按单个角色展示。
+ *   AE2：主表只列内置角色；管理员另见 `RoleMatrixExtras.tsx` 的「自定义角色」分组（含 data_scope 覆盖计数与多角色并集示例），多角色账号见「我的并集」卡。
  * 【改它要注意什么】不要在这里补权限点码、其他用户 / 组织的名字——接口不提供，也不应该提供。
  * ============================================================================
  */
@@ -16,12 +17,10 @@ import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Card, SectionTitle, useFetch } from '../../components/ui'
 import { ScopeBlocked, firstFailure } from '../../components/ScopeNotice'
+import { CustomRolesCard, MyUnionCard, type ExtrasData } from './RoleMatrixExtras'
 
 type Access = 'full' | 'scoped' | 'bound' | 'global_only' | 'none'
-type RoleMatrixData = {
-  roles: { code: string; name: string }[]
-  doc_types: { code: string; name: string; module: string; binding: string | null; global_only: boolean }[]
-  cells: Record<string, Record<string, Access>>
+type RoleMatrixData = ExtrasData & {
   restricted: boolean
   me: { role: string; role_name: string; is_admin: boolean; data_scope_effective: string; store_bound: boolean; dealer_bound: boolean }
 }
@@ -46,7 +45,9 @@ export default function RoleMatrix() {
   const scope = useFetch<MyScopeData>('/auth/my-scope', undefined, [])
   const [kw, setKw] = useState('')
   const failure = firstFailure({ errorStatus: matrix.errorStatus, errorCode: matrix.errorCode })
-  const data = matrix.data
+  const raw = matrix.data
+  // 主表只列内置角色（管理员视图）；自定义角色放进下面的"自定义角色"分组。非管理员只有自己那一列，原样显示
+  const data = useMemo(() => (raw && !raw.restricted ? { ...raw, roles: raw.roles.filter((r) => r.builtin) } : raw), [raw])
   const myRole = data?.me.role
 
   const rows = useMemo(() => {
@@ -91,6 +92,7 @@ export default function RoleMatrix() {
             </ul>
           </Card>
 
+
           <Card>
             <div className="mb-3 flex items-center gap-2 flex-wrap">
               <input className="input" style={{ width: 260 }} placeholder="按单据类型 / 编码 / 模块筛选" value={kw} onChange={(e) => setKw(e.target.value)} data-testid="role-matrix-filter" />
@@ -130,6 +132,9 @@ export default function RoleMatrix() {
             </div>
             <p className="mt-3 text-xs text-slate-500">账号被授予多个角色时，实际可见度是各角色权限的并集；矩阵按单个角色展示，且不含个别账号被单独设置的数据范围。</p>
           </Card>
+
+          {raw && <CustomRolesCard data={raw} />}
+          {raw && <MyUnionCard data={raw} />}
         </>
       )}
     </div>

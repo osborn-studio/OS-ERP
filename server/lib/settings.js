@@ -371,6 +371,16 @@ export const SETTING_RULES = {
     impact: '**打开（默认）**：迁移 067 的 `audit_logs_fts`（FTS5 外部内容表 + 三个触发器）存在，稀有关键词走索引。**关闭**：索引表与触发器被删除，关键词检索一律走 LIKE（与无 FTS5 的构建完全一致，命中稀少的关键词在大库上更慢），审计写入少一次索引维护。改值本身不动索引：用 `scripts/audit-fts-maintain.mjs --disable|--enable --reason ...`（同事务改值并删除/重建），或重启时由迁移 071 的自愈按本值收敛；再开启时重建并回填存量行，大库上持写锁。'
   },
 
+  // ---- 指标目录对受限范围调用者的口径（ADR-0057） ----
+  metrics_global_for_restricted: {
+    group: 'ops', label: '受限账号可见的全局口径指标', type: 'enum', default: 'hide', is_danger: true, wired: true,
+    enum: [{ value: 'hide', label: '隐藏（默认）' }, { value: 'label', label: '标注全局口径后返回' }],
+    impact: '`/api/metrics`、`/values`、`/catalog` 里没有组织范围语义的指标（销售、线上 OMS、应付、订货中心、POS、经销商信用、审批）。'
+      + '**隐藏（默认）**：数据范围非"全部"的调用者不会收到这些指标（响应以 `hidden_count` 告知被隐藏条数），只返回按其范围收窄的库存 / 采购订单类指标。'
+      + '**标注后返回**：恢复 ADR-0053 行为——这些指标仍返回**全局数字**，仅带 `scoped:false` 由前端标"全局口径"。'
+      + '⚠️ 改为"标注后返回"= 受限账号能看到全公司销售 / 应付 / 审批等汇总数；改动必须写理由。无论取值，调用者仍须持有各指标对应的业务查看权限。'
+  },
+
   // ---- 单据流门店绑定（ADR-0051） ----
   docflow_strict_store_binding: {
     group: 'ops', label: '单据流严格门店绑定', type: 'bool', default: '1', is_danger: true, wired: true,

@@ -3,7 +3,7 @@
 <!-- generated -->
 <!-- 由 `node scripts/gen-codemap.mjs` 生成，勿手改；CI 校验不漂移 -->
 
-共 199 张表、67 个迁移。“建于”= schema.sql / 迁移编号 / 运行时建表的文件；“改于”= ALTER、addColumn（无后缀）、建索引（·idx）、触发器（·trg）、DROP（·drop）所在迁移编号。“触达”= 该文件的 SQL 文本里出现这张表（server/db/ 下的种子与启动文件不计）。
+共 201 张表、69 个迁移。“建于”= schema.sql / 迁移编号 / 运行时建表的文件；“改于”= ALTER、addColumn（无后缀）、建索引（·idx）、触发器（·trg）、DROP（·drop）所在迁移编号。“触达”= 该文件的 SQL 文本里出现这张表（server/db/ 下的种子与启动文件不计）。
 
 ## 扫描边界（必读）
 
@@ -27,8 +27,9 @@
 | `ar_documents` | 019 | 019·idx, 020·idx | lib/ar.js, lib/credit-release.js, lib/docflow.js, lib/invoice.js, lib/report.js | routes/ar.js |
 | `assembly_order_items` | schema.sql | — | — | routes/inventory.js |
 | `assembly_orders` | schema.sql | — | lib/docflow.js | routes/inventory.js, routes/master.js |
-| `audit_chain_anchors` | 068 | 068·idx | lib/audit-anchor-manifest.js, lib/audit-chain-verify.js, lib/audit-trail.js | — |
-| `audit_logs` | schema.sql | 067·trg, 068 | lib/audit-anchor-manifest.js, lib/audit-chain-verify.js, lib/audit-trail.js, lib/audit-view.js | routes/auth.js, routes/meta.js |
+| `audit_anchor_intents` | 072 | 072 | lib/audit-anchor-intent.js | — |
+| `audit_chain_anchors` | 068 | 068·idx | lib/audit-anchor-intent.js, lib/audit-anchor-manifest.js, lib/audit-chain-verify.js, lib/audit-trail.js | — |
+| `audit_logs` | schema.sql | 067·trg, 068 | lib/audit-anchor-intent.js, lib/audit-anchor-manifest.js, lib/audit-chain-verify.js, lib/audit-trail.js, lib/audit-view.js | routes/auth.js, routes/meta.js |
 | `biz_flow_steps` | 008 | — | lib/order-center.js | routes/docflow.js, routes/order-center.js, routes/purchase-chain.js |
 | `biz_flows` | 008 | — | lib/order-center.js | routes/docflow.js, routes/order-center.js, routes/purchase-chain.js |
 | `bom_items` | 023 | 023·idx | lib/bom.js | — |
@@ -62,6 +63,7 @@
 | `doc_states` | 008 | 008·idx | lib/docflow.js, mcp/catalog.js, mcp/tools.js | routes/docflow.js, routes/order-center.js |
 | `doc_transition_policy` | 027 | — | lib/approval.js, lib/docflow.js | — |
 | `doc_types` | 008 | — | lib/approval.js, lib/docflow.js, lib/docno.js, lib/order-center.js, lib/role-matrix.js, mcp/catalog.js, mcp/tools.js | routes/approval.js, routes/docflow.js, routes/purchase-chain.js |
+| `if` | 073 | — | — | — |
 | `im_approval_map` | 040 | 040·idx | lib/im-sync.js | routes/im.js |
 | `im_dept_map` | 040 | 040·idx | lib/im-sync.js | routes/im.js |
 | `im_platform_cfg` | 040 | — | lib/im-sync.js | — |
@@ -103,8 +105,8 @@
 | `oc_statement_items` | 010 | 010·idx | lib/order-center.js | — |
 | `oc_statements` | 010 | 010·idx | lib/docflow.js, lib/order-center.js | routes/order-center.js |
 | `oc_visibility_rules` | 010 | — | lib/order-center.js | routes/order-center.js |
-| `oms_order_items` | schema.sql | 025 | — | routes/mall.js, routes/oms.js |
-| `oms_orders` | schema.sql | — | lib/dashboard-sql.js, lib/docflow.js, lib/metrics.js | routes/ai.js, routes/dashboard.js, routes/mall.js, routes/oms.js |
+| `oms_order_items` | schema.sql | 025 | lib/oms-sql.js | routes/mall.js, routes/oms.js |
+| `oms_orders` | schema.sql | — | lib/dashboard-sql.js, lib/docflow.js, lib/metrics.js, lib/oms-sql.js | routes/ai.js, routes/dashboard.js, routes/mall.js, routes/oms.js |
 | `oms_sync_logs` | schema.sql | — | — | routes/mall.js, routes/oms.js, routes/qimen.js |
 | `org_brands` | 005 | — | — | — |
 | `org_functions` | 001 | — | lib/admin-bootstrap.js | — |
@@ -119,7 +121,7 @@
 | `payment_release_ledger` | 057 | 057·idx | lib/purchase.js | — |
 | `period_audit_log` | 037 | 037·idx | lib/period-audit.js | — |
 | `permissions` | 005 | 005·idx | lib/account-security.js, lib/approval.js, middleware/auth.js | routes/approval.js, routes/auth.js |
-| `platforms` | schema.sql | 060 | lib/dashboard-sql.js, lib/qimen-auth.js, lib/sales-order.js | routes/ai.js, routes/dashboard.js, routes/mall.js, routes/master.js, routes/oms.js, routes/qimen.js, routes/sales.js |
+| `platforms` | schema.sql | 060 | lib/dashboard-sql.js, lib/oms-sql.js, lib/qimen-auth.js, lib/sales-order.js | routes/ai.js, routes/dashboard.js, routes/mall.js, routes/master.js, routes/oms.js, routes/qimen.js, routes/sales.js |
 | `pos_cash_drop_items` | 024 | 024·idx | lib/pos2.js | routes/pos.js |
 | `pos_cash_drops` | 024 | 024·idx | lib/pos2.js | routes/pos.js |
 | `pos_daily_closes` | schema.sql | 024 | lib/docflow.js, lib/pos2.js | routes/pos.js |
@@ -204,7 +206,7 @@
 | `supplier_products` | 011 | 011·idx | lib/purchase.js | routes/purchase-chain.js |
 | `suppliers` | schema.sql | 005 | lib/accounting.js, lib/approval.js, lib/costing.js, lib/dashboard-sql.js, lib/purchase.js, lib/qc.js, lib/qc2.js, mcp/tools.js | routes/ai.js, routes/dashboard.js, routes/inventory.js, routes/master.js, routes/outsourcing.js, routes/purchase-chain.js, routes/purchase.js |
 | `user_orgs` | 005 | 005·idx | lib/account-security.js, lib/admin-bootstrap.js | — |
-| `user_roles` | 005 | 005·idx | lib/account-security.js, lib/admin-bootstrap.js, lib/approval.js, middleware/auth.js | — |
+| `user_roles` | 005 | 005·idx | lib/account-security.js, lib/admin-bootstrap.js, lib/approval.js, lib/role-matrix.js, middleware/auth.js | — |
 | `users` | schema.sql | 005, 050 | lib/account-security.js, lib/admin-bootstrap.js, lib/approval.js, lib/im-sync.js, lib/qc2.js, lib/role-matrix.js, mcp/delegation.js, mcp/doc-perms.js, mcp/tokens.js, mcp/tools.js, middleware/auth.js | routes/approval.js, routes/auth.js, routes/im.js, routes/sales.js |
 | `voucher_entries` | 032 | 032·idx, 041·idx | lib/accounting.js, lib/annual.js, lib/closing.js, lib/report.js | — |
 | `voucher_template_entries` | 032 | 032·idx | lib/accounting.js | — |
@@ -285,3 +287,5 @@
 | 069 | `069_qimen_clear_demo_secret.cjs` | 清除库内公开奇门演示签名常量并记录事实 | — | — |
 | 070 | `070_oms_order_time_index.cjs` | 线上订单下单时间索引（oms_orders.order_time） | — | — |
 | 071 | `071_audit_fts_optional.cjs` | 审计日志 FTS5 索引可选化（设置 audit_fts_enabled） | — | — |
+| 072 | `072_audit_anchor_intents.cjs` | 审计锚点操作意图表（audit_anchor_intents） | audit_anchor_intents | audit_anchor_intents, audit_anchor_intents_old |
+| 073 | `073_mcp_rate_buckets.cjs` | MCP 限速桶表（mcp_rate_buckets，db 存储模式） | if | — |

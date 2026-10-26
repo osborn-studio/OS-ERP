@@ -40,6 +40,10 @@ const DECLARED = [
   'server/lib/audit-chain-verify.js',
   'server/lib/audit-anchor-manifest.js',
   'server/db/migrations/068_audit_hash_chain.cjs',
+  // 锚点操作意图（AE5，ADR-0055 补充）
+  'server/db/migrations/072_audit_anchor_intents.cjs',
+  'server/lib/audit-anchor-intent.js',
+  'scripts/lib/anchor-intent-signer.mjs',
   'scripts/audit-verify-chain.mjs',
   'scripts/audit-archive.mjs',
   'scripts/gen-role-matrix.mjs',
@@ -71,6 +75,8 @@ const DECLARED = [
   'scripts/check-mcp-coverage.mjs',
   'scripts/gen-sbom.mjs',
   'scripts/release-candidate.mjs',
+  'scripts/evidence-log-ingest.mjs',
+  'tests/evidence-log-ingest.test.mjs',
   'scripts/release-keygen.mjs',
   'scripts/lib/evidence-sign.mjs',
   'scripts/gen-changelog.mjs',
@@ -80,6 +86,7 @@ const DECLARED = [
   'scripts/check-file-header.mjs',
   'scripts/check-audit-allowlist.mjs',
   'tests/audit-allowlist.test.mjs',
+  'tests/dependency-review-policy.test.mjs',
   'scripts/db-backup.mjs',
   // 文件系统写入序列的故障注入点（AD6）
   'scripts/lib/fs-fault.mjs',
@@ -193,7 +200,10 @@ const DECLARED = [
   'server/lib/tx.js',
   'scripts/lib/bench-contender.mjs',
   'tests/write-contention.test.mjs',
-  'tests/fixtures/write-contention-worker.mjs'
+  'tests/fixtures/write-contention-worker.mjs',
+  // OMS /stats 与 AI 平台分析的 order_time 区间谓词（AE3，ADR-0044 补充 4）
+  'server/lib/oms-sql.js',
+  'tests/oms-sql.test.mjs'
 ]
 
 /** 参与覆盖率统计的源文件（**排除** node_modules / dist / data） */

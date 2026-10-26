@@ -59,3 +59,21 @@ node scripts/audit-fts-maintain.mjs --data-dir /abs/path/to/data --industry cosm
 - 在带 FTS5 的构建上建过索引的库，不要拿到无 FTS5 的构建上写入；要换构建，先 `--disable`。
 - 与 `GML_AUDIT_FTS=0` 的区别：后者只切查询路径、索引与触发器仍在并被维护；设置关闭是真正删除。
 - CI 的 `audit-no-fts5` job 用从源码重编译、去掉 `SQLITE_ENABLE_FTS5` 的 better-sqlite3 跑 `tests/audit-logs-view.test.mjs` 与 `tests/audit-fts-maintain.test.mjs`（真实无 FTS5 构建）。
+
+## 5. 端到端运维闭环：关闭 → 检索仍可用 → 重启 → 重新开启（AE4，ADR-0054 补充）
+
+`tests/audit-fts-ops-loop.test.mjs` 在真实服务进程（随机 loopback 端口、临时数据目录）上演练下面整条链路；回填耗时见 capacity-baseline "AE4"。
+
+| 步骤 | 操作 | 预期（可核对） |
+|---|---|---|
+| 1 | 服务**运行中**执行 `--disable --reason "原因"` | 退出 0，报告 `status: ok`、`setting_after: "0"`、`changed_objects: true`；`audit_logs_fts` 与三个触发器都不在；`setting_audit_log` 多一行留痕 |
+| 2 | 照常使用：关键词检索 | 结果与关闭前完全一致（走 `LIKE`）；关闭期间新写入的审计行立即可检索，索引**不会**被写入悄悄重建 |
+| 3 | 重启服务 | 设置为关 → 启动自愈**不**重建索引；`--integrity-check` 报告 `status: absent`（退出 0）|
+| 4 | 低峰执行 `--enable --reason "原因"` | 退出 0，`setting_after: "1"`；建表 + 触发器 + **回填全部存量行（含第 2 步关闭期间写入的行）**；关键词检索重新走 FTS（≥3 字符且命中稀少）；`--integrity-check` 为 `ok` |
+| 5 | 之后的新写入与再次重启 | 触发器维护索引；设置为开 → 重启后对象仍在 |
+
+- 重复执行同一动作是幂等的（`changed_objects` / `setting_changed` 为 false）；缺 `--reason` 退出 2、什么都不改；构建不支持 FTS5 时 `--enable` 报 `unsupported`、退出 1、设置不改。
+- 步骤 4 持写锁到回填结束；100 万行的实测见 capacity-baseline "AE4"（复现：`node scripts/bench-audit-fts-toggle.mjs --rows 1000000`，在系统临时目录建库、结束即删）。期间并发写入等 `busy_timeout`，可能收到 `SQLITE_BUSY`——低峰执行。
+- 并发与失败：设置与对象在同一个 `BEGIN IMMEDIATE` 事务里改，拿不到锁 → `status: busy`、二者都不变；中途失败 → 整体回滚。两个运维脚本同时执行时后到者等锁，之后看到的是已改好的状态（幂等）。
+- 已知窗口（未修）：`--disable` 恰好提交于某个在途关键词请求「选定走 FTS」与「执行查询」之间时，那一个请求会失败（`no such table: audit_logs_fts`；CSV 导出跨批次可能中途失败），重试即可——低峰执行，或先以 `GML_AUDIT_FTS=0` 重启切走查询路径再 `--disable`。启动自愈与维护脚本恰好重叠时，启动可能得到 `SQLITE_BUSY_SNAPSHOT` 而失败，重启即可。
+- 无 FTS5 构建：CI 的 `audit-no-fts5` job（`ci.yml`）从源码重编译去掉 `SQLITE_ENABLE_FTS5` 的 better-sqlite3 并跑审计视图与维护测试；该 job 在托管 runner 上的首次运行结果尚未验证（见 ADR-0054）。

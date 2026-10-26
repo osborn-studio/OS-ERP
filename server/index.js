@@ -22,9 +22,9 @@ import cors from 'cors'
 import path from 'node:path'
 import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { ROOT_DIR, INDUSTRIES, DEFAULT_INDUSTRY, runWithIndustry, normalizeIndustry, dbPathFor } from './db/index.js'
+import { ROOT_DIR, INDUSTRIES, DEFAULT_INDUSTRY, runWithIndustry, normalizeIndustry, dbPathFor, getDbFor } from './db/index.js'
 import { errorHandler } from './middleware/audit.js'
-import { requestLogger } from './lib/logger.js'
+import { requestLogger, logger } from './lib/logger.js'
 import { assertTrustProxyConfig, trustProxyFn } from './lib/trust-proxy.js'
 import { requireAuth, JWT_SECRET, assertJwtSecretPosture, isTokenInvalid } from './middleware/auth.js'
 import jwt from 'jsonwebtoken'
@@ -82,7 +82,7 @@ import imRoutes from './routes/im.js'
 // 这里显式引入一次，保证任何流转发生前闸门一定已挂上 ——
 // 只靠路由挂载的话，加载顺序一变闸门就会静默失效。
 import './lib/approval.js'
-import mcpRoutes from './mcp/server.js'
+import mcpRoutes, { purgeMcpRateBuckets, mcpRateStore } from './mcp/server.js'
 import mcpAdminRoutes from './mcp/admin.js'
 import { buildOpenApi } from './openapi.js'
 import { installCapabilityGates, runtimeCapabilities } from './capabilities.js'
@@ -306,6 +306,22 @@ const httpServer = app.listen(PORT, HOST, () => {
   console.log(`[gml] 行业版本：${Object.values(INDUSTRIES).map((x) => x.label).join(' / ')}（登录时选择）`)
   console.log(`[gml] 演示账号：admin / 12345（主管理员，全部模块）· 其余角色账号密码 123456`)
 })
+
+// AE9：MCP 限速桶 db 存储模式的过期桶清理（后台定时器，请求路径从不删除；memory 模式不注册）。
+// 每分钟对每个已存在的行业库清一次；失败只记日志与计数器（`mcp_rate_store_failures_total{reason="purge_failed"}`），永不抛、不阻止退出（unref）。
+if (mcpRateStore === 'db') {
+  const purgeTimer = setInterval(() => {
+    for (const code of Object.keys(INDUSTRIES)) {
+      try {
+        if (!fs.existsSync(dbPathFor(code))) continue
+        purgeMcpRateBuckets(getDbFor(code))
+      } catch (e) {
+        logger.error('mcp rate purge tick failed', { component: 'mcp', industry: code, err_message: e?.message })
+      }
+    }
+  }, 60_000)
+  purgeTimer.unref()
+}
 
 // AC9：SIGTERM 时先把进程内指标快照写成一行 JSON（重启后计数器归零，运维靠它对账），再优雅收尾退出。
 // 快照只读内存计数器，不查库；兜底定时器保证挂住的连接不会拖住退出。

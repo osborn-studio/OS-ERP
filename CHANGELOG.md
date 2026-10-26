@@ -8,6 +8,10 @@
 
 <!-- generated -->
 
+## 第十四批（进行中）：见 roadmap-v10
+
+- [ADR-0057：指标按业务查看权限过滤，受限范围默认隐藏无范围语义的指标（AE1）](docs/implementation/ADR-0057-metrics-perms-hide.md) — 每条指标登记 `perms`（`server/lib/metrics.js`，该指标揭示的业务查看权限，任一命中即可）。25 条全覆盖，测试逐条校验非空且都是库里已有的权限点：销售类 `sales.order.view`（`unpaid` 另可 `finance.receivable.view`）；线上 `oms.order.view`；库存 `inventory.stock.view`，库存金额 `inventory.cost.view`；采购订单类复用 `PO_READ_…
+
 ## 第十三批（进行中）：见 roadmap-v9
 
 - [ADR-0053：指标接口按范围收口，`report.dashboard_kpi` 与 dealer summary 补功能权限（AD1）](docs/implementation/ADR-0053-metrics-scope-and-kpi-permissions.md) — 指标函数接受 `orgScope`：`compute(db, { days, orgScope })`；不传 = 全局（`dashboard-perf`、`scripts/test-metrics.mjs` 等内部调用口径逐字不变）。`metricValues` / `metricCatalog` / `metricGroups` 透传。 - 范围判据各只有一份：库存类（`stock_qty`、`available_qty`、`stock_amount`、`turnover_…

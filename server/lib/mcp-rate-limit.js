@@ -15,11 +15,23 @@
  *     令牌 id 不是正整数同样拒绝。
  *   · 滑动窗口用"当前窗口 + 上一窗口按比例折算"的计数器近似：每个桶 O(1) 内存，窗口边界处不会出现 2 倍突发。
  *   · 日配额读库失败 ⇒ fail closed（拒绝并标 `unavailable`），不会因为库出问题而静默放开。
- * 【不持久】速率桶在进程内存，重启清零（限流不是账务；日配额读审计表，是持久的）。多进程部署各自计数。
+ * 【不持久（memory 模式，默认）】速率桶在进程内存，重启清零（限流不是账务；日配额读审计表，是持久的）。多进程部署各自计数。
+ * 【db 模式（AE9，`GML_MCP_RATE_STORE=db`）】桶落在表 `mcp_rate_buckets`（迁移 073），多进程共享、重启不清零：
+ *   · 一次放行 = 一个 `withWriteRetry` 的 IMMEDIATE 事务：先读当前 / 上一窗口计数、做与内存模式**同一个**滑动窗口判定，
+ *     通过才 `INSERT … ON CONFLICT DO UPDATE SET count=count+1`（总额度与写额度同事务，要么都记要么都不记）。写锁串行化各进程，所以不会超发。
+ *   · 被拒绝的调用只读不写（事务里没有写语句）。写失败（锁用尽、表缺失、磁盘错误……）⇒ **fail closed**：拒绝并标 `store_unavailable`，
+ *     计数器 `mcp_rate_store_failures_total{reason="write_failed"}` +1，绝不因存储故障放开限流。
+ *   · 过期桶由后台定时器调用 `purge(db)` 清理（`server/index.js` 注册），**请求路径从不删除**。清理线是「当前窗口起点 − 2 个窗口」，
+ *     比上一窗口还早一整个窗口，所以进程间时钟有 ±1 窗口偏差也不会误删仍在用的桶。
+ *   · 取值只认 `memory` / `db`，其它值启动即抛 `MCP_RATE_STORE_INVALID`（拼错的配置不能悄悄退回"各进程各算各的"）。
+ *   · 日配额不受影响（本来就读审计表）；进程内的"影子计数"仍是每进程一份，只在审计写失败时兜底。
  * ============================================================================
  */
 import { createBucketStore, envInt } from './metrics-throttle.js'
-import { SETTING_RULES, normalizeSettingValue, castSettingValue } from './settings.js'
+import { withWriteRetry } from './tx.js'
+import { incCounter } from './process-counters.js'
+import { logger } from './logger.js'
+import { SETTING_RULES, normalizeSettingValue, castSettingValue, readSetting } from './settings.js'
 
 export const DEFAULT_MCP_RATE = Object.freeze({ rpm: 600, writeRpm: 60, windowMs: 60000, maxBuckets: 10000 })
 const MAX_RATE = 1_000_000
@@ -54,22 +66,122 @@ function makeWindow(limit, now, maxBuckets) {
   }
 }
 
-export function createMcpRateLimiter({ env = process.env, now = Date.now, ...override } = {}) {
-  const policy = {
+const STORE_MODES = ['memory', 'db']
+export function rateStoreFromEnv(env = process.env) {
+  const raw = env.GML_MCP_RATE_STORE
+  if (raw === undefined || raw === '') return 'memory'
+  if (!STORE_MODES.includes(raw)) {
+    throw Object.assign(new Error(`GML_MCP_RATE_STORE 只能是 memory 或 db，收到「${String(raw).slice(0, 32)}」`), { code: 'MCP_RATE_STORE_INVALID' })
+  }
+  return raw
+}
+
+const PURGE_CHUNK = 5000
+const PURGE_MAX_CHUNKS = 20
+const PURGE_BUSY_MS = 250 // 后台清理最多等这么久的写锁
+const stmts = new WeakMap() // db → 预编译语句（连接关闭后随连接回收）
+function dbStatements(db) {
+  let s = stmts.get(db)
+  if (!s) {
+    s = {
+      sel: db.prepare('SELECT window_start AS ws, kind, count FROM mcp_rate_buckets WHERE token_key=? AND window_start IN (?,?)'),
+      up: db.prepare(`INSERT INTO mcp_rate_buckets (token_key, window_start, kind, count) VALUES (?,?,?,1)
+                      ON CONFLICT(token_key, window_start, kind) DO UPDATE SET count=count+1`),
+      expired: db.prepare('SELECT 1 FROM mcp_rate_buckets WHERE window_start < ? LIMIT 1'),
+      purge: db.prepare(`DELETE FROM mcp_rate_buckets WHERE rowid IN (SELECT rowid FROM mcp_rate_buckets WHERE window_start < ? LIMIT ${PURGE_CHUNK})`)
+    }
+    stmts.set(db, s)
+  }
+  return s
+}
+
+/** 速率策略（环境变量 + 默认值）。限流器与管理端只读展示（AE11 `/api/mcp/limits`）共用这一处，页面显示的数字就是限流器实际用的数字。 */
+export function mcpRatePolicy(env = process.env, override = {}) {
+  return {
+    store: override.store ?? rateStoreFromEnv(env),
     rpm: override.rpm ?? envInt(env.GML_MCP_TOKEN_RPM, 1, MAX_RATE, DEFAULT_MCP_RATE.rpm),
     writeRpm: override.writeRpm ?? envInt(env.GML_MCP_WRITE_RPM, 1, MAX_RATE, DEFAULT_MCP_RATE.writeRpm),
     windowMs: DEFAULT_MCP_RATE.windowMs,
     maxBuckets: override.maxBuckets ?? DEFAULT_MCP_RATE.maxBuckets
   }
+}
+
+export function createMcpRateLimiter({ env = process.env, now = Date.now, ...override } = {}) {
+  const policy = mcpRatePolicy(env, override)
   const all = makeWindow(policy.rpm, now, policy.maxBuckets)
   const writes = makeWindow(policy.writeRpm, now, policy.maxBuckets)
   const shadow = createBucketStore({ maxBuckets: policy.maxBuckets, now })
   const deny = (reason, win) => ({ allowed: false, reason, retryAfter: win.retryAfter() })
+  const W = policy.windowMs
+
+  /** db 模式的一次额度申请（见文件头）。→ 与内存模式同形；存储失败 ⇒ reason 'store_unavailable' */
+  function consumeDb(tokenId, level, scope, db) {
+    const key = `${scope}|${tokenId}`
+    try {
+      if (!db || typeof db.prepare !== 'function') throw new Error('no database handle')
+      const s = dbStatements(db)
+      // 时刻与窗口必须在拿到写锁**之后**、每次尝试里重新取（Codex 审计 high）：若在事务外取一次并跨重试沿用，
+      // 争用跨过分钟边界时会按旧窗口判定与记账，无视新窗口已满，造成超发。
+      const { out, retryAfter } = withWriteRetry(db, () => {
+        const t = now()
+        const ws = t - (t % W)
+        const f = (t % W) / W
+        const retryAfter = Math.min(60, Math.max(1, Math.ceil((W - (t % W)) / 1000)))
+        const cnt = { all: { cur: 0, prev: 0 }, write: { cur: 0, prev: 0 } }
+        for (const r of s.sel.all(key, ws, ws - W)) cnt[r.kind][r.ws === ws ? 'cur' : 'prev'] = r.count
+        const over = (c, limit) => c.prev * (1 - f) + c.cur + 1 > limit
+        const isWrite = level === 'write'
+        if (over(cnt.all, policy.rpm)) return { out: 'rpm', retryAfter }
+        if (isWrite && over(cnt.write, policy.writeRpm)) return { out: 'write_rpm', retryAfter }
+        s.up.run(key, ws, 'all')
+        if (isWrite) s.up.run(key, ws, 'write')
+        return { out: null, retryAfter }
+      }, { label: 'mcp_rate' })
+      return out ? { allowed: false, reason: out, retryAfter } : { allowed: true }
+    } catch (e) {
+      incCounter('mcp_rate_store_failures_total', 'write_failed')
+      logger.error('mcp rate store write failed; refusing call (fail closed)', { component: 'mcp', outcome: 'store_unavailable', err_code: e?.code ?? '-', err_message: e?.message })
+      return { allowed: false, reason: 'store_unavailable', retryAfter: 5 }
+    }
+  }
+
   return {
     policy,
-    /** 一次工具调用的额度申请。→ { allowed: true } | { allowed: false, reason: 'rpm'|'write_rpm'|'unavailable', retryAfter } */
-    consume(tokenId, level, scope = '') {
+    /**
+     * db 模式清理过期桶（定时器调用；请求路径不调用）。→ { deleted } | { deleted: 0, failed: true } | { deleted: 0, skipped: true }（memory 模式）。永不抛。
+     * 删除线 = 当前窗口起点 − 2 个窗口：比"上一窗口"还早一整个窗口，进程间时钟偏差不会让仍在用的桶被误删。分块删除，每块一个短事务。
+     */
+    purge(db) {
+      if (policy.store !== 'db') return { deleted: 0, skipped: true }
+      const t = now()
+      const cutoff = t - (t % W) - 2 * W
+      let deleted = 0
+      let prevBusy = null
+      try {
+        const s = dbStatements(db)
+        // 没有过期行就不拿写锁（只读探测，WAL 下不阻塞也不被阻塞）
+        if (!s.expired.get(cutoff)) return { deleted: 0 }
+        // 清理跑在事件循环上（同步 better-sqlite3）：只等短暂的 busy_timeout、不重试，锁被占着就放弃本轮、下一分钟再来（Codex 审计 medium）。
+        prevBusy = db.pragma('busy_timeout', { simple: true })
+        db.pragma(`busy_timeout = ${PURGE_BUSY_MS}`)
+        for (let i = 0; i < PURGE_MAX_CHUNKS; i++) {
+          const n = withWriteRetry(db, () => s.purge.run(cutoff).changes, { label: 'mcp_rate_purge', maxAttempts: 1 })
+          deleted += n
+          if (n < PURGE_CHUNK) break
+        }
+        return { deleted }
+      } catch (e) {
+        incCounter('mcp_rate_store_failures_total', 'purge_failed')
+        logger.error('mcp rate bucket purge failed', { component: 'mcp', err_code: e?.code ?? '-', err_message: e?.message })
+        return { deleted, failed: true }
+      } finally {
+        if (prevBusy !== null) { try { db.pragma(`busy_timeout = ${Number(prevBusy) || 0}`) } catch { /* 连接已不可用 */ } }
+      }
+    },
+    /** 一次工具调用的额度申请。→ { allowed: true } | { allowed: false, reason: 'rpm'|'write_rpm'|'unavailable'|'store_unavailable', retryAfter } */
+    consume(tokenId, level, scope = '', db = undefined) {
       if (!Number.isSafeInteger(tokenId) || tokenId <= 0 || typeof scope !== 'string' || scope.length > 64) return deny('unavailable', all)
+      if (policy.store === 'db') return consumeDb(tokenId, level, scope, db)
       const key = `${scope}|${tokenId}` // 令牌 id 在各行业库里各自从 1 起编，必须带库标识，否则不同行业的同号令牌共用一个桶
       const a = all.open(key)
       if (a.full) return deny('unavailable', all)
@@ -100,6 +212,12 @@ export function createMcpRateLimiter({ env = process.env, now = Date.now, ...ove
       return { ...q, used }
     }
   }
+}
+
+/** 已配置的日配额（0 = 关闭）。只读展示用：读失败按 0 显示不影响限流（限流自己走 `dailyQuotaState`，读失败 fail closed）。 */
+export function dailyQuotaConfigured(db) {
+  const n = Number(readSetting(db, 'mcp_token_daily_quota'))
+  return Number.isFinite(n) && n >= 0 ? n : 0
 }
 
 /** 本地午夜距现在的秒数（≥1） */
@@ -133,4 +251,4 @@ export function dailyQuotaState(db, tokenId, { now = () => new Date() } = {}) {
   }
 }
 
-export default { createMcpRateLimiter, dailyQuotaState, DEFAULT_MCP_RATE }
+export default { createMcpRateLimiter, rateStoreFromEnv, dailyQuotaState, DEFAULT_MCP_RATE, mcpRatePolicy, dailyQuotaConfigured }
