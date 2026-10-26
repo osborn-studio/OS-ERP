@@ -102,6 +102,7 @@ node scripts/verify-release.mjs --evidence=<EVIDENCE.json> --log[=<file>]   # ch
   by the building process and also stored in the signed evidence.
 - The append modifies a tracked file: commit the new line before the next build (the dirty-tree check applies as usual).
 - Appends take an exclusive lock file (`<log>.lock`); a held lock makes the build fail instead of interleaving. A lock left by a crashed process must be removed by hand after checking nothing is appending.
+- Crash semantics of the append (AD6; full table in `docs/operations/audit-integrity.md` section 5b): the line is written and fsynced inside the lock, and a failed write or fsync truncates the file back to its length before the append. If the process is killed (or loses power) instead: a stale `<log>.lock` is left (remove by hand), the log is either still a valid chain (the entry counts as appended; rebuilding the same name is refused, use a new commit) or has a torn last line (the log is rejected and never repaired: restore the committed file with git and rebuild). Fault points `log.after-lock`, `log.after-write-before-fsync`, `log.after-fsync-before-unlock` exist for tests only (`GML_TEST_FS_FAULT`, `GML_RUNTIME_MODE=test`); with the variable set in any other mode `release-candidate --log` fails before building.
 - A candidate name can appear once. Re-signing a candidate means a new commit, hence a new name.
 - Limits: a hash chain detects edits in the middle, not removal of the newest lines or replacement of the whole file by another
   valid chain; git history and an out-of-band copy of the latest line's hash cover that. The log does not prove the evidence true.
@@ -114,6 +115,19 @@ signature was not verified. **A formal release must be re-signed by the key hold
 with `GML_RELEASE_SIGN_KEY` set (and `--log`) from a clean checkout; because a candidate name (`RC-<version>-<shortsha>`) can appear in
 the log only once, re-signing a commit that is already logged (for example by hosted CI) requires a new commit, which gets a new name; distribute the public key out of band, and verify with
 `--pubkey --require-signature --log`. Hosted-CI candidates are development candidates only and are never release-grade.
+
+### Hosted CI candidate (AD10)
+
+The `candidate` job in `.github/workflows/ci.yml` builds a candidate on a GitHub-hosted runner. It runs only for
+`workflow_dispatch` and for pushes of tags matching `v*` (never for pull requests or pushes to `main`), at most one at a time,
+within 90 minutes. It runs `release-candidate --run-tests --ci-run=auto --log=<runner temp> --output=<runner temp>`, then
+`verify-release --evidence --artifact --log` on the extracted package, and uploads exactly three files as a workflow artifact
+kept for 14 days: `RC-<version>-<shortsha>.zip`, `EVIDENCE.json` and `evidence-log-line.jsonl` (the log line this build would
+append). It creates no tag, no GitHub Release, and does not commit the log line back: a maintainer who wants it in
+`docs/release/EVIDENCE-LOG.jsonl` commits it by hand.
+
+**托管候选未签名，正式发行须持钥者在受控机器重签** (hosted candidates are unsigned: `built_by: hosted-ci`, `signature: null`;
+the job never holds `GML_RELEASE_SIGN_KEY`). The artifact is a development candidate, not release or production acceptance.
 
 ## RELEASE-NOTES.md
 

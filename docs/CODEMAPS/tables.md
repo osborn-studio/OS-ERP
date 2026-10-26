@@ -3,7 +3,7 @@
 <!-- generated -->
 <!-- 由 `node scripts/gen-codemap.mjs` 生成，勿手改；CI 校验不漂移 -->
 
-共 199 张表、65 个迁移。“建于”= schema.sql / 迁移编号 / 运行时建表的文件；“改于”= ALTER、addColumn（无后缀）、建索引（·idx）、触发器（·trg）、DROP（·drop）所在迁移编号。“触达”= 该文件的 SQL 文本里出现这张表（server/db/ 下的种子与启动文件不计）。
+共 199 张表、67 个迁移。“建于”= schema.sql / 迁移编号 / 运行时建表的文件；“改于”= ALTER、addColumn（无后缀）、建索引（·idx）、触发器（·trg）、DROP（·drop）所在迁移编号。“触达”= 该文件的 SQL 文本里出现这张表（server/db/ 下的种子与启动文件不计）。
 
 ## 扫描边界（必读）
 
@@ -61,7 +61,7 @@
 | `doc_no_rules` | 009 | 009·idx | lib/docno.js | routes/docflow.js |
 | `doc_states` | 008 | 008·idx | lib/docflow.js, mcp/catalog.js, mcp/tools.js | routes/docflow.js, routes/order-center.js |
 | `doc_transition_policy` | 027 | — | lib/approval.js, lib/docflow.js | — |
-| `doc_types` | 008 | — | lib/approval.js, lib/docflow.js, lib/docno.js, lib/order-center.js, mcp/catalog.js, mcp/tools.js | routes/approval.js, routes/docflow.js, routes/purchase-chain.js |
+| `doc_types` | 008 | — | lib/approval.js, lib/docflow.js, lib/docno.js, lib/order-center.js, lib/role-matrix.js, mcp/catalog.js, mcp/tools.js | routes/approval.js, routes/docflow.js, routes/purchase-chain.js |
 | `im_approval_map` | 040 | 040·idx | lib/im-sync.js | routes/im.js |
 | `im_dept_map` | 040 | 040·idx | lib/im-sync.js | routes/im.js |
 | `im_platform_cfg` | 040 | — | lib/im-sync.js | — |
@@ -82,7 +82,7 @@
 | `mall_customers` | schema.sql | 025 | lib/coupon.js, lib/member.js, lib/pos2.js, middleware/mall-session.js | routes/mall.js, routes/promo.js |
 | `material_issue_items` | 023 | 023·idx | lib/mfg.js | — |
 | `material_issues` | 023 | 023·idx | lib/docflow.js, lib/mfg.js | — |
-| `mcp_call_logs` | 006 | 006·idx | mcp/admin.js, mcp/server.js, mcp/tokens.js | — |
+| `mcp_call_logs` | 006 | 006·idx | lib/mcp-rate-limit.js, mcp/admin.js, mcp/server.js, mcp/tokens.js | — |
 | `mcp_confirmations` | 006 | 006·idx | mcp/admin.js, mcp/server.js | — |
 | `mcp_idempotency` | 006 | 006·idx, 026·idx | mcp/server.js | — |
 | `member_accounts` | 025 | 025·idx | lib/member.js | routes/promo.js |
@@ -175,8 +175,8 @@
 | `report_config_audit_log` | 039 | 039·idx | lib/report-config-audit.js | — |
 | `report_defs` | 034 | — | lib/report-config-audit.js, lib/report.js | — |
 | `report_lines` | 034 | 034·idx | lib/report-config-audit.js, lib/report.js | — |
-| `role_permissions` | 005 | — | lib/account-security.js, middleware/auth.js | routes/auth.js |
-| `roles` | 005 | — | lib/account-security.js, lib/admin-bootstrap.js, lib/approval.js, middleware/auth.js | routes/approval.js, routes/auth.js |
+| `role_permissions` | 005 | — | lib/account-security.js, lib/role-matrix.js, middleware/auth.js | routes/auth.js |
+| `roles` | 005 | — | lib/account-security.js, lib/admin-bootstrap.js, lib/approval.js, lib/role-matrix.js, middleware/auth.js | routes/approval.js, routes/auth.js |
 | `sales_deliveries` | schema.sql | — | lib/accounting.js, lib/docflow.js, lib/invoice.js, lib/report.js, lib/returns.js, lib/sales-order.js | routes/invoice.js, routes/oms.js, routes/sales.js |
 | `sales_delivery_items` | schema.sql | — | lib/invoice.js, lib/report.js, lib/returns.js | routes/oms.js, routes/sales.js |
 | `sales_invoice_items` | 021 | 021·idx | lib/invoice.js | — |
@@ -189,7 +189,7 @@
 | `sales_returns` | schema.sql | 028·idx | lib/dealer-statement.js, lib/docflow.js, lib/metrics.js, lib/pos2.js, lib/rebate.js, lib/refund.js, lib/returns.js, lib/sales-order.js | routes/dealers.js, routes/pos.js, routes/sales.js |
 | `serial_numbers` | schema.sql | — | — | routes/inventory.js, routes/master.js |
 | `setting_audit_log` | 038 | 038·idx | lib/settings.js | — |
-| `settings` | schema.sql | — | lib/ops-status.js, lib/settings.js | routes/promo.js |
+| `settings` | schema.sql | — | lib/mcp-rate-limit.js, lib/ops-status.js, lib/settings.js | routes/promo.js |
 | `stock_check_items` | schema.sql | — | lib/pos2.js | routes/inventory.js, routes/pos.js |
 | `stock_checks` | schema.sql | 024 | lib/docflow.js, lib/pos2.js | routes/inventory.js, routes/pos.js |
 | `stock_cost_ledger` | 002 | 002·idx | lib/accounting.js, lib/costing.js, lib/stock.js | — |
@@ -205,7 +205,7 @@
 | `suppliers` | schema.sql | 005 | lib/accounting.js, lib/approval.js, lib/costing.js, lib/dashboard-sql.js, lib/purchase.js, lib/qc.js, lib/qc2.js, mcp/tools.js | routes/ai.js, routes/dashboard.js, routes/inventory.js, routes/master.js, routes/outsourcing.js, routes/purchase-chain.js, routes/purchase.js |
 | `user_orgs` | 005 | 005·idx | lib/account-security.js, lib/admin-bootstrap.js | — |
 | `user_roles` | 005 | 005·idx | lib/account-security.js, lib/admin-bootstrap.js, lib/approval.js, middleware/auth.js | — |
-| `users` | schema.sql | 005, 050 | lib/account-security.js, lib/admin-bootstrap.js, lib/approval.js, lib/im-sync.js, lib/qc2.js, mcp/delegation.js, mcp/doc-perms.js, mcp/tokens.js, mcp/tools.js, middleware/auth.js | routes/approval.js, routes/auth.js, routes/im.js, routes/sales.js |
+| `users` | schema.sql | 005, 050 | lib/account-security.js, lib/admin-bootstrap.js, lib/approval.js, lib/im-sync.js, lib/qc2.js, lib/role-matrix.js, mcp/delegation.js, mcp/doc-perms.js, mcp/tokens.js, mcp/tools.js, middleware/auth.js | routes/approval.js, routes/auth.js, routes/im.js, routes/sales.js |
 | `voucher_entries` | 032 | 032·idx, 041·idx | lib/accounting.js, lib/annual.js, lib/closing.js, lib/report.js | — |
 | `voucher_template_entries` | 032 | 032·idx | lib/accounting.js | — |
 | `voucher_templates` | 032 | — | lib/accounting.js | — |
@@ -283,3 +283,5 @@
 | 067 | `067_audit_fts.cjs` | 审计日志关键词检索（FTS5 外部内容表 + 触发器） | — | audit_logs, temp |
 | 068 | `068_audit_hash_chain.cjs` | 审计日志哈希链（prev_hash/row_hash + 锚点表） | audit_chain_anchors | audit_chain_anchors, audit_logs |
 | 069 | `069_qimen_clear_demo_secret.cjs` | 清除库内公开奇门演示签名常量并记录事实 | — | — |
+| 070 | `070_oms_order_time_index.cjs` | 线上订单下单时间索引（oms_orders.order_time） | — | — |
+| 071 | `071_audit_fts_optional.cjs` | 审计日志 FTS5 索引可选化（设置 audit_fts_enabled） | — | — |

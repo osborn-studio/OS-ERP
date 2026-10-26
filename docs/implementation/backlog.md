@@ -138,3 +138,18 @@
 | `zod` 为未使用依赖，白名单到期 2026-12-15 前应移除（会改 SBOM/声明） | 依赖 | AC10 |
 | 新浏览器场景（审计 FTS 提示、看板时间戳）未执行 | Linux CI | AC11 |
 | `dmserver` 上的所有性能数字均未复测 | 目标主机 | 全批 |
+
+## 第十三批后仍 open 的残留
+
+| 位置 | 残留 | 来源 |
+|---|---|---|
+| `/api/metrics` 系列 | 仍只需 `system:metrics:view`，未按指标对应业务查看权限；受限角色对无范围语义指标只是标注而非隐藏，需产品决定 | AD1 Codex 审计（高） |
+| 角色矩阵 | 不含自定义角色、按账号 `data_scope` 覆盖与多角色并集 | AD2/AD11 |
+| `oms.js` `/stats`、`ai.js` 平台分析 | 仍用 `date(order_time)` 谓词，未用迁移 070 索引；应用若引入 `ANALYZE`，explain-audit 可能改判 | AD3 |
+| 离机锚点 | `--accept-new-anchors` 后桥接锚点与合法锚点不可区分；需操作日志自动对账 | AD5 Codex 审计 |
+| 故障注入 | 只模拟 abort/截断，未测真实掉电；加密备份只覆盖一个注入点；未在 Linux 上跑 | AD6 |
+| 夜间工作流、`capacity-smoke`、`candidate` job、promtool/no-FTS CI 步骤 | 均未在托管 runner 上实跑（工作流不在 main） | AD8/AD10 |
+| MCP 限速 | 各进程各自计数（多进程部署下放大 N 倍）；重启清零；滑动窗口为近似 | AD9 |
+| `candidate` job 的 `--ci-run=auto` 在同一提交无成功 CI 时为 null；推 `v*` 标签会同时触发其余 job | AD10 |
+| `boss` 进总部名单后 docflow 可见范围扩大 | 产品确认 | AD2 |
+| `dmserver` 上的所有性能数字均未复测 | 目标主机 | 全批 |

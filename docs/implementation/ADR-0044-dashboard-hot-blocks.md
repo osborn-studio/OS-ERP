@@ -130,3 +130,47 @@ MCP 的范围依据从 `owner_org_id` 改为仓库所属组织，是 ADR-0038 �
 - **中 1（已修，文档 + 测试）**：命中率推导只看单键与写入，没有说明计数器是所有端点 / 键的合计，且命中率取决于每个键的读取间隔与 TTL——5 个键各 1 分钟读一次，30 分钟 150 次全未命中、零写入，会满足样本条件让告警一直亮；上限公式的 `floor(30/r)` 有边界效应（15 s → 2/3，16 s → 1/2）。→ `monitoring.md` 写明"命中率低不一定是写入密"、触发后的两步排查与处置、样本条件按聚合查找次数解释；新增测试 `AC4 hit ratio can be zero with no writes at all` 固定这些事实（含 150 次全未命中的多键用例）。
 - **低 1（已修）**：保真测试只比较文本与导入，路由若调错构建函数 / 窗口仍绿。→ 新增 `AC4 route responses equal the results of the registered explain-audit statements`：HTTP 响应与登记语句在同一库上的执行结果逐项相等（`/top` 四条、`/channel` 两条、`/recent` 四条，默认窗口与登记一致）。仍不是"抓取路由实际 prepare 的 SQL"（路由在独立进程，没有注入点）——按行为而非文本比对。
 - **低 2（已修）**：受限账号"不预热"只在已预热的键上测过。→ 新增 `AC4 a rejected caller on a cold /channel key …`：未用过的 `days=45` 被 403 / 401 后日志无处理器行，管理员第一次读该键仍是 `miss`。
+
+---
+
+# 补充 3（AD3，roadmap-v9）：`oms_orders.order_time` 索引（迁移 070）与 `/trend`、`/channel` 线上分支
+
+状态：开发实现，尚非产品上线验收｜数字见 `capacity-baseline.md` 的 AD3 一节（Mac mini + 合成 20 万 OMS 单 + 整机高负载，量级为准）
+
+## 决定
+
+### 1. 索引：`idx_oms_order_time`，order_time 起头的**覆盖**索引
+迁移 `070_oms_order_time_index.cjs`：`oms_orders(order_time, status, platform_id, pay_amount)`，非 UNIQUE、`IF NOT EXISTS`、表或列缺失则跳过，`INDEXES` 是 `up` 与 `verify` 的唯一来源。
+**与 roadmap-v9 字面（单列 `oms_orders(order_time)`）的偏差，及理由**：先实测单列索引——每命中一行都要回表取 `status / platform_id / pay_amount`（随机读），窗口覆盖的行占比一高就比整表顺序扫描**更慢**（合成 20 万行、数据铺满 365 天时 `/trend` 90 天窗口约 69 → 88 ms；数据全在最近 60 天内时 30 天窗口 119 → 196 ms、90 天窗口 209 → 424 ms，即新建一家店、订单都在窗口里的最坏情形会退化 2–3×）。把两条看板查询读的列放进索引，计划变成 `SEARCH … USING COVERING INDEX idx_oms_order_time (order_time>?)`，各窗口、各数据分布都不比整表扫描慢（见 capacity-baseline）。代价：索引更大（20 万行 +9.5 MB，约 +19%；单列约 +5.6 MB）与略高的写放大。仍以 `order_time` 起头，`oms.js` 里 `o.order_time >= ?` 之类区间查询同样可用。若产品方更想要字面的单列索引，把 `INDEXES[0].cols` 与 `needs` 改回即可（测试里的 `COVERING` 断言随之改）。
+
+### 2. SQL：加一个可走索引的区间谓词，**保留**旧谓词复核
+旧：`date(order_time) >= date('now','localtime','-N day')`——对列套函数，无索引可用。
+新：`order_time >= :lo AND date(order_time) >= :since`，绑定参数由 JS 按**本地日期**算出（`onlineWindow(days)` → `[lo, since]`）。
+- `since` 与旧右端同值：`sinceDate()` 复刻 `date('now','localtime','-N day')`（先转本地钟面再减 N 天，无夏令时修正，与 SQLite 一致）；N 非有限数、为负（旧模板拼出 `'--N day'`，SQLite 返回 NULL，旧结果为空）、或超出 SQLite 儒略日范围时返回 `null`，绑定 NULL，结果为空，与旧行为相同。极远的过去按 SQLite 的 `-0712-11-25` 形式输出。
+- `lo = since 前一天`：只用来缩小索引范围；宽一天是为了不漏掉带时区后缀的存量值（`2026-10-23T20:00:00-08:00` 的 `date()` 是 10-24，但文本小于 `'2026-10-24'`）。
+- **保留 `date(order_time) >= since` 作复核**：索引选出的候选行再用原谓词过滤，所以结果与旧 SQL 逐行相同——包括脏值（`'not-a-date'`、`'null 00:00:00'` 文本序高于任何日期，但 `date()` 为 NULL，被复核剔除）。路线图写的"纯区间 `>= ? AND < ?`"没有采用：纯区间对脏值与时区后缀会改变结果，而且旧 SQL 没有上界（未来日期的订单也计入），加上界同样改变结果。
+- 已知残余：文本序与日期前缀不一致的存量值（前导空白等）可能被 `lo` 挡掉而旧 SQL 会计入；应用自身写入的格式（`YYYY-MM-DD HH:MM:SS`，seed / OMS 同步 / H5 商城）不受影响。
+- 缓存键 `trend:<days>` / `channel:<days>` 不变；跨零点由 `db-ttl-cache` 失效，所以 JS 日期与 SQLite `'now'` 之间的毫秒级竞态最多影响一次请求的窗口起点，且与改动前的"请求中途跨零点"同量级。
+
+### 3. `/trend` SQL 搬进 `dashboard-sql.js`，`dash.trend_*` 不再是人工镜像
+`trendSalesSql(days)` / `trendPurchaseSql(days)` 文本逐字未改（测试与旧文本逐字对照），`trendOnlineSql()` 为新语句；路由与 `scripts/explain-audit.mjs` 取同一份。explain-audit：`dash.trend_sales`（`idx_so_order_date`）、`dash.trend_purchase`（`idx_po_order_date`）、`dash.trend_online`（`idx_oms_order_time`）、`dash.channel_online`（`idx_oms_order_time`）都声明 `expectIndex`；**移除** `dash.channel_online` 的 ALLOW 豁免（`unusedAllow` 守卫保证不会残留）。登记语句带上与路由同形的绑定参数（`onlineWindow(30|90)`）。
+
+### 4. 写放大
+按 AA6 的方法（独立库交替、逐行自动提交的单行 INSERT）：见 capacity-baseline，量级为每笔订单多 25–40 µs，一次平台订单 / 商城下单落一行，可忽略；`scripts/bench-oms-order-time.mjs` 可重复。
+
+## 测试（tests/dashboard-perf.test.mjs，`AD3` 前缀 8 个 + 既有 AC4 用例更新）
+迁移（建索引、幂等、`verify()` 缺索引为假、表 / 列缺失跳过、runner 登记）；`sinceDate` 与 SQLite `date(?, 'localtime', '-N day')` 同一瞬间逐项相等（分数 / 负 / 非有限 / 超范围窗口，多个临近午夜的瞬间）并在 6 个进程时区（含半小时偏移、夏令时切换日、UTC+14）的子进程里复核；`onlineWindow`；新旧 SQL 在带边界的夹具上返回相同行（窗口起点当天 00:00:00 计入、前一天 23:59:59 不计、`T` 分隔、仅日期、时区后缀、脏文本、儒略日数字串、NULL、空串、未来日期、未知平台），变异（去掉 `date()` 复核）使之变红；`trend` sales / purchase 文本与旧文本相同；explain-audit 计划是 `COVERING INDEX idx_oms_order_time`、无 `SCAN oms_orders`、ALLOW 已删、删索引后守卫变红；HTTP 响应（`/trend`、`/channel`）与旧 SQL 逐项相等，路由里不再有内联的 `date(order_time) >=`。
+
+## 已知限制
+- 数字来自 Mac mini + 合成表，整机负载 30–45，不是 `dmserver` 结果；真实 OMS 订单的时间分布未知，覆盖索引的好处在"窗口覆盖多数行"时最大，在窗口很窄时二者接近。
+- explain-audit 在 `ANALYZE` 过的库上可能选 `idx_oms_status` 的 skip-scan（应用从不跑 `ANALYZE`，`synth-data` 也刻意不跑）；若将来引入 `ANALYZE`，`expectIndex` 会报红，到时需重新评估。
+- `oms.js` 的 `/stats` 等路由仍有 `date(order_time) >= …`（同样的整表读取），不在 AD3 范围；可复用 `onlineWindow()` 与同一索引另行改写。
+
+## Codex 审计（AD3，`gpt-6.1-sol`，只读）
+范围：`git diff batch-twelve...HEAD`；关注 SQL 等价（含时区边界）、迁移安全、explain-audit 保真。
+- **高：无。** 确认：常规时区 / 夏令时 / 非法与超大窗口与 SQLite 一致；审计登记的 SQL 文本与路由默认工厂相同。
+- **中 1（部分已修 / 部分登记为残余）**：区间谓词对 SQLite 能解析、但文本序低于 `lo` 的非规范值会改变结果——儒略日数字串（`'2.4613375e6'`、`'+2461337.5'`、`' 2461337.5'`）与日历溢出日期（`2026-02-31` 被 SQLite 规整为 03-03）。这些**不是应用写入的格式**（seed / OMS 同步 / H5 商城都写 `YYYY-MM-DD HH:MM:SS`），不修，写进上文"已知残余"并在夹具里保留儒略日数字串 `'2461000.5'`（落在窗口外，不影响等式）；要彻底消除只能放弃索引或先把存量规范化，不在 AD3 范围。已修的部分：时区后缀与脏文本由 `lo` 放宽一天 + `date()` 复核覆盖（夹具含这些值）。
+- **中 2（已修）**：`expectIndex` 只检查计划里出现索引名，去掉区间谓词后计划退化成 `SCAN … USING COVERING INDEX`（覆盖索引全扫）仍然绿。→ explain-audit 新增 `expectSearch`：计划行必须是 `SEARCH … INDEX <idx> (约束)`；`dash.trend_sales / trend_purchase / trend_online / channel_online` 都声明；新测试用"只保留 `date()` 复核 + `INDEXED BY`"的变异语句验证守卫变红。
+- **低 1（已修）**：小数天窗口的取整与 SQLite 不同（`TZ=UTC`、12:00:00Z、`days=0.500000001`：SQLite `2026-10-24`，JS `2026-10-23`）。→ `sinceDate` 按 SQLite 的毫秒取整（`trunc(N·86400000 + 0.5)`）减；测试加入边界窗口与子进程 UTC 瞬间，变异（去掉取整）使其变红。
+- **低 2（已修）**：`verify()` 只查索引名，`CREATE INDEX idx_oms_order_time ON oms_orders(status)` 会绕过自愈。→ `verify()` 与 `up()` 改为核对所属表、有序键列、非 UNIQUE、非局部；名字被占但定义不对时 `up()` 先 `DROP` 再重建（这个名字归迁移 070 所有）；测试覆盖单列 / UNIQUE / 局部三种漂移。
+- 审计提到的"登记语句的绑定参数在模块加载时取快照"：explain-audit 是一次性 CLI 进程，窗口日期只影响计划里的常量，不影响计划形态，未改。

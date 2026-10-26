@@ -115,7 +115,7 @@ export default function MyScope() {
         </table>
         <div className="mt-3 text-xs text-slate-500 space-y-1">
           <p>三种"看不到"不要混淆：缺权限点是 403（页面会提示没有访问权限）；范围内没有数据是 200 加空列表；内部账号打开范围外的单据详情返回"不存在"（404），与真的不存在无法区分；门店 / 经销商账号访问他人主体的单据则是 403。</p>
-          <p>需要调整范围请联系管理员（用户与权限页设置所属组织与数据范围）。<Link to="/" className="underline ml-1">返回首页</Link></p>
+          <p>需要调整范围请联系管理员（用户与权限页设置所属组织与数据范围）。<Link to="/system/role-matrix" className="underline ml-1">各角色的数据范围对照</Link><Link to="/" className="underline ml-2">返回首页</Link></p>
         </div>
       </Card>
     </div>

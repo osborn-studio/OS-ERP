@@ -21,6 +21,9 @@
  *   （AES-256-GCM，认证）。这些是**要离机保存**的对象（docs/operations/audit-integrity.md §6），`audit-verify-chain --against-backup` 据此识别“整链重算”。
  *   链校验失败不挡备份（被篡改的库也要有备份），只在清单里 `verified:false`。清单写失败 ⇒ 该库备份失败（不留没有清单的新备份）。
  *
+ * 【写入顺序】（AD6）无密钥时快照先写 `<终名>.partial`，校验通过、fsync 后才 rename 成终名 `.db`；注入点 `backup.{after-db-copy,before-sidecar,after-sidecar}`（GML_TEST_FS_FAULT，仅 test 模式）
+ *   之后的状态与恢复见 docs/operations/audit-integrity.md §5b。
+ *
  * 【告警】（ADR-0029）有失败且设置 GML_ALERT_CHANNEL（已存在的通知渠道 code）⇒ 经通知发送路径发一条简短告警（只含行业码/错误码/数据目录名）；成功静默。
  *
  * 【改它要注意什么】tests/db-backup.test.mjs 用真实子进程跑本脚本；`GML_BACKUP_FAULT`
@@ -49,6 +52,7 @@ import { resolveBackupDir } from '../server/lib/backup-dir.js'
 import { sendBackupAlert } from '../server/lib/backup-alert.js'
 import { getChannel } from '../server/lib/notify.js'
 import { loadBackupKey, encryptFile, decryptFile, shredFile, FORMAT_VERSION } from '../server/lib/backup-crypto.js'
+import { faultPoint, assertFsFaultAllowed } from './lib/fs-fault.mjs'
 import { summarizeAuditChain, withoutAnchorList, buildManifest } from '../server/lib/audit-anchor-manifest.js'
 
 const SMOKE_TABLE = 'users'
@@ -99,6 +103,8 @@ if (faultSpec) {
   if (kind !== 'truncate') usageError(`BACKUP_FAULT_INVALID: 不支持的故障类型 ${kind}`)
   fault = { kind, only: only || null }
 }
+
+try { assertFsFaultAllowed() } catch (e) { usageError(`${e.code}: ${e.message}`) }
 
 let backupKey = null
 try {
@@ -179,9 +185,8 @@ function verifyBackup(file, source) {
 const sha256File = (file) => createHash('sha256').update(fs.readFileSync(file)).digest('hex')
 
 /** 失败的快照改名为 *.failed：保留证据，但不会被当成可用备份（裁剪与恢复都只认 .db） */
-function quarantine(file) {
+function quarantine(file, failed = `${file}.failed`) {
   if (!fs.existsSync(file)) return null
-  const failed = `${file}.failed`
   try {
     fs.renameSync(file, failed)
     return failed
@@ -269,13 +274,15 @@ if (!freezeError) {
         }
         snap.finalOut = finalOut
         // 有密钥时明文快照只存在于 0600 临时文件（窗口：从 VACUUM INTO 到加密完成后擦除）
-        snap.out = backupKey ? path.join(dir, `.${base}_${stamp}${suffix()}.${randomBytes(6).toString('hex')}.plain.tmp`) : finalOut
+        // 无密钥时先落 `<终名>.partial`，校验通过后才改成终名（AD6）：被杀在快照与校验之间时，磁盘上不会出现没验过的 `.db`（会被裁剪当成一份备份）
+        snap.out = backupKey ? path.join(dir, `.${base}_${stamp}${suffix()}.${randomBytes(6).toString('hex')}.plain.tmp`) : `${finalOut}.partial`
         if (backupKey) plainTmps.add(snap.out)
         db.prepare('VACUUM INTO ?').run(snap.out)
+        faultPoint('backup.after-db-copy')
       } catch (e) {
         failed++
         entry.error = `${SNAPSHOT_FAILED}: ${e.message}`
-        entry.failed_file = snap.out ? (backupKey ? (shredFile(snap.out), null) : quarantine(snap.out)) : null
+        entry.failed_file = snap.out ? (backupKey ? (shredFile(snap.out), null) : quarantine(snap.out, `${snap.finalOut}.failed`)) : null
         snap.dead = true
       } finally {
         db.close()
@@ -300,7 +307,7 @@ for (const snap of snaps) {
   const { entry, cfg, dir, base, out, finalOut } = snap
   entry.consistency_stamp = consistency.id
   if (snap.dead) { results.push(entry); continue }
-  const discard = () => (backupKey ? (shredFile(out), null) : quarantine(out)) // 加密模式绝不把明文隔离留盘
+  const discard = () => (backupKey ? (shredFile(out), null) : quarantine(out, `${finalOut}.failed`)) // 加密模式绝不把明文隔离留盘
 
   // 仅测试模式：模拟"快照文件写坏"，证明校验失败路径真的不裁剪、非零退出
   if (fault && (!fault.only || fault.only === entry.code)) {
@@ -349,12 +356,18 @@ for (const snap of snaps) {
     shredFile(out) // 明文临时文件在此擦除
     entry.file = finalOut
   } else {
-    entry.file = out
-    entry.size = fs.statSync(out).size
-    entry.sha256 = sha256File(out)
+    // 已通过校验：fsync 后原子改成终名，再 fsync 目录项
+    const pfd = fs.openSync(out, 'r')
+    try { fs.fsyncSync(pfd) } finally { fs.closeSync(pfd) }
+    fs.renameSync(out, finalOut)
+    if (process.platform !== 'win32') { const dfd = fs.openSync(dir, 'r'); try { fs.fsyncSync(dfd) } finally { fs.closeSync(dfd) } }
+    entry.file = finalOut
+    entry.size = fs.statSync(finalOut).size
+    entry.sha256 = sha256File(finalOut)
   }
   const ownedSidecars = [] // 失败清理只删本次创建的文件，不碰别人遗留的同名文件
   try {
+    faultPoint('backup.before-sidecar')
     const manifest = buildManifest({ industry: entry.code, backupFile: entry.file, backupSha256: entry.sha256, summary: chainSummary })
     const text = JSON.stringify(manifest, null, 2) + '\n'
     fs.writeFileSync(`${entry.file}.audit-manifest.json`, text, { mode: 0o600, flag: 'wx' })
@@ -380,6 +393,7 @@ for (const snap of snaps) {
     results.push(entry)
     continue
   }
+  faultPoint('backup.after-sidecar')
   entry.status = 'ok'
 
   // 裁剪：只处理本脚本命名规则生成的 .db / .db.enc，新文件永远保留，其余按时间保留 keep-1 份

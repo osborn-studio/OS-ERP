@@ -24,7 +24,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url))
-const SCENARIOS = ['runtime-capabilities', 'session', 'user-editor', 'funds-review', 'scope-notice', 'my-scope', 'audit-logs', 'inventory-paging', 'approval-template-perm', 'pos-settle-perm', 'audit-fts-hint', 'dashboard-cache-stamp']
+const SCENARIOS = ['runtime-capabilities', 'session', 'user-editor', 'funds-review', 'scope-notice', 'my-scope', 'audit-logs', 'inventory-paging', 'approval-template-perm', 'pos-settle-perm', 'audit-fts-hint', 'dashboard-cache-stamp', 'role-matrix']
 const SCENARIO_TIMEOUT_MS = 5 * 60 * 1000
 const redact = (text) => text.replace(/[A-Za-z0-9_.-]{32,}/g, '[REDACTED]')
 const tail = (text, n) => text.split('\n').slice(-n).join('\n')
@@ -83,7 +83,10 @@ try {
     cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'],
     env: {
       PATH: process.env.PATH, HOME: dataDir, TMPDIR: dataDir, HOST: '127.0.0.1', PORT: String(port),
-      GML_RUNTIME_MODE: 'test', GML_DATA_DIR: dataDir, GML_DB: '', GML_JWT_SECRET: randomBytes(32).toString('hex')
+      GML_RUNTIME_MODE: 'test', GML_DATA_DIR: dataDir, GML_DB: '', GML_JWT_SECRET: randomBytes(32).toString('hex'),
+      // 所有场景共用一个服务进程，且全部来自 127.0.0.1：默认每 IP 每分钟 60 次登录（ADR-0005，成功也计数、不退还）
+      // 在十几个场景连跑时会被耗尽，后面的场景登录得到 429 而不是页面缺陷。按账号的限额保持默认。
+      GML_LOGIN_IP_LIMIT: '10000'
     }
   })
   server.stdout.on('data', (d) => { serverOutput += d })
@@ -117,6 +120,10 @@ try {
     if (!ok) {
       console.log('::group::Failure diagnostics (tail, long opaque strings redacted)')
       console.log(redact(tail(output.trim(), 40)))
+      console.log('::endgroup::')
+      // 场景失败时服务端最近的日志行同样有用（例如 429 / 500 的来源）；同样只打印脱敏尾部
+      console.log('::group::Server output tail at failure (redacted)')
+      console.log(redact(tail(serverOutput.trim(), 30)))
       console.log('::endgroup::')
     }
   }

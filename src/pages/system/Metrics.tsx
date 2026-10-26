@@ -193,7 +193,12 @@ export default function Metrics() {
                     r.category ? <span className={CATEGORY_TONE[r.category] || 'tag bg-slate-100 text-slate-500'}>{r.category}</span> : '—' },
                   { key: 'value', title: '当前值', width: 160, align: 'right', render: (r) => {
                     if (isMetricError(r.value)) return <span className="text-amber-600" title={(r.value as any).error}>算不出</span>
-                    return <strong className={r.value === 0 ? 'text-ink-400' : 'text-ink-900'}>{fmtMetricValue(r.value, r.unit)}</strong>
+                    return (
+                      <span>
+                        <strong className={r.value === 0 ? 'text-ink-400' : 'text-ink-900'}>{fmtMetricValue(r.value, r.unit)}</strong>
+                        {r.scoped === false && <span className="ml-1 text-[11px] text-amber-600" title="该指标尚未按组织范围过滤，受限账号看到的是全局数字">全局口径</span>}
+                      </span>
+                    )
                   } },
                   { key: 'formula', title: '计算口径', render: (r) => (
                     <span className="text-[12px] text-ink-700 font-mono break-all">{r.formula}</span>
@@ -290,7 +295,7 @@ export default function Metrics() {
               {detail.unit && <span className="tag bg-slate-100 text-slate-500">单位：{detail.unit}</span>}
               <span className="ml-auto text-[13px]">
                 <span className="text-ink-400 mr-2">当前值（近 {data?.days ?? days} 天）</span>
-                <strong className="text-ink-900">{fmtMetricValue(detail.value, detail.unit)}</strong>
+                <strong className="text-ink-900">{fmtMetricValue(detail.value, detail.unit)}</strong>{detail.scoped === false && <span className="ml-1 text-[11px] text-amber-600">全局口径</span>}
               </span>
             </div>
 

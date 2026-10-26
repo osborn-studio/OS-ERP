@@ -9,6 +9,7 @@ import { createHash } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { loadPublicKey, verifyEvidenceSignature, SIG_FILE } from './lib/evidence-sign.mjs'
 import { LOG_FILE, evidenceDigest, readLog, signatureDigest } from './lib/evidence-log.mjs'
+import { loadAnchor, checkLogDescent } from './lib/offbox-anchor.mjs'
 import { hashEntries, listTestsTree, TESTS_TREE_FILE } from './lib/tests-tree.mjs'
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 // Evidence/archive options must never silently turn into a manifest-only check.
@@ -83,14 +84,21 @@ if (process.argv.filter(a => a === '--pubkey' || a.startsWith('--pubkey=')).leng
 const pubkeyIdx = process.argv.findIndex(a => a === '--pubkey' || a.startsWith('--pubkey='))
 const pubkeyArg = pubkeyIdx < 0 ? undefined : (process.argv[pubkeyIdx].startsWith('--pubkey=') ? process.argv[pubkeyIdx].slice(9) : process.argv[pubkeyIdx + 1])
 if (pubkeyIdx >= 0 && (!pubkeyArg || pubkeyArg.startsWith('--'))) fail('--pubkey needs a public key PEM path')
-else if (pubkeyIdx >= 0 && !evidenceArg) fail('--pubkey is only meaningful together with --evidence=<EVIDENCE.json>')
+else if (pubkeyIdx >= 0 && !evidenceArg && !process.argv.some(a => a === '--offbox' || a.startsWith('--offbox='))) fail('--pubkey is only meaningful together with --evidence=<EVIDENCE.json> or --offbox <anchor.json>')
 // AC6（ADR-0052）：--log[=<file>] 校验透明日志链并要求本候选在其中；--require-signature 把"未签名"从警告升级为失败。两者都要求 --evidence。
 const logIdx = process.argv.findIndex(a => a === '--log' || a.startsWith('--log='))
 if (process.argv.filter(a => a === '--log' || a.startsWith('--log=')).length > 1) fail('--log given more than once')
 const logArg = logIdx < 0 ? undefined : (process.argv[logIdx] === '--log' ? path.join(root, LOG_FILE) : path.resolve(process.argv[logIdx].slice(6)))
 if (logIdx >= 0 && process.argv[logIdx] === '--log=') fail('--log= needs a file path')
 const requireSignature = process.argv.includes('--require-signature')
-if ((logArg !== undefined || requireSignature) && !evidenceArg) fail('--log and --require-signature are only meaningful together with --evidence=<EVIDENCE.json>')
+// AD5（ADR-0055）：--offbox <anchor.json> | --offbox=<anchor.json>：验离机锚点签名（须 --pubkey）并要求 --log 的日志是锚定日志的后代。
+if (process.argv.filter(a => a === '--offbox' || a.startsWith('--offbox=')).length > 1) fail('--offbox given more than once')
+const offIdx = process.argv.findIndex(a => a === '--offbox' || a.startsWith('--offbox='))
+const offboxArg = offIdx < 0 ? undefined : (process.argv[offIdx].startsWith('--offbox=') ? process.argv[offIdx].slice(9) : process.argv[offIdx + 1])
+if (offIdx >= 0 && (!offboxArg || offboxArg.startsWith('--'))) fail('--offbox needs an anchor file path')
+else if (offIdx >= 0 && !pubkeyArg) fail('--offbox needs --pubkey <pem>: an unverified anchor proves nothing')
+else if (offIdx >= 0 && logArg === undefined) fail('--offbox needs --log: the anchored log tail can only be checked against a log')
+if ((logArg !== undefined && !offboxArg || requireSignature) && !evidenceArg) fail('--log and --require-signature are only meaningful together with --evidence=<EVIDENCE.json> (--log may instead accompany --offbox)')
 if (requireSignature && !pubkeyArg) fail('--require-signature needs --pubkey <pem>: an unverified signature is not a signature')
 if (evidenceArg) {
   const bad = (field, why) => fail(`EVIDENCE.${field}: ${why}`)
@@ -235,6 +243,20 @@ if (evidenceArg) {
       } catch (error) { bad('synthetic_drill', `${f?.path}: ${error.message}`) }
     }
   } catch (error) { fail(`EVIDENCE: cannot read ${evidenceArg} (${error.message})`) }
+}
+if (offboxArg && !offboxArg.startsWith('--') && pubkeyArg && logArg !== undefined) {
+  const bad = why => fail(`OFFBOX: ${why}`)
+  try {
+    const loaded = loadAnchor(path.resolve(offboxArg), loadPublicKey(path.resolve(pubkeyArg)))
+    if (!loaded.ok) bad(loaded.reason)
+    else {
+      let text = null
+      try { text = fs.readFileSync(logArg, 'utf8') } catch (error) { if (error.code !== 'ENOENT') bad(`evidence log cannot be read (${error.code || error.message})`) }
+      const d = checkLogDescent(loaded.anchor, text)
+      if (!d.ok) bad(d.reason)
+      else console.log(`[verify] offbox anchor verified (key_id ${loaded.key_id.slice(0, 16)}…, made ${loaded.anchor.created_at}); ${d.note ?? `evidence log descends from the anchored tail (${loaded.anchor.log.lines} line(s) anchored, ${d.advanced} added since)`}`)
+    }
+  } catch (error) { bad(error.message) }
 }
 console.log(`[verify] ${Object.keys(manifest.files).length} files; ${failed} errors`)
 process.exitCode = failed ? 1 : 0

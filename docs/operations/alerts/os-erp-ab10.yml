@@ -37,3 +37,12 @@ groups:
         annotations:
           summary: "MCP 写型工具因调用审计不可用而被拒"
           description: "检查 mcp_call_logs 表与磁盘；见 ADR-0011。"
+
+      - alert: OsErpMcpRateLimited
+        # 持续被限流：令牌被滥用、Agent 死循环重试，或默认额度（600/分、写 60/分）对该用法太小（ADR-0056）
+        expr: sum(increase(os_erp_mcp_tool_calls_total{code="MCP_RATE_LIMITED"}[10m])) > 20
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "MCP 调用持续被速率限制或日配额拒绝（429）"
+          description: "到 MCP 调用日志按 token_name 找调用量最大的令牌（被限流的调用不写审计行，看放行的那部分即可）；确认是滥用则吊销令牌，是合理用量则调 GML_MCP_TOKEN_RPM / GML_MCP_WRITE_RPM 或设置键 mcp_token_daily_quota。"

@@ -49,6 +49,9 @@ export function buildOpenApi() {
     '/api/meta/dict': {
       get: { tags: ['系统'], summary: '枚举字典（状态/角色/单据类型）', security: [], responses: { 200: jsonResp(null, '字典') } }
     },
+    '/api/meta/role-matrix': {
+      get: { tags: ['系统'], summary: '角色与单据可见度矩阵（管理员全表，其余账号仅自己的角色列；说明性视图，不作为授权判据）', responses: { 200: jsonResp(null, 'roles、doc_types、cells、restricted 与调用者 me'), 401: jsonResp(null, '未认证') } }
+    },
     // ---- 系统参数（批次 R）：配置的定义、当前值与**变更历史** ----
     // 这组端点在此之前**没有登记进契约**（`GET/PUT /api/meta/settings` 一直存在，
     // 但只在路由里），本批一并补齐 —— 配置是会计政策的载体，它不该躲在契约之外。
@@ -1190,7 +1193,7 @@ export function buildOpenApi() {
     openapi: '3.0.3',
     info: {
       title: 'GML 供应链协同系统 API',
-      version: '1.40.0',
+      version: '1.41.0',
       description:
         '化妆品 / 服装 双行业轻量级供应链协同系统接口文档。覆盖主数据、采购、销售、存货、经销商、门店要货、委外管理、计划与生产、生产制造（BOM / 领料 / 完工入库）、质量检验、线上 OMS 与经营看板。\n\n' +
         '**多行业**：登录 `POST /api/auth/login` 时传 `industry`（`cosmetic` / `apparel`）选择行业版本；' +

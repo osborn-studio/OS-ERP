@@ -42,6 +42,11 @@ const DECLARED = [
   'server/db/migrations/068_audit_hash_chain.cjs',
   'scripts/audit-verify-chain.mjs',
   'scripts/audit-archive.mjs',
+  'scripts/gen-role-matrix.mjs',
+  // 离机锚点（AD5，ADR-0055）
+  'scripts/offbox-anchor.mjs',
+  'scripts/lib/offbox-anchor.mjs',
+  'tests/offbox-anchor.test.mjs',
   'scripts/lib/audit-chain-cli.mjs',
   'tests/audit-chain.test.mjs',
   'server/lib/logger.js',
@@ -76,6 +81,9 @@ const DECLARED = [
   'scripts/check-audit-allowlist.mjs',
   'tests/audit-allowlist.test.mjs',
   'scripts/db-backup.mjs',
+  // 文件系统写入序列的故障注入点（AD6）
+  'scripts/lib/fs-fault.mjs',
+  'tests/fs-fault.test.mjs',
   // 数据保留与个人信息处理（ADR-0030）
   'scripts/retention.mjs',
   'scripts/privacy-export.mjs',

@@ -40,6 +40,8 @@ export interface MetricDef {
 /** 定义 + 当前值。值为 { error } 时表示这条算不出来（不是 0） */
 export interface MetricItem extends MetricDef {
   value: number | { error: string } | null
+  /** false = 该值是全局口径（受限账号看到的不是本组织的数）；缺省或 true = 按调用者范围算（ADR-0053） */
+  scoped?: boolean
 }
 
 export interface MetricGroup {

@@ -602,6 +602,12 @@ node scripts/upgrade-rehearsal.mjs --from=58 --backup-dir=/abs/new-dir/data/back
 - 因此**一次运行也没有派发**（已派发 0/3；被拒绝的请求不产生 run id），三次规定运行（`rehearsal=true snapshot_upto=58`、`scale=large-ci`、默认）全部未执行。
 - 修复建议（需要用户决定，AC8 未改仓库设置也未改工作流）：合并 PR #7（或把 `nightly-capacity.yml` 单独 cherry-pick 进 `main`）之后，再按下面的命令触发三次；合并前在 PR 分支上无法验证该工作流能否在 GitHub 上跑通。
 
+### AD8 过渡入口（2026-10-24）：`ci.yml` 的 `capacity-smoke` job
+- 复查：`gh api repos/osborn-studio/OS-ERP/contents/.github/workflows/nightly-capacity.yml?ref=main` 仍返回 HTTP 404，`main` 仍没有该文件（PR #7/#8 未合入），所以三条规定运行**仍无法派发**，已派发 0/3，表格保持待填。
+- 过渡：`ci.yml` 新增 `capacity-smoke` job，**仅** `workflow_dispatch` 触发（`if: github.event_name == 'workflow_dispatch'`，不在 push / pull_request 上跑）；medium 规模（`--skus 20000 --docs 30000 --txns 150000`）、生成预算 `--time-budget 20`、作业 `timeout-minutes: 30`；步骤为流水线 → 写档压测 → `capacity-summary.mjs --scale medium`，只上传白名单 `capacity-summary.json`（保留 14 天）。不含升级演练、`large-ci`、`audit_fts`。
+- **它是过渡，不是 `nightly-capacity.yml` 的替代**。`ci.yml` 已在 `main` 上（已有 `workflow_dispatch`），按 GitHub 的规则，`gh workflow run ci.yml --ref <推送后的分支>` 理论上可以在合入前直接运行分支上的新 job；但**本次没有推送、没有触发**，没有任何 run id，所以这里没有它的任何数字（该分支派发方式也未验证）。`nightly-capacity.yml` 合入 `main` 后应删除该 job，按下方命令跑三次规定运行。
+- 未验证：该 job 在 GitHub 上能否 30 分钟内跑完（20 分钟预算只约束生成阶段，备份、两次恢复演练、explain-audit、压测、写档压测在剩余时间内；托管 runner 上没有任何耗时数据）。
+
 ### 触发（合入 `main` 之后；只用 `gh workflow run`，不改仓库设置）
 ```bash
 gh workflow run nightly-capacity.yml --ref main -f rehearsal=true -f snapshot_upto=58
@@ -669,3 +675,53 @@ gh run view <run-id> --log-failed
 - `dmserver` 上用生产规模副本复跑；large 规模未跑；机器空闲时的数字未取。
 - `dash.trend_*` 的 explain-audit 登记仍是人工镜像（只有 sales / purchase 两条，没有 `trend.online`，其 `date(order_time)` 同样整表读取 `oms_orders`）；本工作流只登记新增语句。
 - `oms_orders.order_time` 没有可用索引（`/channel` 线上分支与 `/trend` 线上分支共同的残余），根治需要新迁移，不在本工作流范围。
+
+## AD3 `oms_orders.order_time` 覆盖索引：迁移 070 前后（**Mac mini / 合成 20 万 OMS 单 / 非目标主机 / 整机高负载**）
+
+脚本：`node scripts/bench-oms-order-time.mjs --rows 200000 --span 365|60 --rounds 5 --writes 5000 --repeat 31`（全新临时目录、真实迁移运行器后删掉 070 的索引造出"迁移前"，结束即删；不跑 `ANALYZE`——应用从不跑，统计表会让规划器改选 `idx_oms_status` 的 skip-scan）。**机器负载很高（运行时 1 分钟平均负载 34–43，同机并行其它工作流）**，绝对值抖动大、只看量级；中位数取 31 次。**不是 `dmserver` 结果、不是容量承诺。**
+
+"前"= 旧 SQL（`date(order_time) >= …`，无索引）；"后"= 新 SQL（`dashboard-sql.js`，`order_time >= ? AND date(order_time) >= ?`）+ 迁移 070 的覆盖索引；"单列"= 仅作对比、**未发布**的 `oms_orders(order_time)`。新旧 SQL 在两个窗口上返回的行逐项相同（脚本断言，`results_identical: true`）。
+
+### 计划
+| 语句 | 前 | 后 |
+|---|---|---|
+| `/trend` 线上 | `SCAN oms_orders` + 临时 B 树分组 | `SEARCH oms_orders USING COVERING INDEX idx_oms_order_time (order_time>?)` + 临时 B 树分组 |
+| `/channel` 线上 | `SCAN o` + `SEARCH pf …` + 临时 B 树分组 | `SEARCH o USING COVERING INDEX idx_oms_order_time (order_time>?)` + `SEARCH pf …` + 临时 B 树分组 |
+
+### 延迟（ms，中位数；20 万行）
+数据铺满 365 天（30 天窗口约含 8% 的行，90 天约 25%）：
+
+| 窗口 / 语句 | 前（SCAN） | 后（覆盖索引） | 单列索引（未发布） |
+|---|---|---|---|
+| 30 天 trend | 40.4 | **6.5** | 27.7 |
+| 30 天 channel | 38.4 | **6.4** | 27.0 |
+| 90 天 trend | 68.7 | **24.4** | 88.3 |
+| 90 天 channel | 44.6 | **15.9** | 87.7 |
+
+数据全部落在最近 60 天内（两个窗口都覆盖 100% 的行，最坏情形，如新开业的店）：
+
+| 窗口 / 语句 | 前（SCAN） | 后（覆盖索引） | 单列索引（未发布） |
+|---|---|---|---|
+| 30 天 trend | 119.1 | **49.7** | 195.5 |
+| 30 天 channel | 61.9 | 58.7 | 200.6 |
+| 90 天 trend | 208.7 | **102.7** | 423.6 |
+| 90 天 channel | 88.1 | 76.6 | 411.9 |
+
+读法：单列索引在窗口覆盖多数行时**比整表扫描慢 2–5×**（每行一次回表），这是迁移 070 用覆盖索引而不是路线图字面的单列索引的原因；覆盖索引在各分布下都不比扫描慢，窗口窄时快 6×（trend 30 天），最坏情形与扫描持平或略好。`/trend`、`/channel` 另有 30 s 缓存，这里是未命中路径。
+
+### 建索引与库体积
+`CREATE INDEX`（20 万行）约 175–215 ms；库文件 49.96 MB → 59.45 MB（**+9.5 MB，约 +19%**；单列索引约 +5.6 MB）。大库上建索引持写锁，量级随行数线性。
+
+### 写放大（独立库交替、逐行自动提交的 INSERT，种子 10 万行，5 轮 × 5000 行；µs/行，最小值 / 中位数）
+| 状态 | 数据铺满 365 天 | 数据在 60 天内 |
+|---|---|---|
+| 无索引 | 59.5 / 62.0 | 58.5 / 68.7 |
+| 迁移 070（覆盖索引） | 86.1 / 103.0（**最小值 ×1.45，约 +27 µs/行**） | 90.3 / 107.2（×1.54，约 +32 µs/行） |
+| 单列索引（未发布） | 68.3 / 95.2（×1.15） | 81.9 / 103.1（×1.40） |
+
+写放大的绝对量级：每笔平台同步订单 / H5 商城订单落一行 `oms_orders`，多付约 30–40 µs（含机器负载抖动，倍数随负载变化、量级稳定）。
+
+### 复现与未覆盖
+- 复现：`node scripts/bench-oms-order-time.mjs --rows 200000 --span 365 --out result.json`（`--span 60` 为最坏情形）。
+- 未覆盖：`dmserver` 与生产规模副本；机器空闲时的数字；真实 OMS 订单的时间分布；并发写入下的索引争用；`oms.js` `/stats` 等其它 `date(order_time)` 查询（未改）。
+- explain-audit（合成库，`synth-data --skus 300 --docs 300 --txns 1500`，只读）：111 条语句，**0 违规**，裸 SCAN 27（豁免 26、小表 1），索引全扫 6；`dash.trend_*` 与 `dash.channel_online` 的计划见上表，`dash.channel_online` 的豁免已移除。

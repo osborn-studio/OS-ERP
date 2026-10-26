@@ -33,6 +33,8 @@ import {
   viewRow
 } from '../lib/audit-view.js'
 import { DOC_TYPE_LABEL } from '../lib/stock.js'
+// 角色 x 单据类型可见度矩阵（AD11，只读说明视图；AD2 的生成脚本复用同一份计算）
+import { roleMatrixFor } from '../lib/role-matrix.js'
 // 仓库类型文案的**唯一出处**在 `lib/warehouse.js`（与"新建/改仓"接口的取值域同一份）——
 // 分两份的后果实测过：餐饮线的 `kitchen` 不在字典里 ⇒ 界面上显示裸串 `kitchen`。
 import { WAREHOUSE_TYPES } from '../lib/warehouse.js'
@@ -178,6 +180,13 @@ r.get(
     res.setHeader('Cache-Control', 'no-store')
     return res.end(Buffer.from(renderPrometheus({ ops, retry: writeRetryStats(), counters: counterSnapshot(), histograms: histogramSnapshot(), version: versionInfo().version }), 'utf8'))
   })
+)
+
+/** 角色与数据范围矩阵（AD11）：只读、requireAuth；不含权限点码，`me` 只描述调用者自己 */
+r.get(
+  '/role-matrix',
+  requireAuth,
+  wrap((req, res) => ok(res, roleMatrixFor(getDb(), req.user)))
 )
 
 r.get(

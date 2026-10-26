@@ -22,6 +22,8 @@ curl -sS -H "Authorization: Bearer $GML_METRICS_TOKEN" 'http://127.0.0.1:3000/ap
 
 **抓取节流（AB10）**：`/api/meta/metrics` 按来源 IP（`req.ip`，受 `GML_TRUST_PROXY` 约束）限速，独立于登录节流的桶，在鉴权之前计数（猜令牌同样受限）。默认每 IP 每 60 s 120 次，可用 `GML_METRICS_IP_LIMIT`（1..100000）与 `GML_METRICS_IP_WINDOW_MS`（1000..86400000）调整，非法值回退默认。超限返回 429，`error=METRICS_RATE_LIMITED` 并带 `Retry-After`。进程内计数，重启清零。
 
+**MCP 速率限制与日配额（AD9，ADR-0056）**：每个 MCP 令牌（按验签后的令牌 id 计，与 IP 无关）有两个 60 秒滑动窗口额度：`GML_MCP_TOKEN_RPM`（全部工具调用与 `resources/read`，默认 600）与 `GML_MCP_WRITE_RPM`（`level: write` 工具，默认 60；写调用同时计入总额度）。取值范围 1..1000000，非法值回退默认。超限返回 HTTP 429、`Retry-After`、业务码 `MCP_RATE_LIMITED`（在 `detail.code`；响应仍带 JSON-RPC 外壳与 `result.isError`，无顶层 `error`），并计入 `os_erp_mcp_tool_calls_total{code="MCP_RATE_LIMITED"}`；被限流的调用不写 `mcp_call_logs`。可选日配额：设置键 `mcp_token_daily_quota`（系统设置 > 运维，危险键，改动须写理由；默认 0 = 关闭），按令牌统计本地当日的调用审计行，过本地午夜归零，超出同样返回 429（`detail.reason=daily_quota`）。限流桶在进程内存（重启清零、多进程各自计数），桶数上限 10000，满了且无可清理项时拒绝新桶（fail closed）。告警见 `OsErpMcpRateLimited`。
+
 ## 2. Prometheus 抓取配置
 
 ```yaml
@@ -65,11 +67,11 @@ AB10 新增：
 |---|---|---|
 | `os_erp_dashboard_cache_total{result="hit\|miss"}` | counter | 总部看板 TTL 缓存命中 / 未命中（汇总、趋势、排行、待办、库存分布；AC4 起含渠道，`/recent` 不缓存、不计数；`GML_DASHBOARD_CACHE_MS=0` 关闭缓存时不计数） |
 | `os_erp_audit_write_duration_seconds_bucket{le}` / `_sum` / `_count` | histogram | `audit_logs` INSERT 耗时（秒，含失败的尝试）；固定桶 0.0005 … 1 与 `+Inf` |
-| `os_erp_mcp_tool_calls_total{tool,code}` | counter | MCP 工具调用（以调用审计行成功落地为准），`code` 为 `ok` 或登记的错误码；未登记的工具名折成 `unknown`、未登记的码折成 `other`，基数固定 |
+| `os_erp_mcp_tool_calls_total{tool,code}` | counter | MCP 工具调用（以调用审计行成功落地为准；`MCP_RATE_LIMITED` 例外，被限流的调用不写审计行但照常计数），`code` 为 `ok` 或登记的错误码；未登记的工具名折成 `unknown`、未登记的码折成 `other`，基数固定 |
 
 计数器是进程内的，重启归零；用 `increase()`/`rate()`，不要直接比较绝对值。收到 `SIGTERM`（`kill`、`docker stop`、systemd 停止）时，服务在优雅退出前向标准输出写**一行** JSON 快照（`"msg":"metrics_snapshot","event":"shutdown"`，含计数器、直方图、写重试；不含路径与账号），重启前后可据此对账。`SIGKILL` 与崩溃不会有快照。
 
-## 4. 告警规则（6 条 + AB10 的 4 条，见 4.1）
+## 4. 告警规则（6 条 + AB10 的 4 条 + AD9 的 1 条，见 4.1）
 
 以上 6 条规则在 `docs/operations/alerts/os-erp.yml`（CI 的 docker job 用 `promtool check rules` 校验；Prometheus 的 `rule_files` 直接引用该文件）。
 

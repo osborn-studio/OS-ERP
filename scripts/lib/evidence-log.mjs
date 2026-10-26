@@ -19,6 +19,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { canonicalize } from './evidence-sign.mjs'
+import { faultPoint, assertFsFaultAllowed } from './fs-fault.mjs'
 
 export const LOG_FILE = 'docs/release/EVIDENCE-LOG.jsonl'
 export const GENESIS_PREV = createHash('sha256').update('OS-ERP EVIDENCE-LOG v1 genesis').digest('hex')
@@ -105,6 +106,7 @@ export function assertAppendable(file, name) {
 export function appendEntry(file, { name, evidence, sigText, builtBy, timestamp = new Date().toISOString() }) {
   if (!BUILT_BY.includes(builtBy)) throw new Error(`built_by must be one of ${BUILT_BY.join(', ')}`)
   if (!NAME.test(name)) throw new Error(`bad candidate name ${name}`)
+  assertFsFaultAllowed() // 注入配置在生产模式下误设 ⇒ 在加锁、写入之前就失败
   fs.mkdirSync(path.dirname(file), { recursive: true })
   const lock = `${file}.lock`
   let fd
@@ -112,12 +114,27 @@ export function appendEntry(file, { name, evidence, sigText, builtBy, timestamp 
     throw new Error(error.code === 'EEXIST' ? `evidence log lock ${lock} is held by another process (or left by a crashed one; remove it only after confirming nothing is appending)` : `cannot take evidence log lock ${lock} (${error.code || error.message})`)
   }
   try {
+    faultPoint('log.after-lock')
     const v = assertAppendable(file, name)
     const entry = { schema: 1, name, evidence_sha256: evidenceDigest(evidence), signature: signatureDigest(sigText), built_by: builtBy, timestamp, prev: v.tip }
     const existing = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : ''
     const check = verifyLog(existing + entryLine(entry) + '\n')
     if (!check.ok) throw new Error(check.reason)
-    fs.appendFileSync(file, entryLine(entry) + '\n')
+    // 追加 → fsync → 解锁（AD6）：写或 fsync 失败时把文件截回追加前的长度（锁内，没有别的写者），日志不留半行；
+    // fsync 成功之后才算入账。进程在两步之间被杀则无法回滚：见 docs/operations/audit-integrity.md "证据日志追加" 的恢复语义
+    const lfd = fs.openSync(file, 'a')
+    const sizeBefore = fs.fstatSync(lfd).size
+    try {
+      const buf = Buffer.from(entryLine(entry) + '\n', 'utf8')
+      for (let off = 0; off < buf.length;) off += fs.writeSync(lfd, buf, off) // writeSync 可能短写：写满为止
+      faultPoint('log.after-write-before-fsync')
+      fs.fsyncSync(lfd)
+    } catch (error) {
+      try { fs.ftruncateSync(lfd, sizeBefore) } catch { /* 截不回去就让下一次校验报告半行 */ }
+      throw error
+    } finally { fs.closeSync(lfd) }
+    // fsync 之后该行已入账：此后的任何错误都带 committed=true，调用方不得再清理候选产物（否则同名重建会被日志拒绝）
+    try { faultPoint('log.after-fsync-before-unlock') } catch (error) { error.committed = true; throw error }
     return entry
   } finally { fs.closeSync(fd); fs.rmSync(lock, { force: true }) }
 }

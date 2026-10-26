@@ -35,11 +35,11 @@
 import { Router } from 'express'
 import { getDb } from '../db/index.js'
 import { ok, wrap } from '../lib/http.js'
-import { requireAuth, requirePerm } from '../middleware/auth.js'
+import { requireAuth, requirePerm, attachOrgScope } from '../middleware/auth.js'
 import { audit } from '../middleware/audit.js'
 import {
   METRICS, METRIC_BY_KEY, metricDefinitions, metricValues,
-  metricCatalog, metricGroups, syncMetricDefs, metricDefsStale
+  metricCatalog, metricGroups, metricScopedFlags, syncMetricDefs, metricDefsStale
 } from '../lib/metrics.js'
 
 const r = Router()
@@ -64,13 +64,14 @@ r.get(
   '/',
   requireAuth,
   requirePerm('system:metrics:view'),
+  attachOrgScope,
   wrap((req, res) => {
     const db = getDb()
     const days = daysOf(req)
     const withValues = String(req.query.with_values ?? '1') !== '0'
     return ok(res, {
       days,
-      groups: metricGroups(db, { days, withValues }),
+      groups: metricGroups(db, { days, withValues, orgScope: req.orgScope }),
       total: METRICS.length,
       modules: [...new Set(METRICS.map((m) => m.module))]
     })
@@ -90,14 +91,16 @@ r.get(
   '/values',
   requireAuth,
   requirePerm('system:metrics:view'),
+  attachOrgScope,
   wrap((req, res) => {
     const db = getDb()
     const days = daysOf(req)
     const keys = keysOf(req)
-    const values = metricValues(db, { keys, days })
+    const values = metricValues(db, { keys, days, orgScope: req.orgScope })
     // unknown = 请求了但字典里没有的 key —— 显式回一个列表，别让人对着空值猜
     const unknown = keys ? keys.filter((k) => !METRIC_BY_KEY[k]) : []
-    return ok(res, { days, values, unknown })
+    // scoped：该值是否按调用者范围算（false = 全局口径，前端据此标注）；见 ADR-0053
+    return ok(res, { days, values, scoped: metricScopedFlags(req.orgScope, keys), unknown })
   })
 )
 
@@ -106,9 +109,10 @@ r.get(
   '/catalog',
   requireAuth,
   requirePerm('system:metrics:view'),
+  attachOrgScope,
   wrap((req, res) => {
     const db = getDb()
-    return ok(res, { items: metricCatalog(db, { days: daysOf(req), withValues: true }) })
+    return ok(res, { items: metricCatalog(db, { days: daysOf(req), withValues: true, orgScope: req.orgScope }) })
   })
 )
 

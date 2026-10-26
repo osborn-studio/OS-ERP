@@ -18,6 +18,7 @@
     "check:dict": "node scripts/check-inv-txn-dict.mjs",
     "migrate": "node scripts/migrate.mjs",
     "check:mcp": "node scripts/check-mcp-coverage.mjs",
+    "role-matrix": "node scripts/gen-role-matrix.mjs",
     "check:data-paths": "node scripts/check-data-paths.mjs",
     "check:route-authz": "node scripts/check-route-authz.mjs",
     "audit:explain": "node scripts/explain-audit.mjs",
@@ -40,8 +41,7 @@
     "dayjs": "^1.11.13",
     "express": "^4.21.1",
     "jsonwebtoken": "^9.0.2",
-    "nanoid": "^5.0.9",
-    "zod": "^3.23.8"
+    "nanoid": "^5.0.9"
   },
   "devDependencies": {
     "@types/react": "^18.3.12",

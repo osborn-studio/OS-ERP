@@ -31,7 +31,8 @@ async function server(t) {
   await new Promise((resolve) => probe.close(resolve))
   const env = {
     PATH: process.env.PATH, HOME: dir, TMPDIR: dir, HOST: '127.0.0.1', PORT: String(port),
-    GML_RUNTIME_MODE: 'test', GML_DATA_DIR: dir, GML_DB: '', GML_JWT_SECRET: randomBytes(32).toString('hex')
+    GML_RUNTIME_MODE: 'test', GML_DATA_DIR: dir, GML_DB: '', GML_JWT_SECRET: randomBytes(32).toString('hex'),
+    GML_MCP_TOKEN_RPM: '100000', GML_MCP_WRITE_RPM: '100000' // 本矩阵是穷举压测（AD9 默认写 60/分会误伤），限流行为见 mcp-rate-limit.test.mjs
   }
   const child = spawn(process.execPath, ['server/index.js'], { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] })
   let output = ''
@@ -705,4 +706,41 @@ test('AC1: purchase.list_orders / report.dashboard_kpi admit a purchase order by
   assert.equal(await kpi(tokA), expectA)
   assert.equal(await kpi(tokAll), db.prepare("SELECT COUNT(*) c FROM purchase_orders WHERE status IN ('approved','partial')").get().c)
   assert.ok(expectA < await kpi(tokAll))
+})
+
+// AD1（ADR-0053）：report.dashboard_kpi 按子项要求所有者持有对应查看权限；缺权限的子项省略而不是 403。
+test('AD1: report.dashboard_kpi omits sub-items the token owner may not view', { timeout: 300000 }, async (t) => {
+  const f = await server(t)
+  const { db, api, mcp } = f
+  const admin = (await api('/api/auth/login', { body: { username: 'admin', password: '12345', industry: 'cosmetic' } })).body.data
+  const r = (await api('/api/auth/users', { token: admin.token, body: { username: 'ad1_kpi', name: 'ad1_kpi', role: 'warehouse', password: secret(), data_scope: 'all' } })).body
+  assert.equal(r.success, true, JSON.stringify(r))
+  const token = createToken(db, { name: 'ad1_kpi', ownerUserId: r.data.id, industry: 'cosmetic', scopes: 'read' }).token
+  const all = ['inventory.stock.view', 'sales.order.view', 'purchase.order.view', 'purchase.inbound', 'purchase.return']
+  const setPerms = (keep) => {
+    for (const p of all) db.prepare('DELETE FROM role_permissions WHERE role_code=? AND perm_code=?').run('warehouse', p)
+    for (const p of keep) db.prepare('INSERT OR IGNORE INTO role_permissions (role_code, perm_code) VALUES (?,?)').run('warehouse', p)
+  }
+  const kpi = async () => {
+    const res = await mcp('tools/call', { name: 'report.dashboard_kpi', arguments: {} }, token)
+    assert.equal(res.body.result?.isError ?? false, false, JSON.stringify(res.body))
+    return payload(res)
+  }
+  const STOCK = ['stock_value', 'stock_rows']
+  setPerms(all)
+  let k = await kpi()
+  for (const key of [...STOCK, 'sku_count', 'pending_shipment_orders', 'purchase_in_transit']) assert.ok(key in k, `all perms: ${key}`)
+  setPerms(['sales.order.view', 'purchase.order.view'])
+  k = await kpi()
+  for (const key of STOCK) assert.ok(!(key in k), `no stock perm: ${key} omitted`)
+  assert.ok('pending_shipment_orders' in k && 'purchase_in_transit' in k && 'sku_count' in k)
+  setPerms(['inventory.stock.view', 'purchase.inbound'])
+  k = await kpi()
+  assert.ok(!('pending_shipment_orders' in k), 'no sales view: omitted')
+  assert.ok('purchase_in_transit' in k, 'purchase.inbound is a PO_READ_PERMS member')
+  assert.ok(STOCK.every((key) => key in k))
+  setPerms(['inventory.stock.view', 'sales.order.view'])
+  k = await kpi()
+  assert.ok(!('purchase_in_transit' in k), 'no purchase view: omitted, not 403')
+  assert.ok(k.currency)
 })

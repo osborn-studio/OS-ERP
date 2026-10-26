@@ -17,9 +17,9 @@ import { Router } from 'express'
 import { localDate } from '../lib/dates.js'
 import { getDb } from '../db/index.js'
 import { ok, fail, wrap, pageParams, paged, bizFail } from '../lib/http.js'
-import { requireAuth, requireRole, currentUser, attachOrgScope } from '../middleware/auth.js'
+import { requireAuth, requireRole, requirePerm, currentUser, attachOrgScope } from '../middleware/auth.js'
 import { stockScopeSql, assertWarehouseInScope } from '../lib/stock.js'
-import { purchaseOrderScopeSql } from '../lib/purchase.js'
+import { purchaseOrderScopeSql, PO_READ_PERMS } from '../lib/purchase.js'
 import { audit } from '../middleware/audit.js'
 import { nextDocNo } from '../lib/docno.js'
 import { advanceStatus, tryTransition, nowText, logEvent, allowedActions } from '../lib/docflow.js'
@@ -358,6 +358,8 @@ r.post(
   '/dealer/summary',
   requireAuth,
   requireRole(...HQ),
+  // ADR-0053：响应含在途采购量，需采购查看权限（与采购订单读路由同一份 PO_READ_PERMS）
+  requirePerm(...PO_READ_PERMS),
   attachOrgScope,
   wrap((req, res) => {
     const db = getDb()
