@@ -21,7 +21,8 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 const NAME_RE = /^[A-Za-z0-9_.-]{1,64}$/
-const SCALES = new Set(['small', 'medium', 'large'])
+const SCALES = new Set(['small', 'medium', 'large', 'large-ci'])
+const PARTIAL_REASONS = new Set(['time_budget', 'disk_low'])
 
 const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null)
 const bool = (v) => (typeof v === 'boolean' ? v : null)
@@ -71,6 +72,11 @@ export function buildSummary(pipeline, write, { scale = null, sha = null } = {})
     schema_version: 1,
     scope_notice: 'GitHub-hosted runner, synthetic data, single run: trend indicator only. NOT a target-host (dmserver) result and NOT a capacity commitment.',
     scale: SCALES.has(scale) ? scale : '?',
+    // AC8: 生成阶段是否因时间预算 / 磁盘守卫提前停止；partial 时所有延迟与违规数只对 reached 的规模成立。
+    profile: p?.profile == null ? null : name(p.profile),
+    partial: bool(p?.partial),
+    partial_reason: p?.partial_reason == null ? null : (PARTIAL_REASONS.has(p.partial_reason) ? p.partial_reason : '?'),
+    reached: p?.reached && typeof p.reached === 'object' ? { skus: num(p.reached.skus), txns: num(p.reached.txns), txns_target: num(p.reached.txns_target), docs: num(p.reached.docs), docs_target: num(p.reached.docs_target) } : null,
     commit: typeof sha === 'string' && /^[0-9a-f]{40}$/.test(sha) ? sha : null,
     verdict: failures.length ? 'FAIL' : 'PASS',
     failures,

@@ -359,6 +359,15 @@ export const SETTING_RULES = {
     impact: '`scripts/retention.mjs --execute` 清理早于该天数的 mcp_call_logs（danger 级别调用永不清理）。缩短会更早永久删除 AI 调用记录。'
   },
 
+  // ---- 单据流门店绑定（ADR-0051） ----
+  docflow_strict_store_binding: {
+    group: 'ops', label: '单据流严格门店绑定', type: 'bool', default: '1', is_danger: true, wired: true,
+    impact: '**打开（默认）**：`/api/docflow/*` 对非总部角色（admin / finance / sales / warehouse / purchase / scm 以外）的内部账号，'
+      + '未绑定门店时不返回日结（RC）/ 门店要货（YQ）/ 门店发货（SH）/ POS 订单（PS）/ POS 班次（PSF），未绑定经销商时不返回经销商要货（DR）的单据与流转留痕；总部角色、admin、超管豁免未绑定检查。'
+      + '**关闭**：仅取消上述未绑定检查，恢复按组织数据范围读取这些类型。已绑定门店 / 经销商的账号仍限本方；订货主体（OC / OCS）及总部专属（DS / RB）的限制始终生效，MCP 严格绑定不受此开关影响。'
+      + '⚠️ 关闭 = 放宽读权限；改动必须写理由，且应只在确认有「非总部角色需要跨店只读」时临时使用。'
+  },
+
   // ---- 审批（ADR-0037 补充，Z9） ----
   approval_manager_global: {
     group: 'approval', label: '审批管理员全局可见', type: 'bool', default: '1', is_danger: true, wired: true,

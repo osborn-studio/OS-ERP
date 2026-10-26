@@ -121,3 +121,20 @@
 | `promtool` 未校验新告警规则；MCP 调用计数无端到端测试 | 监控 | AB10 |
 | GHSA-vfj7-8cjw-p6xm 是否已撤回需联网复核 | 依赖 | AB12 |
 | `dmserver` 上的所有性能数字均未复测 | 目标主机 | 全批 |
+
+## 第十二批后仍 open 的残留
+
+| 位置 | 残留 | 来源 |
+|---|---|---|
+| `/api/metrics`、`/metrics/values`、`/catalog` | 对受限角色仍返回全局 `stock_qty`/`purchase_amount*` | AC1 Codex 审计（高） |
+| MCP `report.dashboard_kpi`（`perms: []`）、`/dealer/summary` | 无采购查看权限仍能得到在途量 | AC1 Codex 审计（中） |
+| `boss` 角色不在 `hq-roles.js` 名单 | docflow 下不再可见 RC/YQ/SH；一行可加，需产品决定；开关可回退 | AC2 |
+| `dash.trend_*` 的 explain-audit 登记仍是人工镜像；`oms_orders.order_time` 无索引 | `/channel`、`/trend` 线上分支整表读取，需迁移 | AC4 |
+| `GML_AUDIT_FTS=0` 不等于无 FTS5 构建（表与触发器仍在） | 性能守卫 | AC5 |
+| 透明日志无法发现"删掉最新几行"或整文件替换 | 需离机副本 | AC6 |
+| 归档崩溃只测了 SIGKILL，未测真实掉电；伪造锚点与真实锚点不可区分 | 运维 | AC7 |
+| 夜间工作流（rehearsal / snapshot_upto / scale=large-ci / audit_fts）均未在托管 runner 上实跑：工作流文件尚未在 main | 待 PR #7 合入后手动触发 | AC8 |
+| `promtool check rules` 与新增 CI 步骤未在 runner 上跑过 | 托管 runner | AC9/AC5/AC10 |
+| `zod` 为未使用依赖，白名单到期 2026-12-15 前应移除（会改 SBOM/声明） | 依赖 | AC10 |
+| 新浏览器场景（审计 FTS 提示、看板时间戳）未执行 | Linux CI | AC11 |
+| `dmserver` 上的所有性能数字均未复测 | 目标主机 | 全批 |

@@ -32,18 +32,22 @@ const ADMIN = ['admin']
 const BIZ = ['admin', 'purchase', 'sales', 'warehouse']
 
 // ---------- 商品主数据（含 SKU 子表）----------
-const PRODUCT_SELECT = `
+// ADR-0050：stock_qty 只汇总调用者仓库组织范围内的仓（`stockScopeSql`）；全局范围 `1=1`、行为不变。
+// 谓词里的占位符在 SELECT 段，所以 params 要排在 WHERE 参数之前。
+const productSelect = (sc) => `
   p.*, b.name AS brand_name, c.name AS category_name,
   (SELECT COUNT(*) FROM product_skus s WHERE s.product_id = p.id) AS sku_count,
-  (SELECT COALESCE(SUM(st.qty_on_hand),0) FROM inventory_stocks st JOIN product_skus s2 ON s2.id=st.sku_id WHERE s2.product_id=p.id) AS stock_qty
+  (SELECT COALESCE(SUM(st.qty_on_hand),0) FROM inventory_stocks st JOIN product_skus s2 ON s2.id=st.sku_id WHERE s2.product_id=p.id AND ${sc.sql}) AS stock_qty
 `
 const PRODUCT_FROM = 'products p LEFT JOIN brands b ON b.id=p.brand_id LEFT JOIN categories c ON c.id=p.category_id'
 
 r.get(
   '/products',
   requireAuth,
+  attachOrgScope,
   wrap((req, res) => {
     const db = getDb()
+    const stSc = stockScopeSql(req.orgScope, 'st')
     const { page, pageSize, offset } = pageParams(req)
     const conds = []
     const params = []
@@ -67,8 +71,8 @@ r.get(
     const where = conds.length ? `WHERE ${conds.join(' AND ')}` : ''
     const total = db.prepare(`SELECT COUNT(*) c FROM ${PRODUCT_FROM} ${where}`).get(...params).c
     const rows = db
-      .prepare(`SELECT ${PRODUCT_SELECT} FROM ${PRODUCT_FROM} ${where} ORDER BY p.id DESC LIMIT ? OFFSET ?`)
-      .all(...params, pageSize, offset)
+      .prepare(`SELECT ${productSelect(stSc)} FROM ${PRODUCT_FROM} ${where} ORDER BY p.id DESC LIMIT ? OFFSET ?`)
+      .all(...stSc.params, ...params, pageSize, offset)
     return paged(res, { rows, total, page, pageSize })
   })
 )
@@ -76,9 +80,11 @@ r.get(
 r.get(
   '/products/:id',
   requireAuth,
+  attachOrgScope,
   wrap((req, res) => {
     const db = getDb()
-    const p = db.prepare(`SELECT ${PRODUCT_SELECT} FROM ${PRODUCT_FROM} WHERE p.id=?`).get(Number(req.params.id))
+    const stSc = stockScopeSql(req.orgScope, 'st')
+    const p = db.prepare(`SELECT ${productSelect(stSc)} FROM ${PRODUCT_FROM} WHERE p.id=?`).get(...stSc.params, Number(req.params.id))
     if (!p) return fail(res, '商品不存在', 404)
     p.skus = db.prepare('SELECT * FROM product_skus WHERE product_id=? ORDER BY id').all(p.id)
     return ok(res, p)
@@ -89,6 +95,7 @@ r.post(
   '/products',
   requireAuth,
   requireRole(...BIZ),
+  attachOrgScope,
   wrap((req, res) => {
     const db = getDb()
     const {
@@ -132,7 +139,7 @@ r.post(
     })
     const pid = tx()
     audit(req, { action: 'CREATE', module: 'master', entity: 'products', entityId: pid, detail: name })
-    return ok(res, db.prepare(`SELECT ${PRODUCT_SELECT} FROM ${PRODUCT_FROM} WHERE p.id=?`).get(pid))
+    { const stSc = stockScopeSql(req.orgScope, 'st'); return ok(res, db.prepare(`SELECT ${productSelect(stSc)} FROM ${PRODUCT_FROM} WHERE p.id=?`).get(...stSc.params, pid)) }
   })
 )
 
@@ -140,6 +147,7 @@ r.put(
   '/products/:id',
   requireAuth,
   requireRole(...BIZ),
+  attachOrgScope,
   wrap((req, res) => {
     const db = getDb()
     const id = Number(req.params.id)
@@ -158,7 +166,7 @@ r.put(
     }
     if (sets.length) db.prepare(`UPDATE products SET ${sets.join(',')} WHERE id=?`).run(...vals, id)
     audit(req, { action: 'UPDATE', module: 'master', entity: 'products', entityId: id })
-    return ok(res, db.prepare(`SELECT ${PRODUCT_SELECT} FROM ${PRODUCT_FROM} WHERE p.id=?`).get(id))
+    { const stSc = stockScopeSql(req.orgScope, 'st'); return ok(res, db.prepare(`SELECT ${productSelect(stSc)} FROM ${PRODUCT_FROM} WHERE p.id=?`).get(...stSc.params, id)) }
   })
 )
 
@@ -182,8 +190,10 @@ r.delete(
 r.get(
   '/skus',
   requireAuth,
+  attachOrgScope,
   wrap((req, res) => {
     const db = getDb()
+    const stSc = stockScopeSql(req.orgScope, 'st')
     const conds = []
     const params = []
     if (req.query.product_id) {
@@ -207,10 +217,10 @@ r.get(
     const rows = db
       .prepare(
         `SELECT s.*, p.name AS product_name, p.spu_code, p.unit, p.spec AS product_spec, b.name AS brand_name,
-                COALESCE((SELECT SUM(st.qty_on_hand) FROM inventory_stocks st WHERE st.sku_id=s.id),0) AS stock_qty
+                COALESCE((SELECT SUM(st.qty_on_hand) FROM inventory_stocks st WHERE st.sku_id=s.id AND ${stSc.sql}),0) AS stock_qty
          FROM ${FROM} ${where} ORDER BY s.id DESC ${limit}`
       )
-      .all(...params)
+      .all(...stSc.params, ...params)
     return ok(res, rows)
   })
 )
@@ -276,8 +286,11 @@ r.use('/platforms', crudRouter({ table: 'platforms', module: 'master', searchFie
 r.get(
   '/scan',
   requireAuth,
+  attachOrgScope,
   wrap((req, res) => {
     const db = getDb()
+    const stSc = stockScopeSql(req.orgScope, 'st')
+    const snSc = stockScopeSql(req.orgScope, 'sn') // ADR-0050（Codex）：序列号命中也按仓库范围
     const code = String(req.query.code || '').trim()
     if (!code) return fail(res, '请输入条码 / 序列号 / SKU 编码')
     // 1) 序列号
@@ -285,9 +298,9 @@ r.get(
       .prepare(
         `SELECT sn.*, sk.sku_code, sk.name AS sku_name, sk.spec, p.name AS product_name, w.name AS warehouse_name
          FROM serial_numbers sn JOIN product_skus sk ON sk.id=sn.sku_id JOIN products p ON p.id=sk.product_id
-         LEFT JOIN warehouses w ON w.id=sn.warehouse_id WHERE sn.serial_no=?`
+         LEFT JOIN warehouses w ON w.id=sn.warehouse_id WHERE sn.serial_no=? AND ${snSc.sql}`
       )
-      .get(code)
+      .get(code, ...snSc.params)
     if (sn) {
       return ok(res, { type: 'serial', data: sn, msg: `序列号命中：${sn.product_name}（${sn.status === 'in_stock' ? '在库' : sn.status === 'shipped' ? '已出库' : sn.status}）` })
     }
@@ -295,12 +308,12 @@ r.get(
     const sku = db
       .prepare(
         `SELECT s.*, p.name AS product_name, p.spu_code, p.unit, p.shelf_life_months, b.name AS brand_name,
-                COALESCE((SELECT SUM(st.qty_on_hand) FROM inventory_stocks st WHERE st.sku_id=s.id),0) stock_qty,
-                COALESCE((SELECT SUM(st.qty_on_hand - st.qty_reserved) FROM inventory_stocks st WHERE st.sku_id=s.id),0) available_qty
+                COALESCE((SELECT SUM(st.qty_on_hand) FROM inventory_stocks st WHERE st.sku_id=s.id AND ${stSc.sql}),0) stock_qty,
+                COALESCE((SELECT SUM(st.qty_on_hand - st.qty_reserved) FROM inventory_stocks st WHERE st.sku_id=s.id AND ${stSc.sql}),0) available_qty
          FROM product_skus s JOIN products p ON p.id=s.product_id LEFT JOIN brands b ON b.id=p.brand_id
          WHERE s.barcode=? OR s.sku_code=?`
       )
-      .get(code, code)
+      .get(...stSc.params, ...stSc.params, code, code)
     if (sku) {
       return ok(res, { type: 'barcode', data: sku, msg: `商品命中：${sku.product_name} ${sku.name}` })
     }
@@ -312,8 +325,10 @@ r.get(
 r.get(
   '/bundles',
   requireAuth,
+  attachOrgScope,
   wrap((req, res) => {
     const db = getDb()
+    const stSc = stockScopeSql(req.orgScope, 'st')
     const { page, pageSize, offset } = pageParams(req)
     const conds = []
     const params = []
@@ -334,10 +349,10 @@ r.get(
         `SELECT b.*, sk.sku_code AS parent_sku_code, sk.name AS parent_sku_name,
                 (SELECT COUNT(*) FROM bundle_components bc WHERE bc.bundle_id=b.id) component_count,
                 (SELECT COALESCE(SUM(bc.qty * cs.cost_std),0) FROM bundle_components bc JOIN product_skus cs ON cs.id=bc.component_sku_id WHERE bc.bundle_id=b.id) AS bom_cost,
-                (SELECT COALESCE(SUM(st.qty_on_hand),0) FROM inventory_stocks st WHERE st.sku_id=b.parent_sku_id) AS stock_qty
+                (SELECT COALESCE(SUM(st.qty_on_hand),0) FROM inventory_stocks st WHERE st.sku_id=b.parent_sku_id AND ${stSc.sql}) AS stock_qty
          FROM ${FROM} ${where} ORDER BY b.id DESC LIMIT ? OFFSET ?`
       )
-      .all(...params, pageSize, offset)
+      .all(...stSc.params, ...params, pageSize, offset)
     return paged(res, { rows, total, page, pageSize })
   })
 )
@@ -533,16 +548,18 @@ r.get(
 r.get(
   '/overview',
   requireAuth,
-  wrap((_req, res) => {
+  attachOrgScope,
+  wrap((req, res) => {
     const db = getDb()
     const c = (sql, ...p) => db.prepare(sql).get(...p).c
+    const whSc = stockScopeSql(req.orgScope, '', 'id') // ADR-0050
     return ok(res, {
       products: c("SELECT COUNT(*) c FROM products WHERE status='active'"),
       skus: c("SELECT COUNT(*) c FROM product_skus WHERE status='active'"),
       dealers: c("SELECT COUNT(*) c FROM dealers WHERE status='active'"),
       stores: c("SELECT COUNT(*) c FROM stores WHERE status='active'"),
       suppliers: c("SELECT COUNT(*) c FROM suppliers WHERE status='active'"),
-      warehouses: c("SELECT COUNT(*) c FROM warehouses WHERE status='active'"),
+      warehouses: c(`SELECT COUNT(*) c FROM warehouses WHERE status='active' AND ${whSc.sql}`, ...whSc.params),
       platforms: c("SELECT COUNT(*) c FROM platforms WHERE status='active'")
     })
   })

@@ -8,6 +8,7 @@ import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { loadPublicKey, verifyEvidenceSignature, SIG_FILE } from './lib/evidence-sign.mjs'
+import { LOG_FILE, evidenceDigest, readLog, signatureDigest } from './lib/evidence-log.mjs'
 import { hashEntries, listTestsTree, TESTS_TREE_FILE } from './lib/tests-tree.mjs'
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 // Evidence/archive options must never silently turn into a manifest-only check.
@@ -83,6 +84,14 @@ const pubkeyIdx = process.argv.findIndex(a => a === '--pubkey' || a.startsWith('
 const pubkeyArg = pubkeyIdx < 0 ? undefined : (process.argv[pubkeyIdx].startsWith('--pubkey=') ? process.argv[pubkeyIdx].slice(9) : process.argv[pubkeyIdx + 1])
 if (pubkeyIdx >= 0 && (!pubkeyArg || pubkeyArg.startsWith('--'))) fail('--pubkey needs a public key PEM path')
 else if (pubkeyIdx >= 0 && !evidenceArg) fail('--pubkey is only meaningful together with --evidence=<EVIDENCE.json>')
+// AC6（ADR-0052）：--log[=<file>] 校验透明日志链并要求本候选在其中；--require-signature 把"未签名"从警告升级为失败。两者都要求 --evidence。
+const logIdx = process.argv.findIndex(a => a === '--log' || a.startsWith('--log='))
+if (process.argv.filter(a => a === '--log' || a.startsWith('--log=')).length > 1) fail('--log given more than once')
+const logArg = logIdx < 0 ? undefined : (process.argv[logIdx] === '--log' ? path.join(root, LOG_FILE) : path.resolve(process.argv[logIdx].slice(6)))
+if (logIdx >= 0 && process.argv[logIdx] === '--log=') fail('--log= needs a file path')
+const requireSignature = process.argv.includes('--require-signature')
+if ((logArg !== undefined || requireSignature) && !evidenceArg) fail('--log and --require-signature are only meaningful together with --evidence=<EVIDENCE.json>')
+if (requireSignature && !pubkeyArg) fail('--require-signature needs --pubkey <pem>: an unverified signature is not a signature')
 if (evidenceArg) {
   const bad = (field, why) => fail(`EVIDENCE.${field}: ${why}`)
   try {
@@ -187,7 +196,35 @@ if (evidenceArg) {
           }
         }
       } catch (error) { bad('signature', error.message) }
-    } else if (ev.signature) console.warn(`[verify] NOTE: evidence is signed (key_id ${String(ev.signature.key_id).slice(0, 16)}…) but signature not verified: no --pubkey given`)
+    }
+    if (ev.signature === null) {
+      const banner = '!'.repeat(78)
+      console.error(`${banner}\n[verify] WARNING: UNSIGNED CANDIDATE (built_by: ${ev.built_by ?? 'unrecorded'}). EVIDENCE.json carries no signature, so nothing\n[verify] proves who approved this evidence. It is a development candidate only: a formal release must be re-signed by the\n[verify] key holder on a controlled machine (docs/release/README.md). Use --pubkey with --require-signature to enforce.\n${banner}`)
+      if (requireSignature) bad('signature', '--require-signature: the candidate is unsigned')
+    }
+    if (ev.built_by !== undefined && !['hosted-ci', 'key-holder', 'local'].includes(ev.built_by)) bad('built_by', 'must be hosted-ci, key-holder or local')
+    if (ev.built_by === 'hosted-ci' && ev.signature !== null) bad('built_by', 'a hosted-ci candidate cannot be signed (hosted CI holds no key)')
+    if (logArg !== undefined) {
+      const lg = readLog(logArg)
+      const name = String(ev.artifact?.name ?? '').replace(/\.zip$/, '')
+      if (!lg.ok) bad('log', lg.reason)
+      else {
+        const entry = lg.entries.find(e => e.name === name)
+        if (!entry) bad('log', `candidate ${name} is not present in the evidence log ${logArg}`)
+        else {
+          let sigDigest = null
+          try { sigDigest = signatureDigest(fs.readFileSync(path.join(path.dirname(path.resolve(evidenceArg)), SIG_FILE), 'utf8')) } catch (error) { if (error.code !== 'ENOENT') bad('log', `${SIG_FILE}: ${error.message}`) }
+          let ed = null
+          try { ed = evidenceDigest(ev) } catch (error) { bad('log', error.message) }
+          if (ed !== null && entry.evidence_sha256 !== ed) bad('log', 'entry evidence_sha256 does not match the canonicalized evidence (evidence changed after it was logged)')
+          if (entry.signature !== sigDigest) bad('log', `entry signature digest ${entry.signature ?? 'null'} does not match ${SIG_FILE} (${sigDigest ?? 'absent'})`)
+          if ((entry.signature === null) !== (ev.signature === null)) bad('log', 'entry and evidence disagree on whether the candidate is signed')
+          if (ev.built_by !== undefined && entry.built_by !== ev.built_by) bad('log', `entry built_by ${entry.built_by} != evidence built_by ${ev.built_by}`)
+          if (failed === 0) console.log(`[verify] evidence log verified (${lg.entries.length} entries, chain intact, ${name} present, built_by ${entry.built_by}, ${entry.signature ? 'signed' : 'UNSIGNED'})`)
+        }
+      }
+    }
+    if (ev.signature && !(pubkeyArg && !pubkeyArg.startsWith('--'))) console.warn(`[verify] NOTE: evidence is signed (key_id ${String(ev.signature.key_id).slice(0, 16)}…) but signature not verified: no --pubkey given`)
     const files = ev.synthetic_drill?.files
     if (!Array.isArray(files) || !files.length) bad('synthetic_drill', 'must reference capacity evidence files')
     else for (const f of files) {

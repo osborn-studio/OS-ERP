@@ -3,7 +3,7 @@
 <!-- generated -->
 <!-- 由 `node scripts/gen-codemap.mjs` 生成，勿手改；CI 校验不漂移 -->
 
-共 48 个 ADR 文件。批次来自 `scripts/gen-changelog.mjs` 的 BATCHES（编号区间）；状态是 ADR 原文“状态：”一句的摘录（没有就如实标注），**不代表验收**；“守卫 / 测试”是 ADR 正文里提到的文件路径（静态正则提取，路径不存在时标注“（不存在）”），不证明该测试覆盖了 ADR 的全部决定。
+共 51 个 ADR 文件。批次来自 `scripts/gen-changelog.mjs` 的 BATCHES（编号区间）；状态是 ADR 原文“状态：”一句的摘录（没有就如实标注），**不代表验收**；“守卫 / 测试”是 ADR 正文里提到的文件路径（静态正则提取，路径不存在时标注“（不存在）”），不证明该测试覆盖了 ADR 的全部决定。
 
 | 编号 | 标题 | 批次 | 状态（原文摘录） | 守卫（scripts/） | 测试（tests/） |
 |---|---|---|---|---|---|
@@ -55,3 +55,6 @@
 | 0047 | [ADR-0047：发行候选证据 Ed25519 签名（AB4）](ADR-0047-evidence-signing.md) | 第十一批（进行中） | 开发实现，尚非产品上线验收 | `lib/evidence-sign.mjs`<br>`release-keygen.mjs` | — |
 | 0048 | [ADR-0048：旧结构快照备份集与免截断的升级演练（AB5）](ADR-0048-schema-snapshot-rehearsal.md) | 第十一批（进行中） | 开发实现，尚非产品上线验收 | `schema-snapshot.mjs` | — |
 | 0049 | [ADR-0049 审计日志防篡改哈希链与归档（AB6）](ADR-0049-audit-hash-chain.md) | 第十一批（进行中） | 开发实现，尚非产品上线验收 | `audit-archive.mjs`<br>`audit-verify-chain.mjs`<br>`lib/audit-chain-cli.mjs`<br>`lib/privacy-common.mjs`<br>`retention.mjs` | — |
+| 0050 | [ADR-0050：MCP 采购订单读工具与剩余聚合读口和 HTTP 范围对齐（AC1）](ADR-0050-mcp-purchase-scope-parity.md) | 第十二批（进行中） | 开发实现，尚非产品上线验收 | — | — |
+| 0051 | [ADR-0051 总部角色名单单点与 docflow 严格门店绑定（AC2）](ADR-0051-hq-roles-docflow-binding.md) | 第十二批（进行中） | 开发实现，尚非产品上线验收 | `test-setting-audit.mjs` | — |
+| 0052 | [ADR-0052：发行证据透明日志与 CI 签名口径（AC6）](ADR-0052-evidence-transparency-log.md) | 第十二批（进行中） | 开发实现，尚非产品上线验收 | `lib/evidence-log.mjs` | — |

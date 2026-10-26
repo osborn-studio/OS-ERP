@@ -38,9 +38,15 @@ export const FTS_TABLE = 'audit_logs_fts'
 let ftsOverride = null
 /** 测试钩子：false = 模拟没有 FTS5 的构建（强制 LIKE 回退）；null = 按库里是否有 audit_logs_fts 判断 */
 export function setFtsOverride(v) { ftsOverride = v }
+/**
+ * 环境开关（AC5）：`GML_AUDIT_FTS=0`（恰好是字符串 "0"）强制所有关键词检索走 LIKE，`keywordUsesFts` 恒为 false。
+ * 每次调用时读 `process.env`（不缓存），所以测试可以按用例设置；其它取值（未设、空串、"1"、"false"）都**不**关闭 FTS，避免拼写错误悄悄改变行为。
+ * 只影响查询路径：迁移 067 照常建表与触发器，`scripts/audit-fts-maintain.mjs` 照常维护索引。用途是在带 FTS5 的构建上真实演练无 FTS 回退（CI 以此再跑一遍视图测试）。
+ */
+export const ftsEnvDisabled = () => process.env.GML_AUDIT_FTS === '0'
 /** 这个库能不能走 FTS：迁移 067 建了 `audit_logs_fts`（没有 FTS5 的构建上迁移是空操作，表不存在 → 回退 LIKE） */
 export function ftsAvailable(db) {
-  if (ftsOverride === false) return false
+  if (ftsOverride === false || ftsEnvDisabled()) return false
   try { return !!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(FTS_TABLE) } catch { return false }
 }
 

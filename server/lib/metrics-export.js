@@ -93,4 +93,17 @@ export function renderPrometheus({ ops, retry, counters, histograms = {}, versio
   return `${lines.join('\n')}\n`
 }
 
-export default { renderPrometheus, metricsTokenOk, METRICS_TOKEN_MIN_LENGTH, PROMETHEUS_CONTENT_TYPE }
+/**
+ * AC9：SIGTERM 时写进日志的一行 JSON 快照（重启前后对账用）。只含进程内计数器 / 直方图 / 写重试，
+ * 不含 ops（不读库、不碰文件系统）、不含路径与账号；任何异常都折成一行 `metrics_snapshot_failed`，永不抛错。
+ */
+export function shutdownSnapshotLine({ counters, histograms = {}, retry = {}, now = () => new Date() }) {
+  const ts = (() => { try { return now().toISOString() } catch { return null } })()
+  try {
+    return JSON.stringify({ ts, level: 'info', msg: 'metrics_snapshot', event: 'shutdown', counters, histograms, retry })
+  } catch {
+    return JSON.stringify({ ts, level: 'warn', msg: 'metrics_snapshot_failed', event: 'shutdown' })
+  }
+}
+
+export default { shutdownSnapshotLine, renderPrometheus, metricsTokenOk, METRICS_TOKEN_MIN_LENGTH, PROMETHEUS_CONTENT_TYPE }

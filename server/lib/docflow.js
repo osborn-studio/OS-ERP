@@ -36,7 +36,8 @@ import { getDb } from '../db/index.js'
 // 界面上「流转时间」与「单据时间」对不上，跨零点时甚至差一天。
 import { localNow } from './dates.js'
 import { docScopeBuilder } from './doc-scope-registry.js'
-import { boundStoreId, storeBindingExempt } from './store-binding.js'
+import { boundStoreId, boundDealerId, isExternalSubject, storeBindingExempt } from './store-binding.js'
+import { isHqRole } from './hq-roles.js'
 
 export class DocFlowError extends Error {
   constructor(message, { code = 'DOC_FLOW_ERROR', httpStatus = 400, detail = null } = {}) {
@@ -121,18 +122,18 @@ export const DOC_SCOPE_RESOLVERS = Object.freeze({
   SR: { builder: 'sales', table: 'sales_returns', kind: 'return' },
   SI: { builder: 'org', table: 'sales_invoices', cols: ['org_id'] },
   // 订货中心（ocScope，ADR-0027）：按客户归属组织
-  OC: { builder: 'order-center', table: 'oc_orders' },
-  OCS: { builder: 'order-center', table: 'oc_statements' },
+  OC: { builder: 'order-center', table: 'oc_orders', binding: 'subject' },
+  OCS: { builder: 'order-center', table: 'oc_statements', binding: 'subject' },
   // POS / 门店（门店归属组织；账号绑了门店则只限该门店，ADR-0025）
-  PS: { builder: 'store', table: 'pos_orders', cols: ['store_id'] },
-  PSF: { builder: 'store', table: 'pos_shifts', cols: ['store_id'] },
+  PS: { builder: 'store', table: 'pos_orders', cols: ['store_id'], binding: 'store' },
+  PSF: { builder: 'store', table: 'pos_shifts', cols: ['store_id'], binding: 'store' },
   RC: { builder: 'store', table: 'pos_daily_closes', cols: ['store_id'], binding: 'store' },
   YQ: { builder: 'store', table: 'store_requisitions', cols: ['store_id'], binding: 'store' },
   SH: { builder: 'store', table: 'store_shipments', cols: ['store_id'], binding: 'store' },
   // 经销商往来（经销商档案 dealers.org_id）
-  DR: { builder: 'dealer', table: 'dealer_requisitions', cols: ['dealer_id'] },
-  DS: { builder: 'dealer', table: 'dealer_statements', cols: ['dealer_id'] },
-  RB: { builder: 'dealer', table: 'dealer_rebates', cols: ['dealer_id'] },
+  DR: { builder: 'dealer', table: 'dealer_requisitions', cols: ['dealer_id'], binding: 'dealer' },
+  DS: { builder: 'dealer', table: 'dealer_statements', cols: ['dealer_id'], binding: 'hq' },
+  RB: { builder: 'dealer', table: 'dealer_rebates', cols: ['dealer_id'], binding: 'hq' },
   // 库存 / 生产 / 委外 / 质检：仓库归属组织（warehouses.org_id）
   TF: { builder: 'warehouse', table: 'stock_transfers', cols: ['from_warehouse_id', 'to_warehouse_id'] },
   CK: { builder: 'warehouse', table: 'stock_checks', cols: ['warehouse_id'] },
@@ -174,7 +175,12 @@ const GENERIC_BUILDERS = {
       ? { sql: `(${base} AND t.${spec.cols[0]} = ?)`, params: [...ids, bound] }
       : { sql: base, params: ids }
   },
-  dealer: (ids, spec) => ({ sql: `t.${spec.cols[0]} IN (SELECT id FROM dealers WHERE org_id IN (${ids.map(() => '?').join(',')}))`, params: ids })
+  dealer: (ids, spec, ctx) => {
+    const base = `t.${spec.cols[0]} IN (SELECT id FROM dealers WHERE org_id IN (${ids.map(() => '?').join(',')}))`
+    // AC3：DR（binding: 'dealer'）绑了经销商的账号只限本经销商，与 demand.js `dealerCtx` 一致
+    const bound = spec.binding === 'dealer' ? boundDealerId(ctx.user) : null
+    return bound != null ? { sql: `(${base} AND t.${spec.cols[0]} = ?)`, params: [...ids, bound] } : { sql: base, params: ids }
+  }
 }
 
 /**
@@ -185,17 +191,32 @@ const GENERIC_BUILDERS = {
  */
 export function docScopeOf(ctx, docType) {
   const spec = typeof docType === 'string' && Object.prototype.hasOwnProperty.call(DOC_SCOPE_RESOLVERS, docType) ? DOC_SCOPE_RESOLVERS[docType] : null
-  // AB7：带 `binding: 'store'` 的类型（RC / YQ / SH）在任何数据范围（含 all）下都先过门店绑定闸
-  if (spec && spec.binding === 'store' && ctx && ctx.user && !storeBindingExempt(ctx.user)) {
+  // AB7 / AC3：带 `binding` 的类型在任何数据范围（含 all）下都先过绑定闸；admin / 超管与无主上下文豁免。
+  //   store   RC / YQ / SH / PS / PSF：已绑门店 ⇒ 只限本店；未绑门店 ⇒ 严格模式（MCP）整类不可见，HTTP 保持角色名口径
+  //   dealer  DR：已绑经销商 ⇒ 只限本经销商；未绑 ⇒ 同上
+  //   subject OC / OCS：外部主体（role=dealer|store）只看自己的订货档案，`all` 也不放行别家（构建器按 customer_id 收口）；内部账号走组织范围
+  //   hq      DS / RB：总部专属、没有自视图 ⇒ 任何门店 / 经销商绑定或外部主体账号整类不可见
+  let viaBuilder = false // subject：外部主体即使 data_scope=all 也要走构建器
+  if (spec && spec.binding && ctx && ctx.user && !storeBindingExempt(ctx.user)) {
+    const allScope = !!(ctx.orgScope && ctx.orgScope.scope === 'all')
     const sid = boundStoreId(ctx.user)
-    if (sid == null) {
-      // 未绑门店：HTTP 路由按角色名放行总部角色（保持）；严格模式（MCP）一律不可见
-      if (ctx.strictBinding) return null
-    } else if (ctx.orgScope && ctx.orgScope.scope === 'all') {
-      return { sql: `t.${spec.cols[0]} = ?`, params: [sid] }
+    const did = boundDealerId(ctx.user)
+    if (spec.binding === 'store' || spec.binding === 'dealer') {
+      const bid = spec.binding === 'store' ? sid : did
+      if (bid == null) {
+        // 未绑定：HTTP 路由按角色名放行总部角色（保持）；严格模式（MCP）一律不可见
+        // ADR-0051（AC2）：HTTP docflow 的严格模式带 hqExempt——总部角色（hq-roles.js）仍按数据范围放行；MCP 不带，维持"比 HTTP 严"
+        if (ctx.strictBinding && !(ctx.hqExempt && isHqRole(ctx.user.role))) return null
+      } else if (allScope) {
+        return { sql: `t.${spec.cols[0]} = ?`, params: [bid] }
+      }
+    } else if (spec.binding === 'subject') {
+      viaBuilder = isExternalSubject(ctx.user)
+    } else if (spec.binding === 'hq') {
+      if (sid != null || did != null || isExternalSubject(ctx.user)) return null
     }
   }
-  if (ctx && ctx.orgScope && ctx.orgScope.scope === 'all') return { all: true }
+  if (!viaBuilder && ctx && ctx.orgScope && ctx.orgScope.scope === 'all') return { all: true }
   if (!spec || spec.builder === 'global') return null
   const orgScope = ctx ? ctx.orgScope : null
   const full = { ...ctx, orgScope }

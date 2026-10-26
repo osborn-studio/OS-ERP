@@ -8,6 +8,12 @@
 
 <!-- generated -->
 
+## 第十二批（进行中）：见 roadmap-v8
+
+- [ADR-0050：MCP 采购订单读工具与剩余聚合读口和 HTTP 范围对齐（AC1）](docs/implementation/ADR-0050-mcp-purchase-scope-parity.md) — 单一谓词：`server/lib/purchase.js` 新增 `purchaseOrderScopeSql(orgScope, alias)`，返回 `{ sql, params, empty }`，判据就是既有 `purchaseScopeSql(...).wh`（入库仓 `warehouses.org_id`；全局 `1=1`；`dealer` / `none` / 空集合 `1=0`；仓无组织对受限范围不可见）。HTTP 订单列表、`/stats`、`assertP…
+- [ADR-0051 总部角色名单单点与 docflow 严格门店绑定（AC2）](docs/implementation/ADR-0051-hq-roles-docflow-binding.md) — 一张表，三种派生，全部冻结
+- [ADR-0052：发行证据透明日志与 CI 签名口径（AC6）](docs/implementation/ADR-0052-evidence-transparency-log.md) — `docs/release/EVIDENCE-LOG.jsonl`，一行一个候选：`{schema:1, name, evidence_sha256, signature, built_by, timestamp, prev}`。 - `evidence_sha256` = 规范化 EVIDENCE.json（ADR-0047 规范化 v1，与签名相同的字节）的 sha256；`signature` = `EVIDENCE.sig` 文本（去首尾空白）的 sha256 或 `…
+
 ## 第十一批（进行中）：见 roadmap-v7
 
 - [ADR-0046：主数据下拉仓库项、采购订单读与 QC 聚合按仓库组织范围收口](docs/implementation/ADR-0046-master-options-qc-scope.md) — 判据唯一化：全部复用既有谓词，不新写 SQL 口径——仓库按 `stockScopeSql(orgScope, '', 'id')`，采购订单按 `purchaseScopeSql(orgScope,'po').wh` 与详情的 `assertPurchaseDocInScope(db,'PO',…)`，QC 聚合按 `stockScopeSql(orgScope,'')`（`warehouse_id`，与 `listRequests / listInspections / …

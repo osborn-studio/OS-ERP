@@ -170,3 +170,22 @@ test('AB5: snapshot_upto is an optional string input, off by default, validated 
   assert.match(code, /upgrade-rehearsal\.mjs --from="\$snap" --backup-dir="\$CAP_RUN\/snapshot\/data\/backups"/)
   assert.match(code, /if:\s*inputs\.rehearsal == 'true'/, 'snapshot_upto only matters inside the optional rehearsal step')
 })
+
+test('AC8: summary shows scale large-ci, partial, partial_reason and reached; hostile partial_reason is dropped', () => {
+  const base = { ok: true, profile: 'large-ci', partial: true, partial_reason: 'time_budget', reached: { skus: 100000, txns: 640000, txns_target: 1000000, docs: 90000, docs_target: 100000, path: '/home/runner/x' }, steps: { explain_audit: { ok: true, statements: 61, violations: 0 }, bench_api: { ok: true, totals: { errors: 0 } } } }
+  const write = { totals: { errors: 0 }, integrity: { ok: true } }
+  const { summary } = buildSummary(base, write, { scale: 'large-ci' })
+  assert.equal(summary.scale, 'large-ci')
+  assert.equal(summary.profile, 'large-ci')
+  assert.equal(summary.partial, true)
+  assert.equal(summary.partial_reason, 'time_budget')
+  assert.deepEqual(summary.reached, { skus: 100000, txns: 640000, txns_target: 1000000, docs: 90000, docs_target: 100000 })
+  assert.ok(!JSON.stringify(summary).includes('/home/runner'))
+  assert.equal(summary.verdict, 'PASS', 'partial alone does not fail the job')
+  const hostile = buildSummary({ ...base, partial_reason: '/etc/passwd' }, write, { scale: 'large-ci' }).summary
+  assert.equal(hostile.partial_reason, '?')
+  const none = buildSummary({ ok: true, partial: false, steps: base.steps }, write, { scale: 'medium' }).summary
+  assert.equal(none.partial, false)
+  assert.equal(none.partial_reason, null)
+  assert.equal(none.reached, null)
+})

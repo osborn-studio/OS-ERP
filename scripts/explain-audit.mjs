@@ -25,6 +25,7 @@ import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import Database from 'better-sqlite3'
 import { buildWhere, orderOf, countSql, exportSql, AUDIT_COUNT_CAP } from '../server/lib/audit-view.js'
+import { topProductsSql, topBrandsSql, topDealersSql, topStoresSql, INVENTORY_DIST_AGG_SQL, channelOfflineSql, channelOnlineSql, RECENT_SQL } from '../server/lib/dashboard-sql.js'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 export const SCHEMA_VERSION = 1
@@ -98,6 +99,19 @@ export const STATEMENTS = [
     sql: "SELECT order_date AS date, COUNT(*) orders, COALESCE(SUM(receivable_amount),0) amount FROM sales_orders WHERE status NOT IN ('cancelled','draft') AND order_date >= date('now','localtime','-30 day') GROUP BY order_date ORDER BY date" },
   { id: 'dash.trend_purchase', mirrors: 'server/routes/dashboard.js trend', bench: null,
     sql: "SELECT order_date AS date, COALESCE(SUM(total_amount),0) amount FROM purchase_orders WHERE status <> 'cancelled' AND order_date >= date('now','localtime','-30 day') GROUP BY order_date ORDER BY date" },
+  // AC4：以下语句的 SQL 文本**直接取自** server/lib/dashboard-sql.js（路由 server/routes/dashboard.js 执行的就是这一份），不是人工镜像；
+  // 窗口取各接口的默认值（/top 30 天、/channel 90 天）。AB2 的 /top 改成 CROSS JOIN 固定"先取窗口内订单再取明细"，所以声明 expectIndex。
+  { id: 'dash.top_products', mirrors: 'server/routes/dashboard.js GET /top (server/lib/dashboard-sql.js topProductsSql)', bench: null, expectIndex: 'idx_so_order_date', sql: topProductsSql(30) },
+  { id: 'dash.top_brands', mirrors: 'server/routes/dashboard.js GET /top (server/lib/dashboard-sql.js topBrandsSql)', bench: null, expectIndex: 'idx_so_order_date', sql: topBrandsSql(30) },
+  { id: 'dash.top_dealers', mirrors: 'server/routes/dashboard.js GET /top (server/lib/dashboard-sql.js topDealersSql)', bench: null, expectIndex: 'idx_so_order_date', sql: topDealersSql(30) },
+  { id: 'dash.top_stores', mirrors: 'server/routes/dashboard.js GET /top (server/lib/dashboard-sql.js topStoresSql)', bench: null, expectIndex: 'idx_so_order_date', sql: topStoresSql(30) },
+  { id: 'dash.inventory_dist_agg', mirrors: 'server/routes/dashboard.js GET /inventory-dist (server/lib/dashboard-sql.js INVENTORY_DIST_AGG_SQL)', bench: null, sql: INVENTORY_DIST_AGG_SQL },
+  { id: 'dash.channel_offline', mirrors: 'server/routes/dashboard.js GET /channel (server/lib/dashboard-sql.js channelOfflineSql)', bench: null, expectIndex: 'idx_so_order_date', sql: channelOfflineSql(90) },
+  { id: 'dash.channel_online', mirrors: 'server/routes/dashboard.js GET /channel (server/lib/dashboard-sql.js channelOnlineSql)', bench: null, sql: channelOnlineSql(90) },
+  { id: 'dash.recent_sales', mirrors: 'server/routes/dashboard.js GET /recent (server/lib/dashboard-sql.js RECENT_SQL.salesOrders)', bench: null, sql: RECENT_SQL.salesOrders },
+  { id: 'dash.recent_purchase', mirrors: 'server/routes/dashboard.js GET /recent (server/lib/dashboard-sql.js RECENT_SQL.purchaseOrders)', bench: null, sql: RECENT_SQL.purchaseOrders },
+  { id: 'dash.recent_oms', mirrors: 'server/routes/dashboard.js GET /recent (server/lib/dashboard-sql.js RECENT_SQL.omsOrders)', bench: null, sql: RECENT_SQL.omsOrders },
+  { id: 'dash.recent_txn', mirrors: 'server/routes/dashboard.js GET /recent (server/lib/dashboard-sql.js RECENT_SQL.transactions)', bench: null, sql: RECENT_SQL.transactions },
 
   // ---- 采购 purchase_order_list / purchase_order_detail（server/routes/purchase.js、server/lib/purchase.js） ----
   { id: 'po.list_page', mirrors: 'server/routes/purchase.js GET /orders', bench: 'purchase_order_list', params: [20, 0],
@@ -258,6 +272,14 @@ export const ALLOW = [
   { statement: 'audit.count_keyword', table: 'audit_logs', reason: '关键词是 LIKE \'%x%\' 子串匹配（action/entity/user_name），没有可用索引；LIMIT 10001 只在命中多时早停，命中稀少时仍读全表——已知残余，靠最少 2 字符与组合 module/user 过滤收敛' },
   { statement: 'audit.list_entity_only', table: 'audit_logs', noSort: true, reason: '仅按 entity 类型（几十种、每种命中很多行）：用 `+entity` 屏蔽 idx_audit_entity，避免对全部命中行临时排序；沿 rowid 倒扫凑够一页即停。命中稀少的类型会读到整表——已知残余（见 capacity-baseline AA6）' },
   { statement: 'audit.list_keyword', table: 'audit_logs', noSort: true, reason: '同 audit.count_keyword（2 字关键词 trigram 无法匹配，FTS 不适用）：子串匹配无法建索引；按 id 倒序取够一页即停，命中稀少时读量上界是整表' },
+  // AC4：/recent 四条都是"按主键倒序取最新 8 条"，无过滤条件，上界即 8 行
+  { statement: 'dash.recent_sales', table: 'sales_orders', noSort: true, reason: PAGE_REASON },
+  { statement: 'dash.recent_purchase', table: 'purchase_orders', noSort: true, reason: PAGE_REASON },
+  { statement: 'dash.recent_oms', table: 'oms_orders', noSort: true, reason: PAGE_REASON },
+  { statement: 'dash.recent_txn', table: 'inventory_transactions', noSort: true, reason: PAGE_REASON },
+  // AC4：/channel 线上渠道按 `date(o.order_time) >= …` 过滤——对列套函数，没有任何索引能用（idx_oms_month 建在 substr(order_time,1,7) 上，谓词不同）；
+  // 读量随 OMS 订单总量线性增长（合成库 2 万行 ≈ 12 ms）。已知残余：由 /channel 的 30 s 缓存吸收重复读取；根治需要新迁移（给 order_time 建索引并把谓词改成可索引的区间），不在 AC4 范围。
+  { statement: 'dash.channel_online', table: 'oms_orders', reason: '谓词对列套函数 date(order_time)，无可用索引，整表读取并随订单量线性增长；缓存吸收重复读取（AC4），根治需新迁移' },
   { statement: 'dash.sales_unpaid', table: 'sales_orders', reason: AGG_REASON },
   { statement: 'dash.stock_total', table: 'inventory_stocks', reason: '整表聚合（SUM 全库存），没有谓词；索引只能做覆盖扫描，不改变量级；AA5 起由看板 30 s 缓存吸收重复读取' },
   { statement: 'rpt.stock_value', table: 'inventory_stocks', reason: '整表聚合库存金额，没有谓词' },

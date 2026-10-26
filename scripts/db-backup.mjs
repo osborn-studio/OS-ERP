@@ -16,6 +16,11 @@
  *     存活到加密完成后被擦除；校验失败在加密模式下直接擦除而不是隔离。三库在同一写冻结窗口内快照，
  *     报告带共享的 consistency_stamp（近似一致点，非跨库事务）。
  *
+ * 【审计链清单】（ADR-0049 补充，AC7）每份通过校验的快照再对**快照内容**跑一次审计链校验，把链尾 id / row_hash / 行数与 `audit_chain_anchors` 的
+ *   摘要写进报告条目 `audit_chain`，并在备份旁写 `<备份>.audit-manifest.json`（含锚点明细）；加密模式再写同内容的 `<备份>.audit-manifest.enc`
+ *   （AES-256-GCM，认证）。这些是**要离机保存**的对象（docs/operations/audit-integrity.md §6），`audit-verify-chain --against-backup` 据此识别“整链重算”。
+ *   链校验失败不挡备份（被篡改的库也要有备份），只在清单里 `verified:false`。清单写失败 ⇒ 该库备份失败（不留没有清单的新备份）。
+ *
  * 【告警】（ADR-0029）有失败且设置 GML_ALERT_CHANNEL（已存在的通知渠道 code）⇒ 经通知发送路径发一条简短告警（只含行业码/错误码/数据目录名）；成功静默。
  *
  * 【改它要注意什么】tests/db-backup.test.mjs 用真实子进程跑本脚本；`GML_BACKUP_FAULT`
@@ -44,12 +49,14 @@ import { resolveBackupDir } from '../server/lib/backup-dir.js'
 import { sendBackupAlert } from '../server/lib/backup-alert.js'
 import { getChannel } from '../server/lib/notify.js'
 import { loadBackupKey, encryptFile, decryptFile, shredFile, FORMAT_VERSION } from '../server/lib/backup-crypto.js'
+import { summarizeAuditChain, withoutAnchorList, buildManifest } from '../server/lib/audit-anchor-manifest.js'
 
 const SMOKE_TABLE = 'users'
 const SNAPSHOT_FAILED = 'BACKUP_SNAPSHOT_FAILED'
 const VERIFY_FAILED = 'BACKUP_VERIFY_FAILED'
 const FREEZE_FAILED = 'BACKUP_FREEZE_FAILED'
 const ENCRYPT_FAILED = 'BACKUP_ENCRYPT_FAILED'
+const MANIFEST_FAILED = 'BACKUP_MANIFEST_FAILED'
 const CONSISTENCY_NOTE = '短暂写冻结下的近似一致点：三库在同一窗口内各持有 BEGIN IMMEDIATE 保留锁后依次快照，窗口内无新提交；这不是跨库事务，窗口外的写入顺序不被保证。'
 
 function usageError(message) {
@@ -256,7 +263,8 @@ if (!freezeError) {
         // 密文名与明文临时名同序号，冲突时一起换
         for (;;) {
           finalOut = path.join(dir, `${base}_${stamp}${suffix()}${ext}`)
-          if (!fs.existsSync(finalOut) && !fs.existsSync(`${finalOut}.failed`) && !fs.existsSync(`${finalOut}.partial`)) break
+          if (!fs.existsSync(finalOut) && !fs.existsSync(`${finalOut}.failed`) && !fs.existsSync(`${finalOut}.partial`) &&
+              !fs.existsSync(`${finalOut}.audit-manifest.json`) && !fs.existsSync(`${finalOut}.audit-manifest.enc`)) break
           n++
         }
         snap.finalOut = finalOut
@@ -311,6 +319,16 @@ for (const snap of snaps) {
     continue
   }
 
+  // 审计链清单：对**明文快照**（加密前）计算；失败不拦备份，但要在报告里留下痕迹
+  let chainSummary
+  try {
+    const sdb = new Database(out, { readonly: true })
+    try { chainSummary = summarizeAuditChain(sdb) } finally { sdb.close() }
+  } catch (e) {
+    chainSummary = { present: false, error: e.message }
+  }
+  entry.audit_chain = withoutAnchorList(chainSummary)
+
   entry.encrypted = !!backupKey
   if (backupKey) {
     const t0 = performance.now()
@@ -335,6 +353,33 @@ for (const snap of snaps) {
     entry.size = fs.statSync(out).size
     entry.sha256 = sha256File(out)
   }
+  const ownedSidecars = [] // 失败清理只删本次创建的文件，不碰别人遗留的同名文件
+  try {
+    const manifest = buildManifest({ industry: entry.code, backupFile: entry.file, backupSha256: entry.sha256, summary: chainSummary })
+    const text = JSON.stringify(manifest, null, 2) + '\n'
+    fs.writeFileSync(`${entry.file}.audit-manifest.json`, text, { mode: 0o600, flag: 'wx' })
+    ownedSidecars.push(`${entry.file}.audit-manifest.json`)
+    if (backupKey) {
+      const tmpPlain = path.join(dir, `.${path.basename(entry.file)}.manifest.${randomBytes(6).toString('hex')}.plain.tmp`)
+      plainTmps.add(tmpPlain)
+      try {
+        fs.writeFileSync(tmpPlain, text, { mode: 0o600, flag: 'wx' })
+        encryptFile(tmpPlain, `${entry.file}.audit-manifest.enc`, backupKey)
+        ownedSidecars.push(`${entry.file}.audit-manifest.enc`)
+      } finally {
+        shredFile(tmpPlain)
+        plainTmps.delete(tmpPlain)
+      }
+    }
+  } catch (e) {
+    failed++
+    for (const f of [entry.file, ...ownedSidecars]) fs.rmSync(f, { force: true })
+    entry.status = 'failed'
+    entry.error = `${MANIFEST_FAILED}: ${e.message}`
+    entry.file = undefined
+    results.push(entry)
+    continue
+  }
   entry.status = 'ok'
 
   // 裁剪：只处理本脚本命名规则生成的 .db / .db.enc，新文件永远保留，其余按时间保留 keep-1 份
@@ -346,6 +391,7 @@ for (const snap of snaps) {
     .sort((a, b) => b.m - a.m)
   for (const item of others.slice(Math.max(cfg.keep - 1, 0))) {
     fs.unlinkSync(item.p)
+    for (const sfx of ['.audit-manifest.json', '.audit-manifest.enc']) fs.rmSync(`${item.p}${sfx}`, { force: true }) // 清单随备份一起裁剪
     entry.pruned.push(item.f)
   }
   results.push(entry)

@@ -32,6 +32,8 @@ import { cachedForDb, invalidateForDb, cacheTtlMs, cacheKeyCount } from '../serv
 const ROOT = fileURLToPath(new URL('../', import.meta.url))
 const SCHEMA = readFileSync(new URL('../server/db/schema.sql', import.meta.url), 'utf8')
 
+const strip = ({ value, hit }) => ({ value, hit })
+
 function fixture(t) {
   const db = new Database(':memory:')
   t.after(() => db.close())
@@ -202,6 +204,7 @@ async function server(t, extraEnv = {}, { dir: sharedDir } = {}) {
   const db = new Database(path.join(dir, 'gml_cosmetic.db'))
   t.after(() => db.close())
   return {
+    base,
     api: (r) => call(r), post: (r, b) => call(r, { method: 'POST', body: JSON.stringify(b) }), db, output: () => output, dir,
     apiAs: (tok, r) => callAs(tok, r), token,
     /** 建一个受限（按组织）账号并登录；返回 token */
@@ -252,20 +255,20 @@ test('db-ttl-cache: hit inside TTL; invalidated by own writes, other-connection 
   let calls = 0
   const compute = (d) => () => { calls++; return d.prepare('SELECT SUM(v) s FROM t').get().s }
 
-  assert.deepEqual(cachedForDb(a, compute(a), opts), { value: 1, hit: false })
-  assert.deepEqual(cachedForDb(a, compute(a), opts), { value: 1, hit: true })
+  assert.deepEqual(strip(cachedForDb(a, compute(a), opts)), { value: 1, hit: false })
+  assert.deepEqual(strip(cachedForDb(a, compute(a), opts)), { value: 1, hit: true })
   assert.equal(calls, 1)
   // 另一个连接的缓存互不串（同表名、不同库）
   b.prepare('UPDATE t SET v=50').run()
-  assert.deepEqual(cachedForDb(b, compute(b), opts), { value: 50, hit: false })
-  assert.deepEqual(cachedForDb(a, compute(a), opts), { value: 1, hit: true })
+  assert.deepEqual(strip(cachedForDb(b, compute(b), opts)), { value: 50, hit: false })
+  assert.deepEqual(strip(cachedForDb(a, compute(a), opts)), { value: 1, hit: true })
   // 本连接写入 → 立即失效
   a.prepare('INSERT INTO t VALUES (2)').run()
-  assert.deepEqual(cachedForDb(a, compute(a), opts), { value: 3, hit: false })
+  assert.deepEqual(strip(cachedForDb(a, compute(a), opts)), { value: 3, hit: false })
   assert.equal(cachedForDb(a, compute(a), opts).hit, true)
   // 其它连接（等价于其它进程）提交 → 立即失效
   other.prepare('INSERT INTO t VALUES (4)').run()
-  assert.deepEqual(cachedForDb(a, compute(a), opts), { value: 7, hit: false })
+  assert.deepEqual(strip(cachedForDb(a, compute(a), opts)), { value: 7, hit: false })
   // 回滚的写入也失效（超集，不会漏）
   a.exec('BEGIN'); a.prepare('INSERT INTO t VALUES (100)').run(); a.exec('ROLLBACK')
   assert.equal(cachedForDb(a, compute(a), opts).hit, false)
@@ -366,8 +369,8 @@ test('AB2 db-ttl-cache: keyed entries are independent, any write drops all keys,
   a.exec('CREATE TABLE t (v INTEGER); INSERT INTO t VALUES (1)')
   let n = 0
   const run = (key, d = a) => cachedForDb(d, () => { n++; return `${key}:${d.prepare('SELECT SUM(v) s FROM t').get().s}` }, { ttlMs: 30000, key })
-  assert.deepEqual(run('trend:30'), { value: 'trend:30:1', hit: false })
-  assert.deepEqual(run('trend:7'), { value: 'trend:7:1', hit: false }, 'a different key is its own entry')
+  assert.deepEqual(strip(run('trend:30')), { value: 'trend:30:1', hit: false })
+  assert.deepEqual(strip(run('trend:7')), { value: 'trend:7:1', hit: false }, 'a different key is its own entry')
   assert.equal(run('trend:30').hit, true)
   assert.equal(run('trend:7').hit, true)
   assert.equal(n, 2)
@@ -376,8 +379,8 @@ test('AB2 db-ttl-cache: keyed entries are independent, any write drops all keys,
   assert.equal(cachedForDb(a, () => 'y', { ttlMs: 30000 }).value, 'x')
   // 其它连接写入 → 所有键一起失效
   other.prepare('INSERT INTO t VALUES (5)').run()
-  assert.deepEqual(run('trend:30'), { value: 'trend:30:6', hit: false })
-  assert.deepEqual(run('trend:7'), { value: 'trend:7:6', hit: false })
+  assert.deepEqual(strip(run('trend:30')), { value: 'trend:30:6', hit: false })
+  assert.deepEqual(strip(run('trend:7')), { value: 'trend:7:6', hit: false })
   // 显式失效清空全部键
   invalidateForDb(a)
   assert.equal(run('trend:30').hit, false)
@@ -605,4 +608,313 @@ test('AB2 /top and /inventory-dist rewrites return the same rows as the original
   const names = dist.byWarehouse.map((w) => w.warehouse_name)
   assert.ok(names.indexOf('ab2 空仓1') < names.indexOf('ab2 空仓2'), 'ties are ordered by warehouse id (deterministic)')
   assert.ok(dist.byCategory.some((c) => c.category_name === '未分类') && dist.byCategory.some((c) => c.category_name === 'AB2品类'))
+})
+
+// ============================ AC11：缓存时间戳（cached_at / cache_ttl_ms / X-Dashboard-Cache）============================
+
+test('AC11 db-ttl-cache reports when the value was computed: a hit keeps the original stamp, a miss gets a new one', (t) => {
+  const db = new Database(':memory:')
+  t.after(() => db.close())
+  db.exec('CREATE TABLE t (v INTEGER)')
+  let clock = 5000
+  const opts = { ttlMs: 30000, now: () => clock }
+  const first = cachedForDb(db, () => 1, opts)
+  assert.equal(first.at, 5000)
+  clock = 9000
+  const hit = cachedForDb(db, () => 2, opts)
+  assert.equal(hit.hit, true)
+  assert.equal(hit.at, 5000, 'a hit reports the compute time, not the read time')
+  clock = 5000 + 30001
+  const miss = cachedForDb(db, () => 3, opts)
+  assert.equal(miss.hit, false)
+  assert.equal(miss.at, clock)
+  // 缓存关闭：每次都是现算，戳是现在
+  clock = 70000
+  assert.equal(cachedForDb(db, () => 4, { ttlMs: 0, now: () => clock }).at, 70000)
+})
+
+test('AC11 the five cached dashboard endpoints carry cached_at + cache_ttl_ms + X-Dashboard-Cache; recent stays unstamped; a write restamps', { timeout: 300000 }, async (t) => {
+  const f = await server(t)
+  const raw = async (route) => {
+    const res = await fetch(new URL(route, f.base), { headers: { authorization: `Bearer ${f.token}` } })
+    return { status: res.status, cache: res.headers.get('x-dashboard-cache'), body: await res.json() }
+  }
+  for (const route of ['summary', 'trend', 'top', 'todos', 'inventory-dist', 'channel']) { // AC4 把 /channel 也接进了 cachedRead
+    const a = await raw(`/api/dashboard/${route}`)
+    assert.equal(a.status, 200, route)
+    assert.equal(a.cache, 'miss', route)
+    assert.match(a.body.cached_at, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/, route)
+    assert.equal(a.body.cache_ttl_ms, 30000, route)
+    const b = await raw(`/api/dashboard/${route}`)
+    assert.equal(b.cache, 'hit', route)
+    assert.equal(b.body.cached_at, a.body.cached_at, `${route}: a hit keeps the original stamp`)
+  }
+  for (const route of ['recent']) {
+    const r = await raw(`/api/dashboard/${route}`)
+    assert.equal(r.status, 200, route)
+    assert.equal('cached_at' in r.body, false, `${route} is not cached, so it carries no stamp`)
+    assert.equal(r.cache, null, route)
+  }
+  const before = (await raw('/api/dashboard/summary')).body.cached_at
+  await delay(20)
+  const row = f.db.prepare('SELECT id FROM inventory_stocks ORDER BY id LIMIT 1').get()
+  f.db.prepare('UPDATE inventory_stocks SET qty_on_hand = qty_on_hand + 1 WHERE id=?').run(row.id)
+  const after = await raw('/api/dashboard/summary')
+  assert.equal(after.cache, 'miss')
+  assert.ok(Date.parse(after.body.cached_at) > Date.parse(before), 'after a write the stamp moves forward')
+})
+
+test('AC11 GML_DASHBOARD_CACHE_MS=0 reports cache_ttl_ms 0 so the page can say "not cached"', { timeout: 300000 }, async (t) => {
+  const f = await server(t, { GML_DASHBOARD_CACHE_MS: '0' })
+  const res = await fetch(new URL('/api/dashboard/summary', f.base), { headers: { authorization: `Bearer ${f.token}` } })
+  const body = await res.json()
+  assert.equal(body.cache_ttl_ms, 0)
+  assert.match(body.cached_at, /^\d{4}-/)
+})
+
+// ============================ AC4：/channel、/recent 剖析，explain-audit 登记，缓存命中率阈值依据（ADR-0044 补充 2）============================
+
+import * as dsql from '../server/lib/dashboard-sql.js'
+import { auditStatements, STATEMENTS, ALLOW } from '../scripts/explain-audit.mjs'
+import { counterSnapshot, resetCounters } from '../server/lib/process-counters.js'
+
+const AC4_ROUTES = { channel: '/api/dashboard/channel', recent: '/api/dashboard/recent' }
+
+// 原写法（batch-eleven 的 channel 处理器内联 SQL，逐字保留作对照）
+const OLD_CHANNEL = (days) => {
+  const from = `date('now','localtime','-${days} day')`
+  return {
+    offline: `SELECT channel, COUNT(*) orders, COALESCE(SUM(receivable_amount),0) amount FROM sales_orders
+         WHERE status NOT IN ('cancelled','draft') AND order_date >= ${from} AND channel <> 'platform' GROUP BY channel`,
+    online: `SELECT COALESCE(pf.name,'未知平台') AS platform_name, COUNT(o.id) orders, COALESCE(SUM(o.pay_amount),0) amount
+         FROM oms_orders o LEFT JOIN platforms pf ON pf.id=o.platform_id
+         WHERE date(o.order_time) >= ${from} AND o.status NOT IN ('refunded','closed') GROUP BY pf.id`
+  }
+}
+
+test('AC4 explain-audit statements for dashboard come from the route-side SQL module (no hand copy), with declared indexes', () => {
+  const route = readFileSync(new URL('../server/routes/dashboard.js', import.meta.url), 'utf8')
+  // 路由里不再内联这些语句：所有文本都来自 lib/dashboard-sql.js，explain-audit 引用的是同一份
+  assert.match(route, /from '\.\.\/lib\/dashboard-sql\.js'/)
+  for (const frag of ['CROSS JOIN', 'LEFT JOIN platforms pf ON pf.id=o.platform_id', 'FROM inventory_stocks st LEFT JOIN', 'ORDER BY so.id DESC']) assert.ok(!route.includes(frag), `route must not inline: ${frag}`)
+  const byId = new Map(STATEMENTS.map((s) => [s.id, s]))
+  const expect = {
+    'dash.top_products': [dsql.topProductsSql(30), 'idx_so_order_date'],
+    'dash.top_brands': [dsql.topBrandsSql(30), 'idx_so_order_date'],
+    'dash.top_dealers': [dsql.topDealersSql(30), 'idx_so_order_date'],
+    'dash.top_stores': [dsql.topStoresSql(30), 'idx_so_order_date'],
+    'dash.inventory_dist_agg': [dsql.INVENTORY_DIST_AGG_SQL, undefined],
+    'dash.channel_offline': [dsql.channelOfflineSql(90), 'idx_so_order_date'],
+    'dash.channel_online': [dsql.channelOnlineSql(90), undefined],
+    'dash.recent_sales': [dsql.RECENT_SQL.salesOrders, undefined],
+    'dash.recent_purchase': [dsql.RECENT_SQL.purchaseOrders, undefined],
+    'dash.recent_oms': [dsql.RECENT_SQL.omsOrders, undefined],
+    'dash.recent_txn': [dsql.RECENT_SQL.transactions, undefined]
+  }
+  for (const [id, [sql, idx]] of Object.entries(expect)) {
+    const s = byId.get(id)
+    assert.ok(s, `${id} must be registered`)
+    assert.equal(s.sql, sql, `${id}: SQL text must be the route module's text`)
+    assert.equal(s.expectIndex, idx, `${id}: expectIndex`)
+    assert.match(s.mirrors, /dashboard-sql\.js/, id)
+  }
+  // 登记的 /top 语句确实是 CROSS JOIN 写法（固定先取窗口内订单）
+  assert.match(byId.get('dash.top_products').sql, /sales_orders so CROSS JOIN sales_order_items/)
+})
+
+test('AC4 explain-audit: the registered dashboard statements pass on a migrated schema; /top starts from idx_so_order_date then idx_soi_order; a plain JOIN would not be pinned', (t) => {
+  const { db } = fixture(t)
+  const ids = ['dash.top_products', 'dash.top_brands', 'dash.top_dealers', 'dash.top_stores', 'dash.inventory_dist_agg', 'dash.channel_offline', 'dash.channel_online', 'dash.recent_sales', 'dash.recent_purchase', 'dash.recent_oms', 'dash.recent_txn']
+  const subset = STATEMENTS.filter((s) => ids.includes(s.id))
+  assert.equal(subset.length, ids.length)
+  const rep = auditStatements(db, subset, { allow: ALLOW.filter((a) => ids.includes(a.statement)) })
+  assert.deepEqual(rep.violations, [])
+  assert.equal(rep.unusedAllow.length, 0, 'every exemption for these statements is exercised')
+  const plan = (id) => rep.statements.find((s) => s.id === id).plan
+  for (const id of ['dash.top_products', 'dash.top_brands']) {
+    assert.match(plan(id)[0], /SEARCH so USING INDEX idx_so_order_date/, `${id}: orders first, by the date index`)
+    assert.ok(plan(id).some((d) => /SEARCH i USING INDEX idx_soi_order/.test(d)), `${id}: items by idx_soi_order`)
+  }
+  // 反例：把同一语句改回普通 JOIN 再声明 expectIndex，审计要么选别的计划（红），要么保持；这里只断言守卫真的会检查 expectIndex
+  const bad = auditStatements(db, [{ id: 'x', mirrors: 't', sql: dsql.topBrandsSql(30), expectIndex: 'idx_does_not_exist' }], { allow: [] })
+  assert.equal(bad.ok, false)
+  assert.match(bad.violations.at(-1).reason, /idx_does_not_exist/)
+})
+
+test('AC4 /channel: profiled, cached per ?days, identical to the original SQL, invalidated by writes; body carries no cache/profile fields', { timeout: 300000 }, async (t) => {
+  const f = await server(t, { GML_PROFILE: '1' })
+  const db = f.db
+  db.pragma('foreign_keys=OFF')
+  const pf = Number(db.prepare("INSERT INTO platforms (code, name) VALUES ('AC4-P', 'AC4平台')").run().lastInsertRowid)
+  const io = db.prepare("INSERT INTO oms_orders (platform_id, platform_order_no, order_time, status, pay_amount) VALUES (?,?,datetime('now','localtime',?),?,?)")
+  io.run(pf, 'AC4-1', '-1 day', 'pending', 100.5); io.run(pf, 'AC4-2', '-40 day', 'shipped', 200); io.run(pf, 'AC4-3', '-100 day', 'shipped', 999)
+  io.run(pf, 'AC4-4', '-2 day', 'refunded', 77); io.run(987654, 'AC4-5', '-3 day', 'completed', 5) // 退款不计；无平台 → 未知平台
+  db.pragma('foreign_keys=ON')
+  const a = await f.api(AC4_ROUTES.channel)
+  assert.equal(a.status, 200, JSON.stringify(a.body))
+  const b = await f.api(AC4_ROUTES.channel)
+  assert.deepEqual(b.body, a.body)
+  assert.ok(!/cache|profile/i.test(JSON.stringify(a.body.data)))
+  assert.deepEqual(Object.keys(a.body.data), ['offline', 'online'])
+  const q = OLD_CHANNEL(90)
+  assert.deepEqual(a.body.data.online, db.prepare(q.online).all())
+  const labels = { dealer: '经销商分销', store: '门店零售', online: '自营商城', platform: '平台电商', live: '直播电商' }
+  assert.deepEqual(a.body.data.offline, db.prepare(q.offline).all().map((x) => ({ name: labels[x.channel] || x.channel, ...x })))
+  assert.ok(a.body.data.online.some((x) => x.platform_name === 'AC4平台' && x.orders === 2 && x.amount === 300.5), '90-day window: -1d and -40d, not -100d, not refunded')
+  assert.ok(a.body.data.online.some((x) => x.platform_name === '未知平台'))
+  // ?days 进键：30 天是新条目，窗口不同 → 结果不同；默认 90 与显式 90 是同一份
+  const d30 = await f.api(`${AC4_ROUTES.channel}?days=30`)
+  const d30b = await f.api(`${AC4_ROUTES.channel}?days=30`)
+  const d90 = await f.api(`${AC4_ROUTES.channel}?days=90`)
+  assert.deepEqual(d30b.body, d30.body)
+  assert.deepEqual(d90.body, a.body)
+  assert.deepEqual(d30.body.data.online, db.prepare(OLD_CHANNEL(30).online).all())
+  assert.notDeepEqual(d30.body.data.online, a.body.data.online)
+  await waitProfile(f.output, 'dashboard.channel', 5)
+  assert.deepEqual(profileLines(f.output, 'dashboard.channel').map(profileCache), ['miss', 'hit', 'miss', 'hit', 'hit'])
+  const keys = Object.keys(JSON.parse(/blocks=(\{.*\})/.exec(profileLines(f.output, 'dashboard.channel')[0])[1]))
+  assert.ok(['offline', 'online'].every((k) => keys.includes(k)), `per-block timings: ${keys}`)
+  // 任何写入立即失效：新增一单后马上反映
+  db.prepare("INSERT INTO oms_orders (platform_id, platform_order_no, order_time, status, pay_amount) VALUES (?, 'AC4-6', datetime('now','localtime'), 'pending', 50)").run(pf)
+  const after = await f.api(AC4_ROUTES.channel)
+  assert.equal(after.body.data.online.find((x) => x.platform_name === 'AC4平台').orders, 3)
+  await waitProfile(f.output, 'dashboard.channel', 6)
+  assert.equal(profileCache(profileLines(f.output, 'dashboard.channel').at(-1)), 'miss')
+})
+
+test('AC4 /recent: profiled but deliberately not cached (cache=off), always fresh right after a write, shape unchanged', { timeout: 300000 }, async (t) => {
+  const f = await server(t, { GML_PROFILE: '1' })
+  const a = await f.api(AC4_ROUTES.recent)
+  assert.equal(a.status, 200, JSON.stringify(a.body))
+  assert.deepEqual(Object.keys(a.body.data), ['salesOrders', 'purchaseOrders', 'omsOrders', 'transactions'])
+  assert.ok(a.body.data.salesOrders.length <= 8)
+  for (const [k, sql] of Object.entries(dsql.RECENT_SQL)) assert.deepEqual(a.body.data[k], f.db.prepare(sql).all(), k)
+  const n0 = a.body.data.salesOrders[0]?.doc_no
+  f.db.prepare("INSERT INTO sales_orders (doc_no, channel, order_date, status, total_qty, receivable_amount) VALUES ('AC4-RECENT', 'store', date('now','localtime'), 'confirmed', 1, 1)").run()
+  const b = await f.api(AC4_ROUTES.recent)
+  assert.equal(b.body.data.salesOrders[0].doc_no, 'AC4-RECENT')
+  assert.notEqual(n0, 'AC4-RECENT')
+  await waitProfile(f.output, 'dashboard.recent', 2)
+  const lines = profileLines(f.output, 'dashboard.recent')
+  assert.ok(lines.every((l) => /cache=off/.test(l)), 'recent is profiled and reports cache=off')
+  const keys = Object.keys(JSON.parse(/blocks=(\{.*\})/.exec(lines[0])[1]))
+  assert.deepEqual(keys, ['salesOrders', 'purchaseOrders', 'omsOrders', 'transactions'])
+  assert.ok(!/cache|profile/i.test(JSON.stringify(a.body.data)))
+})
+
+test('AC4 /channel and /recent: silent profiler by default; restricted callers are rejected before the handler and never warm the cache', { timeout: 300000 }, async (t) => {
+  const quiet = await server(t)
+  for (const route of Object.values(AC4_ROUTES)) assert.equal((await quiet.api(route)).status, 200)
+  assert.ok(!quiet.output().includes('profile_blocks'))
+  const f = await server(t, { GML_PROFILE: '1' })
+  const orgId = f.db.prepare("SELECT org_id FROM warehouses WHERE code='WH01'").get().org_id
+  const restricted = await f.scopedUser('ac4_scoped', orgId)
+  for (const route of Object.values(AC4_ROUTES)) { await f.api(route); assert.equal((await f.api(route)).status, 200) }
+  for (const n of Object.keys(AC4_ROUTES)) await waitProfile(f.output, `dashboard.${n}`, 2)
+  const before = Object.keys(AC4_ROUTES).map((n) => profileLines(f.output, `dashboard.${n}`).length)
+  for (const route of Object.values(AC4_ROUTES)) {
+    const denied = await f.apiAs(restricted, route)
+    assert.equal(denied.status, 403, route)
+    assert.equal(denied.body.code, 'GLOBAL_DATA_FORBIDDEN', route)
+    assert.equal((await f.apiAs(null, route)).status, 401, route)
+  }
+  await delay(500)
+  assert.deepEqual(Object.keys(AC4_ROUTES).map((n) => profileLines(f.output, `dashboard.${n}`).length), before)
+})
+
+// ---- 缓存命中率告警阈值依据（docs/operations/monitoring.md 引用本模型）----
+function mulberry32(a) { return () => { a |= 0; a = (a + 0x6D2B79F5) | 0; let x = Math.imul(a ^ (a >>> 15), 1 | a); x = (x + Math.imul(x ^ (x >>> 7), 61 | x)) ^ x; return ((x ^ (x >>> 14)) >>> 0) / 4294967296 } }
+/** 用真实的 cachedForDb（注入时钟）模拟：每 readEvery 秒读一次，写入间隔服从均值 writeMean 秒的指数分布；返回命中率并核对 AB10 计数器 */
+function simulateHitRatio({ readEvery, writeMean, horizonS = 6 * 3600, ttlMs = 30000, seed = 7 }) {
+  const db = new Database(':memory:')
+  try {
+    db.exec('CREATE TABLE w(x)')
+    const rnd = mulberry32(seed)
+    const gap = () => -Math.log(1 - rnd()) * writeMean
+    const ins = db.prepare('INSERT INTO w VALUES (1)')
+    resetCounters()
+    let nextW = gap(), hit = 0, miss = 0
+    for (let s = readEvery; s <= horizonS; s += readEvery) {
+      while (nextW <= s) { ins.run(); nextW += gap() }
+      const r = cachedForDb(db, () => 1, { ttlMs, now: () => s * 1000, key: 'k' })
+      if (r.hit) hit++; else miss++
+    }
+    const c = counterSnapshot().dashboard_cache_total
+    assert.equal(c.hit, hit, 'AB10 hit counter equals observed hits')
+    assert.equal(c.miss, miss, 'AB10 miss counter equals observed misses')
+    return hit / (hit + miss)
+  } finally { db.close() }
+}
+
+test('AC4 cache hit-ratio model (real cachedForDb, injected clock): ratio is monotone in write rate, capped by TTL/poll interval, and falls below the 20% alert line only under sustained frequent writes', () => {
+  const ALERT = 0.2
+  for (const readEvery of [5, 15]) {
+    const ceiling = Math.floor(30 / readEvery) / (Math.floor(30 / readEvery) + 1) // 每次未命中后最多 floor(ttl/poll) 次命中
+    let prev = -1
+    const ratios = [900, 300, 120, 60, 30, 15, 10, 5, 2].map((w) => ({ w, r: simulateHitRatio({ readEvery, writeMean: w }) }))
+    for (const { r } of ratios.slice().reverse()) { assert.ok(r >= prev - 0.02, 'monotone (allowing sampling noise)'); prev = r }
+    assert.ok(ratios[0].r <= ceiling + 0.005 && ratios[0].r >= ceiling - 0.05, `quiet instance approaches the ceiling ${ceiling.toFixed(3)} (got ${ratios[0].r.toFixed(3)})`)
+    // 写入平均间隔 >= 30 s：远高于告警线；平均每 2 s 一次写入：低于告警线
+    assert.ok(ratios.find((x) => x.w === 30).r > 2 * ALERT, `poll ${readEvery}s, write/30s stays well above the alert line`)
+    assert.ok(ratios.find((x) => x.w === 2).r < ALERT, `poll ${readEvery}s, write/2s is below the alert line`)
+  }
+  // 15 s 轮询时，告警线（20%）对应平均约每 10 s 一次写入
+  const at10 = simulateHitRatio({ readEvery: 15, writeMean: 10 })
+  assert.ok(at10 > 0.1 && at10 < 0.3, `poll 15s, write/10s ~ the alert line, got ${at10.toFixed(3)}`)
+  // TTL 关闭（0）→ 不计数、命中率无从谈起；告警表达式的最小样本（> 60 次/30 分钟）因此不会误报
+  const db = new Database(':memory:')
+  resetCounters()
+  assert.equal(cachedForDb(db, () => 1, { ttlMs: 0 }).hit, false)
+  assert.deepEqual(counterSnapshot().dashboard_cache_total, { hit: 0, miss: 0 })
+  db.close()
+})
+
+// ---- Codex 审计（AC4）补强 ----
+test('AC4 route responses equal the results of the registered explain-audit statements (audited SQL = executed SQL, by behaviour not just text)', { timeout: 300000 }, async (t) => {
+  const f = await server(t)
+  const st = (id) => STATEMENTS.find((s) => s.id === id).sql
+  const top = (await f.api('/api/dashboard/top')).body.data // 默认窗口 30 天，与登记一致
+  assert.deepEqual(top.products, f.db.prepare(st('dash.top_products')).all())
+  assert.deepEqual(top.brands, f.db.prepare(st('dash.top_brands')).all())
+  assert.deepEqual(top.dealers, f.db.prepare(st('dash.top_dealers')).all())
+  assert.deepEqual(top.stores, f.db.prepare(st('dash.top_stores')).all())
+  assert.ok(top.products.length > 0 && top.dealers.length > 0, 'the demo seed gives the comparison something to compare')
+  const ch = (await f.api('/api/dashboard/channel')).body.data // 默认窗口 90 天
+  assert.deepEqual(ch.online, f.db.prepare(st('dash.channel_online')).all())
+  assert.deepEqual(ch.offline.map(({ name, ...x }) => x), f.db.prepare(st('dash.channel_offline')).all())
+  const rec = (await f.api('/api/dashboard/recent')).body.data
+  assert.deepEqual(rec.salesOrders, f.db.prepare(st('dash.recent_sales')).all())
+  assert.deepEqual(rec.purchaseOrders, f.db.prepare(st('dash.recent_purchase')).all())
+  assert.deepEqual(rec.omsOrders, f.db.prepare(st('dash.recent_oms')).all())
+  assert.deepEqual(rec.transactions, f.db.prepare(st('dash.recent_txn')).all())
+})
+
+test('AC4 a rejected caller on a cold /channel key neither runs the handler nor warms the key: the first authorized read of that key is still a miss', { timeout: 300000 }, async (t) => {
+  const f = await server(t, { GML_PROFILE: '1' })
+  const orgId = f.db.prepare("SELECT org_id FROM warehouses WHERE code='WH01'").get().org_id
+  const restricted = await f.scopedUser('ac4_cold', orgId)
+  const cold = `${AC4_ROUTES.channel}?days=45`
+  assert.equal((await f.apiAs(restricted, cold)).status, 403)
+  assert.equal((await f.apiAs(null, cold)).status, 401)
+  await delay(500)
+  assert.equal(profileLines(f.output, 'dashboard.channel').length, 0, 'no handler run for rejected callers')
+  assert.equal((await f.api(cold)).status, 200)
+  await waitProfile(f.output, 'dashboard.channel', 1)
+  assert.equal(profileCache(profileLines(f.output, 'dashboard.channel')[0]), 'miss')
+})
+
+test('AC4 hit ratio can be zero with no writes at all: the per-key read interval vs TTL matters, not only writes (alert description)', () => {
+  const quiet = (readEvery) => simulateHitRatio({ readEvery, writeMean: 1e9, horizonS: 3600 })
+  assert.ok(Math.abs(quiet(10) - 0.75) < 0.01, 'every 10 s: 3 hits per miss')
+  assert.ok(Math.abs(quiet(15) - 2 / 3) < 0.01, 'every 15 s: boundary read at exactly TTL still hits')
+  assert.ok(Math.abs(quiet(16) - 0.5) < 0.01, 'every 16 s: one hit per miss (floor(30/16)=1)')
+  assert.equal(quiet(31), 0, 'a key read less often than the TTL never hits, even with zero writes')
+  // 多个键（端点 × days）各自慢速读取：聚合计数 > 60 次 / 30 分钟（告警的样本量条件）而命中率为 0
+  const db = new Database(':memory:')
+  try {
+    resetCounters()
+    for (let s = 60; s <= 1800; s += 60) for (const key of ['summary', 'trend:30', 'top:30', 'todos', 'channel:90']) cachedForDb(db, () => 1, { ttlMs: 30000, now: () => s * 1000, key })
+    const c = counterSnapshot().dashboard_cache_total
+    assert.deepEqual(c, { hit: 0, miss: 150 })
+  } finally { db.close() }
 })

@@ -38,6 +38,7 @@ const DECLARED = [
   // 审计哈希链（AB6，ADR-0049）
   'server/db/migrations/_audit_chain.cjs',
   'server/lib/audit-chain-verify.js',
+  'server/lib/audit-anchor-manifest.js',
   'server/db/migrations/068_audit_hash_chain.cjs',
   'scripts/audit-verify-chain.mjs',
   'scripts/audit-archive.mjs',
@@ -72,6 +73,8 @@ const DECLARED = [
   'scripts/lib/runtime-closure.mjs',
   'scripts/gen-third-party-notices.mjs',
   'scripts/check-file-header.mjs',
+  'scripts/check-audit-allowlist.mjs',
+  'tests/audit-allowlist.test.mjs',
   'scripts/db-backup.mjs',
   // 数据保留与个人信息处理（ADR-0030）
   'scripts/retention.mjs',
@@ -88,6 +91,9 @@ const DECLARED = [
   'scripts/upgrade-rehearsal.mjs',
   'scripts/lib/lock-probe.mjs',
   'tests/upgrade-rehearsal.test.mjs',
+  // 审计 FTS 维护（AC5）
+  'scripts/audit-fts-maintain.mjs',
+  'tests/audit-fts-maintain.test.mjs',
   // 旧结构快照备份集（AB5 / ADR-0048）
   'scripts/schema-snapshot.mjs',
   'tests/schema-snapshot.test.mjs',

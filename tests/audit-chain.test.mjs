@@ -16,6 +16,8 @@ import Database from 'better-sqlite3'
 import { runMigrations, MIGRATIONS_DIR } from '../server/db/migrations/runner.js'
 import { insertAuditRow, auditStrictRow, deleteAuditRowsAnchored, rehashAuditRow, GENESIS } from '../server/lib/audit-trail.js'
 import { verifyChain, verifyJsonlSegment } from '../server/lib/audit-chain-verify.js'
+import { loadBackupManifest, compareLiveToBackup, sha256FileSync } from '../server/lib/audit-anchor-manifest.js'
+import { encryptFile } from '../server/lib/backup-crypto.js'
 import { applyPlan } from '../scripts/lib/privacy-common.mjs'
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url))
@@ -557,4 +559,420 @@ test('verifyJsonlSegment streams: lines straddling 1 MiB read chunks verify, a f
   bytes[at] = bytes[at] === 0x78 ? 0x79 : 0x78
   writeFileSync(file, bytes)
   assert.equal(verifyJsonlSegment(file).ok, false)
+})
+
+// ============================================================================
+// AC7（ADR-0049 补充）：链尾 / 锚点离机保存、`--against-backup`、`audit-archive --resume` 与崩溃窗口
+// ============================================================================
+const VERIFY = 'scripts/audit-verify-chain.mjs'
+const ARCHIVE = 'scripts/audit-archive.mjs'
+const BACKUP = 'scripts/db-backup.mjs'
+const BKEY = 'k'.repeat(40) + '-ac7-backup-key-material'
+const tipOf = (db) => db.prepare('SELECT id, row_hash FROM audit_logs ORDER BY id DESC LIMIT 1').get()
+const backupDirOf = (dir) => path.join(dir, 'backups')
+const newestBackup = (dir) => readdirSync(backupDirOf(dir)).filter((f) => /^gml_cosmetic_.*\.db(\.enc)?$/.test(f)).sort().at(-1)
+/** 把整条链从 fromId 起重算（等价于能写库的攻击者改内容后整链重算），可选给 fromId 之后的行改内容 */
+function attackerRewrite(db, fromId, mutate) {
+  db.transaction(() => {
+    const rows = db.prepare('SELECT * FROM audit_logs WHERE id >= ? ORDER BY id').all(fromId)
+    let prev = fromId === 1 ? GENESIS : db.prepare('SELECT row_hash FROM audit_logs WHERE id=?').get(fromId - 1).row_hash
+    for (const r of rows) {
+      if (r.id === fromId && mutate) mutate(r)
+      const h = spec(r, prev)
+      db.prepare('UPDATE audit_logs SET detail=?, prev_hash=?, row_hash=? WHERE id=?').run(r.detail, prev, h, r.id)
+      prev = h
+    }
+  })()
+}
+function backedUp(t, { key } = {}) {
+  const dir = tmp(t)
+  const db = mkDb(dir)
+  fill(db, 12)
+  const env = key ? { GML_BACKUP_KEY: key } : {}
+  const b = cli(BACKUP, ['cosmetic'], dir, env)
+  assert.equal(b.status, 0, b.stdout + b.stderr)
+  const set = path.join(backupDirOf(dir), newestBackup(dir))
+  const V = (extra = [], e = {}) => cli(VERIFY, ['--data-dir', dir, '--against-backup', set, '--json', ...extra], dir, { ...env, ...e })
+  return { dir, db, set, V, tip: tipOf(db), env }
+}
+const cos = (r) => JSON.parse(r.stdout).industries.cosmetic
+
+test('AC7 --against-backup: a live chain that only advanced since the backup is accepted (plain and encrypted backups)', (t) => {
+  for (const key of [undefined, BKEY]) {
+    const { db, V, tip } = backedUp(t, { key })
+    assert.equal(V().status, 0)
+    assert.equal(cos(V()).against_backup.status, 'ok')
+    fill(db, 5, 100)
+    const r = V()
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    const ab = cos(r).against_backup
+    assert.deepEqual([ab.status, ab.backup_tip_id, ab.backup_tip_hash, ab.advanced_rows, ab.manifest_source], ['ok', tip.id, tip.row_hash, 5, key ? 'encrypted' : 'plain'])
+    db.close()
+  }
+})
+
+test('AC7 --against-backup: whole-chain recompute after an edit is a rewrite even though the live chain verifies; truncation is reported too', (t) => {
+  const { dir, db, V } = backedUp(t)
+  attackerRewrite(db, 4, (r) => { r.detail = '{"forged":true}' })
+  assert.equal(cli(VERIFY, ['--data-dir', dir, '--industry', 'cosmetic'], dir).status, 0, 'plain verify is fooled by a full recompute')
+  const r = V()
+  assert.equal(r.status, 1)
+  assert.equal(cos(r).against_backup.status, 'rewrite')
+  assert.equal(cos(r).against_backup.kind, 'tip-row-differs')
+  db.close()
+  const b = backedUp(t)
+  b.db.prepare('DELETE FROM audit_logs WHERE id > ?').run(b.tip.id - 3)
+  const r2 = b.V()
+  assert.equal(r2.status, 1)
+  assert.deepEqual([cos(r2).against_backup.status, cos(r2).against_backup.kind], ['rewrite', 'behind'])
+  b.db.close()
+})
+
+test('AC7 --against-backup: forged anchors are listed, and fail the run under --strict-anchors', (t) => {
+  const { db, V } = backedUp(t)
+  // 攻击者改第 3 行内容、重算它，再给第 4 行伪造一个锚点把断口"登记"掉
+  const before = db.prepare('SELECT * FROM audit_logs WHERE id IN (3,4) ORDER BY id').all()
+  const newHash = spec({ ...before[0], detail: '{"x":1}' }, before[0].prev_hash)
+  db.transaction(() => {
+    db.prepare("UPDATE audit_logs SET detail='{\"x\":1}', row_hash=? WHERE id=3").run(newHash)
+    db.prepare("INSERT INTO audit_chain_anchors (kind, at_row_id, anchor_hash, prev_id, prev_row_hash, reason) VALUES ('erase', 4, ?, 3, ?, 'forged')").run(before[1].prev_hash, newHash)
+  })()
+  assert.equal(verifyChain(db).ok, true)
+  const ok = V()
+  assert.equal(ok.status, 0)
+  assert.equal(cos(ok).against_backup.anchors_added.length, 1)
+  assert.equal(cos(ok).against_backup.anchors_added[0].reason, 'forged')
+  assert.equal(V(['--strict-anchors']).status, 1)
+  db.close()
+})
+
+test('AC7 --against-backup: a tampered plaintext manifest is caught against the backup content and against the encrypted manifest', (t) => {
+  const p = backedUp(t)
+  const mf = p.set + '.audit-manifest.json'
+  const m = JSON.parse(readFileSync(mf, 'utf8'))
+  m.audit_chain.tip_hash = '1'.repeat(64)
+  writeFileSync(mf, JSON.stringify(m))
+  const r = p.V()
+  assert.equal(r.status, 1)
+  assert.equal(JSON.parse(r.stdout).against_backup.status, 'manifest-mismatch')
+  p.db.close()
+  const e = backedUp(t, { key: BKEY })
+  const mf2 = e.set + '.audit-manifest.json'
+  const m2 = JSON.parse(readFileSync(mf2, 'utf8'))
+  m2.audit_chain.tip_hash = '2'.repeat(64)
+  writeFileSync(mf2, JSON.stringify(m2))
+  const r2 = e.V()
+  assert.equal(r2.status, 1)
+  assert.equal(JSON.parse(r2.stdout).against_backup.status, 'manifest-mismatch')
+  assert.equal(cli(VERIFY, ['--data-dir', e.dir, '--against-backup', e.set + '.nope'], e.dir).status, 1, 'missing manifest is a failure, not a pass')
+  e.db.close()
+})
+
+/** 备份时尾行是旧行；之后追加新行并归档旧段 ⇒ 备份尾已被归档 */
+function archivedTipFixture(t) {
+  const dir = tmp(t)
+  const out = tmp(t, 'os-ac7-out-')
+  const db = mkDb(dir)
+  fill(db, 30)
+  db.transaction(() => { for (let id = 1; id <= 30; id++) db.prepare('UPDATE audit_logs SET created_at=?, row_hash=NULL, prev_hash=NULL WHERE id=?').run('2024-01-15 10:00:00', id) })()
+  await_import().up(db)
+  const b = cli(BACKUP, ['cosmetic'], dir)
+  assert.equal(b.status, 0, b.stdout + b.stderr)
+  const set = path.join(backupDirOf(dir), newestBackup(dir))
+  const tip = tipOf(db)
+  fill(db, 10, 100)
+  return { dir, out, db, set, tip }
+}
+const archiveArgs = (dir, out, extra = []) => ['--data-dir', dir, '--industry', 'cosmetic', '--before', '2025-01-01', '--out', out, ...extra]
+const archiveNow = (f) => {
+  const token = cli(ARCHIVE, archiveArgs(f.dir, f.out), f.dir).stdout.match(/口令：(ARCHIVE-[0-9A-F]{16})/)[1]
+  const r = cli(ARCHIVE, archiveArgs(f.dir, f.out, ['--confirm', token]), f.dir)
+  assert.equal(r.status, 0, r.stdout + r.stderr)
+}
+
+test('AC7 --against-backup: a backup tip that was archived needs the archive digests; with them the descent is proven', (t) => {
+  const f = archivedTipFixture(t)
+  archiveNow(f)
+  assert.equal(f.db.prepare('SELECT COUNT(*) n FROM audit_logs WHERE id=?').get(f.tip.id).n, 0, 'tip row is gone from the live db')
+  const V = (extra = []) => cli(VERIFY, ['--data-dir', f.dir, '--against-backup', f.set, '--json', ...extra], f.dir)
+  const no = V()
+  assert.equal(no.status, 1)
+  assert.equal(cos(no).against_backup.status, 'unverifiable')
+  const yes = V(['--archive-dir', f.out])
+  assert.equal(yes.status, 0, yes.stdout + yes.stderr)
+  assert.deepEqual([cos(yes).against_backup.status, cos(yes).against_backup.via], ['ok', 'archive'])
+  // 摘要对应的 JSONL 被改 ⇒ 不认
+  const jsonl = readdirSync(f.out).find((n) => n.endsWith('.jsonl'))
+  const bytes = readFileSync(path.join(f.out, jsonl))
+  bytes[10] = bytes[10] === 0x78 ? 0x79 : 0x78
+  writeFileSync(path.join(f.out, jsonl), bytes)
+  assert.equal(V(['--archive-dir', f.out]).status, 1)
+  f.db.close()
+})
+
+/** 归档 + 在导出 fsync 之后、删除之前 SIGKILL 子进程 */
+async function crashedArchive(t) {
+  const f = archiveReady(t)
+  const A = (extra = []) => cli(ARCHIVE, archiveArgs(f.dir, f.out, extra), f.dir)
+  const token = A().stdout.match(/口令：(ARCHIVE-[0-9A-F]{16})/)[1]
+  const child = spawn(process.execPath, [ARCHIVE, ...archiveArgs(f.dir, f.out, ['--confirm', token])], { cwd: ROOT, env: envFor(f.dir, { GML_TEST_ARCHIVE_PAUSE_AFTER_EXPORT: '1' }), stdio: 'ignore' })
+  t.after(() => { try { child.kill('SIGKILL') } catch { /* 已退出 */ } })
+  const marker = path.join(f.out, '.archive-paused')
+  for (let i = 0; i < 600 && !existsSync(marker); i++) await new Promise((r) => setTimeout(r, 50))
+  assert.ok(existsSync(marker), 'child reached the pause point after the export fsync')
+  const exited = new Promise((r) => child.once('exit', (code, signal) => r({ code, signal })))
+  child.kill('SIGKILL')
+  const ex = await exited
+  assert.equal(ex.signal, 'SIGKILL')
+  rmSync(marker)
+  return { ...f, A, token }
+}
+const outFiles = (out) => readdirSync(out).sort()
+
+test('AC7 archive crash window: SIGKILL after export fsync leaves the db untouched and the export complete; --resume finishes it idempotently', { timeout: 120000 }, async (t) => {
+  const f = await crashedArchive(t)
+  const { dir, out, db, A, token } = f
+  // 库：事务未提交 ⇒ 全部还在、没有锚点 / 归档审计、链完好
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM audit_logs').get().n, 60)
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM audit_chain_anchors').get().n, 0)
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM audit_logs WHERE action='AUDIT_ARCHIVE'").get().n, 0)
+  assert.equal(verifyChain(db).ok, true)
+  // 文件：两个都在且完整
+  const files = outFiles(out)
+  assert.equal(files.length, 2)
+  const jsonl = path.join(out, files.find((n) => n.endsWith('.jsonl')))
+  const digestFile = path.join(out, files.find((n) => n.endsWith('.digest.json')))
+  const digest = JSON.parse(readFileSync(digestFile, 'utf8'))
+  assert.equal(digest.file_sha256, sha(readFileSync(jsonl, 'utf8')))
+  assert.equal(verifyJsonlSegment(jsonl, digest.anchors).rows, 40)
+  const before = [readFileSync(jsonl), readFileSync(digestFile)]
+  // 不带 --resume 重跑：不覆盖，明确指向 --resume
+  const again = A(['--confirm', token])
+  assert.equal(again.status, 1)
+  assert.match(again.stdout, /OUT_EXISTS.*--resume/s)
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM audit_logs').get().n, 60)
+  // --resume 演练：不改任何东西，给出口令
+  const dry = A(['--resume'])
+  assert.equal(dry.status, 0, dry.stdout + dry.stderr)
+  assert.match(dry.stdout, /可续做/)
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM audit_logs').get().n, 60)
+  assert.equal(A(['--resume', '--confirm', 'ARCHIVE-0000000000000000']).status, 2)
+  const done = A(['--resume', '--confirm', dry.stdout.match(/口令：(ARCHIVE-[0-9A-F]{16})/)[1]])
+  assert.equal(done.status, 0, done.stdout + done.stderr)
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM audit_logs').get().n, 21)
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM audit_logs WHERE action='AUDIT_ARCHIVE'").get().n, 1)
+  const anchor = db.prepare("SELECT * FROM audit_chain_anchors WHERE kind='archive'").get()
+  assert.deepEqual([anchor.at_row_id, anchor.anchor_hash], [41, digest.tip_row_hash])
+  assert.equal(verifyChain(db).ok, true)
+  assert.deepEqual([readFileSync(jsonl), readFileSync(digestFile)], before, 'resume does not rewrite the export')
+  assert.deepEqual(outFiles(out), files)
+  // 幂等：再来一次不会再删、不会再写审计
+  const rows = db.prepare('SELECT COUNT(*) n FROM audit_logs').get().n
+  const second = A(['--resume', '--confirm', token])
+  assert.equal(second.status, 0, second.stdout + second.stderr)
+  assert.match(second.stdout, /already-archived/)
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM audit_logs').get().n, rows)
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM audit_logs WHERE action='AUDIT_ARCHIVE'").get().n, 1)
+  assert.equal(cli(VERIFY, ['--data-dir', dir, '--industry', 'cosmetic'], dir).status, 0)
+  db.close()
+})
+
+test('AC7 --resume refuses an export that is not exactly the db segment, an altered digest, and an incomplete export', { timeout: 120000 }, async (t) => {
+  // 1) 库里不进哈希的列（user_name）在崩溃后被改：链仍通过，但导出文件已不是库里的那一段
+  let f = await crashedArchive(t)
+  f.db.prepare("UPDATE audit_logs SET user_name='mallory' WHERE id=7").run()
+  assert.equal(verifyChain(f.db).ok, true)
+  let r = f.A(['--resume', '--confirm', f.token])
+  assert.equal(r.status, 1)
+  assert.match(r.stdout, /EXPORT_DB_MISMATCH/)
+  assert.equal(f.db.prepare('SELECT COUNT(*) n FROM audit_logs').get().n, 60)
+  f.db.close()
+  // 2) 导出文件被改一个字节
+  f = await crashedArchive(t)
+  const jsonl = path.join(f.out, outFiles(f.out).find((n) => n.endsWith('.jsonl')))
+  const b = readFileSync(jsonl)
+  b[20] = b[20] === 0x78 ? 0x79 : 0x78
+  writeFileSync(jsonl, b)
+  r = f.A(['--resume', '--confirm', f.token])
+  assert.equal(r.status, 1)
+  assert.match(r.stdout, /EXPORT_(DIGEST|VERIFY)_MISMATCH/)
+  assert.equal(f.db.prepare('SELECT COUNT(*) n FROM audit_logs').get().n, 60)
+  assert.ok(existsSync(jsonl), 'a refused resume never deletes the evidence')
+  f.db.close()
+  // 3) 摘要里的 file_sha256 被改
+  f = await crashedArchive(t)
+  const dg = path.join(f.out, outFiles(f.out).find((n) => n.endsWith('.digest.json')))
+  const d = JSON.parse(readFileSync(dg, 'utf8'))
+  d.file_sha256 = '0'.repeat(64)
+  writeFileSync(dg, JSON.stringify(d))
+  r = f.A(['--resume', '--confirm', f.token])
+  assert.equal(r.status, 1)
+  assert.equal(f.db.prepare('SELECT COUNT(*) n FROM audit_logs').get().n, 60)
+  f.db.close()
+  // 4) 只有 JSONL、没有摘要（崩在导出途中）：不续做
+  f = await crashedArchive(t)
+  rmSync(path.join(f.out, outFiles(f.out).find((n) => n.endsWith('.digest.json'))))
+  r = f.A(['--resume', '--confirm', f.token])
+  assert.equal(r.status, 1)
+  assert.match(r.stdout, /RESUME_INCOMPLETE/)
+  f.db.close()
+  // 5) 什么都没导出过：--resume 不偷偷当成新归档
+  const g = archiveReady(t)
+  r = cli(ARCHIVE, archiveArgs(g.dir, g.out, ['--resume']), g.dir)
+  assert.equal(r.status, 1)
+  assert.match(r.stdout, /RESUME_NOTHING/)
+  assert.equal(g.db.prepare('SELECT COUNT(*) n FROM audit_logs').get().n, 60)
+  g.db.close()
+})
+
+test('AC7 the pause hook is refused outside test mode', (t) => {
+  const g = archiveReady(t)
+  const r = cli(ARCHIVE, archiveArgs(g.dir, g.out), g.dir, { GML_RUNTIME_MODE: 'production', GML_TEST_ARCHIVE_PAUSE_AFTER_EXPORT: '1' })
+  assert.equal(r.status, 2)
+  assert.match(r.stderr, /GML_TEST_ARCHIVE_PAUSE_AFTER_EXPORT/)
+  g.db.close()
+})
+
+// ---- AC7 Codex 审计后的加固回归 ----
+test('AC7 hardening: encrypted artifacts without the key are not trusted via the plaintext manifest', (t) => {
+  const e = backedUp(t, { key: BKEY })
+  const r = cli(VERIFY, ['--data-dir', e.dir, '--against-backup', e.set, '--json'], e.dir)
+  assert.equal(r.status, 1)
+  assert.equal(JSON.parse(r.stdout).against_backup.status, 'key-required')
+  // 只拿到明文清单（离机副本）也不能当作已认证：.enc 清单不在旁边时，明文清单可用但会注明未认证
+  const only = cli(VERIFY, ['--data-dir', e.dir, '--against-backup', e.set + '.audit-manifest.json', '--json'], e.dir)
+  assert.equal(only.status, 1, 'the .enc sibling exists, so the key is required')
+  e.db.close()
+})
+
+test('AC7 hardening: swapping the manifest anchor list while keeping the digest is caught; a backup whose chain was already broken is no baseline', (t) => {
+  const p = backedUp(t)
+  const mf = p.set + '.audit-manifest.json'
+  const m = JSON.parse(readFileSync(mf, 'utf8'))
+  m.audit_chain.anchors = [{ kind: 'erase', at_row_id: 2, anchor_hash: 'a'.repeat(64), prev_id: 1, prev_row_hash: 'b'.repeat(64), reason: 'x', created_at: '2026-01-01 00:00:00' }]
+  writeFileSync(mf, JSON.stringify(m))
+  assert.equal(JSON.parse(p.V().stdout).against_backup.status, 'manifest-mismatch')
+  p.db.close()
+  const dir = tmp(t)
+  const db = mkDb(dir)
+  fill(db, 8)
+  db.prepare("UPDATE audit_logs SET detail='{\"edited\":1}' WHERE id=3").run() // 备份前链就已经断了
+  assert.equal(cli(BACKUP, ['cosmetic'], dir).status, 0, 'a broken chain does not block the backup')
+  const set = path.join(backupDirOf(dir), newestBackup(dir))
+  assert.equal(JSON.parse(readFileSync(set + '.audit-manifest.json', 'utf8')).audit_chain.verified, false)
+  const r = cli(VERIFY, ['--data-dir', dir, '--against-backup', set, '--json'], dir)
+  assert.equal(r.status, 1)
+  db.close()
+})
+
+test('AC7 hardening: backup verification verdict and break must match the recomputed chain', async (t) => {
+  for (const key of [undefined, BKEY]) await t.test(key ? 'encrypted' : 'plain', async (t) => {
+    const dir = tmp(t)
+    const db = mkDb(dir)
+    t.after(() => db.close())
+    fill(db, 2)
+    const original = db.prepare('SELECT detail FROM audit_logs WHERE id=2').get().detail
+    db.prepare("UPDATE audit_logs SET detail='tampered' WHERE id=2").run()
+    const env = key ? { GML_BACKUP_KEY: key } : {}
+    const b = cli(BACKUP, ['cosmetic'], dir, env)
+    assert.equal(b.status, 0, b.stdout + b.stderr)
+    const set = path.join(backupDirOf(dir), newestBackup(dir))
+    const mf = `${set}.audit-manifest.json`
+    const manifest = JSON.parse(readFileSync(mf, 'utf8'))
+    const keyBytes = key ? Buffer.from(key) : null
+    const backupHash = sha256FileSync(set)
+    assert.equal(manifest.backup_sha256, backupHash)
+    assert.equal(manifest.audit_chain.verified, false)
+    assert.equal(manifest.audit_chain.last_id, 1, 'only the valid prefix was summarized')
+    assert.equal(manifest.audit_chain.break.id, 2)
+    db.prepare('UPDATE audit_logs SET detail=? WHERE id=2').run(original)
+    assert.equal(verifyChain(db).ok, true, 'the live chain is valid and contains the backup prefix')
+    const V = () => cli(VERIFY, ['--data-dir', dir, '--against-backup', set, '--json'], dir, env)
+    const loaded = loadBackupManifest(set, keyBytes)
+    assert.equal(loaded.ok, true, 'an honest broken-chain manifest remains readable')
+    assert.equal(compareLiveToBackup(db, loaded.manifest).kind, 'backup-chain-broken')
+    assert.equal(V().status, 1, 'an honest broken backup is not an accepted baseline')
+
+    for (const [label, mutate] of [
+      ['forged verified flag', c => { c.verified = true }],
+      ['forged flag with hidden break', c => { c.verified = true; delete c.break }],
+      ['hidden break alone', c => { delete c.break }],
+      ['changed break details', c => { c.break.id = 1 }]
+    ]) await t.test(label, () => {
+      const forged = structuredClone(manifest)
+      mutate(forged.audit_chain)
+      writeFileSync(mf, JSON.stringify(forged))
+      if (key) {
+        // Authenticate the same forged summary, so rejection must come from DB recomputation.
+        rmSync(`${set}.audit-manifest.enc`)
+        encryptFile(mf, `${set}.audit-manifest.enc`, keyBytes)
+      }
+      assert.equal(sha256FileSync(set), backupHash, 'backup bytes and sha256 stay unchanged')
+      const read = loadBackupManifest(set, keyBytes)
+      const result = V()
+      assert.equal(result.status, 1, result.stdout + result.stderr)
+      assert.equal(JSON.parse(result.stdout).against_backup?.status, 'manifest-mismatch')
+      assert.deepEqual([read.ok, read.status], [false, 'manifest-mismatch'])
+    })
+  })
+})
+
+test('AC7 hardening: honest content, link and unchained breaks survive manifest JSON round trips', async (t) => {
+  for (const key of [undefined, BKEY]) for (const kind of ['content', 'link', 'unchained']) {
+    await t.test(`${key ? 'encrypted' : 'plain'} ${kind}`, (t) => {
+      const dir = tmp(t)
+      const db = mkDb(dir)
+      t.after(() => db.close())
+      fill(db, 2)
+      const first = db.prepare('SELECT * FROM audit_logs WHERE id=1').get()
+      if (kind === 'content') db.prepare("UPDATE audit_logs SET detail='changed' WHERE id=1").run()
+      if (kind === 'unchained') db.prepare('UPDATE audit_logs SET row_hash=NULL WHERE id=1').run()
+      if (kind === 'link') {
+        const prev = 'f'.repeat(64)
+        db.prepare('UPDATE audit_logs SET prev_hash=?, row_hash=? WHERE id=1').run(prev, spec(first, prev))
+      }
+      const checked = verifyChain(db)
+      assert.equal(checked.brk.kind, kind)
+      assert.equal(checked.tipHash, null, 'the first row is broken; there is no valid prefix')
+      const b = cli(BACKUP, ['cosmetic'], dir, key ? { GML_BACKUP_KEY: key } : {})
+      assert.equal(b.status, 0, b.stdout + b.stderr)
+      const set = path.join(backupDirOf(dir), newestBackup(dir))
+      const loaded = loadBackupManifest(set, key ? Buffer.from(key) : null)
+      assert.equal(loaded.ok, true, loaded.message)
+      assert.deepEqual(loaded.manifest.audit_chain.break, checked.brk)
+      assert.equal(loaded.manifest.audit_chain.verified, false)
+      assert.equal(compareLiveToBackup(db, loaded.manifest).kind, 'backup-chain-broken')
+    })
+  }
+})
+
+test('AC7 hardening: archive digests are re-verified row by row, so a re-signed (sha256 updated) tampered JSONL does not prove descent', (t) => {
+  const f = archivedTipFixture(t)
+  archiveNow(f)
+  const jsonl = path.join(f.out, readdirSync(f.out).find((n) => n.endsWith('.jsonl')))
+  const digestFile = path.join(f.out, readdirSync(f.out).find((n) => n.endsWith('.digest.json')))
+  const lines = readFileSync(jsonl, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))
+  lines[3].detail = '{"forged":true}' // 内容改了，row_hash 不动
+  const text = lines.map((l) => JSON.stringify(l) + '\n').join('')
+  writeFileSync(jsonl, text)
+  const d = JSON.parse(readFileSync(digestFile, 'utf8'))
+  d.file_sha256 = sha(text)
+  writeFileSync(digestFile, JSON.stringify(d))
+  const r = cli(VERIFY, ['--data-dir', f.dir, '--against-backup', f.set, '--archive-dir', f.out, '--json'], f.dir)
+  assert.equal(r.status, 1)
+  assert.equal(cos(r).against_backup.status, 'unverifiable')
+  f.db.close()
+})
+
+test('AC7 hardening: --resume after a completed archive is idempotent even when every row predated the cutoff (the retained last row forms a new segment)', (t) => {
+  const g = archiveReady(t)
+  const A = (extra = []) => cli(ARCHIVE, ['--data-dir', g.dir, '--industry', 'cosmetic', '--before', '2027-01-01', '--out', g.out, ...extra], g.dir)
+  const token = A().stdout.match(/口令：(ARCHIVE-[0-9A-F]{16})/)[1]
+  assert.equal(A(['--confirm', token]).status, 0)
+  const rows = g.db.prepare('SELECT COUNT(*) n FROM audit_logs').get().n
+  const r = A(['--resume', '--confirm', token])
+  assert.equal(r.status, 0, r.stdout + r.stderr)
+  assert.match(r.stdout, /already-archived/)
+  assert.equal(g.db.prepare('SELECT COUNT(*) n FROM audit_logs').get().n, rows)
+  g.db.close()
 })

@@ -440,7 +440,7 @@ test('MCP delegation matrix: every tool x {owner inactive, permission removed, s
   // 未绑定 ⇒ 全部拒绝；全程零写。
   matrix.registry_binding_state = { state: 'registry_store_binding', types: {} }
   {
-    const types = ['RC', 'YQ', 'SH']
+    const types = ['PS', 'PSF', 'RC', 'YQ', 'SH']
     for (const code of types) for (const p of DOC_VIEW_PERMS[code].perms) grant.run('warehouse', p)
     for (const p of ['sales.order.view', 'purchase.order.view', 'inventory.stock.view']) grant.run('warehouse', p)
     try {
@@ -465,6 +465,39 @@ test('MCP delegation matrix: every tool x {owner inactive, permission removed, s
         const good = cell.bound_foreign === 'NOT_FOUND' && cell.trace_foreign === 'NOT_FOUND' && cell.unbound_get === 'TOKEN_OWNER_BINDING_REQUIRED' && cell.unbound_trace === 'NOT_FOUND' && changed.length === 0
         matrix.registry_binding_state.types[code] = { ...cell, result: good ? 'DENIED' : 'LEAK' }
         if (!good) failures.push(`registry_store_binding ${code}: ${JSON.stringify(cell)} ${changed.join(';')}`)
+      }
+    } finally {
+      restorePerms()
+    }
+  }
+
+  // ---- 状态 4c（AC3）：DR（dealer 绑定）与 DS / RB（hq：无自视图）在 DOC_SCOPE_RESOLVERS 里声明 ----
+  // DR：绑他家经销商 ⇒ 本家单据可读、他家 NOT_FOUND，未绑定 ⇒ BINDING_REQUIRED；DS / RB：任何经销商 / 门店绑定的账号读不到，全程零写。
+  matrix.registry_ac3_state = { state: 'registry_dealer_hq_binding', types: {} }
+  {
+    const types = ['DR', 'DS', 'RB']
+    for (const code of types) for (const p of DOC_VIEW_PERMS[code].perms) grant.run('warehouse', p)
+    try {
+      for (const code of types) {
+        const tn = db.prepare('SELECT table_name FROM doc_types WHERE code=?').get(code).table_name
+        const dealers = db.prepare(`SELECT dealer_id FROM ${tn} WHERE dealer_id IS NOT NULL GROUP BY dealer_id ORDER BY COUNT(*) DESC, dealer_id LIMIT 2`).all()
+        assert.equal(dealers.length, 2, `${code}: fixture needs two dealers with documents`)
+        const rowOf = (did) => db.prepare(`SELECT id FROM ${tn} WHERE dealer_id=? ORDER BY id LIMIT 1`).get(did)
+        const own = rowOf(dealers[0].dealer_id)
+        const foreign = rowOf(dealers[1].dealer_id)
+        const cell = {}
+        const before = snapshot()
+        db.prepare('UPDATE users SET dealer_id=? WHERE id=?').run(dealers[0].dealer_id, ownerId)
+        cell.bound_own = outcome(await mcp('tools/call', { name: 'doc.get', arguments: { doc_type: code, id: own.id } }, token)).kind
+        cell.bound_foreign = outcome(await mcp('tools/call', { name: 'doc.get', arguments: { doc_type: code, id: foreign.id } }, token)).code
+        db.prepare('UPDATE users SET dealer_id=NULL WHERE id=?').run(ownerId)
+        cell.unbound_get = outcome(await mcp('tools/call', { name: 'doc.get', arguments: { doc_type: code, id: own.id } }, token)).code
+        const changed = diff(before, snapshot())
+        const good = code === 'DR'
+          ? cell.bound_own === 'ok' && cell.bound_foreign === 'NOT_FOUND' && cell.unbound_get === 'TOKEN_OWNER_BINDING_REQUIRED'
+          : cell.bound_own !== 'ok' && cell.bound_foreign === 'NOT_FOUND' && cell.unbound_get == null
+        matrix.registry_ac3_state.types[code] = { ...cell, result: good && changed.length === 0 ? 'DENIED' : 'LEAK' }
+        if (!good || changed.length) failures.push(`registry_ac3 ${code}: ${JSON.stringify(cell)} ${changed.join(';')}`)
       }
     } finally {
       restorePerms()
@@ -630,7 +663,9 @@ test('MCP delegation matrix: every tool x {owner inactive, permission removed, s
   assert.equal(covered, TOOLS.length, 'matrix must cover every tool in every state')
   assert.equal(saved.tool_count, TOOLS.length)
   assert.ok(Object.keys(saved.binding_state.types).length >= 6 && Object.values(saved.binding_state.types).every((x) => x.result === 'DENIED'), 'every store/dealer bound type is denied to an unbound owner')
-  assert.deepEqual(Object.keys(saved.registry_binding_state.types).sort(), ['RC', 'SH', 'YQ'], 'AB7: registry store binding is exercised for RC / YQ / SH')
+  assert.deepEqual(Object.keys(saved.registry_binding_state.types).sort(), ['PS', 'PSF', 'RC', 'SH', 'YQ'], 'AB7 / AC3: registry store binding is exercised for PS / PSF / RC / YQ / SH')
+  assert.deepEqual(Object.keys(saved.registry_ac3_state.types).sort(), ['DR', 'DS', 'RB'], 'AC3: dealer and hq registry bindings')
+  assert.ok(Object.values(saved.registry_ac3_state.types).every((x) => x.result === 'DENIED'), 'AC3: bound-to-other-dealer / bound owners read nothing from DR / DS / RB')
   assert.ok(Object.values(saved.registry_binding_state.types).every((x) => x.result === 'DENIED'), 'AB7: bound-to-other-store and unbound owners read nothing')
   assert.ok(Object.keys(saved.history_scope_state.cases).length >= 2 && Object.values(saved.history_scope_state.cases).every((x) => x.result !== 'LEAK'), 'history tool honors the owner scope')
   assert.ok(Object.keys(saved.trace_query_scope_state.cases).length >= 6 && Object.values(saved.trace_query_scope_state.cases).every((x) => x.result !== 'LEAK'), 'order.trace_document and doc.query honor the owner scope and view permission')
@@ -638,4 +673,36 @@ test('MCP delegation matrix: every tool x {owner inactive, permission removed, s
   assert.ok(Object.values(saved.replay_state.tools).every((x) => x.result !== 'LEAK'), 'no write tool replays a cached result after owner permission / scope loss')
   assert.deepEqual(failures, [], `tools that slipped through:\n${failures.join('\n')}`)
   assert.ok(Object.values(saved.tools).every((x) => Object.values(x.states).every((c) => c.result !== 'LEAK')))
+})
+
+// AC1（ADR-0050）：采购订单在 MCP 读工具里的可见范围与 HTTP 完全一致 —— 只按入库仓的组织，目标门店不放行。
+test('AC1: purchase.list_orders / report.dashboard_kpi admit a purchase order by warehouse org only, like HTTP', { timeout: 300000 }, async (t) => {
+  const f = await server(t)
+  const { db, api, mcp } = f
+  const admin = (await api('/api/auth/login', { body: { username: 'admin', password: '12345', industry: 'cosmetic' } })).body.data
+  const whA = db.prepare("SELECT id, org_id FROM warehouses WHERE code='WH01'").get()
+  const whB = db.prepare("SELECT id, org_id FROM warehouses WHERE code='WH03'").get()
+  assert.notEqual(whA.org_id, whB.org_id)
+  const supplier = db.prepare('SELECT id FROM suppliers ORDER BY id LIMIT 1').get().id
+  const storeA = Number(db.prepare("INSERT INTO stores (code, name, status, org_id) VALUES ('AC1-MX-S','AC1 matrix store','active',?)").run(whA.org_id).lastInsertRowid)
+  const ins = db.prepare("INSERT INTO purchase_orders (doc_no, supplier_id, warehouse_id, target_store_id, order_date, status) VALUES (?,?,?,?,date('now','localtime'),'approved')")
+  ins.run('AC1-MX-WH-A', supplier, whA.id, null)
+  ins.run('AC1-MX-WH-B-STORE-A', supplier, whB.id, storeA)
+  ins.run('AC1-MX-WH-B', supplier, whB.id, null)
+  for (const p of ['purchase.order.view']) db.prepare('INSERT OR IGNORE INTO role_permissions (role_code, perm_code) VALUES (?,?)').run('warehouse', p)
+  const mk = async (username, extra) => {
+    const r = (await api('/api/auth/users', { token: admin.token, body: { username, name: username, role: 'warehouse', password: secret(), ...extra } })).body
+    assert.equal(r.success, true, JSON.stringify(r))
+    return createToken(db, { name: username, ownerUserId: r.data.id, industry: 'cosmetic', scopes: 'read' }).token
+  }
+  const tokA = await mk('ac1_mx_a', { org_id: whA.org_id, data_scope: 'org' })
+  const tokAll = await mk('ac1_mx_all', { data_scope: 'all' })
+  const docs = async (token) => payload(await mcp('tools/call', { name: 'purchase.list_orders', arguments: { limit: 200 } }, token)).list.map((x) => x.doc_no).filter((x) => x.startsWith('AC1-MX-')).sort()
+  assert.deepEqual(await docs(tokA), ['AC1-MX-WH-A'], 'target store in scope must not admit an order stored in another org warehouse')
+  assert.equal((await docs(tokAll)).length, 3, 'global scope unchanged')
+  const kpi = async (token) => payload(await mcp('tools/call', { name: 'report.dashboard_kpi', arguments: {} }, token)).purchase_in_transit
+  const expectA = db.prepare("SELECT COUNT(*) c FROM purchase_orders WHERE status IN ('approved','partial') AND warehouse_id IN (SELECT id FROM warehouses WHERE org_id=?)").get(whA.org_id).c
+  assert.equal(await kpi(tokA), expectA)
+  assert.equal(await kpi(tokAll), db.prepare("SELECT COUNT(*) c FROM purchase_orders WHERE status IN ('approved','partial')").get().c)
+  assert.ok(expectA < await kpi(tokAll))
 })

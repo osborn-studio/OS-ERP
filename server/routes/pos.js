@@ -21,6 +21,7 @@ import { requireAuth, requireRole, requirePerm, permContext, hasPerm, resolveOrg
 import { boundStoreId } from '../lib/store-binding.js'
 import { warehouseInScope } from '../lib/stock.js'
 import { audit } from '../middleware/audit.js'
+import { POS_HQ_ROLES } from '../lib/hq-roles.js'
 import { advanceStatus } from '../lib/docflow.js'
 import {
   PAY_METHODS,
@@ -85,9 +86,6 @@ function requireStore() {
     next()
   }
 }
-
-/** 总部侧只读查询用：允许 admin/财务/仓储/销售看，不允许门店账号看别家 */
-const HQ_ROLES = ['admin', 'sales', 'finance', 'warehouse']
 
 function today() {
   return localDate()
@@ -397,7 +395,7 @@ r.get(
     return ok(
       res,
       listShifts(db, {
-        storeId: req.query.all === '1' && HQ_ROLES.includes(req.user.role) ? req.query.store_id || null : store.id,
+        storeId: req.query.all === '1' && POS_HQ_ROLES.includes(req.user.role) ? req.query.store_id || null : store.id,
         bizDate: req.query.biz_date || null,
         status: req.query.status || null,
         limit: Number(req.query.limit || 100)
@@ -527,7 +525,7 @@ r.post(
 /**
  * 落案挂账差异（`pending` → charge / absorb）。这一步不是状态流转，见 lib/pos2.js 说明。
  * AA9：闸是权限点 `pos.shift.settle`（不再看角色名）；绑了门店的非 admin 账号只能结本店班次，别家 404。
- * 无门店绑定的总部角色账号（HQ_ROLES，如 finance）持权限即可结任意门店；未绑门店的非总部账号 403。
+ * 无门店绑定的总部角色账号（POS_HQ_ROLES，如 finance）持权限即可结任意门店；未绑门店的非总部账号 403。
  */
 r.post(
   '/shifts/:id/settle-variance',
@@ -537,9 +535,9 @@ r.post(
     const db = getDb()
     const id = Number(req.params.id)
     if (req.user.role !== 'admin') {
-      // 绑了门店 → 只能结本店；没绑门店 → 只有总部角色（HQ_ROLES）可跨店，未绑门店的 store 账号 403（Codex 审计 P1）
+      // 绑了门店 → 只能结本店；没绑门店 → 只有总部角色（POS_HQ_ROLES）可跨店，未绑门店的 store 账号 403（Codex 审计 P1）
       if (req.user.store_id) assertShiftOfStore(db, id, req.user.store_id)
-      else if (!HQ_ROLES.includes(req.user.role)) return fail(res, '当前账号未绑定门店，请联系总部', 403, 403)
+      else if (!POS_HQ_ROLES.includes(req.user.role)) return fail(res, '当前账号未绑定门店，请联系总部', 403, 403)
     }
     const detail = settleVariance(db, req, { shiftId: id, handled: req.body?.handled, note: req.body?.note ?? null })
     audit(req, { action: 'SETTLE_VARIANCE', module: 'pos', entity: 'pos_shifts', entityId: id, detail: req.body?.handled })
@@ -911,7 +909,7 @@ r.post(
 r.get(
   '/hq/overview',
   requireAuth,
-  requireRole(...HQ_ROLES),
+  requireRole(...POS_HQ_ROLES),
   wrap((req, res) => {
     const db = getDb()
     const stores = db
@@ -993,7 +991,7 @@ r.get(
 r.get(
   '/hq/cash-inflight',
   requireAuth,
-  requireRole(...HQ_ROLES),
+  requireRole(...POS_HQ_ROLES),
   wrap((req, res) => {
     const db = getDb()
     const rows = cashInflight(db, {})
@@ -1027,7 +1025,7 @@ r.get(
 r.get(
   '/hq/daily-closes',
   requireAuth,
-  requireRole(...HQ_ROLES),
+  requireRole(...POS_HQ_ROLES),
   wrap((req, res) => {
     const db = getDb()
     const rows = db
@@ -1051,7 +1049,7 @@ r.get(
 r.post(
   '/daily-closes/:id/confirm',
   requireAuth,
-  requireRole(...HQ_ROLES),
+  requireRole(...POS_HQ_ROLES),
   wrap((req, res) => {
     const db = getDb()
     const id = Number(req.params.id)
@@ -1072,7 +1070,7 @@ r.post(
 r.get(
   '/hq/orders',
   requireAuth,
-  requireRole(...HQ_ROLES),
+  requireRole(...POS_HQ_ROLES),
   wrap((req, res) => {
     const db = getDb()
     const storeId = Number(req.query.store_id || 0)
@@ -1102,7 +1100,7 @@ r.get(
 r.get(
   '/hq/shifts',
   requireAuth,
-  requireRole(...HQ_ROLES),
+  requireRole(...POS_HQ_ROLES),
   wrap((req, res) => {
     const db = getDb()
     return ok(
@@ -1123,7 +1121,7 @@ r.get(
 r.get(
   '/hq/shifts/:id',
   requireAuth,
-  requireRole(...HQ_ROLES),
+  requireRole(...POS_HQ_ROLES),
   wrap((req, res) => {
     const db = getDb()
     return ok(res, shiftDetail(db, Number(req.params.id)))

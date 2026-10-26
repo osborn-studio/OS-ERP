@@ -1,0 +1,54 @@
+groups:
+  - name: os-erp
+    rules:
+      - alert: OsErpBackupStaleOrFailed
+        # 备份失败、从未备份、或超过 26 小时没有新报告（每日备份留 2 小时余量）；未知（-1）也算异常
+        expr: os_erp_backup_last_failed == 1 or os_erp_backup_missing == 1 or os_erp_backup_age_seconds > 93600 or os_erp_backup_age_seconds == -1
+        for: 15m
+        labels: { severity: critical }
+        annotations:
+          summary: "OS-ERP 备份失败/缺失/过期"
+          description: "按 docs/operations/restore-runbook.md 检查备份目录与最新 backup-report；备份没跑（cron 挂了）只有这条规则能发现。"
+
+      - alert: OsErpAuditStrictWriteFailing
+        # 安全审计写不进去 ⇒ 受保护的业务变更全部 503 回滚；任何一次都值得看
+        expr: increase(os_erp_security_audit_unavailable_total[10m]) > 0 or increase(os_erp_audit_strict_write_failures_total{reason=~"insert_error|no_row|mcp_call_log"}[10m]) > 0
+        labels: { severity: critical }
+        annotations:
+          summary: "严格审计写失败，业务变更被回滚"
+          description: "检查 audit_logs / mcp_call_logs 表、磁盘空间、数据库只读或锁。outside_tx 是编码错误，不在此规则内，看日志 AUDIT_OUTSIDE_TX。"
+
+      - alert: OsErpLoginThrottleUnavailable
+        # 节流存储坏了 ⇒ 登录 fail closed（全部 503），或已经出现 unavailable 拒绝
+        expr: os_erp_login_throttle_unavailable == 1 or increase(os_erp_login_throttle_rejections_total{reason="unavailable"}[10m]) > 0
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: "登录节流存储不可用，用户无法登录"
+          description: "检查数据目录下 login-throttle.sqlite 的权限/损坏/磁盘；见 ADR-0005。"
+
+      - alert: OsErpWriteRetryExhausted
+        # 写重试用尽 = 有请求因 SQLITE_BUSY 最终失败；一次即告警（不加 for：10m 窗口的 increase 撑不过 10m 的 pending 期）
+        expr: increase(os_erp_write_retry_exhausted_total[10m]) > 0
+        labels: { severity: warning }
+        annotations:
+          summary: "写事务重试用尽，有请求因争用失败"
+          description: "检查是否有长事务/备份与写入同时进行；见 ADR-0035，必要时调 GML_WRITE_RETRY_MAX 或错开备份时段。"
+
+      - alert: OsErpWriteContention
+        # 重试速率持续偏高（还没到用尽，但争用在加剧）
+        expr: rate(os_erp_write_retries_total[10m]) > 1
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "写事务争用：重试频繁"
+          description: "检查是否有长事务/备份与写入同时进行；见 ADR-0035，必要时调 GML_WRITE_RETRY_MAX 或错开备份时段。"
+
+      - alert: OsErpDiskLowOrMigrationDrift
+        # 磁盘可用低于 5 GiB（-1 为未知，不触发），或迁移文件与已登记校验和不一致
+        expr: (os_erp_disk_free_bytes >= 0 and os_erp_disk_free_bytes < 5 * 1024 * 1024 * 1024) or os_erp_migration_checksum_mismatches > 0
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "数据卷空间不足或迁移校验和漂移"
+          description: "磁盘写满会让备份与审计写入失败；校验和不一致说明已应用的迁移文件被改过，先评审再决定是否收养。"

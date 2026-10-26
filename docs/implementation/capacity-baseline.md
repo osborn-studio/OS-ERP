@@ -347,6 +347,26 @@ node scripts/synth-pipeline.mjs --dir /tmp/synth-large --skus 20000 --txns 25000
 ### 未覆盖
 进程内计时（不含 HTTP / 鉴权）；单机单连接；合成数据（关键词分布不代表生产）；FTS 的 `integrity-check` 与长期碎片（`optimize`）未测；无 FTS5 构建的回退路径只在测试里模拟（`setFtsOverride(false)` 与 DROP 掉 FTS 对象），没有真正的无 FTS5 二进制可跑。
 
+## AC5 审计 FTS 索引维护：`audit-fts-maintain.mjs` 在合成 100 万行库上的持写锁时间（**Mac mini / 合成 100 万行 / 非目标主机 / 单次墙钟 / 整机高负载**）
+
+脚本：`node scripts/audit-fts-maintain.mjs --data-dir <临时目录> --industry cosmetic --rebuild|--optimize|--integrity-check`（用法与口径见 `docs/operations/audit-search.md`）。库：临时目录里 schema + 全部迁移，用 `bench-audit-logs.mjs` 导出的 `seed()`（唯一 INSERT 点 `insertAuditRow`，含 AB6 哈希链与 067 触发器）写入 100 万行合成审计（种子 20261024，写入 188 s），随后 `wal_checkpoint(TRUNCATE)`；库文件 451 MB（含 FTS 索引）；测完临时目录已删除（脚本自带 `rm -rf` 并打印确认）。
+**机器有负载**（测量期间 1 分钟负载约 29–30，同机并行其它工作流）：**只看量级**。每个动作各跑一次（`rebuild` 跑两次）；`elapsed_ms` = 本进程 BEGIN→COMMIT 墙钟；`lock_probe` = 另一线程用自己的连接每约 1 ms 试 `BEGIN IMMEDIATE`（`busy_timeout=0`），`max_busy_span_ms` 为被挡窗口的下界、`max_blocked_ms` 为近似上界（见 `scripts/lib/lock-probe.mjs`）。
+
+| 动作 | elapsed_ms | 写入者被挡（下界 / 上界，ms）| 探针撞上次数 / 窗口数 | 库文件（含 WAL）| 
+|---|---|---|---|---|
+| `--integrity-check` | 1142 | 1141 / 1144 | 680 / 1 | 451 → 451 MB（不变）|
+| `--optimize` | 1314 | 966 / 969 | 524 / 1 | 451 → 508 MB（WAL 里待检查点的新页）|
+| `--rebuild`（第 1 次）| **3335** | **3025 / 3028** | 1745 / 1 | 460 → 521 MB |
+| `--rebuild`（第 2 次）| **4099** | **3727 / 3730** | 2201 / 1 | 460 → 521 MB |
+| `--integrity-check`（重建后）| 1496 | 1494 / 1502 | 847 / 1 | 460 → 460 MB |
+
+读法（诚实边界）：
+- **100 万行重建约 3–4 s 持写锁**，与 AB3 记录的迁移 067 回填（2.7–3.9 s）同量级；全程一个被挡窗口，说明重建确实是单次写事务。这段时间内其它写入（每条审计写入、每次业务写）等待 `busy_timeout`（默认 5 s）：本次未超；目标主机更慢或库更大时可能超过 5 s，届时并发写入收到 `SQLITE_BUSY`——所以 `--rebuild` 应在低峰执行。读者不受影响（WAL，探针只量写入者）。
+- `--integrity-check` 也持写锁（FTS5 的 `integrity-check` 是 INSERT 形式的命令），100 万行约 1.1–1.5 s；夜间可选步骤跑在合成库副本上，不影响在用库。
+- 两次重建相差 0.8 s，主要是机器负载抖动，不是系统性差别；不要把任何一格当作承诺值。
+- 合成数据的 detail 很短，真实库的 `action / entity / user_name` 三列更长时三元组更多，重建会更慢；这里没有测。
+- `GML_AUDIT_FTS=0` 开关只影响查询路径，不影响上述任何数字。
+
 ## AA11 迁移升级演练：059–062 在合成 medium 库上的逐迁移耗时（**Mac mini / 合成数据 / 非目标主机 / 单次墙钟**）
 
 脚本：`scripts/upgrade-rehearsal.mjs`（库：`scripts/lib/lock-probe.mjs`；测试：`tests/upgrade-rehearsal.test.mjs`）。它在备份集（或合成库目录，经 `db-backup.mjs` 备份成备份集）的**隔离恢复副本**上，从 `--from N` 基线起把编号 > N 的迁移**逐个**交给真实运行器（生产模式、暂存迁移目录里是仓库文件的字节级复制），每步记录耗时与写锁阻塞，升级后核对校验和 / 空操作重跑 / integrity / 外键 / 业务探针 / verify-seed 风格不变量，任一失败即回退（进程内重新恢复并比对 + 调用 ADR-0016 的 `upgrade-rollback-drill.mjs`）。可选夜间步骤见 `nightly-capacity.yml` 的 `rehearsal` 输入（默认 `false`，定时任务永不运行）。
@@ -448,7 +468,7 @@ node scripts/upgrade-rehearsal.mjs --from=62 --backup-dir=… --target-dir=… -
 ### 怎么用
 - 本地/流水线：`node scripts/synth-pipeline.mjs --dir <绝对新目录> --profile large-ci [--time-budget 240] [--out <报告>]`。`large-ci` 默认 `--skus 100000 --txns 1000000 --docs 100000 --batch-txns 200000 --min-free-mb 3072`；显式给的参数永远覆盖默认。
 - 工作流：`nightly-capacity.yml` 的手动输入 `scale` 增加选项 `large-ci`（默认仍 `medium`，定时运行不受影响）；选它时作业超时 355 分钟（GitHub 上限 360），生成预算 `--time-budget 240` 分钟，其余步骤（备份、两次恢复演练、explain-audit、压测、写档压测）在剩余时间内跑。
-- 新步骤 `Large-ci report` 只从原始流水线报告打印固定格式行：`partial`/原因/达到规模、`explain_audit violations=`、逐接口 `p50/p95/p99/errors`（p95 表）。现有 `Gate` 不变（违规或错误仍然红）；`capacity-summary.mjs` 未改，所以 summary 里 `scale` 对 large-ci 显示 `?`，**要看 large-ci 的 partial 状态只能看 `Large-ci report` 步骤的日志行**。
+- 新步骤 `Large-ci report` 只从原始流水线报告打印固定格式行：`partial`/原因/达到规模、`explain_audit violations=`、逐接口 `p50/p95/p99/errors`（p95 表）。现有 `Gate` 不变（违规或错误仍然红）；AC8 起 `capacity-summary.mjs` 对 large-ci 也输出 `scale: "large-ci"`、`profile`、`partial`、`partial_reason`（仅 `time_budget`/`disk_low`/`null`，其余记 `?`）与 `reached`（`skus/txns/txns_target/docs/docs_target`），此前 `scale` 显示 `?`。
 
 ### 分批与守卫（`synth-data.mjs`）
 - `--batch-txns N`：每当 `inventory_transactions` 的最大 rowid 越过 N 的整数倍（在单据事务之外的循环边界检查），先 `wal_checkpoint(TRUNCATE)`，再 `VACUUM`，再 checkpoint。目的是控制 WAL 与空闲页，不是改数据：同种子下分批与不分批的 `digest` 相同（测试断言）。
@@ -533,8 +553,8 @@ Mac mini，`--profile large-ci --skus 5000 --txns 50000 --docs 5000 --batch-txns
 
 ### 仍未覆盖
 - `dmserver` 上用生产规模副本复跑；large 规模未跑；机器空闲时的数字未取（本轮全程高负载）。
-- `/dashboard/channel`、`/dashboard/recent` 未剖析、未缓存。
-- `explain-audit` 未登记 `/top`、`/inventory-dist` 的新语句（不在本工作流文件范围）；`explain-audit`（对本合成 medium 库、只读）：87 条既有语句，**0 违规**，裸 SCAN 21（豁免 20、小表 1），索引全扫 5——这个结果不覆盖新语句。
+- `/dashboard/channel`、`/dashboard/recent` 未剖析、未缓存（**AC4 已补**，见下节）。
+- `explain-audit` 未登记 `/top`、`/inventory-dist` 的新语句（**AC4 已登记**，见下节）；`explain-audit`（对本合成 medium 库、只读）：87 条既有语句，**0 违规**，裸 SCAN 21（豁免 20、小表 1），索引全扫 5——这个结果不覆盖新语句。
 
 ## AB5 真正旧结构库上的 059–066 逐迁移耗时（**Mac mini / 合成 medium / 非目标主机 / 单次墙钟 / 整机高负载**）
 
@@ -574,29 +594,78 @@ node scripts/upgrade-rehearsal.mjs --from=58 --backup-dir=/abs/new-dir/data/back
 
 ## 托管 runner（AB9：`nightly-capacity.yml` 在 GitHub 托管 runner 上的首次手动演练）
 
-**状态：尚未触发，下表全部待填。** 本节只登记触发方法与待填结果；没有任何托管 runner 的数字被写在这里。托管 runner 是共享虚拟机 + 合成数据 + 单次运行，数字只作趋势参考，**不是 `dmserver` 目标主机结果，不是容量承诺**；工作流只上传白名单的 `capacity-summary.json`，下表只抄摘要里的字段，不贴原始报告、库文件或日志。
+**状态（AC8，2026-10-24）：未能触发，下表全部待填（原因）。** 本节只登记触发方法与待填结果；没有任何托管 runner 的数字被写在这里。托管 runner 是共享虚拟机 + 合成数据 + 单次运行，数字只作趋势参考，**不是 `dmserver` 目标主机结果，不是容量承诺**；工作流只上传白名单的 `capacity-summary.json`，下表只抄摘要里的字段，不贴原始报告、库文件或日志。
 
-### 触发（只用 `gh workflow run`，不改仓库设置）
+### AC8 触发尝试记录
+- 检查：`gh api repos/osborn-studio/OS-ERP/contents/.github/workflows/nightly-capacity.yml?ref=main` 返回 HTTP 404，即 `main` 上**根本没有** `nightly-capacity.yml`（`main` 的工作流只有 `CI` 与 `OS ERP Linux validation`，`gh workflow list` 同）；该文件只存在于 `feat/batch-eleven`（PR #7 未合并）等分支，该分支上含 `scale=large-ci`、`rehearsal`、`snapshot_upto` 三个输入。
+- 尝试：`gh workflow run nightly-capacity.yml --ref feat/batch-eleven -f scale=small` 被 GitHub 拒绝：`HTTP 404: workflow nightly-capacity.yml not found on the default branch`。`workflow_dispatch` 只对默认分支上已存在的工作流文件开放，分支上的新工作流在合入默认分支前无法手动触发，也无法被定时触发。
+- 因此**一次运行也没有派发**（已派发 0/3；被拒绝的请求不产生 run id），三次规定运行（`rehearsal=true snapshot_upto=58`、`scale=large-ci`、默认）全部未执行。
+- 修复建议（需要用户决定，AC8 未改仓库设置也未改工作流）：合并 PR #7（或把 `nightly-capacity.yml` 单独 cherry-pick 进 `main`）之后，再按下面的命令触发三次；合并前在 PR 分支上无法验证该工作流能否在 GitHub 上跑通。
+
+### 触发（合入 `main` 之后；只用 `gh workflow run`，不改仓库设置）
 ```bash
-# 默认 medium 规模 + 升级演练（rehearsal=true）
-gh workflow run nightly-capacity.yml -f rehearsal=true
-# 指定规模（small / medium / large）
-gh workflow run nightly-capacity.yml -f scale=medium -f rehearsal=true
-# 查看与等待
+gh workflow run nightly-capacity.yml --ref main -f rehearsal=true -f snapshot_upto=58
+gh workflow run nightly-capacity.yml --ref main -f scale=large-ci
+gh workflow run nightly-capacity.yml --ref main
+# 查看与等待（每次等待设硬超时，用 gh run view 轮询）
 gh run list --workflow nightly-capacity.yml --limit 3
-gh run watch <run-id> --exit-status
+gh run view <run-id> --json status,conclusion
 gh run view <run-id> --log-failed
 ```
 
-### 结果登记（待填）
-| 项 | 值 |
-|---|---|
-| run id / commit | 待填 |
-| scale / rehearsal | 待填 |
-| runner 信息（OS、CPU 核数、磁盘余量） | 待填 |
-| 生成 / 备份 / 恢复演练耗时（s） | 待填 |
-| `explain-audit` 违规数 | 待填 |
-| `bench-api` 读 p95（ms，按接口） | 待填 |
-| `bench-api` 写 p95（ms）/ 完整性检查 | 待填 |
-| 升级演练逐迁移耗时（仅 rehearsal=true） | 待填 |
-| 失败 / 异常 | 待填 |
+### 结果登记
+下表三列各对应一次规定运行；每格的值必须附 run id；摘要字段来自 `capacity-summary.json`（含 AC8 新增的 `scale/partial/partial_reason/reached`，摘要本身不含 run id，run id 取自 Actions 页面），磁盘余量与升级演练逐迁移耗时不在摘要里，需另从 `Large-ci report` 步骤日志 / 演练日志取并注明来源，取不到就写「不可得」。
+
+| 项 | `rehearsal=true snapshot_upto=58` | `scale=large-ci` | 默认（medium） |
+|---|---|---|---|
+| run id / commit / 结论 / 耗时 | 待填（未触发：工作流不在默认分支，GitHub 404） | 待填（同左） | 待填（同左） |
+| scale / partial / partial_reason / reached | 待填（同左） | 待填（同左） | 待填（同左） |
+| runner 信息（OS、CPU 核数、磁盘余量） | 待填（同左） | 待填（同左） | 待填（同左） |
+| 生成 / 备份 / 恢复演练耗时（s） | 待填（同左） | 待填（同左） | 待填（同左） |
+| `explain-audit` 违规数 | 待填（同左） | 待填（同左） | 待填（同左） |
+| `bench-api` 读 p95（ms，按接口） | 待填（同左） | 待填（同左） | 待填（同左） |
+| `bench-api` 写 p95（ms）/ 完整性检查 | 待填（同左） | 待填（同左） | 待填（同左） |
+| 升级演练逐迁移耗时 | 待填（同左） | 不适用 | 不适用 |
+| 失败 / 异常 | 待填（同左） | 待填（同左） | 待填（同左） |
+
+### 未验证
+截至 2026-10-24 本次尝试（`gh run list --workflow nightly-capacity.yml` 与 `gh workflow run` 均返回 HTTP 404，输出未存档）未发现该工作流的任何运行；仅限本次尝试的结论，不证明历史上从未运行。`large-ci` 的 355 分钟超时、磁盘余量、partial 行为；`snapshot_upto` 输入校验的线上表现；所有托管 runner 数字。
+
+## AC4 看板 `/channel`、`/recent` 剖析与 explain-audit 登记（**Mac mini / 合成 medium 库 / 非目标主机 / 整机高负载**）
+
+> **范围声明与负载（务必连同数字一起读）**：Mac mini；合成 `medium` 库（`synth-data.mjs --skus 20000 --docs 30000 --txns 150000`，种子 20261023，在隔离临时目录生成，用完删除；生成耗时 356 s，库 250 MB）。压测用**副本**：分类标记改 `test`、跑一次 `bootAll`（演示种子叠加，同 AB2 口径），并**额外灌入 5 个平台与 2 万条 `oms_orders`**（时间分布在最近 120 天、状态五种轮换）——合成生成器不产生 OMS 单，不灌的话 `/channel` 的线上分支是空表，测不出任何东西。**测量时整机负载很高（`uptime` 1 分钟平均负载 27–35，多个工作流同时在跑测试）**，绝对数字抖动大、只看量级；3 轮"缓存关 / 缓存开"交错，表里给 3 轮中位数。**不是 `dmserver` 结果、不是容量承诺、不是验收证据。**
+
+### 逐块计时
+两种口径：(a) 直接在副本库上对 SQL 计时（只读连接，21 次取中位数，负载约 31）；(b) 服务进程 `GML_PROFILE=1`、缓存关、100 次请求的块耗时中位数（负载约 30）。
+
+| 块 | (a) SQL 直测 ms | (b) 服务内块 ms | 计划 |
+|---|---|---|---|
+| `channel.offline` | 3.83 | 5.47 | `SEARCH sales_orders USING INDEX idx_so_order_date` + 临时 B 树分组 |
+| `channel.online`（2 万 OMS 单）| 11.93 | 4.76 | **`SCAN o`**（`date(order_time)` 套函数，无索引可用）+ 临时 B 树分组 |
+| `recent.salesOrders` / `purchaseOrders` / `omsOrders` / `transactions` | 0.04 / 0.02 / 0.01 / 0.02 | 0.03 / 0.02 / 0.02 / 0.02 | 全部 `SCAN` 沿 rowid 倒序取 8 行即停，无排序临时表 |
+| `/channel` 整个处理器 | — | 10.8 | |
+
+(a) 与 (b) 的 `online` 差异（11.9 vs 4.8）是负载抖动，不是改动：两边是同一条 SQL。**没有任何块 ≥ 50 ms。**
+
+### 决定与理由
+- **`/channel` 缓存**（键 `channel:<days>`，与 AB2 同一套 `cachedRead`）：单次不到 15 ms，但线上分支是对 `oms_orders` 的**整表读取，随订单量线性增长**（2 万行 ≈ 5–12 ms，外推 20 万行会越过 50 ms 线——这是外推，没有测）；响应只由库内容、日期与 `days` 决定，路由器已要求全局数据范围，缓存范围安全。缓存把重复请求挪出请求路径，不改查询。
+- **`/recent` 不缓存**：四条查询合计 < 0.2 ms，缓存的收益小于每次读取的版本校验；"最新动态"任何写入都使缓存失效，命中率天然低。仍接入 `createProfiler`（`cache=off`），以便生产数据量下回看。
+
+### HTTP 延迟（并发 4，每接口 100 次 + 1 次预热，ms；3 轮中位数，括号内为 3 轮原始值）
+| 接口 | 缓存关 p50 | 缓存关 p95 | 缓存开 p50 | 缓存开 p95 |
+|---|---|---|---|---|
+| `/dashboard/channel` | 73.8 (73.8/97.5/39.9) | 200.6 (200.6/284.1/79.7) | 2.7 (2.3/2.7/7.1) | 16.5 (16.5/8.6/61.9) |
+| `/dashboard/recent`（两档代码路径相同，差异是噪声）| 5.1 (6.7/5.1/3.9) | 26.4 (26.4/29.7/9.8) | 4.5 (4.4/6.4/4.5) | 29.9 (15.8/66.4/29.9) |
+
+读法：`/channel` 缓存关的 p50 远大于块耗时（~11 ms）是并发 4 在单线程 Node 上排队加整机高负载；缓存开后命中路径 p50 ≈ 3 ms。`/recent` 本来就快，不缓存是对的。0 个错误（全部 200）。"前"（batch-eleven）与"缓存关"同一条 SQL，所以没有单独跑前后对比。
+
+### explain-audit 登记
+`scripts/explain-audit.mjs` 新增 11 条语句，SQL 文本**直接取自** `server/lib/dashboard-sql.js`（路由执行的同一份，不是抄写；`tests/dashboard-perf.test.mjs` 断言登记文本与模块导出逐字相同、路由里不再内联）：`dash.top_products` / `top_brands` / `top_dealers` / `top_stores`（`expectIndex: idx_so_order_date`）、`dash.inventory_dist_agg`、`dash.channel_offline`（`expectIndex: idx_so_order_date`）、`dash.channel_online`、`dash.recent_sales` / `recent_purchase` / `recent_oms` / `recent_txn`。计划：`/top` 两条为 `SEARCH so USING INDEX idx_so_order_date` → `SEARCH i USING INDEX idx_soi_order`（CROSS JOIN 写法确实固定了顺序；变异——改回普通 JOIN——使计划变成 `SCAN i` 并报红）；`inventory_dist_agg` 是 `SCAN st USING INDEX idx_stock_wh_sku`（索引全扫，一遍）；`recent_*` 四条豁免（按主键倒序取页，`noSort`）；`channel_online` 豁免（整表读取，理由与"根治需新迁移"写在 ALLOW 里）。
+
+- 在**纯合成 medium 库**上（不含演示种子）：110 条语句，**0 违规**，裸 SCAN 28（豁免 27、小表 1），索引全扫 6。
+- 在压测副本（含演示种子叠加）上：1 条违规 `oc.overview_credit_used`（`oc_customers` 752 行 ≥ 阈值 200，裸 SCAN）。**与本工作流无关**：同一副本上 `batch-eleven` 源码（99 条语句）同样报这一条；原因是演示种子把该表灌到阈值之上。未处理，列入未验证 / 后续。
+
+### 仍未覆盖
+- `dmserver` 上用生产规模副本复跑；large 规模未跑；机器空闲时的数字未取。
+- `dash.trend_*` 的 explain-audit 登记仍是人工镜像（只有 sales / purchase 两条，没有 `trend.online`，其 `date(order_time)` 同样整表读取 `oms_orders`）；本工作流只登记新增语句。
+- `oms_orders.order_time` 没有可用索引（`/channel` 线上分支与 `/trend` 线上分支共同的残余），根治需要新迁移，不在本工作流范围。
