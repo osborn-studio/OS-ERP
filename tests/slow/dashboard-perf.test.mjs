@@ -12,6 +12,7 @@
  * ============================================================================
  */
 import test from 'node:test'
+import { FETCH_TIMEOUT_MS, SLOW_WAIT } from '../lib/load-tolerance.mjs'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
@@ -184,7 +185,7 @@ async function server(t, extraEnv = {}, { dir: sharedDir } = {}) {
     await stopped
     if (!sharedDir) rmSync(dir, { recursive: true, force: true })
   })
-  for (let i = 0; i < 2400 && !output.includes('服务已启动') && child.exitCode === null; i++) await delay(50)
+  for (let i = 0; i < SLOW_WAIT.extendedReadyAttempts && !output.includes('服务已启动') && child.exitCode === null; i++) await delay(50)
   assert.ok(output.includes('服务已启动'), `test-mode server must become ready:\n${output.slice(-2000)}`)
   const base = `http://127.0.0.1:${port}`
   const login = async (username, password) => {
@@ -197,7 +198,7 @@ async function server(t, extraEnv = {}, { dir: sharedDir } = {}) {
   const token = await login('admin', '12345')
   const callAs = async (tok, route, init = {}) => {
     const res = await fetch(`${base}${route}`, {
-      ...init, headers: { ...(tok ? { authorization: `Bearer ${tok}` } : {}), 'content-type': 'application/json' }, signal: AbortSignal.timeout(15000)
+      ...init, headers: { ...(tok ? { authorization: `Bearer ${tok}` } : {}), 'content-type': 'application/json' }, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS)
     })
     return { status: res.status, body: await res.json() }
   }
@@ -218,7 +219,7 @@ async function server(t, extraEnv = {}, { dir: sharedDir } = {}) {
   }
 }
 
-test('GET /dashboard/summary: profile log only with GML_PROFILE=1, never in the body; AI stock_alert matches the original SQL', { timeout: 300000 }, async (t) => {
+test('GET /dashboard/summary: profile log only with GML_PROFILE=1, never in the body; AI stock_alert matches the original SQL', { timeout: SLOW_WAIT.serverCaseMs }, async (t) => {
   const off = await server(t)
   const r0 = await off.api('/api/dashboard/summary')
   assert.equal(r0.status, 200)
@@ -316,7 +317,7 @@ test('db-ttl-cache: a new local day never reuses yesterday\'s result', (t) => {
   assert.equal(run().hit, false, 'must recompute after local midnight')
 })
 
-test('dashboard summary is never stale: reflects writes made through another connection immediately, and repeated reads are cache hits', { timeout: 300000 }, async (t) => {
+test('dashboard summary is never stale: reflects writes made through another connection immediately, and repeated reads are cache hits', { timeout: SLOW_WAIT.serverCaseMs }, async (t) => {
   const { api, db, output } = await server(t, { GML_PROFILE: '1' })
   const a = await api('/api/dashboard/summary')
   const b = await api('/api/dashboard/summary')
@@ -352,9 +353,9 @@ const AB2_ROUTES = {
   'inventory-dist': '/api/dashboard/inventory-dist'
 }
 const profileLines = (out, label) => out().split('\n').filter((l) => l.includes('profile_blocks') && l.includes(`label=${label}`))
-/** 等到某个接口的 profile 行达到 n 条（子进程 stdout 与 HTTP 响应没有先后保证），最多 5 s */
+/** 等到某个接口的 profile 行达到 n 条（子进程 stdout 与 HTTP 响应没有先后保证），默认最多 5 s */
 async function waitProfile(out, label, n) {
-  for (let i = 0; i < 100 && profileLines(out, label).length < n; i++) await delay(50)
+  for (let i = 0; i < SLOW_WAIT.profileAttempts && profileLines(out, label).length < n; i++) await delay(50)
   assert.ok(profileLines(out, label).length >= n, `expected ${n} profile lines for ${label}, got ${profileLines(out, label).length}`)
 }
 const profileCache = (line) => /cache=(hit|miss)/.exec(line)?.[1]
@@ -395,7 +396,7 @@ test('AB2 db-ttl-cache: keyed entries are independent, any write drops all keys,
   assert.equal(cachedForDb(a, () => 'ok', { ttlMs: 30000, key: 'bad' }).hit, false)
 })
 
-test('AB2 trend/top/todos/inventory-dist: profile line per endpoint (log only), second read hits, ?days is part of the key, responses stay identical', { timeout: 300000 }, async (t) => {
+test('AB2 trend/top/todos/inventory-dist: profile line per endpoint (log only), second read hits, ?days is part of the key, responses stay identical', { timeout: SLOW_WAIT.serverCaseMs }, async (t) => {
   const f = await server(t, { GML_PROFILE: '1' })
   const base = {}
   for (const [name, route] of Object.entries(AB2_ROUTES)) {
@@ -437,13 +438,13 @@ test('AB2 trend/top/todos/inventory-dist: profile line per endpoint (log only), 
   assert.deepEqual(profileLines(f.output, 'dashboard.top').map(profileCache), ['miss', 'hit', 'miss', 'hit'])
 })
 
-test('AB2 profiler stays silent by default on the four endpoints', { timeout: 300000 }, async (t) => {
+test('AB2 profiler stays silent by default on the four endpoints', { timeout: SLOW_WAIT.serverCaseMs }, async (t) => {
   const f = await server(t)
   for (const route of Object.values(AB2_ROUTES)) assert.equal((await f.api(route)).status, 200)
   assert.ok(!f.output().includes('profile_blocks'))
 })
 
-test('AB2 cache never serves a global payload to a scope-restricted caller (route gate runs before the cache), and reads do not warm for them', { timeout: 300000 }, async (t) => {
+test('AB2 cache never serves a global payload to a scope-restricted caller (route gate runs before the cache), and reads do not warm for them', { timeout: SLOW_WAIT.serverCaseMs }, async (t) => {
   const f = await server(t, { GML_PROFILE: '1' })
   const orgId = f.db.prepare("SELECT org_id FROM warehouses WHERE code='WH01'").get().org_id
   const restricted = await f.scopedUser('ab2_scoped', orgId)
@@ -480,7 +481,7 @@ db.close()
 console.log('WROTE')
 `
 
-test('AB2 two processes on one DB file: another process\'s commit drops this process\'s cache for all four endpoints (data_version)', { timeout: 300000 }, async (t) => {
+test('AB2 two processes on one DB file: another process\'s commit drops this process\'s cache for all four endpoints (data_version)', { timeout: SLOW_WAIT.serverCaseMs }, async (t) => {
   const A = await server(t, { GML_PROFILE: '1' })
   // 第二个 server 进程：同一数据目录（同一个库文件），另一个随机端口；先登录（登录会写 last_login_at），再预热 A，避免登录写入干扰命中判断
   const B = await server(t, {}, { dir: A.dir })
@@ -553,7 +554,7 @@ const OLD_DIST = {
 // 浮点求和顺序可以不同（最后一位）；比较时对数值取 4 位小数
 const norm = (rows) => rows.map((r) => Object.fromEntries(Object.entries(r).map(([k, v]) => [k, typeof v === 'number' ? Math.round(v * 1e4) / 1e4 : v])))
 
-test('AB2 /top and /inventory-dist rewrites return the same rows as the original SQL on a varied fixture', { timeout: 300000 }, async (t) => {
+test('AB2 /top and /inventory-dist rewrites return the same rows as the original SQL on a varied fixture', { timeout: SLOW_WAIT.serverCaseMs }, async (t) => {
   const f = await server(t)
   const db = f.db
   db.pragma('foreign_keys=OFF')
@@ -634,7 +635,7 @@ test('AC11 db-ttl-cache reports when the value was computed: a hit keeps the ori
   assert.equal(cachedForDb(db, () => 4, { ttlMs: 0, now: () => clock }).at, 70000)
 })
 
-test('AC11 the five cached dashboard endpoints carry cached_at + cache_ttl_ms + X-Dashboard-Cache; recent stays unstamped; a write restamps', { timeout: 300000 }, async (t) => {
+test('AC11 the five cached dashboard endpoints carry cached_at + cache_ttl_ms + X-Dashboard-Cache; recent stays unstamped; a write restamps', { timeout: SLOW_WAIT.serverCaseMs }, async (t) => {
   const f = await server(t)
   const raw = async (route) => {
     const res = await fetch(new URL(route, f.base), { headers: { authorization: `Bearer ${f.token}` } })
@@ -665,7 +666,7 @@ test('AC11 the five cached dashboard endpoints carry cached_at + cache_ttl_ms + 
   assert.ok(Date.parse(after.body.cached_at) > Date.parse(before), 'after a write the stamp moves forward')
 })
 
-test('AC11 GML_DASHBOARD_CACHE_MS=0 reports cache_ttl_ms 0 so the page can say "not cached"', { timeout: 300000 }, async (t) => {
+test('AC11 GML_DASHBOARD_CACHE_MS=0 reports cache_ttl_ms 0 so the page can say "not cached"', { timeout: SLOW_WAIT.serverCaseMs }, async (t) => {
   const f = await server(t, { GML_DASHBOARD_CACHE_MS: '0' })
   const res = await fetch(new URL('/api/dashboard/summary', f.base), { headers: { authorization: `Bearer ${f.token}` } })
   const body = await res.json()
@@ -742,7 +743,7 @@ test('AC4 explain-audit: the registered dashboard statements pass on a migrated 
   assert.match(bad.violations.at(-1).reason, /idx_does_not_exist/)
 })
 
-test('AC4 /channel: profiled, cached per ?days, identical to the original SQL, invalidated by writes; body carries no cache/profile fields', { timeout: 300000 }, async (t) => {
+test('AC4 /channel: profiled, cached per ?days, identical to the original SQL, invalidated by writes; body carries no cache/profile fields', { timeout: SLOW_WAIT.serverCaseMs }, async (t) => {
   const f = await server(t, { GML_PROFILE: '1' })
   const db = f.db
   db.pragma('foreign_keys=OFF')
@@ -783,7 +784,7 @@ test('AC4 /channel: profiled, cached per ?days, identical to the original SQL, i
   assert.equal(profileCache(profileLines(f.output, 'dashboard.channel').at(-1)), 'miss')
 })
 
-test('AC4 /recent: profiled but deliberately not cached (cache=off), always fresh right after a write, shape unchanged', { timeout: 300000 }, async (t) => {
+test('AC4 /recent: profiled but deliberately not cached (cache=off), always fresh right after a write, shape unchanged', { timeout: SLOW_WAIT.serverCaseMs }, async (t) => {
   const f = await server(t, { GML_PROFILE: '1' })
   const a = await f.api(AC4_ROUTES.recent)
   assert.equal(a.status, 200, JSON.stringify(a.body))
@@ -803,7 +804,7 @@ test('AC4 /recent: profiled but deliberately not cached (cache=off), always fres
   assert.ok(!/cache|profile/i.test(JSON.stringify(a.body.data)))
 })
 
-test('AC4 /channel and /recent: silent profiler by default; restricted callers are rejected before the handler and never warm the cache', { timeout: 300000 }, async (t) => {
+test('AC4 /channel and /recent: silent profiler by default; restricted callers are rejected before the handler and never warm the cache', { timeout: SLOW_WAIT.serverCaseMs }, async (t) => {
   const quiet = await server(t)
   for (const route of Object.values(AC4_ROUTES)) assert.equal((await quiet.api(route)).status, 200)
   assert.ok(!quiet.output().includes('profile_blocks'))
@@ -871,7 +872,7 @@ test('AC4 cache hit-ratio model (real cachedForDb, injected clock): ratio is mon
 })
 
 // ---- Codex 审计（AC4）补强 ----
-test('AC4 route responses equal the results of the registered explain-audit statements (audited SQL = executed SQL, by behaviour not just text)', { timeout: 300000 }, async (t) => {
+test('AC4 route responses equal the results of the registered explain-audit statements (audited SQL = executed SQL, by behaviour not just text)', { timeout: SLOW_WAIT.serverCaseMs }, async (t) => {
   const f = await server(t)
   const st = (id) => STATEMENTS.find((s) => s.id === id).sql
   const top = (await f.api('/api/dashboard/top')).body.data // 默认窗口 30 天，与登记一致
@@ -891,7 +892,7 @@ test('AC4 route responses equal the results of the registered explain-audit stat
   assert.deepEqual(rec.transactions, f.db.prepare(st('dash.recent_txn')).all())
 })
 
-test('AC4 a rejected caller on a cold /channel key neither runs the handler nor warms the key: the first authorized read of that key is still a miss', { timeout: 300000 }, async (t) => {
+test('AC4 a rejected caller on a cold /channel key neither runs the handler nor warms the key: the first authorized read of that key is still a miss', { timeout: SLOW_WAIT.serverCaseMs }, async (t) => {
   const f = await server(t, { GML_PROFILE: '1' })
   const orgId = f.db.prepare("SELECT org_id FROM warehouses WHERE code='WH01'").get().org_id
   const restricted = await f.scopedUser('ac4_cold', orgId)
@@ -1123,7 +1124,7 @@ test('AD3 explain-audit: trend + channel online use idx_oms_order_time (SEARCH, 
   for (const id of ['dash.trend_online', 'dash.channel_online']) assert.ok(bad.violations.some((v) => v.statement === id && /idx_oms_order_time/.test(v.reason || '') || (v.statement === id && /SCAN/.test(v.detail))), `${id} flagged without the index`)
 })
 
-test('AD3 routes: /trend and /channel (HTTP) equal the old SQL on the seeded instance; trend body unchanged in shape', { timeout: 300000 }, async (t) => {
+test('AD3 routes: /trend and /channel (HTTP) equal the old SQL on the seeded instance; trend body unchanged in shape', { timeout: SLOW_WAIT.serverCaseMs }, async (t) => {
   const f = await server(t, { GML_PROFILE: '1' })
   const db = f.db
   db.pragma('foreign_keys=OFF')

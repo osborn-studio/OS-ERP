@@ -13,6 +13,7 @@
  * ============================================================================
  */
 import test from 'node:test'
+import { SLOW_WAIT } from '../lib/load-tolerance.mjs'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
@@ -50,7 +51,7 @@ async function server(t) {
     await stopped
     rmSync(dir, { recursive: true, force: true })
   })
-  for (let i = 0; i < 2400 && !output.includes('服务已启动') && child.exitCode === null; i++) await delay(50)
+  for (let i = 0; i < SLOW_WAIT.extendedReadyAttempts && !output.includes('服务已启动') && child.exitCode === null; i++) await delay(50)
   assert.ok(output.includes('服务已启动'), `test-mode server must become ready:\n${output.slice(-2000)}`)
   const base = `http://127.0.0.1:${port}`
   const api = async (route, { token, body, method = body === undefined ? 'GET' : 'POST' } = {}) => {
@@ -58,7 +59,7 @@ async function server(t) {
       method,
       headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-      signal: AbortSignal.timeout(10000)
+      signal: AbortSignal.timeout(SLOW_WAIT.httpShortMs)
     })
     return { status: res.status, body: await res.json() }
   }
@@ -84,7 +85,7 @@ async function server(t) {
 const okData = (r) => { assert.equal(r.status, 200, JSON.stringify(r.body)); return r.body.data }
 const expectStatus = (r, s, m) => assert.equal(r.status, s, `${m}: ${JSON.stringify(r.body)}`)
 
-test('inventory domain and purchase status/receive follow warehouse org scope', { timeout: 300000 }, async (t) => {
+test('inventory domain and purchase status/receive follow warehouse org scope', { timeout: SLOW_WAIT.serverCaseMs }, async (t) => {
   const f = await server(t)
   const { db, api } = f
   const whA = db.prepare("SELECT id, org_id FROM warehouses WHERE code='WH01'").get()
@@ -357,7 +358,7 @@ test('inventory domain and purchase status/receive follow warehouse org scope', 
 // ---------------------------------------------------------------------------------------------
 // ADR-0042：MCP 库存工具按所有者的仓库组织范围收口（与 HTTP `/api/inventory/*` 同一份 stock.js 判据）
 // ---------------------------------------------------------------------------------------------
-test('MCP inventory tools follow the owner warehouse-org scope (ADR-0042)', { timeout: 300000 }, async (t) => {
+test('MCP inventory tools follow the owner warehouse-org scope (ADR-0042)', { timeout: SLOW_WAIT.serverCaseMs }, async (t) => {
   const f = await server(t)
   const { db } = f
   process.env.GML_RUNTIME_MODE = 'test'
@@ -467,7 +468,7 @@ test('MCP inventory tools follow the owner warehouse-org scope (ADR-0042)', { ti
 // ---------------------------------------------------------------------------
 // AA4（ADR-0038 补充）：质检处置调拨 / 仓库主数据 / 收货单与退货单 / POS 门店库存
 // ---------------------------------------------------------------------------
-test('AA4: QC disposition, warehouse master, purchase receipts/returns and POS store stock stay inside the scope', { timeout: 300000 }, async (t) => {
+test('AA4: QC disposition, warehouse master, purchase receipts/returns and POS store stock stay inside the scope', { timeout: SLOW_WAIT.serverCaseMs }, async (t) => {
   const f = await server(t)
   const { db, api } = f
   const whA = db.prepare("SELECT id, org_id FROM warehouses WHERE code='WH01'").get()
@@ -723,7 +724,7 @@ test('AA4: QC disposition, warehouse master, purchase receipts/returns and POS s
   })
 })
 
-test('AB1: master options warehouses, purchase order list/detail and QC overview/audit follow the warehouse-org scope (ADR-0046)', { timeout: 300000 }, async (t) => {
+test('AB1: master options warehouses, purchase order list/detail and QC overview/audit follow the warehouse-org scope (ADR-0046)', { timeout: SLOW_WAIT.serverCaseMs }, async (t) => {
   const f = await server(t)
   const { db, api } = f
   const whA = db.prepare("SELECT id, org_id FROM warehouses WHERE code='WH01'").get()
@@ -823,7 +824,7 @@ test('AB1: master options warehouses, purchase order list/detail and QC overview
   })
 })
 
-test('AC1: MCP purchase tools, dealer summary and master aggregates follow the warehouse-org scope (ADR-0050)', { timeout: 300000 }, async (t) => {
+test('AC1: MCP purchase tools, dealer summary and master aggregates follow the warehouse-org scope (ADR-0050)', { timeout: SLOW_WAIT.serverCaseMs }, async (t) => {
   const f = await server(t)
   const { db, api } = f
   process.env.GML_RUNTIME_MODE = 'test'
@@ -925,7 +926,7 @@ test('AC1: MCP purchase tools, dealer summary and master aggregates follow the w
 })
 
 // AD1（ADR-0053）：指标接口按范围收口；没有范围语义的指标对受限调用者标 scoped:false；dealer summary 要采购查看权限。
-test('AD1: /api/metrics values / catalog / dictionary follow the warehouse-org scope and flag global-only metrics (ADR-0053)', { timeout: 300000 }, async (t) => {
+test('AD1: /api/metrics values / catalog / dictionary follow the warehouse-org scope and flag global-only metrics (ADR-0053)', { timeout: SLOW_WAIT.serverCaseMs }, async (t) => {
   const f = await server(t)
   const { db, api } = f
   const whA = db.prepare("SELECT id, org_id FROM warehouses WHERE code='WH01'").get()

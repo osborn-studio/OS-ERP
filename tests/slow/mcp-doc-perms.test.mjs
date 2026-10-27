@@ -6,6 +6,7 @@
 //   · 无主令牌（独立服务主体）读已映射类型不受影响。
 // 只在全新临时数据目录 + 随机回环端口上跑（GML_RUNTIME_MODE=test 才开放 MCP）。
 import test from 'node:test'
+import { SLOW_WAIT } from '../lib/load-tolerance.mjs'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
@@ -45,7 +46,7 @@ async function server(t) {
     await stopped
     rmSync(dir, { recursive: true, force: true })
   })
-  for (let i = 0; i < 2400 && !output.includes('服务已启动') && child.exitCode === null; i++) await delay(50)
+  for (let i = 0; i < SLOW_WAIT.extendedReadyAttempts && !output.includes('服务已启动') && child.exitCode === null; i++) await delay(50)
   assert.ok(output.includes('服务已启动'), `test-mode server must become ready:\n${output.slice(-2000)}`)
   const base = `http://127.0.0.1:${port}`
   const api = async (route, { token, body } = {}) => {
@@ -53,7 +54,7 @@ async function server(t) {
       method: body === undefined ? 'GET' : 'POST',
       headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-      signal: AbortSignal.timeout(10000)
+      signal: AbortSignal.timeout(SLOW_WAIT.httpShortMs)
     })
     return { status: res.status, body: await res.json() }
   }
@@ -63,7 +64,7 @@ async function server(t) {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) },
       body: JSON.stringify({ jsonrpc: '2.0', id: ++seq, method, params }),
-      signal: AbortSignal.timeout(10000)
+      signal: AbortSignal.timeout(SLOW_WAIT.httpShortMs)
     })
     return { status: res.status, body: await res.json() }
   }
@@ -104,7 +105,7 @@ test('doc view permission map covers every active doc type with real permission 
   assert.deepEqual(stale, [], 'mapping must not carry types that no longer exist')
 })
 
-test('doc.query / doc.get / doc.list_types honour the owner view permission per doc type', { timeout: 300000 }, async (t) => {
+test('doc.query / doc.get / doc.list_types honour the owner view permission per doc type', { timeout: SLOW_WAIT.serverCaseMs }, async (t) => {
   const f = await server(t)
   const { db, api, mcp } = f
   const admin = (await api('/api/auth/login', { body: { username: 'admin', password: '12345', industry: 'cosmetic' } })).body.data.token
@@ -250,7 +251,7 @@ test('Y6 binding table is declared exactly once, in doc-perms, and its columns e
   assert.equal(bindingOf('RB'), null)
 })
 
-test('Y6 bound doc types: owner without binding is denied; with binding sees only its own store/dealer/subject', { timeout: 300000 }, async (t) => {
+test('Y6 bound doc types: owner without binding is denied; with binding sees only its own store/dealer/subject', { timeout: SLOW_WAIT.serverCaseMs }, async (t) => {
   const f = await server(t)
   const { db, api, mcp } = f
   const admin = (await api('/api/auth/login', { body: { username: 'admin', password: '12345', industry: 'cosmetic' } })).body.data.token
@@ -416,7 +417,7 @@ test('Y6 bound doc types: owner without binding is denied; with binding sees onl
 
 // AA1（ADR-0041）：doc.query / order.trace_document 的归属判定走 DOC_SCOPE_RESOLVERS（与 doc.get / HTTP 同一份），
 // 不再按 dealer_id 等列名推断；doc.query 把范围谓词下推进 SQL（limit 准确）；越界单据当作不存在。
-test('AA1 doc.query and order.trace_document use the resolver table with owner scope and binding', { timeout: 300000 }, async (t) => {
+test('AA1 doc.query and order.trace_document use the resolver table with owner scope and binding', { timeout: SLOW_WAIT.serverCaseMs }, async (t) => {
   const f = await server(t)
   const { db, api, mcp } = f
   const admin = (await api('/api/auth/login', { body: { username: 'admin', password: '12345', industry: 'cosmetic' } })).body.data.token
@@ -531,7 +532,7 @@ test('AA1 doc.query and order.trace_document use the resolver table with owner s
 // 注册表本身也不再对「绑了门店的非 admin 账号 + data_scope=all」放行别家门店的单据。
 // 矩阵：三种类型 × 绑定 / 未绑定 / 绑他店 / admin 豁免 / 无主令牌，只读，零写。
 const AB7_TYPES = ['RC', 'YQ', 'SH']
-test('AB7 RC/YQ/SH binding rules live in DOC_SCOPE_RESOLVERS and use the shared store-binding predicate', { timeout: 300000 }, async (t) => {
+test('AB7 RC/YQ/SH binding rules live in DOC_SCOPE_RESOLVERS and use the shared store-binding predicate', { timeout: SLOW_WAIT.serverCaseMs }, async (t) => {
   const f = await server(t)
   const { db, api, mcp } = f
   const { DOC_SCOPE_RESOLVERS, docInScope, docScopeOf } = await import('../../server/lib/docflow.js')
@@ -633,7 +634,7 @@ test('AB7 RC/YQ/SH binding rules live in DOC_SCOPE_RESOLVERS and use the shared 
 // 注册表层（docScopeOf / docInScope / docEventScope）与 MCP 读工具（doc.get / doc.query / order.trace_document）各测一遍，
 // 每类型 × {绑定本方、绑定他方、未绑定、admin}，全程零写。
 const AC3_EXPECT = { PS: 'store', PSF: 'store', RC: 'store', YQ: 'store', SH: 'store', DR: 'dealer', OC: 'subject', OCS: 'subject', DS: 'hq', RB: 'hq' }
-test('AC3 registry: every bound DOC_VIEW_PERMS type has a resolver binding rule, scope=all no longer bypasses it', { timeout: 300000 }, async (t) => {
+test('AC3 registry: every bound DOC_VIEW_PERMS type has a resolver binding rule, scope=all no longer bypasses it', { timeout: SLOW_WAIT.serverCaseMs }, async (t) => {
   const f = await server(t)
   const { db } = f
   const { DOC_SCOPE_RESOLVERS, docInScope, docScopeOf, docEventScope } = await import('../../server/lib/docflow.js')
@@ -728,7 +729,7 @@ test('AC3 registry: every bound DOC_VIEW_PERMS type has a resolver binding rule,
   assert.deepEqual(['oc_customers', 'oc_orders', 'oc_statements', 'doc_events', 'audit_logs'].map(countOf), before, 'registry reads wrote nothing (no ensureCustomer)')
 })
 
-test('AC3 MCP matrix: PS PSF DR OC OCS DS RB x {bound-own, bound-other, unbound, admin} through doc.get / doc.query / order.trace_document, zero writes', { timeout: 300000 }, async (t) => {
+test('AC3 MCP matrix: PS PSF DR OC OCS DS RB x {bound-own, bound-other, unbound, admin} through doc.get / doc.query / order.trace_document, zero writes', { timeout: SLOW_WAIT.serverCaseMs }, async (t) => {
   const f = await server(t)
   const { db, api, mcp } = f
   const { DOC_SCOPE_RESOLVERS } = await import('../../server/lib/docflow.js')

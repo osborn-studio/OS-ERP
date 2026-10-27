@@ -10,6 +10,7 @@
  * ============================================================================
  */
 import test from 'node:test'
+import { SLOW_WAIT, SPAWN_TIMEOUT_LONG_MS } from '../lib/load-tolerance.mjs'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
@@ -78,7 +79,7 @@ function minimalSource(t) {
   assert.equal(git(src, 'commit', '-q', '-m', 'stub').status, 0)
   return src
 }
-const candidate = (src, out, extra = [], env = {}) => spawnSync(process.execPath, ['scripts/release-candidate.mjs', `--output=${out}`, '--skip-build', '--skip-docs', '--reuse-node-modules', ...extra], { cwd: src, env: { PATH, ...env }, encoding: 'utf8', timeout: 280000 })
+const candidate = (src, out, extra = [], env = {}) => spawnSync(process.execPath, ['scripts/release-candidate.mjs', `--output=${out}`, '--skip-build', '--skip-docs', '--reuse-node-modules', ...extra], { cwd: src, env: { PATH, ...env }, encoding: 'utf8', timeout: SPAWN_TIMEOUT_LONG_MS })
 const sha = bytes => createHash('sha256').update(bytes).digest('hex')
 
 test('candidate refuses a dirty working tree (modified, staged or untracked) before building anything', (t) => {
@@ -152,7 +153,7 @@ test('extractNotes picks the version section, else the newest batch, and always 
   assert.throws(() => extractNotes('# nothing here\n', '1.2.3', { commit: 'abcdef0', builtAt: 'x' }), /no changelog section/i)
 })
 
-test('candidate builds RC-<version>-<sha>.zip with sha256, EVIDENCE.json and notes, and verifies on a fresh extraction', { timeout: 290000 }, (t) => {
+test('candidate builds RC-<version>-<sha>.zip with sha256, EVIDENCE.json and notes, and verifies on a fresh extraction', { timeout: SLOW_WAIT.candidateCaseMs }, (t) => {
   const src = minimalSource(t)
   const out = path.join(tempDir(t, 'os-erp-rc-out-'), 'release')
   const version = JSON.parse(readFileSync(path.join(src, 'package.json'), 'utf8')).version
@@ -325,7 +326,7 @@ test('--run-tests cannot be combined with an operator-attested focused result', 
   assert.match(r.stderr, /do not combine/)
 })
 
-test('--run-tests with a failing test aborts and writes no candidate', { timeout: 290000 }, (t) => {
+test('--run-tests with a failing test aborts and writes no candidate', { timeout: SLOW_WAIT.candidateCaseMs }, (t) => {
   const src = minimalSource(t)
   put(src, 'tests/zz-fails.test.mjs', "import test from 'node:test'\nimport assert from 'node:assert/strict'\ntest('stub failure', () => assert.equal(1, 2))\n")
   git(src, 'add', '-A'); git(src, 'commit', '-q', '-m', 'failing test')
@@ -337,7 +338,7 @@ test('--run-tests with a failing test aborts and writes no candidate', { timeout
   assert.ok(!existsSync(out) || readdirSync(out).length === 0, 'no candidate left behind')
 })
 
-test('--run-tests --ci-run auto records produced results bound to the package tests tree; gh stand-in supplies the run id', { timeout: 290000 }, (t) => {
+test('--run-tests --ci-run auto records produced results bound to the package tests tree; gh stand-in supplies the run id', { timeout: SLOW_WAIT.candidateCaseMs }, (t) => {
   const src = guardedSource(t, { 'zz-ok.test.mjs': "import test from 'node:test'\nimport assert from 'node:assert/strict'\ntest('stub ok', () => assert.equal(1, 1))\ntest('stub skipped', { skip: true }, () => {})\n" })
   const head = git(src, 'rev-parse', 'HEAD').stdout.trim()
   const gh = fakeGh(t, { stdout: JSON.stringify([{ databaseId: 424242, conclusion: 'success', status: 'completed', headSha: head, createdAt: '2026-01-04T00:00:00Z', event: 'push', headBranch: 'main' }]) })
@@ -399,7 +400,7 @@ test('--run-tests --ci-run auto records produced results bound to the package te
   assert.match(swapped.stderr, /tests-tree\.json|tests tree binding failed/)
 })
 
-test('without gh the candidate still builds, with ci_run_id null and the reason recorded; nothing is invented', { timeout: 290000 }, (t) => {
+test('without gh the candidate still builds, with ci_run_id null and the reason recorded; nothing is invented', { timeout: SLOW_WAIT.candidateCaseMs }, (t) => {
   const src = minimalSource(t)
   const out = path.join(tempDir(t, 'os-erp-rc-out-'), 'release')
   const r = candidate(src, out, ['--ci-run=auto'], { OS_ERP_GH: '/nonexistent/gh' })
@@ -427,7 +428,7 @@ test('selfCiRun only applies on hosted CI with a numeric run id for this very co
   assert.match(s.lookup.note, /SELF-REFERENTIAL/)
 })
 
-test('--ci-run=auto on hosted CI without a successful ci.yml run records the current run as hosted-ci-self; verify-release accepts it with a warning and rejects forgeries', { timeout: 290000 }, (t) => {
+test('--ci-run=auto on hosted CI without a successful ci.yml run records the current run as hosted-ci-self; verify-release accepts it with a warning and rejects forgeries', { timeout: SLOW_WAIT.candidateCaseMs }, (t) => {
   const src = minimalSource(t)
   const head = git(src, 'rev-parse', 'HEAD').stdout.trim()
   const gh = fakeGh(t, { stdout: '[]' })
@@ -479,7 +480,7 @@ test('AF1: resolveCiRun accepts only ci.yml pull_request/push runs; dispatch run
   }
 })
 
-test('outside hosted CI a missing successful run stays null (no self record is invented locally)', { timeout: 290000 }, (t) => {
+test('outside hosted CI a missing successful run stays null (no self record is invented locally)', { timeout: SLOW_WAIT.candidateCaseMs }, (t) => {
   const src = minimalSource(t)
   const out = path.join(tempDir(t, 'os-erp-rc-out-'), 'release')
   const r = candidate(src, out, ['--ci-run=auto'], { OS_ERP_GH: fakeGh(t, { stdout: '[]' }).file, GITHUB_RUN_ID: '555001' })
@@ -510,7 +511,7 @@ test('AG1: --skip-focused is refused outside GitHub Actions, and never combines 
   assert.ok(!existsSync(out), 'nothing is built')
 })
 
-test('AG1: a hosted --skip-focused build records dry_run, skipped-dry-run focused tests; verify-release warns, is never log-eligible and rejects forgeries', { timeout: 290000 }, async (t) => {
+test('AG1: a hosted --skip-focused build records dry_run, skipped-dry-run focused tests; verify-release warns, is never log-eligible and rejects forgeries', { timeout: SLOW_WAIT.candidateCaseMs }, async (t) => {
   const src = minimalSource(t)
   const head = git(src, 'rev-parse', 'HEAD').stdout.trim()
   const gh = fakeGh(t, { stdout: '[]' })

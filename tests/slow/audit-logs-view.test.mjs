@@ -6,6 +6,7 @@
  * ============================================================================
  */
 import test from 'node:test'
+import { FETCH_TIMEOUT_MS, READY_POLL_ATTEMPTS, SLOW_WAIT } from '../lib/load-tolerance.mjs'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
@@ -55,9 +56,9 @@ async function fixture(t, extraEnv = {}) {
     await stopped
     rmSync(dir, { recursive: true, force: true })
   })
-  for (let i = 0; i < 1200 && !ready && child.exitCode === null; i++) await delay(50)
+  for (let i = 0; i < READY_POLL_ATTEMPTS && !ready && child.exitCode === null; i++) await delay(50)
   assert.ok(ready, 'server must start')
-  const raw = (route, headers = {}) => fetch(`http://127.0.0.1:${port}${route}`, { headers, signal: AbortSignal.timeout(15000) })
+  const raw = (route, headers = {}) => fetch(`http://127.0.0.1:${port}${route}`, { headers, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) })
   const request = async (route, headers = {}) => {
     const res = await raw(route, headers)
     return { status: res.status, body: await res.json() }
@@ -101,7 +102,7 @@ test('Z7 unit: csvCell quotes everything and neutralises formula prefixes', () =
   assert.ok(AUDIT_EXPORT_MAX_ROWS > 0 && AUDIT_EXPORT_MAX_ROWS <= 100000)
 })
 
-test('Z7 permission: 401 anonymous, 403 without system:audit:view, 200 with it; admin ok; migration grants admin', { timeout: 90000 }, async t => {
+test('Z7 permission: 401 anonymous, 403 without system:audit:view, 200 with it; admin ok; migration grants admin', { timeout: SLOW_WAIT.httpCaseMs }, async t => {
   const f = await fixture(t)
   assert.equal((await f.request('/api/meta/audit-logs')).status, 401)
   const nobody = await f.login('z7_nobody', 'purchase')
@@ -121,7 +122,7 @@ test('Z7 permission: 401 anonymous, 403 without system:audit:view, 200 with it; 
   assert.equal(f.db.prepare("SELECT 1 FROM role_permissions WHERE role_code='boss' AND perm_code=?").get(PERM), undefined, 'boss not granted')
 })
 
-test('Z7 filters + pagination + redaction', { timeout: 90000 }, async t => {
+test('Z7 filters + pagination + redaction', { timeout: SLOW_WAIT.httpCaseMs }, async t => {
   const f = await fixture(t)
   const admin = await f.login('z7_admin', 'admin', { isSuper: 1 })
   f.db.exec('DELETE FROM audit_logs')
@@ -175,7 +176,7 @@ test('Z7 filters + pagination + redaction', { timeout: 90000 }, async t => {
   assert.ok(raw.includes('138****5678'))
 })
 
-test('Z7 CSV export: same filters, injection-safe, capped, audited', { timeout: 90000 }, async t => {
+test('Z7 CSV export: same filters, injection-safe, capped, audited', { timeout: SLOW_WAIT.httpCaseMs }, async t => {
   const f = await fixture(t)
   const admin = await f.login('z7_admin', 'admin', { isSuper: 1 })
   f.db.exec('DELETE FROM audit_logs')
@@ -203,7 +204,7 @@ test('Z7 CSV export: same filters, injection-safe, capped, audited', { timeout: 
   assert.equal(detail.max_rows, AUDIT_EXPORT_MAX_ROWS)
 })
 
-test('Z7 CSV export is row-capped and marks truncation', { timeout: 120000 }, async t => {
+test('Z7 CSV export is row-capped and marks truncation', { timeout: SLOW_WAIT.cliMs }, async t => {
   const f = await fixture(t)
   const admin = await f.login('z7_admin', 'admin', { isSuper: 1 })
   f.db.exec('DELETE FROM audit_logs')
@@ -244,7 +245,7 @@ test('AA6 unit: keyword needs 2 effective chars and buildWhere enforces it on it
   assert.equal(orderOf({ module: 'x', entity: 'e', entity_id: '1' }).sql, 'id DESC', 'entity+id wins: idx_audit_entity gives rowid order')
 })
 
-test('AA6 keyword scope over HTTP: module / entity_id / detail are not searched; short keyword is 400 on list and export', { timeout: 90000 }, async t => {
+test('AA6 keyword scope over HTTP: module / entity_id / detail are not searched; short keyword is 400 on list and export', { timeout: SLOW_WAIT.httpCaseMs }, async t => {
   const f = await fixture(t)
   const admin = await f.login('aa6_admin', 'admin', { isSuper: 1 })
   f.db.exec('DELETE FROM audit_logs')
@@ -263,7 +264,7 @@ test('AA6 keyword scope over HTTP: module / entity_id / detail are not searched;
   assert.equal(f.db.prepare("SELECT COUNT(*) c FROM audit_logs WHERE action='AUDIT_LOG_EXPORT'").get().c, 0, 'refused export leaves no export audit row')
 })
 
-test('AA6 capped count: total is at most cap+1, has_more flags it, exact below the cap, page depth is capped', { timeout: 120000 }, async t => {
+test('AA6 capped count: total is at most cap+1, has_more flags it, exact below the cap, page depth is capped', { timeout: SLOW_WAIT.cliMs }, async t => {
   const f = await fixture(t)
   const admin = await f.login('aa6_admin', 'admin', { isSuper: 1 })
   f.db.exec('DELETE FROM audit_logs')
@@ -291,7 +292,7 @@ test('AA6 capped count: total is at most cap+1, has_more flags it, exact below t
   assert.equal(deep.status, 400); assert.match(deep.body.message, /上限/)
 })
 
-test('AA6 export cursor follows the list order: every row once, newest first, ties on created_at, filter + snapshot respected', { timeout: 120000 }, async t => {
+test('AA6 export cursor follows the list order: every row once, newest first, ties on created_at, filter + snapshot respected', { timeout: SLOW_WAIT.cliMs }, async t => {
   const f = await fixture(t)
   const admin = await f.login('aa6_admin', 'admin', { isSuper: 1 })
   f.db.exec('DELETE FROM audit_logs')
@@ -549,7 +550,7 @@ test('AB3 keywordUsesFts: FTS only for rare hits; common keywords, short keyword
   assert.equal(keywordUsesFts(db, 'RAREACT'), false, 'flagged off: LIKE')
 })
 
-test('AB3 action-only filter needs a module: unit + bizcode over HTTP (list and export), module+action still works', { timeout: 90000 }, async t => {
+test('AB3 action-only filter needs a module: unit + bizcode over HTTP (list and export), module+action still works', { timeout: SLOW_WAIT.httpCaseMs }, async t => {
   assert.throws(() => parseFilters({ action: 'CREATE' }), (e) => e instanceof AuditViewError && e.code === AUDIT_ACTION_NEEDS_MODULE && e.status === 400)
   assert.throws(() => buildWhere({ action: 'CREATE' }), (e) => e.code === AUDIT_ACTION_NEEDS_MODULE, 'buildWhere enforces it on its own')
   assert.throws(() => parseFilters({ action: 'CREATE', user: '12' }), AuditViewError, 'a user id is not a module')
@@ -570,7 +571,7 @@ test('AB3 action-only filter needs a module: unit + bizcode over HTTP (list and 
   assert.equal((await f.request('/api/meta/audit-logs?module=sales', admin)).body.data.total, 1)
 })
 
-test('AB3 over HTTP: FTS path answers keyword searches (3+ and 2 chars); dropping the FTS objects falls back to LIKE with identical answers', { timeout: 90000, ...needsFts5Build }, async t => {
+test('AB3 over HTTP: FTS path answers keyword searches (3+ and 2 chars); dropping the FTS objects falls back to LIKE with identical answers', { timeout: SLOW_WAIT.httpCaseMs, ...needsFts5Build }, async t => {
   const f = await fixture(t)
   const admin = await f.login('ab3_http', 'admin', { isSuper: 1 })
   assert.equal(ftsAvailable(f.db), !NOFTS, 'server migrated to 067 (the FTS path is switched off by GML_AUDIT_FTS=0)')
@@ -654,7 +655,7 @@ test('AC5 GML_AUDIT_FTS=0 forces the LIKE path: only the exact string "0" switch
   assert.equal(ftsAvailable(db), true)
 })
 
-test('AC5 over HTTP: a server started with GML_AUDIT_FTS=0 answers from the base table, not the FTS index (a row the index never saw is found)', { timeout: 90000, ...needsFts5Build }, async t => {
+test('AC5 over HTTP: a server started with GML_AUDIT_FTS=0 answers from the base table, not the FTS index (a row the index never saw is found)', { timeout: SLOW_WAIT.httpCaseMs, ...needsFts5Build }, async t => {
   const prev = process.env.GML_AUDIT_FTS
   t.after(() => { if (prev === undefined) delete process.env.GML_AUDIT_FTS; else process.env.GML_AUDIT_FTS = prev })
   delete process.env.GML_AUDIT_FTS // 本进程里 FTS 可用；子进程显式带 0
@@ -803,7 +804,7 @@ test('AD4 table absent + GML_AUDIT_FTS=0 together, and with an FTS-less build si
   assert.deepEqual(ask(), viaFts, 'override as well')
 })
 
-test('AD4 over HTTP: a server whose FTS objects were dropped keeps writing audit rows and answers keyword searches like a no-FTS5 build', { timeout: 90000 }, async t => {
+test('AD4 over HTTP: a server whose FTS objects were dropped keeps writing audit rows and answers keyword searches like a no-FTS5 build', { timeout: SLOW_WAIT.httpCaseMs }, async t => {
   const f = await fixture(t)
   const admin = await f.login('ad4_http', 'admin', { isSuper: 1 })
   ins(f.db, { user: 'alice', action: 'GHOSTACTION', module: 'sales' })

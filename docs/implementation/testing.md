@@ -74,7 +74,11 @@ node scripts/test-timings.mjs --check [--input <json>]
 
 规矩：**只放宽等待，不放宽行为断言**。"至少一次重试"、"零重复行"、"完整性检查通过"、"被拒绝的请求不改状态"这类断言不得加倍率、不得改成近似。新增会随负载波动的数字，先看这里有没有现成常量，没有就加一个并写清它放宽的是什么。
 
-本批已改用常量的文件：`tests/write-contention.test.mjs`、`tests/release-signing.test.mjs`、`tests/slow/audit-fts-ops-loop.test.mjs`、`tests/slow/audit-fts-races.test.mjs`。其余文件里的零散超时没有逐个迁移（见 backlog 的新增条目）。
+AH1 已迁移 `tests/write-contention.test.mjs`、`tests/release-signing.test.mjs`、`tests/slow/audit-fts-ops-loop.test.mjs`、`tests/slow/audit-fts-races.test.mjs`。
+
+2026-10-27 E03：其余 12 个 slow 文件的用例/子进程/HTTP 超时与服务就绪、归档暂停、profile 等待已迁移到公共预算。`SLOW_WAIT` 补齐 5/10/30/90/120/290/300 秒的原有上限，以及 2400/250/600/100 次的原轮询上限；默认倍率 1 时数值逐项保持不变。已有 15 秒 HTTP、180 秒用例与280秒子进程上限复用原常量。只缩放轮询次数，间隔仍为原来的 40/50 毫秒，不让预算被乘两次。
+
+不迁移业务时钟（缓存 TTL、令牌过期、限流窗口）、数据行数、重试次数、锁持有时间、模拟延迟和断言阈值；这些决定被测行为。所有 slow 文件仍由托管慢套件实际运行，不能用预算映射测试代替 Linux 行为验收。新增真实超时应先定位原因，不能靠提高倍率制造通过。
 
 ## 5. 已知基线失败（macOS 参考机，AH1 开始前就存在）
 

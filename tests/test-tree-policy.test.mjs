@@ -12,6 +12,7 @@
  * ============================================================================
  */
 import test from 'node:test'
+import { spawnSync } from 'node:child_process'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -23,6 +24,25 @@ const SLOW_DIR = path.join(ROOT, 'tests/slow')
 const ci = fs.readFileSync(path.join(ROOT, '.github/workflows/ci.yml'), 'utf8')
 const ciCode = ci.replace(/^\s*#.*$/gm, '')
 const slowEntries = fs.existsSync(SLOW_DIR) ? fs.readdirSync(SLOW_DIR) : []
+
+test('slow wait budgets preserve default deadlines and scale only waits in a fresh process', () => {
+  const script = `import { SLOW_WAIT, WRITE_BENCH } from './tests/lib/load-tolerance.mjs'; console.log(JSON.stringify({ waits: SLOW_WAIT, retry: WRITE_BENCH }))`
+  const read = factor => {
+    const r = spawnSync(process.execPath, ['--input-type=module', '-e', script], { cwd: ROOT, env: { PATH: process.env.PATH, GML_TEST_LOAD_FACTOR: factor }, encoding: 'utf8', timeout: 10000 })
+    assert.equal(r.status, 0, r.stderr); return JSON.parse(r.stdout)
+  }
+  const normal = read('1'), loaded = read('2'), capped = read('100')
+  assert.deepEqual(normal.waits, {
+    probeMs: 5000, bootstrapMs: 30000, cliMs: 120000, httpShortMs: 10000,
+    httpCaseMs: 90000, serverCaseMs: 300000, candidateCaseMs: 290000,
+    extendedReadyAttempts: 2400, productionReadyAttempts: 250, archivePauseAttempts: 600, profileAttempts: 100
+  })
+  for (const [key, value] of Object.entries(normal.waits)) {
+    assert.equal(loaded.waits[key], value * 2, key)
+    assert.equal(capped.waits[key], value * 20, key)
+  }
+  assert.deepEqual(loaded.retry, normal.retry, 'contention behaviour/retry budget is never scaled')
+})
 
 test('tests/slow contains only *.test.mjs files and each starts with a `// slow: <reason>` header line', () => {
   assert.ok(slowEntries.length > 0, 'tests/slow must exist and hold the >60 s files')

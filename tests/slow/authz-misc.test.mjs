@@ -16,6 +16,7 @@
  * ============================================================================
  */
 import test from 'node:test'
+import { SLOW_WAIT } from '../lib/load-tolerance.mjs'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { createHash, createHmac, randomBytes } from 'node:crypto'
@@ -52,7 +53,7 @@ async function server(t) {
     await stopped
     rmSync(dir, { recursive: true, force: true })
   })
-  for (let i = 0; i < 2400 && !output.includes('服务已启动') && child.exitCode === null; i++) await delay(50)
+  for (let i = 0; i < SLOW_WAIT.extendedReadyAttempts && !output.includes('服务已启动') && child.exitCode === null; i++) await delay(50)
   assert.ok(output.includes('服务已启动'), `test-mode server must become ready:\n${output.slice(-2000)}`)
   const base = `http://127.0.0.1:${port}`
   const api = async (route, { token, body, method = body === undefined ? 'GET' : 'POST' } = {}) => {
@@ -60,7 +61,7 @@ async function server(t) {
       method,
       headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-      signal: AbortSignal.timeout(10000)
+      signal: AbortSignal.timeout(SLOW_WAIT.httpShortMs)
     })
     return { status: res.status, body: await res.json() }
   }
@@ -87,7 +88,7 @@ const forbidden = (r, m = '') => assert.equal(r.status, 403, `${m} ${JSON.string
 const okData = (r) => { assert.equal(r.status, 200, JSON.stringify(r.body)); return r.body.data }
 const md5 = (s) => createHash('md5').update(s, 'utf8').digest('hex').toUpperCase()
 
-test('doc type to create-permission mapping is total and points at real permissions', { timeout: 300000 }, async (t) => {
+test('doc type to create-permission mapping is total and points at real permissions', { timeout: SLOW_WAIT.serverCaseMs }, async (t) => {
   const f = await server(t)
   const { DOC_CREATE_PERMS, createPermOf } = await import('../../server/lib/docflow.js')
   const types = f.db.prepare('SELECT code FROM doc_types').all().map((x) => x.code)
@@ -103,7 +104,7 @@ test('doc type to create-permission mapping is total and points at real permissi
   assert.equal(createPermOf('toString'), null)
 })
 
-test('no-issue requires the create permission of the doc type; dry runs are exempt', { timeout: 300000 }, async (t) => {
+test('no-issue requires the create permission of the doc type; dry runs are exempt', { timeout: SLOW_WAIT.serverCaseMs }, async (t) => {
   const f = await server(t)
   const { api, db } = f
   const issue = (token, body) => api('/api/docflow/no-issue', { token, body })
@@ -169,7 +170,7 @@ test('no-issue requires the create permission of the doc type; dry runs are exem
   }
 })
 
-test('auth orgs list is trimmed by org scope for non-admin accounts', { timeout: 300000 }, async (t) => {
+test('auth orgs list is trimmed by org scope for non-admin accounts', { timeout: SLOW_WAIT.serverCaseMs }, async (t) => {
   const f = await server(t)
   const { api, db } = f
   const all = db.prepare('SELECT id, path FROM orgs WHERE id<>0').all()
@@ -200,7 +201,7 @@ test('auth orgs list is trimmed by org scope for non-admin accounts', { timeout:
   assert.equal((await api('/api/auth/orgs')).status, 401)
 })
 
-test('qimen gateway never passes through unauthenticated or badly signed calls', { timeout: 300000 }, async (t) => {
+test('qimen gateway never passes through unauthenticated or badly signed calls', { timeout: SLOW_WAIT.serverCaseMs }, async (t) => {
   const f = await server(t)
   const { api, db } = f
   const pf = db.prepare("SELECT id, app_key FROM platforms WHERE app_key IS NOT NULL AND app_key<>'' AND status='active' LIMIT 1").get()
@@ -260,7 +261,7 @@ test('qimen gateway never passes through unauthenticated or badly signed calls',
   await unauthorized(signed(method), 'disabled platform')
 })
 
-test('payment auto-allocation and settlement source selection follow the caller org scope', { timeout: 300000 }, async (t) => {
+test('payment auto-allocation and settlement source selection follow the caller org scope', { timeout: SLOW_WAIT.serverCaseMs }, async (t) => {
   const f = await server(t)
   const { api, db } = f
   const whs = db.prepare(`SELECT w.id, w.org_id, o.path, o.parent_id FROM warehouses w JOIN orgs o ON o.id = w.org_id
