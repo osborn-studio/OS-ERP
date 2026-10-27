@@ -81,6 +81,30 @@ function minimalSource(t) {
 const candidate = (src, out, extra = [], env = {}) => spawnSync(process.execPath, ['scripts/release-candidate.mjs', `--output=${out}`, '--skip-build', '--skip-docs', '--reuse-node-modules', ...extra], { cwd: src, env: { PATH, ...env }, encoding: 'utf8', timeout: 280000 })
 const sha = bytes => createHash('sha256').update(bytes).digest('hex')
 
+test('candidate refuses an over-limit ZIP before reading its manifest and removes partial outputs', (t) => {
+  const src = minimalSource(t)
+  const out = path.join(tempDir(t, 'os-erp-rc-limit-'), 'release')
+  // Tiny physical archive, oversized declaration: no large allocation or Python needed.
+  put(src, 'scripts/oversized-candidate.mjs', `
+import fs from 'node:fs'; import path from 'node:path'; import { zipSync } from 'fflate';
+const out = process.argv.find(a => a.startsWith('--output=')).slice(9);
+fs.mkdirSync(out, { recursive: true });
+const zip = Buffer.from(zipSync({ 'pkg/MANIFEST.json': Buffer.from('{}') }));
+const cd = zip.indexOf(Buffer.from([0x50, 0x4b, 0x01, 0x02]));
+zip.writeUInt32LE(64 * 1024 * 1024 + 1, cd + 24);
+fs.writeFileSync(path.join(out, 'package.zip'), zip);
+`)
+  const pkg = JSON.parse(readFileSync(path.join(src, 'package.json'), 'utf8'))
+  pkg.scripts.release = 'node scripts/oversized-candidate.mjs'
+  put(src, 'package.json', JSON.stringify(pkg))
+  assert.equal(git(src, 'add', '-A').status, 0)
+  assert.equal(git(src, 'commit', '-q', '-m', 'oversized archive fixture').status, 0)
+  const r = candidate(src, out)
+  assert.notEqual(r.status, 0)
+  assert.match(r.stderr, /per-file limit/, 'reject at extraction, before interpreting MANIFEST or running packaged code')
+  assert.ok(!existsSync(out) || readdirSync(out).length === 0, 'no candidate, checksum or evidence left after refusal')
+})
+
 test('candidate refuses a dirty working tree (modified, staged or untracked) before building anything', (t) => {
   const src = minimalSource(t)
   const out = path.join(tempDir(t, 'os-erp-rc-out-'), 'release')

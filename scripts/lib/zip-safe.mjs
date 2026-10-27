@@ -95,18 +95,41 @@ export function listZip(buf, limits = DEFAULT_LIMITS) {
   return out
 }
 
-/**
- * Safely extract `zipFile` into `dest` (must not exist or be empty). `strip` drops that many leading path segments (release zips
- * have one top-level directory). Returns { entries, files, bytes }. Throws ZipLimitError on any violation; on error the partially
- * written destination is removed only if this call created it.
- */
-export function extractZipSafe(zipFile, dest, limits = {}, { strip = 0 } = {}) {
+/** Read one bounded archive snapshot. File growth/shrinkage during the read is refused. */
+export function readZipBounded(zipFile, limits = {}) {
   const lim = { ...DEFAULT_LIMITS, ...limits }
   for (const k of Object.keys(DEFAULT_LIMITS)) if (!Number.isSafeInteger(lim[k]) || lim[k] < 1) throw new ZipLimitError(`limit ${k} must be a positive integer`)
-  const st = fs.statSync(zipFile)
-  if (!st.isFile()) refuse('archive is not a regular file')
-  if (st.size > lim.maxArchiveBytes) refuse(`archive is ${st.size} bytes, over the ${lim.maxArchiveBytes} byte limit`)
-  const buf = fs.readFileSync(zipFile)
+  const fd = fs.openSync(zipFile, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK)
+  try {
+    const st = fs.fstatSync(fd)
+    if (!st.isFile()) refuse('archive is not a regular file')
+    if (st.size > lim.maxArchiveBytes) refuse(`archive is ${st.size} bytes, over the ${lim.maxArchiveBytes} byte limit`)
+    // Bound the actual read too: a file growing after fstat cannot cause an unbounded allocation.
+    const buf = Buffer.alloc(st.size + 1)
+    let size = 0
+    while (size < buf.length) {
+      const n = fs.readSync(fd, buf, size, buf.length - size, null)
+      if (!n) break
+      size += n
+    }
+    if (size !== st.size) refuse('archive size changed while reading')
+    return buf.subarray(0, size)
+  } finally { fs.closeSync(fd) }
+}
+
+/**
+ * Safely extract into a new/empty destination; strip drops leading path segments.
+ * Returns { entries, files, bytes }. A destination created by this call is removed on failure.
+ */
+export function extractZipSafe(zipFile, dest, limits = {}, options = {}) {
+  return extractZipBytesSafe(readZipBounded(zipFile, limits), dest, limits, options)
+}
+
+// The builder keeps these exact bytes for output and hashing, avoiding a second source-file read.
+export function extractZipBytesSafe(buf, dest, limits = {}, { strip = 0 } = {}) {
+  const lim = { ...DEFAULT_LIMITS, ...limits }
+  for (const k of Object.keys(DEFAULT_LIMITS)) if (!Number.isSafeInteger(lim[k]) || lim[k] < 1) throw new ZipLimitError(`limit ${k} must be a positive integer`)
+  if (!Buffer.isBuffer(buf)) refuse('archive bytes must be a Buffer')
   const entries = listZip(buf, lim)
   const root = path.resolve(dest)
   let created = false
