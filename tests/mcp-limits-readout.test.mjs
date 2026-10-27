@@ -112,7 +112,7 @@ test('GET /api/meta/audit-logs carries fts state: setting, index presence and th
   const f = await server(t)
   const admin = await f.login('admin', '12345')
   const on = (await f.get('/api/meta/audit-logs?page=1&pageSize=1', admin)).body.data.fts
-  assert.deepEqual(Object.keys(on).sort(), ['active', 'env_disabled', 'index_present', 'setting_enabled'])
+  assert.deepEqual(Object.keys(on).sort(), ['active', 'env_disabled', 'fallback_total', 'index_present', 'setting_enabled'])
   assert.equal(on.setting_enabled, true)
   assert.equal(on.env_disabled, false)
   assert.equal(on.active, on.index_present && !on.env_disabled, 'active follows the query predicate (index present, no env switch)')

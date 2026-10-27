@@ -1072,7 +1072,8 @@ export function buildOpenApi() {
     // 说明：MCP 业务端点本身走 POST /mcp（JSON-RPC 2.0，非 REST），不在这里登记；
     // 这里登记的是**管理面**的 REST 接口。数据全部由内核三张表推导，页面不写死名单。
     '/api/mcp/catalog': { get: { tags: ['AI 与 MCP'], summary: '**AI 能力目录**：全部单据类型 × 状态机 × 可推进边（含高危标注）× 工具清单 × 安全边界。由 `doc_types`/`doc_states`/`doc_actions` 实时推导', responses: { 200: jsonResp(null), 403: jsonResp(null) } } },
-    '/api/mcp/limits/tokens': { get: { tags: ['AI 与 MCP'], summary: 'MCP 每令牌近期限流（需 system.mcp.manage，只读）：store（memory|db）/ window_seconds / truncated（超过 500 张时 true，触顶令牌优先）/ tokens[{id,name,rate_limited_recent}]。db 模式下 rate_limited_recent = 当前+上一窗口里触及上限的窗口数（0..2；桶表只记放行调用，不是 429 精确次数）；memory 模式 tokens 恒为空。不含令牌前缀/哈希/明文（AF11）', responses: { 200: jsonResp(null), 403: jsonResp(null) } } },
+    '/api/mcp/limits/tokens': { get: { tags: ['AI 与 MCP'], summary: 'MCP 每令牌近期限流（需 system.mcp.manage，只读）：store（memory|db）/ window_seconds / truncated（超过 500 张时 true，触顶令牌优先）/ tokens[{id,name,rate_limited_recent}]。db 模式下 rate_limited_recent = 当前+上一窗口里该令牌被速率额度拒绝（429）的精确次数（来自迁移 075 的 denied 行；拒绝行写失败的那一次不计）；memory 模式 tokens 恒为空。不含令牌前缀/哈希/明文（AF11）', responses: { 200: jsonResp(null), 403: jsonResp(null) } } },
+    '/api/mcp/limits/quota': { get: { tags: ['AI 与 MCP'], summary: 'MCP 每令牌今日日配额用量（需 system.mcp.manage，只读）：daily_quota（0=关闭）/ enabled / truncated（超过 500 张时 true）/ tokens[{id,name,used,remaining}]（仅在用令牌，用量多者在前；口径同 dailyQuotaState：本地日历日的 mcp_call_logs 行数）。配额关闭时 tokens 为空。不含令牌前缀/哈希/明文（AG9）', responses: { 200: jsonResp(null), 403: jsonResp(null) } } },
     '/api/mcp/limits': { get: { tags: ['AI 与 MCP'], summary: 'MCP 限速读数（需 system.mcp.manage，只读）：rpm / write_rpm / window_seconds / daily_quota（0=关闭）/ rate_limited_total（本进程自启动以来的 429 次数，重启归零）/ counter_scope=process。不含令牌信息（AE11）', responses: { 200: jsonResp(null), 403: jsonResp(null) } } },
     '/api/mcp/tools': { get: { tags: ['AI 与 MCP'], summary: 'MCP 工具清单（名称 / 级别 / 用途），供令牌白名单勾选', responses: { 200: jsonResp(null) } } },
     '/api/mcp/tokens': {
@@ -1195,7 +1196,7 @@ export function buildOpenApi() {
     openapi: '3.0.3',
     info: {
       title: 'GML 供应链协同系统 API',
-      version: '1.43.0',
+      version: '1.44.0',
       description:
         '化妆品 / 服装 双行业轻量级供应链协同系统接口文档。覆盖主数据、采购、销售、存货、经销商、门店要货、委外管理、计划与生产、生产制造（BOM / 领料 / 完工入库）、质量检验、线上 OMS 与经营看板。\n\n' +
         '**多行业**：登录 `POST /api/auth/login` 时传 `industry`（`cosmetic` / `apparel`）选择行业版本；' +

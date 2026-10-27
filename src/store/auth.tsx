@@ -84,7 +84,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       const code = ind || industry
       const res = await api.post('/auth/login', { username, password, industry: code })
-      const { token: tk, user: u, transport } = res.data
+      const { token: tk, user: baseUser, transport, roles_inactive, notice_code, notice_message } = res.data
+      // AG10：登录响应里的停用角色提示并进会话用户对象（随后 /auth/me 会以同样字段刷新）
+      const u = baseUser ? { ...baseUser, roles_inactive: roles_inactive ?? [], notice_code: notice_code ?? null, notice_message: notice_message ?? null } : baseUser
       if (sequence !== loginSequence.current || !isCurrentSession(snapshot)) throw new Error('登录状态已在其他操作中变更，请重试。')
       if (transport === 'cookie') {
         // Cookie transport (ADR-0036): the server set the HttpOnly session cookie; no JWT reaches JavaScript.

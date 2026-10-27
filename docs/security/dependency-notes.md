@@ -110,7 +110,7 @@ os-erp@0.2.0-alpha.1
 
 - **确认无引用**：`git grep -i zod` 在移除前只命中 `package.json`、锁文件、`THIRD_PARTY_NOTICES.md`、`server/lib/xlsx.js` 的一行注释、测试夹具与文档；没有任何 `import`/`require`，构建与脚本也不引用。
 - **改动**：从 `package.json` 的 `dependencies` 删除 `zod`；`package-lock.json` 仅删去根包声明与 `node_modules/zod` 条目（无其他包变化，没有升级任何依赖）；重新生成 `THIRD_PARTY_NOTICES.md`；`docs/security/audit-allowlist.json` 的 `allow` 清空为 `[]`，GHSA-mrhx-c7xc-m3w5 不再需要豁免；运行时依赖清单现为 7 个。`release/sbom.cdx.json` 在打包时由锁文件现场生成，仓库内没有提交的 SBOM 文件。
-- `.npmrc` 仍指向镜像 `registry.npmmirror.com`，该镜像不实现审计接口，`npm audit` 仍须用 `--registry=https://registry.npmjs.org`（CI 步骤的做法不变）。
+- （AG7 之后 `.npmrc` 已改回官方 registry，见第 11 节；本条为 AD7 当时状态。）
 - 第 8 节中关于 zod 白名单的描述保留为历史记录，已被本节取代。
 
 ## 10. 依赖复查节奏与开发依赖审计（AE7，2026-10-24）
@@ -148,3 +148,36 @@ artifact 名 `os-erp-dependency-review-<run id>-<attempt>`，保留 30 天，含
 
 - `npm audit --json`（全部依赖）：info/low/moderate/high/critical 均为 0，总计 0；开发模式与运行模式都通过，`dev` 与 `allow` 段均为空。因此当前没有需要豁免的 critical 开发依赖，也没有登记任何条目。
 - 未验证：`dependency-review` job 尚未在 GitHub 上运行；公告库随时间变化，结果只对该时刻有效。
+
+## 11. 锁文件统一到 npmjs 官方 registry（AG7，2026-10-24）
+
+**决定：方案 (a)，`.npmrc` 改为 `registry=https://registry.npmjs.org`，`package-lock.json` 的所有 `resolved` 指向 `registry.npmjs.org`。**
+
+背景：此前 `.npmrc` 指向 `registry.npmmirror.com`，锁文件 377 条 `resolved` 里 341 条来自镜像、36 条来自 npmjs（平台二进制包等）。镜像没有审计/签名接口，AF7 的 `npm audit signatures` 步骤因此只能（大概率）覆盖 npmjs 的条目。
+
+**为什么选 (a) 而不是 (b)（CI 里对临时锁文件重新解析）**
+
+| 指标（本机 Mac mini，Node 22 / npm 10.9.4，冷缓存 `npm ci --ignore-scripts`） | npmmirror（改前锁文件） | npmjs（改后锁文件） |
+|---|---|---|
+| 安装 327 个包 | 12.3 s | 12.1 s |
+| `resolved` 主机分布 | npmmirror 341 / npmjs 36 | npmjs 377 |
+| `npm audit signatures` | 此前约 42 个，镜像条目大概率未覆盖 | 审计 327 个，327 个签名已验证，58 个有 attestation |
+
+安装时间与可达性在本机没有差异（官方 registry 响应约 0.7 s），因此没有理由为保留镜像而维护 (b) 的第二条解析路径（(b) 核验的是重新解析出的版本，而不是实际安装的锁文件）。如果将来某个环境无法访问 npmjs，可在本地用 `--allow <host>` 放行镜像做开发，但 CI 与候选构建必须保持官方源。
+
+**改动范围（可审阅）**
+
+- `.npmrc`：一行。
+- `package-lock.json`：341 行 `resolved` 的主机从 `registry.npmmirror.com` 换成 `registry.npmjs.org`，**只改这一个字段**：版本、`integrity`、依赖树不变（改前改后的 diff 把主机名归一化后逐行相同；其余 0 行变化）。之后 `npm install --package-lock-only` 无进一步变化。`npm ci` 会按 `integrity` 校验 tarball，所以官方源与镜像内容一致已被实测确认。
+- `scripts/check-lock-registry.mjs`（新）：统计各主机的 `resolved` 条目数并打印；主机不在白名单（默认只有 `registry.npmjs.org`）、非 https、带用户信息、缺 `integrity`、没有 `resolved` 且不是 link、锁文件无法解析或为空，一律退出码 1。`--allow <host>` 只用于本地镜像，主机必须是纯主机名（不接受通配符、协议、路径）；`--summary <file>` 写 JSON。用法：`node scripts/check-lock-registry.mjs`。
+- `.github/workflows/release-candidate.yml`：candidate job 在 AF7 两步之后增加一步 `Lock registry guard`，对仓库锁文件和候选包内的 `package-lock.json` 各跑一次，不带 `--allow`。
+- 单元测试：`tests/check-lock-registry.test.mjs`（固定夹具，含真实锁文件的一条断言）。
+
+**验证记录（本机）**：`npm ci` + `npm rebuild better-sqlite3 esbuild`、`npm run build`、`npx tsc --noEmit` 通过；`gen-third-party-notices --check` 无漂移；`check-audit-allowlist` 运行与开发两种模式都通过；守卫对真实锁文件输出 `377 registry.npmjs.org`。
+
+**未验证 / 注意**
+
+- 没有在 GitHub 托管 runner 上跑；`ci.yml` 的 `npm ci` 现在也走官方源（托管 runner 本来就能访问）。
+- `docs/audit/evidence/dependency-lock-inventory.csv` 与更早章节里的 npmmirror 字样是历史记录，没有改写。
+- AF7 的 `release-candidate.yml` 注释和 `audit-signatures.txt` 的 echo 行仍写着"npmmirror 没有签名接口"，这描述的是改前状态，保留是因为 `tests/candidate-supply-chain-policy.test.mjs` 断言了它们；后续可以连同测试一起清理。
+- 守卫只检查 `resolved` 主机，不替代 `npm ci` 的 integrity 校验，也不防止 `package.json` 里使用 git/tarball URL 依赖（这类 `resolved` 会因主机不在白名单而被拒绝）。

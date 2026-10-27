@@ -89,9 +89,9 @@ node scripts/audit-archive.mjs --data-dir /abs/data --industry cosmetic --before
 
 任何状态下库里都不会出现“段已删但锚点缺失”：删除、锚点、审计在同一事务里，提交之前崩溃一律回滚。`--resume` 完成后再跑一次 `--resume` 输出 `already-archived`、退出 0，不再删除、不再写审计。
 
-### db-backup（快照 → 校验 → 终名 + 目录 fsync → 清单 fsync → 报告）
+### db-backup（快照 → 校验 → 终名 + 目录 fsync → 清单 fsync → 清理计划 → 持久化报告 → 删除 + 目录 fsync → 终版报告）
 
-阶段顺序（AF6）：冻结窗口内所有库先生成快照 →（3a）**所有库**逐个校验、落终名并 fsync 目录项（加密模式再擦除明文）→（3b）逐库写清单（文件 fsync，再 fsync 目录）并裁剪 → 写报告。注入点按此顺序：
+阶段顺序（AF6）：冻结窗口内所有库先生成快照 →（3a）**所有库**逐个校验、落终名并 fsync 目录项（加密模式再擦除明文）→（3b）逐库写清单（文件 fsync，再 fsync 目录）→（AG6）算出清理计划（旧备份 + 孤儿清单）记入条目 → 把含该计划的 **pre-prune 报告**持久化（临时文件 fsync → rename → 目录 fsync）→ 删除（备份先、清单后）→ 目录 fsync → 写 **final 终版报告**（同样的 fsync/rename/目录 fsync 序列）。没有要删的东西时只写终版一份。注入点按此顺序：
 
 | 注入点 | 位置 | abort 后磁盘状态 | throw 后 | 恢复 |
 | --- | --- | --- | --- | --- |
@@ -100,10 +100,12 @@ node scripts/audit-archive.mjs --data-dir /abs/data --industry cosmetic --before
 | `backup.before-sidecar` | 3b 开始、第一个库的清单未写 | 同上（已验证的终名、无清单） | 清单失败路径删除这份半成品备份，`BACKUP_MANIFEST_FAILED`，非零退出 | 下一次正常运行生成带清单的新备份；孤儿 `.db` 确认后可手工删除，否则按 keep 规则被裁剪 |
 | `backup.after-manifest-fsync`（AF6） | 第一个库的 `.audit-manifest.json`（及加密模式的 `.audit-manifest.enc`）已写、清单文件已 fsync、目录已 fsync；裁剪与报告未做 | 备份 + 清单完整（含清单的目录项已 fsync），没有本次报告；其余库（如有）只有终名、无清单 | 清单失败路径删除该库的备份与清单（`BACKUP_MANIFEST_FAILED`） | abort：备份可用；下一次正常运行写新报告并按 keep 裁剪。throw：重跑 |
 | `backup.after-sidecar` | 备份与清单都已落盘、报告未写 | 备份 + 清单完整，没有本次报告 | 同左（未捕获异常，进程非零退出） | 备份可用；下一次正常运行写出新报告并按 keep 裁剪 |
+| `backup.after-report-write-before-rename`（AG6） | 一份报告的临时文件 `.backup-report-<stamp>.json.<rand>.tmp` 已写完且已 fsync，尚未 rename；每次写报告前都会触发（有清理计划时先是 pre-prune 那份，其后是终版那份）。pre-prune 那份触发时**还没删任何文件** | 新备份 + 清单完整；旧报告原样保留（报告名下没有半截文件）；留下一个内容完整的 `.backup-report-*.tmp`（点文件，不匹配报告名规则）；有清理计划时旧备份**一个都没删** | 该次报告写入失败：删掉自己的临时文件、打印“报告写入失败”、非零退出；备份与清单完整；若是 pre-prune 那份失败，该目录的清理被跳过（`prune_state=skipped`，不删任何文件） | 备份可用。下一次正常运行先清扫遗留的 `.backup-report-*.tmp`，再照常写报告并按 keep 裁剪。临时文件内容就是本次本该落地的报告，可用于事后查看 |
+| `backup.after-prune-delete-before-dirsync`（AG6） | 清理已 `unlink` 旧备份与其清单、**目录未 fsync**；pre-prune 报告（`report_phase=pre-prune`，条目 `prune_state=planned`，`pruned` 列出本次要删/已删的文件名）已持久化；终版报告未写。仅当本次确实删了文件才触发 | 新备份 + 清单完整；报告是 pre-prune 版（盘上同时可能因断电“复活”部分旧备份——无害，下次按 keep 再裁）；`pruned` 里的名字要么已删要么将删 | 清理捕获为失败：条目 `prune_state=failed`、`prune_error=BACKUP_PRUNE_FAILED…`，终版报告照常写出，非零退出（备份本身仍是 `ok`） | 备份可用。下一次正常运行继续：按 keep 规则裁剪仍超额的旧备份，并清扫**上一份报告里 `prune_state` 为 `planned` / `failed` 的 `pruned` 所列备份**对应的“备份已不在、清单还在”孤儿清单（条目 `pruned_orphans`）；与被打断的清理无关的孤儿清单（如备份被搬到机外、清单留作审计基线）**不会**被自动清扫。删了备份没来得及删清单的状态由此自愈 |
 
 无密钥模式下终名 `.db` 只在 fsync + 校验通过后经 rename 出现，因此“磁盘上有终名 `.db`”总是意味着该快照通过过完整性校验。
 
-#### 加密模式（`GML_BACKUP_KEY`）下同五个注入点（AE6 / AF6）
+#### 加密模式（`GML_BACKUP_KEY`）下同七个注入点（AE6 / AF6 / AG6）
 
 加密模式不写 `.partial` / 终名 `.db` / `.failed`：明文只存在于 0600 的 `.plain.tmp`，密文直接写 `<终名>.db.enc`。`tests/fs-fault.test.mjs` 对每点 × 两种模式断言：备份目录里（含点文件）除 `after-db-copy` 的 abort 外**没有任何以 `SQLite format 3` 开头的明文文件**，且 `.db.enc` / `.audit-manifest.enc` 能用当前密钥认证解开。
 
@@ -114,6 +116,8 @@ node scripts/audit-archive.mjs --data-dir /abs/data --industry cosmetic --before
 | `backup.before-sidecar` | 同上 | 清单失败路径删掉这份 `.db.enc`；`BACKUP_MANIFEST_FAILED` | 同上 |
 | `backup.after-manifest-fsync` | `.db.enc` + `.audit-manifest.json` + `.audit-manifest.enc` 齐全（清单已 fsync、目录已 fsync），无明文临时文件；缺报告 | 删掉该库的 `.db.enc` 与两份清单；`BACKUP_MANIFEST_FAILED` | abort：备份可用，下次正常运行写报告；throw：重跑 |
 | `backup.after-sidecar` | 同 `after-manifest-fsync` 的 abort 状态 | 未捕获异常、非零退出，磁盘状态同左 | 备份可用；下一次正常运行写报告并按 keep 裁剪 |
+| `backup.after-report-write-before-rename`（AG6） | `.db.enc` + 两份清单齐全，无明文；旧报告不变；遗留一个完整的报告 `.tmp`（报告只含元数据与密文 sha256，不含明文数据） | 同上，自己的 `.tmp` 被删，非零退出 | 同明文表：下次运行清扫 `.tmp` 并写报告 |
+| `backup.after-prune-delete-before-dirsync`（AG6） | 旧 `.db.enc` 与其两份清单已删（目录未 fsync），新 `.db.enc` + 清单完整，无明文；pre-prune 报告已列出 `pruned` | `prune_state=failed`，终版报告写出，非零退出 | 同明文表：下次运行继续裁剪并清扫孤儿清单 |
 
 **多库（默认三库一起备份）**：三库的明文快照在同一冻结窗口内先全部生成（kill -9 / 断电落在窗口内时三份 0600 `.plain.tmp` 都可能留盘）。AF6 起，窗口之后**所有库先完成加密、目录 fsync 并擦除明文**，才进入清单阶段，所以 `after-enc-rename-fsync` / `before-sidecar` / `after-manifest-fsync` / `after-sidecar` 的 abort 与 throw 都不会留下任何库的明文（`tests/fs-fault.test.mjs` 的 `all three industries` 用例对这四个点断言：无 `.plain.tmp`、目录里无任何明文 SQLite、三份 `.db.enc` 都能解开）。三库时的清单阶段：`before-sidecar` / `after-manifest-fsync` 的 **throw** 对每个库各触发一次，三个库的半成品备份与清单全部被清掉（报告 `failed=3`）；`after-sidecar` 的 abort 与 throw 是进程级终止，第一个库有备份 + 清单，**其余两个库只有已验证的终名备份、没有清单**（可用，缺链清单，按上文孤儿处理）。意外异常（fsync/rename 本身出错）：无密钥路径的终名阶段出错会删除该库的终名并记 `BACKUP_FINALIZE_FAILED`；加密路径的出错走 `BACKUP_ENCRYPT_FAILED`；清单阶段的出错走 `BACKUP_MANIFEST_FAILED`。仍然存在的明文窗口：`after-db-copy`（其后到该库加密完成之间）与冻结窗口至加密阶段结束之间的 kill -9 / 断电——恢复时检查并**擦除**备份目录里所有 `*.plain.tmp`。（AE6 的旧结论“其余库的 `.plain.tmp` 在 `before-sidecar` / `after-sidecar` 的 abort 后仍在盘上”已不再成立。）
 
@@ -122,10 +126,10 @@ node scripts/audit-archive.mjs --data-dir /abs/data --industry cosmetic --before
 #### 持久性声明：进程崩溃 vs 断电（AF6）
 
 - **进程崩溃（kill -9 / SIGABRT / 异常退出，内核存活）**：上表即全部结论，由 abort 模式的注入测试逐点验证；页缓存里的数据不丢。
-- **断电 / 内核崩溃**：脚本按下列顺序发起 fsync，**在 Linux ext4/xfs 上**这些顺序使得“到达某一注入点”意味着此前的步骤已持久：快照文件 fsync → 改终名 → **目录 fsync** →（加密模式）擦除明文；清单文件 fsync（明文清单；密文清单由 `encryptFile` 在 rename 前 fsync）→ **目录 fsync**（覆盖两种清单的目录项）→ 报告。`tests/fs-fault.test.mjs` 的 `fsync order` 用例用只读的 fs 追踪器断言这些**调用顺序**（密文/清单临时文件先 fsync 再 rename、目录 fsync 先于第一次明文覆写、新建目录的父目录 fsync、清单 fsync + 目录 fsync 先于报告写入；它证明脚本发起了 fsync，不证明硬件落盘）。
+- **断电 / 内核崩溃**：脚本按下列顺序发起 fsync，**在 Linux ext4/xfs 上**这些顺序使得“到达某一注入点”意味着此前的步骤已持久：快照文件 fsync → 改终名 → **目录 fsync** →（加密模式）擦除明文；清单文件 fsync（明文清单；密文清单由 `encryptFile` 在 rename 前 fsync）→ **目录 fsync**（覆盖两种清单的目录项）→ 报告（AG6：临时文件 fsync → rename → 目录 fsync；有清理计划时这是 pre-prune 报告）→ 删除旧备份与清单 → **目录 fsync** → 终版报告。`tests/fs-fault.test.mjs` 的 `fsync order` 用例用只读的 fs 追踪器断言这些**调用顺序**（密文/清单临时文件先 fsync 再 rename、目录 fsync 先于第一次明文覆写、新建目录的父目录 fsync、清单 fsync + 目录 fsync 先于报告 rename；AG6：报告临时文件 fsync → rename → 目录 fsync，pre-prune 报告先于第一次 `unlink`，删除后的目录 fsync 先于终版报告；它证明脚本发起了 fsync，不证明硬件落盘）。
 - **macOS**：`fsync` 只保证到磁盘缓存，不等于 `F_FULLFSYNC`（Node 不暴露），所以在 macOS 上这些 fsync 是尽力而为，不能据此声称断电持久。
 - **新建目录**：首次运行创建备份目录（含嵌套的 `backup_dir`）时，脚本逐级 fsync 每个新目录的父目录；已存在的目录层级不重复处理，其自身的持久性是前提。
-- **未覆盖**：① **报告文件** `backup-report-*.json` 写后不 fsync、也不 fsync 其目录项（它是诊断记录，不是恢复所需对象；断电后可能缺失或为空，备份本身与清单不受影响）；② 裁剪删除旧备份的目录项不 fsync（断电后可能“复活”已裁剪的旧备份，无害）；③ 被擦除的明文只做了零填充 + fsync，文件系统/SSD 层面的残留不在保证内；④ 没有做过真实断电实验——只有进程级 abort 与调用顺序断言。断电之后，离机保存清单前应对最近一份备份再跑一次校验（`--against-backup` 或重新备份）。
+- **未覆盖**：① （AG6 已收口，不再属于未覆盖）报告文件现在是临时文件 → fsync → rename → 目录 fsync，裁剪删除之后也 fsync 目录；清理前先把“将删除清单”持久化进 pre-prune 报告。仍然成立的限制：报告是诊断记录，不是恢复所需对象——它的持久化只保证：一旦命令走过“报告 rename + 目录 fsync”这一步，报告在 Linux ext4/xfs 上断电后仍在（macOS 仍是尽力而为）；在此之前断电或被杀，本次运行仍可能没有报告（备份与清单不受影响）；旧报告的**清理**（超出保留份数的 `backup-report-*.json`）删除后虽然 fsync 了目录，但没有对应的“记录先于删除”（旧报告本身就是被淘汰的诊断记录）；② 断电后目录项未落盘的删除可能“复活”已裁剪的旧备份（无害，下次按 keep 再裁，并会清扫其孤儿清单）；③ 被擦除的明文只做了零填充 + fsync，文件系统/SSD 层面的残留不在保证内；④ 没有做过真实断电实验——只有进程级 abort 与调用顺序断言。断电之后，离机保存清单前应对最近一份备份再跑一次校验（`--against-backup` 或重新备份）。
 
 #### 平台差异：macOS 与 Linux（AE6）
 
@@ -140,7 +144,7 @@ node scripts/audit-archive.mjs --data-dir /abs/data --industry cosmetic --before
 | 大小写 | 默认大小写不敏感（可格式化为敏感） | 敏感 | 所有备份/报告名都是小写库名 + 数字时间戳 + 固定后缀，冲突检测在两者上一致 |
 | `open(..., 'wx')` / `link` 到已存在名 | `EEXIST` | 同 | 清单边车用 `wx`，不会覆盖遗留清单 |
 
-注意：Windows 不在支持范围（目录 fsync 被跳过，`rename` 覆盖语义不同）。运行时间：故障矩阵（`tests/fs-fault.test.mjs` 全部用例，AF6 后 52 个）本机约 45–80 秒（随机器负载），仍低于 3 分钟预算；每个子进程有 120 秒超时，用例级超时 180 秒。
+注意：Windows 不在支持范围（目录 fsync 被跳过，`rename` 覆盖语义不同）。运行时间：故障矩阵（`tests/fs-fault.test.mjs` 全部用例，AG6 后 63 个）本机约 45–80 秒空闲机；AG6 当天整机负载 40–60 时 208–224 秒（超出空闲机的 3 分钟预算，纯属负载所致，见 capacity-baseline.md AG6 记录）；每个子进程有 120 秒超时，用例级超时 180 秒。
 
 ### 证据日志追加（`release-candidate --log` → `appendEntry`）
 
@@ -245,7 +249,28 @@ node scripts/verify-release.mjs --log=/abs/repo/docs/release/EVIDENCE-LOG.jsonl 
 - **意图密钥保管（AF5）**：
   - 生成：`node scripts/release-keygen.mjs --out <仓库外的新目录> --purpose anchor-intent` → `anchor-intent.key.pem`（0600，O_EXCL）+ `anchor-intent.pub.pem`。拒绝规则与发行密钥完全相同：相对路径、仓库或任何 git 工作树内（含经符号链接）、已存在且非空的目录、未知 / 重复 / 缺值的 `--purpose` 都会失败且不留文件；私钥内容永不打印。
   - 放哪：私钥只放在**执行清理 / 归档 / 抹除的操作机**上（`GML_ANCHOR_INTENT_KEY` 指向它），**不要放在业务主机上**——能写业务主机的攻击者拿到私钥就能给伪造的意图签名，签名就只剩装饰；不要提交进仓库、不要放共享存储、不要与发行私钥共用同一把。公钥带外交给复核方，与离机锚点公钥分开记录。
-  - 轮换 / 丢失：换新密钥后，旧意图的 `key_id` 与新公钥不符，`--require-signed-intents` 会判 `intent-signature-unverifiable`；复核旧基线时用对应的旧公钥，所以**旧公钥要保留**。私钥丢失 ⇒ 生成新密钥并做一份新的离机锚点 / 备份作为新基线。
+  - 轮换 / 丢失：轮换流程、公钥集合与按 `key_id` 选钥见 §8c（AG5）；旧意图用旧公钥验，所以**旧公钥要保留**在集合里。私钥丢失 ⇒ 生成新密钥并做一份新的离机锚点 / 备份作为新基线。
   - 诚实边界：意图签名只证明“持有意图私钥的机器签过这条意图”，不证明操作本身合理；私钥与业务主机同时被攻破不在防护范围。
 - 升级前（迁移 072 之前）产生、且发生在某份离机锚点之后的锚点没有意图：这份旧锚点会判 `anchor-without-intent`。处理：核对操作记录后，做一份新的离机锚点，以后用新锚点复核。
 - 范围：`--offbox` 与 `--against-backup`（AF5）共用同一套对账：基线（离机锚点 / 备份清单）链尾范围内新增的锚点（含已被归档搬出库的，见上）要对账，链尾之后追加区间里的新锚点是正常增长。`verifyChain` 自身对锚点的承认规则不变。
+
+### 8c. 意图 / 锚点签名密钥轮换（AG5，ADR-0055 补充 3）
+
+**key_id 是什么。** 签名者公钥 SPKI DER 的 SHA-256（64 位十六进制）。`audit_anchor_intents.key_id` 在意图被签名时一并写入；离机锚点的签名元数据 `signature.key_id` 同理（`offbox-anchor` 还会打印它的前 16 位）。`release-keygen` 轮换出的文件名带前 16 位：`anchor-intent-<前 16 位>.key.pem` / `.pub.pem`，方便对照。
+
+**轮换步骤（意图密钥；发行 / 锚点密钥同理，换 `--purpose`）。**
+1. 在保管目录（第一次 `release-keygen --out <仓库外的新目录> --purpose anchor-intent` 建的那个，0700）里：`node scripts/release-keygen.mjs --out <该目录> --purpose anchor-intent --rotate`。要求目录已存在、里面已有本用途的公钥、不是对组 / 其他可写、不在仓库或任何 git 工作树内；新建一对带指纹的文件，**旧私钥与旧公钥原样保留，私钥永不覆盖**；输出列出保留的公钥 key_id。
+2. 操作机把 `GML_ANCHOR_INTENT_KEY` 改指新私钥（`anchor-intent-<指纹>.key.pem`）。此后新写的意图记录新的 `key_id`。确认旧私钥不再被任何脚本使用后，由操作者决定销毁或离线封存；不要把旧私钥留在业务主机上。
+3. 把新公钥带外交给复核方，**加进**他们的公钥集合（不要替换旧的）。复核命令把集合整体交给 `--intent-pubkey`：可以重复给（`--intent-pubkey a.pub.pem --intent-pubkey b.pub.pem`），也可以直接给保管目录的拷贝（只读取其中的 `*.pub.pem`，不递归，私钥与其他文件被忽略；目录里没有公钥、或某个 `*.pub.pem` 其实是私钥 / 不是 Ed25519 都是用法错误，退出 2）。离机锚点公钥 `--pubkey` 同样可重复 / 给目录，按锚点的 `signature.key_id` 选钥，集合里没有签名者 ⇒ `OFFBOX-INVALID`。
+4. 轮换之后做一份新的离机锚点（`offbox-anchor --key <新私钥>`）并用新集合复核一遍，确认退出码 0。
+
+**复核时怎么选钥。** 意图按自己记录的 `key_id` 在集合里找**那一把**来验，不会把集合里的钥逐把试：
+- `key_id` 在集合里 ⇒ 用它验；验不过 ⇒ `intent-signature-invalid`（包括 `key_id` 被改成另一把受信公钥的情形）。
+- 明确给了 `--intent-pubkey` 而 `key_id` 不在集合里 ⇒ `intent-key-unknown`，`rewrite`，退出 1（无论是否带 `--require-signed-intents`）：要么公钥没带全，要么这把钥已被你从集合里撤掉。**撤销**一把泄露的旧钥 = 把它的公钥从集合里拿掉；它签过的意图随即全部判 `intent-key-unknown`，需要对照操作记录后重做基线。
+- 没给 `--intent-pubkey`、`--offbox` 模式回落用 `--pubkey` 当意图公钥时，`key_id` 对不上不算 `intent-key-unknown`（那把公钥本来是锚点签名钥，不是意图钥），沿用 AE5：默认跳过，`--require-signed-intents` 下 `intent-signature-unverifiable`。所以带意图签名时**总是显式给 `--intent-pubkey` 并带 `--require-signed-intents`**：回落口径下写库者清空或改掉 `key_id` 能让一条签名无效的意图在不带 `--require-signed-intents` 时通过（效果等同于直接写一条无签名意图）。公钥目录里的符号链接会被拒绝；保管目录必须放在 0700 的自有路径下，`--rotate` 也拒绝本身是符号链接的路径。
+
+**过渡规则（旧意图没有 key_id）。** 本变更之前写的签名意图没有可靠的 `key_id` 概念（AE5 已写 `key_id`，但更早或被手工清空的行可能为空；`key_id` 不在被签内容里，库的写入者能把它清掉）。规则：带签名、`key_id` 为空的意图，对集合里的**每一把**试，任何一把验过就通过；都不过 ⇒ `intent-signature-invalid`。风险：被撤销前的泄露旧钥仍在集合里时，攻击者可以清空 `key_id` 让它走这条路径——所以撤销泄露的钥必须把公钥拿出集合，而不是只靠 `key_id`。
+
+**结束条件。** 当同时满足：(a) 库里所有带签名的意图都有 `key_id`（`SELECT COUNT(*) FROM audit_anchor_intents WHERE signature IS NOT NULL AND (key_id IS NULL OR key_id='')` 为 0，或这些行都已经落在最新离机锚点 / 备份的基线之前、不再需要对账），且 (b) 复核方已用 `--require-intent-key-id` 完整跑通一轮每日复核——之后把 `--require-intent-key-id` 写进日常命令。从此没有 `key_id` 的签名意图一律 `intent-key-id-missing`（`rewrite`），过渡规则不再适用。
+
+**限制。** 签名不覆盖 `key_id`（沿用 AE5 的签名输入 `格式标识:intent_hash`，改签名输入会让所有已有意图失效）；它只是选钥提示，不是信任来源。信任来源只有复核方带外保管的公钥集合。

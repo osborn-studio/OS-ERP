@@ -280,7 +280,7 @@
 | `ftsAvailable` | fn | — | — | — |
 | `ftsEnvDisabled` | fn | — | — | — |
 | `ftsPhrase` | fn | — | — | — |
-| `ftsState` | fn | GET /api/meta/audit-logs | — | — |
+| `ftsState` | fn | — | — | — |
 | `isFtsMissingError` | fn | — | — | — |
 | `keywordUsesFts` | fn | — | — | — |
 | `orderOf` | fn | GET /api/meta/audit-logs<br>GET /api/meta/audit-logs/export.csv | — | — |
@@ -747,6 +747,7 @@ MCP 按令牌的速率限制与日配额（ADR-0056 / AD9）
 | `createMcpRateLimiter` | fn | — | — | mcp/server.js |
 | `dailyQuotaConfigured` | fn | — | — | — |
 | `dailyQuotaState` | fn | — | — | — |
+| `dailyQuotaUsage` | fn | — | — | — |
 | `mcpRatePolicy` | fn | — | — | — |
 | `rateStoreFromEnv` | fn | — | — | — |
 | `recentLimitedByToken` | fn | — | — | — |
@@ -828,7 +829,8 @@ Prometheus 文本指标渲染 + 抓取令牌校验（ADR-0045）
 | `METRIC_BY_KEY` | const | — | — | — |
 | `METRIC_DEFS_FINGERPRINT_ID` | const | — | — | — |
 | `boundAllows` | fn | — | — | — |
-| `isScopeRestricted` | fn | — | — | — |
+| `isScopeAware` | fn | — | — | — |
+| `isScopeRestricted` | fn | GET /api/metrics | — | — |
 | `metricCatalog` | fn | GET /api/metrics/catalog | — | — |
 | `metricDefinitions` | fn | GET /api/ai/metrics<br>GET /api/metrics/defs<br>GET /api/metrics/stale | — | — |
 | `metricDefsStale` | fn | GET /api/metrics/stale<br>POST /api/metrics/sync | — | — |
@@ -1094,7 +1096,7 @@ OMS /stats 与 AI 平台分析的 SQL 唯一来源（AE3，ADR-0044 补充 4；A
 | `COUNTER_DEFS` | const | — | — | lib/metrics-export.js |
 | `HISTOGRAM_DEFS` | const | — | — | lib/metrics-export.js |
 | `MCP_RESULT_CODES` | const | — | — | — |
-| `counterSnapshot` | fn | GET /api/meta/metrics | — | — |
+| `counterSnapshot` | fn | GET /api/meta/metrics<br>GET /api/meta/audit-logs | — | — |
 | `histogramSnapshot` | fn | GET /api/meta/metrics | — | — |
 | `incCounter` | fn | — | — | lib/audit-trail.js, lib/audit-view.js, lib/db-ttl-cache.js, lib/login-throttle.js, lib/mcp-rate-limit.js, mcp/server.js |
 | `incMcpToolCall` | fn | — | — | mcp/server.js |
@@ -1180,7 +1182,7 @@ OMS /stats 与 AI 平台分析的 SQL 唯一来源（AE3，ADR-0044 补充 4；A
 | `purchaseOrderScopeSql` | fn | POST /api/demand/dealer/summary<br>GET /api/purchase/orders<br>GET /api/purchase/stats | purchase.list_orders, report.dashboard_kpi | lib/metrics.js, mcp/tools.js |
 | `purchaseOverview` | fn | GET /api/purchase/chain/overview | — | — |
 | `purchaseReturnSource` | fn | — | — | — |
-| `purchaseScopeSql` | fn | 9 条：purchase-chain.js×7, purchase.js×2 | — | lib/approval.js |
+| `purchaseScopeSql` | fn | 9 条：purchase-chain.js×7, purchase.js×2 | — | lib/approval.js, lib/metrics.js |
 | `purchaseTodos` | fn | GET /api/purchase/chain/todos | — | — |
 | `recalcOrder` | fn | PUT /api/purchase/orders/:id | — | — |
 | `receivePurchaseOrder` | fn | POST /api/purchase/orders/:id/receive | purchase.receive_order | mcp/tools.js |

@@ -31,13 +31,17 @@ type MyScopeData = {
   store: Named
   dealer: Named
   explanations: string[]
+  roles_effective?: string[]
+  roles_inactive?: string[]
+  notice_code?: string | null
+  notice_message?: string | null
 }
 
 const SCOPE_LABEL: Record<string, string> = {
   all: '全部数据', subtree: '本组织及下级', org: '仅本组织', self: '仅本人', dealer: '仅本经销商', none: '无（未关联组织）'
 }
 const SOURCE_LABEL: Record<string, string> = {
-  admin: '管理员账号，恒为全部数据', user: '管理员为你的账号单独设置', role_default: '沿用角色默认', no_org: '账号没有所属组织'
+  admin: '管理员账号，恒为全部数据', role_inactive: '主角色已停用，未采用角色默认', user: '管理员为你的账号单独设置', role_default: '沿用角色默认', no_org: '账号没有所属组织'
 }
 
 /** 各范围的静态说明（口径见 ADR-0015/0017/0026/0027），与服务端 resolveOrgScope 一一对应。 */
@@ -76,8 +80,18 @@ export default function MyScope() {
             </dl>
           </Card>
 
+          {(data.roles_inactive?.length ?? 0) > 0 && (
+            <Card>
+              <div role="status" data-testid="my-scope-inactive-roles" className="text-sm text-amber-800">
+                <p className="font-medium">你有已停用的角色：<span data-testid="my-scope-inactive-codes">{data.roles_inactive!.join('、')}</span></p>
+                {data.notice_message && <p className="mt-1">{data.notice_message}</p>}
+              </div>
+            </Card>
+          )}
+
           <Card>
             <h3 className="text-sm font-medium text-slate-800 mb-2">这对你意味着什么</h3>
+            <p className="text-xs text-slate-500 mb-2" data-testid="my-scope-active-note">以下说明由生效（启用）的角色生成；已停用的角色不参与。</p>
             <ul className="list-disc pl-5 space-y-1 text-sm text-slate-700" data-testid="my-scope-explanations">
               {data.explanations.map((s, i) => <li key={i}>{s}</li>)}
             </ul>

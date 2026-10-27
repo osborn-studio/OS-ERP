@@ -11,7 +11,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { createHash } from 'node:crypto'
+import { createHash, createPublicKey } from 'node:crypto'
 import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -488,4 +488,55 @@ test('AF5 docs: the daily procedure shows the full command set (anchor, intent k
   assert.match(b, /--accept-new-anchors[^\n]*(无效|不再)/)
   assert.doesNotMatch(b, /仍按 §6 列出/, 'the --against-backup limitation line is gone')
   assert.match(b, /--purpose anchor-intent/)
+})
+
+// ============================================================================
+// AG5（ADR-0055 补充 3）：锚点内嵌签名者 key_id；--offbox 校验接受公钥集合并按 key_id 选钥
+// ============================================================================
+test('AG5 the anchor embeds the signer key_id (SHA-256 of the SPKI), offbox-anchor prints its short fingerprint, and a rotated custody-directory key signs fine', (t) => {
+  const w = world(t)
+  const r = w.anchor()
+  assert.equal(r.status, 0, r.stderr)
+  const doc = JSON.parse(readFileSync(w.first(), 'utf8'))
+  const id = createHash('sha256').update(createPublicKey(readFileSync(w.k.pub)).export({ type: 'spki', format: 'der' })).digest('hex')
+  assert.equal(doc.anchor.signature.key_id, id)
+  assert.match(r.stdout, new RegExp(`key_id: ${id.slice(0, 16)}`))
+  // 轮换后的新私钥同样可以出锚点，锚点里的 key_id 随之变化
+  const dir = path.join(tmp(t, 'os-ag5-rot-'), 'keys')
+  assert.equal(run('scripts/release-keygen.mjs', ['--out', dir, '--purpose', 'anchor-intent']).status, 0)
+  const rot = JSON.parse(run('scripts/release-keygen.mjs', ['--out', dir, '--purpose', 'anchor-intent', '--rotate']).stdout)
+  const r2 = run(ANCHOR, ['--data-dir', w.data, '--dest', w.dest, '--log', w.log, '--key', rot.private_key])
+  assert.equal(r2.status, 0, r2.stderr)
+  const newest = w.files().map((f) => path.join(w.dest, f)).find((f) => f !== w.first())
+  assert.equal(JSON.parse(readFileSync(newest, 'utf8')).anchor.signature.key_id, rot.key_id)
+  w.db.close()
+})
+
+test('AG5 --offbox accepts a public key set (repeated --pubkey or a directory) and selects the key by the anchor\'s key_id; a key set without the signer is refused', (t) => {
+  const w = world(t)
+  assert.equal(w.anchor().status, 0)
+  const file = w.first()
+  const other = keys(t)
+  const chain = (...pk) => run(VERIFY_CHAIN, ['--data-dir', w.data, '--offbox', file, '--json', ...pk.flatMap((p) => ['--pubkey', p])])
+  assert.equal(chain(w.k.pub).status, 0)
+  assert.equal(chain(other.pub, w.k.pub).status, 0)
+  assert.equal(chain(w.k.pub, other.pub).status, 0)
+  assert.equal(chain(path.dirname(w.k.pub)).status, 0)
+  const wrong = chain(other.pub)
+  assert.equal(wrong.status, 1)
+  assert.equal(JSON.parse(wrong.stdout).offbox.status, 'invalid')
+  assert.match(JSON.parse(wrong.stdout).offbox.message, /key_id/)
+  // 集合里有同一把公钥的多个副本也没问题，但同时给了私钥内容的文件就是用法错误
+  assert.equal(chain(w.k.pub, w.k.pub).status, 0)
+  const bad = run(VERIFY_CHAIN, ['--data-dir', w.data, '--offbox', file, '--json', '--pubkey', w.k.priv])
+  assert.notEqual(bad.status, 0)
+  w.db.close()
+})
+
+test('AG5 docs: the key rotation procedure is written down (rotate command, key set verification, key_id selection, transition rule and its end condition)', () => {
+  const doc = readFileSync(new URL('../docs/operations/audit-integrity.md', import.meta.url), 'utf8')
+  const sec = doc.slice(doc.indexOf('### 8c.'))
+  for (const needle of ['--rotate', 'key_id', 'intent-key-unknown', '--require-intent-key-id', '*.pub.pem', '过渡规则', '结束条件', 'GML_ANCHOR_INTENT_KEY']) assert.ok(sec.includes(needle), `§8c mentions ${needle}`)
+  const adr = readFileSync(new URL('../docs/implementation/ADR-0055-offbox-anchors.md', import.meta.url), 'utf8')
+  assert.match(adr, /补充 3（AG5）/)
 })

@@ -161,6 +161,35 @@ poll with `gh run view <id>`, and record run id, conclusion, duration and the th
 `regression` in `ci.yml` (no `candidate`, `capacity-smoke`, `dependency-review` or `audit-no-fts5`) and no `nightly-capacity.yml`.
 PRs #1 to #3 are merged; #4 to #9 are open and unmerged; `gh` cannot find a PR #10. Dispatched 0 times; no run id exists.
 
+**Status (AG8, 2026-10-24): still not run; no run is recorded.** `main` (commit `a524d3b`) has only `ci.yml` (`checks`, `docker`,
+`regression`) and `linux-validation.yml`; `release-candidate.yml` and `nightly-capacity.yml` return HTTP 404 there. PRs #1 to #3 are
+merged; #4 to #10 are open and unmerged; PR #11 could not be found (HTTP 404). Dispatched 0 times (no `dry_run` run, no full run); no run id exists.
+
+### 首跑步骤 (first run: dry run first, then the full run) (AG1)
+
+`release-candidate.yml` has never run on GitHub, and `workflow_dispatch` only works on a workflow file present on the target ref, so it can be
+dispatched only after the workflow is merged to `main`. To find runner-environment problems quickly (missing tools, network, Python
+venv, native build hooks, production acceptance) without paying for the long focused suite, the dispatch has a `dry_run` choice input
+(`false` or `true`, default `false`; a tag push has no inputs and is always a full run).
+
+1. **Dry run first**: `gh workflow run release-candidate.yml --ref main -f dry_run=true`, then `gh run watch <id>` / `gh run view <id>`.
+   With `dry_run=true` the build step runs `release-candidate --skip-focused --run-guards --ci-run=auto --output=...`: the focused
+   suite is skipped, the five guards and the production acceptance still run. `--skip-focused` is accepted only when
+   `GITHUB_ACTIONS=true` (refused on a workstation with a clear message) and cannot be combined with `--run-tests`, `--focused-result`
+   or `--log`. Consequences, all on purpose:
+   - `EVIDENCE.json` carries `dry_run: true` and `focused_tests: {result: "not run", origin: "skipped-dry-run"}`;
+   - the archive is `RC-<version>-<sha>-dry-run.zip` (that name is not a valid evidence-log candidate name, so it cannot be logged or ingested even by hand),
+     the artifact is named `os-erp-candidate-<run>-<attempt>-dry-run` (the normal name has no suffix) and contains no
+     `evidence-log-line.jsonl`: a dry run never reads or appends the evidence log, so there is nothing to ingest or commit;
+   - `verify-release` prints a prominent `DRY RUN, NOT A CANDIDATE` warning, and `--log` / `--require-signature` fail for it
+     (a dry run is never log-eligible and cannot be signed); the SBOM diff of later runs ignores dry-run artifacts.
+   A green dry run says only that the runner environment, guards and acceptance work; it is not a candidate, not release acceptance and not
+   production acceptance. Do not hand it to the key holder.
+2. **Then the full run**: `gh workflow run release-candidate.yml --ref main -f dry_run=false` (the default). This is the run whose artifact,
+   `evidence-log-line.jsonl` included, follows the maintainer flow above (download, `evidence-log-ingest`, commit).
+3. Record run ids, conclusions, durations and uploaded files in the status notes for both runs. Until that is done, both remain
+   unverified; nothing has been dispatched as of this section being written.
+
 ## RELEASE-NOTES.md
 
 The `CHANGELOG.md` section whose heading contains the version, else the newest batch section (stated in the notes),
@@ -189,6 +218,9 @@ read-only toward the repository and need network access.
   host next to npm's own "audited N packages" summary. A local run on 2026-10-24 reported 42 packages with verified signatures and
   13 with verified attestations (lockfile: 36 npmjs.org entries, 341 npmmirror.com entries). Moving the remaining entries to the
   npmjs registry is a separate decision (it changes `package-lock.json` and install reachability).
+  **Update (AG7, 2026-10-24):** the paragraph above describes the state before AG7. `.npmrc` now points at `registry.npmjs.org` and all 377
+  lockfile `resolved` entries use it, so `npm audit signatures` now covers every installed package (327 audited, 327 verified, 58 attestations); the
+  lock-registry guard step after the SBOM diff fails the candidate if any `resolved` host is not `registry.npmjs.org`. See `docs/security/dependency-notes.md` section 11.
 - **SBOM diff vs the previous candidate artifact.** The step looks up the newest earlier successful run of the candidate workflow
   on `main` or on a `v*` tag with event `push` or `workflow_dispatch` (pull-request runs and runs from other branches are ignored, the current run is excluded), downloads its
   `os-erp-candidate-*` artifact with `gh run download`, and diffs its SBOM (`sbom.cdx.json`, or for artifacts from before AF7 the single

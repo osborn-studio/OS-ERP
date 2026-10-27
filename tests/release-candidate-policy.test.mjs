@@ -59,6 +59,7 @@ test('candidate job pins every action by SHA and does not persist checkout crede
 
 test('candidate job builds with the documented flags, writes outside the checkout, and verifies the result', () => {
   assert.match(code, /env -u GML_RUNTIME_MODE -u GML_DB node scripts\/release-candidate\.mjs --run-tests --ci-run=auto --log="\$CAND_LOG" --output="\$CAND_OUT"/)
+  assert.match(code, /env -u GML_RUNTIME_MODE -u GML_DB node scripts\/release-candidate\.mjs --skip-focused --run-guards --ci-run=auto --output="\$CAND_OUT"\n/)
   assert.match(code, /CAND_OUT=\$RUNNER_TEMP\//)
   assert.match(code, /CAND_LOG=\$RUNNER_TEMP\//)
   assert.match(code, /verify-release\.mjs --evidence="[^"]+" --artifact="\$zip" --log="\$CAND_LOG"/)
@@ -143,4 +144,77 @@ test('AE10/AF1: README documents the artifact, ingest, commit maintainer flow, t
   assert.match(readme, /release-candidate\.yml/)
   assert.match(readme, /evidence-log-ingest\.mjs --line/)
   assert.match(readme, /hosted-ci-self/)
+})
+
+// AG1: dry-run input
+const dispatchBlock = stripComments(workflow.slice(workflow.indexOf('  workflow_dispatch:'), workflow.indexOf('\npermissions:'))).replace(/\n\s*\n/g, '\n')
+const buildStep = code.split(/^      - /m).find((x) => /^name: Build candidate/.test(x)) ?? ''
+const [normalBranch, dryBranch] = (() => {
+  const m = buildStep.match(/if \[ "\$\{DRY_RUN:-false\}" = "true" \]; then\n([\s\S]*?)\n\s+else\n([\s\S]*?)\n\s+fi/)
+  return m ? [m[2], m[1]] : ['', '']
+})()
+
+test('AG1: workflow_dispatch has a dry_run choice input (false/true), default false, and no other input', () => {
+  assert.match(dispatchBlock, /^    inputs:\n      dry_run:\n/m)
+  assert.match(dispatchBlock, /type: choice/)
+  assert.match(dispatchBlock, /default: 'false'/)
+  assert.match(dispatchBlock, /options:\n\s+- 'false'\n\s+- 'true'/)
+  assert.deepEqual([...dispatchBlock.matchAll(/^      (\w+):/gm)].map((x) => x[1]), ['dry_run'])
+  // the push trigger stays tag-only, so a tag push can never be a dry run (input absent => treated as false)
+  assert.match(workflow, /DRY_RUN: \$\{\{ inputs\.dry_run \}\}/)
+})
+
+test('AG1: the dry-run branch skips the focused suite, runs guards, and never touches the evidence log', () => {
+  assert.ok(buildStep, 'build step exists')
+  assert.ok(dryBranch && normalBranch, 'build step branches on DRY_RUN')
+  assert.match(dryBranch, /release-candidate\.mjs --skip-focused --run-guards --ci-run=auto --output="\$CAND_OUT"/)
+  assert.doesNotMatch(dryBranch, /--run-tests|--log|CAND_LOG|EVIDENCE-LOG/)
+  assert.match(normalBranch, /--run-tests --ci-run=auto --log="\$CAND_LOG"/)
+  assert.doesNotMatch(normalBranch, /--skip-focused/)
+  // DRY_RUN is only ever compared against the literal "true"; the input is never interpolated into shell text
+  for (const step of code.split(/^      - /m)) assert.doesNotMatch(step.split(/^\s+run:/m).slice(1).join(''), /\$\{\{ inputs\./, 'no run script interpolates an input')
+  assert.equal([...code.matchAll(/\$\{\{ inputs\.dry_run/g)].length, 2, 'only the job-level DRY_RUN env and the artifact name read the input')
+})
+
+test('AG1: dry-run self-verify omits --log and the log-line upload file; normal self-verify keeps both', () => {
+  const verifyStep = code.split(/^      - /m).find((x) => /^name: Self-verify the candidate/.test(x)) ?? ''
+  const m = verifyStep.match(/if \[ "\$\{DRY_RUN:-false\}" = "true" \]; then\n([\s\S]*?)\n\s+else\n([\s\S]*?)\n\s+fi/)
+  assert.ok(m, 'verify step branches on DRY_RUN')
+  assert.doesNotMatch(m[1], /--log|CAND_LOG|evidence-log-line/)
+  assert.match(m[1], /verify-release\.mjs --evidence="\$CAND_OUT\/\$name\.evidence\/EVIDENCE\.json" --artifact="\$zip"/)
+  assert.match(m[2], /--log="\$CAND_LOG"/)
+  assert.match(m[2], /evidence-log-line\.jsonl/)
+  assert.match(verifyStep, /verify-release\.mjs --evidence="\$CAND_OUT\/\$name\.evidence\/EVIDENCE\.json" --artifact="\$zip" --log="\$CAND_LOG"/)
+})
+
+test('AG1: the dry-run upload uses a distinct -dry-run artifact name, the normal name is unchanged, and the SBOM diff ignores dry-run artifacts', () => {
+  const ups = code.split(/^\s+(?:- )?uses: actions\/upload-artifact@/m).slice(1)
+  assert.equal(ups.length, 1)
+  assert.match(ups[0], /name: os-erp-candidate-\$\{\{ github\.run_id \}\}-\$\{\{ github\.run_attempt \}\}\$\{\{ inputs\.dry_run == 'true' && '-dry-run' \|\| '' \}\}\n/)
+  // the normal name (dry_run false / tag push) is exactly the pre-AG1 name
+  assert.match(ups[0], /os-erp-candidate-\$\{\{ github\.run_id \}\}-\$\{\{ github\.run_attempt \}\}\$\{\{/)
+  const diffStep = code.split(/^      - /m).find((x) => /^name: SBOM diff/.test(x)) ?? ''
+  assert.match(diffStep, /"dry_run": true/, 'previous candidates whose evidence says dry_run are skipped')
+  assert.match(diffStep, /-dry-run/)
+})
+
+test('AG1: dry-run evidence is never log-eligible in the scripts either (static)', () => {
+  const rc = read('scripts/release-candidate.mjs')
+  const vr = read('scripts/verify-release.mjs')
+  assert.match(rc, /--skip-focused is only allowed when GITHUB_ACTIONS=true/)
+  assert.match(rc, /dry run[^\n]*evidence log|evidence log[^\n]*dry run/i)
+  assert.match(vr, /DRY RUN, NOT A CANDIDATE/)
+  assert.match(vr, /never log-eligible/)
+})
+
+test('AG1: README documents the first-run steps (dry run first, then full) and the dry-run semantics', () => {
+  const readme = read('docs/release/README.md')
+  assert.match(readme, /首跑步骤/)
+  assert.match(readme, /dry_run=true/)
+  assert.match(readme, /gh workflow run release-candidate\.yml --ref main -f dry_run=true/)
+  assert.match(readme, /gh workflow run release-candidate\.yml --ref main -f dry_run=false/)
+  assert.ok(readme.indexOf('-f dry_run=true') < readme.indexOf('-f dry_run=false'), 'dry run comes first')
+  assert.match(readme, /skipped-dry-run/)
+  assert.match(readme, /-dry-run/)
+  assert.match(readme, /--skip-focused/)
 })

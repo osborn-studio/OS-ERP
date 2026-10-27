@@ -17,6 +17,8 @@
  *
  * 【用法】GML_DATA_DIR=/abs/seeded-copy node scripts/explain-audit.mjs [--industry cosmetic]
  *          [--threshold 200] [--out file.json]
+ *          [--snapshot plans.json | --compare plans.json]   (AG3：写出 / 比较计划指纹；--compare 同时跑"非测试代码不得执行统计收集语句"的源码扫描)
+ *          [--analyze-scan]   (只跑上述源码扫描，不需要数据库 / GML_DATA_DIR)
  *   退出码：0 无违规；1 有违规；2 用法/安全拒绝（未显式给 GML_DATA_DIR、指向仓库 data/、输出落在仓库 data/ 内）。
  * ============================================================================
  */
@@ -27,6 +29,8 @@ import Database from 'better-sqlite3'
 import { buildWhere, orderOf, countSql, exportSql, AUDIT_COUNT_CAP } from '../server/lib/audit-view.js'
 import { omsStatsByPlatformStmt, omsStatsTrendStmt, omsStatsTotalStmt, omsStatsTopSkusStmt, aiPlatformAnalysisStmt } from '../server/lib/oms-sql.js'
 import { omsPlatformScopeSql, omsOrderScopeSql } from '../server/lib/sales-order.js'
+import { fingerprintsFromAudit, buildSnapshot, compareSnapshot } from './lib/explain-plan-guard.mjs'
+import { scanTree } from './lib/analyze-scan.mjs'
 import { onlineWindow, trendSalesSql, trendPurchaseSql, trendOnlineSql, topProductsSql, topBrandsSql, topDealersSql, topStoresSql, INVENTORY_DIST_AGG_SQL, channelOfflineSql, channelOnlineSql, RECENT_SQL } from '../server/lib/dashboard-sql.js'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -325,6 +329,12 @@ export function aliasMap(sql) {
   return map
 }
 
+/** EXPLAIN QUERY PLAN 行（id / parent / detail）→ 每行的嵌套深度（给 AG3 计划指纹用） */
+function planDepths(rows) {
+  const depth = new Map([[0, -1]])
+  return rows.map(r => { const d = (depth.get(r.parent) ?? -1) + 1; depth.set(r.id, d); return d })
+}
+
 /** 解析一行 EXPLAIN 明细：{ kind: 'table'|'index', name } 或 null（不是扫描行） */
 export function parseScan(detail) {
   const m = /^SCAN (\S+)(?: AS (\S+))?(?: USING (.*))?$/.exec(detail.trim())
@@ -403,7 +413,7 @@ export function auditStatements(db, statements, { threshold = DEFAULT_THRESHOLD,
       const table = [...aliasMap(s.sql).values()][0] ?? '?'
       violations.push({ statement: s.id, table, detail: plan.join(' | '), reason: `计划用了 ${s.expectIndex} 但不是带约束的 SEARCH，或同一索引另有整条索引扫描（索引全扫，区间谓词失效）` })
     }
-    out.push({ id: s.id, mirrors: s.mirrors, bench: s.bench ?? null, plan, scans })
+    out.push({ id: s.id, mirrors: s.mirrors, bench: s.bench ?? null, plan, depths: planDepths(rows), scans })
   }
   const unusedAllow = allow.filter(a => !used.has(a))
   return { ok: violations.length === 0 && unusedAllow.length === 0, threshold, statements: out, violations, unusedAllow }
@@ -417,14 +427,28 @@ function withinRepoData(p) {
 
 function refuse(message, code = 2) { const e = new Error(message); e.exitCode = code; throw e }
 
+/** 快照由哪条命令生成（CI 用同一形状复现；写进快照，也写在 docs/operations/query-planner.md） */
+export const SNAPSHOT_GENERATOR = 'node scripts/synth-data.mjs (default small profile: 60 skus / 600 txns / 120 docs, seed 20261023) with GML_RUNTIME_MODE=production, then node scripts/explain-audit.mjs --snapshot docs/implementation/explain-plans.json'
+
+function runAnalyzeScan() {
+  const r = scanTree(ROOT)
+  for (const h of r.hits) console.error(`  ✗ ${h.file}:${h.line} 非测试代码执行了统计收集语句（${h.rule}）；应用不得改变查询规划器的前提，见 docs/operations/query-planner.md`)
+  for (const a of r.staleAllow) console.error(`  ✗ 过期的统计语句扫描豁免: ${a.file}`)
+  console.log(`explain-audit: 统计语句源码扫描 ${r.filesScanned} 个文件, 命中 ${r.hits.length}`)
+  if (!r.ok) refuse(`源码里有 ${r.hits.length} 处统计语句 / ${r.staleAllow.length} 条过期豁免`, 1)
+}
+
 export async function main(argv = process.argv.slice(2), env = process.env) {
-  const o = { industry: 'cosmetic', threshold: DEFAULT_THRESHOLD, out: null }
-  const map = { '--industry': 'industry', '--threshold': 'threshold', '--out': 'out' }
+  const o = { industry: 'cosmetic', threshold: DEFAULT_THRESHOLD, out: null, snapshot: null, compare: null, scanOnly: false }
+  const map = { '--industry': 'industry', '--threshold': 'threshold', '--out': 'out', '--snapshot': 'snapshot', '--compare': 'compare' }
   for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === '--analyze-scan') { o.scanOnly = true; continue }
     const k = map[argv[i]]
     if (!k || argv[i + 1] === undefined) refuse(`未知或缺值参数 ${argv[i]}`)
     o[k] = argv[++i]
   }
+  if (o.snapshot && o.compare) refuse('--snapshot 与 --compare 不能同时使用')
+  if (o.scanOnly) { runAnalyzeScan(); return { ok: true } }
   o.threshold = Number(o.threshold)
   if (!Number.isInteger(o.threshold) || o.threshold < 1) refuse('threshold 必须是正整数')
   if (!/^[a-z]+$/.test(o.industry)) refuse('industry 非法')
@@ -433,11 +457,16 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   const file = path.join(env.GML_DATA_DIR, `gml_${o.industry}.db`)
   if (!fs.existsSync(file)) refuse(`找不到种子库 ${file}`)
   if (fs.lstatSync(file).isSymbolicLink()) refuse('库文件是符号链接')
-  const outFile = o.out ? path.resolve(o.out) : null
-  if (outFile) {
-    if (withinRepoData(path.dirname(outFile)) || withinRepoData(outFile)) refuse('输出文件不得位于仓库 data/ 内')
-    try { if (fs.lstatSync(outFile).isSymbolicLink()) refuse('输出文件是符号链接') } catch (e) { if (e.exitCode) throw e }
+  const checkOut = (p) => {
+    const f = path.resolve(p)
+    if (withinRepoData(path.dirname(f)) || withinRepoData(f)) refuse('输出文件不得位于仓库 data/ 内')
+    try { if (fs.lstatSync(f).isSymbolicLink()) refuse('输出文件是符号链接') } catch (e) { if (e.exitCode) throw e }
+    return f
   }
+  const outFile = o.out ? checkOut(o.out) : null
+  const snapshotFile = o.snapshot ? checkOut(o.snapshot) : null
+  const compareFile = o.compare ? path.resolve(o.compare) : null
+  if (compareFile && !fs.existsSync(compareFile)) refuse(`找不到快照 ${compareFile}`)
   const db = new Database(file, { readonly: true, fileMustExist: true })
   try {
     const applied = db.prepare('SELECT id FROM schema_migrations ORDER BY id DESC LIMIT 1').get()?.id ?? null
@@ -455,6 +484,33 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     for (const v of result.violations) console.error(`  ✗ ${v.statement}: ${v.detail} (${v.table}${v.rows != null ? `, ${v.rows} 行` : ''})`)
     for (const a of result.unusedAllow) console.error(`  ✗ 过期豁免（计划里已没有这处 SCAN，请删掉）: ${a.statement} × ${a.table}`)
     if (!result.ok) refuse(`${result.violations.length} 处违规, ${result.unusedAllow.length} 条过期豁免`, 1)
+    const fingerprints = fingerprintsFromAudit(result.statements)
+    const sqliteVersion = db.prepare('select sqlite_version() v').get().v
+    if (snapshotFile) {
+      // 违规状态不得固化为基线（上面 refuse 已保证 result.ok）
+      const snap = buildSnapshot({ fingerprints, latestMigration: applied, sqliteVersion, generator: SNAPSHOT_GENERATOR })
+      fs.writeFileSync(snapshotFile, JSON.stringify(snap, null, 2) + '\n')
+      console.log(`explain-audit: 计划指纹快照 ${Object.keys(snap.statements).length} 条 -> ${snapshotFile}`)
+    }
+    if (compareFile) {
+      let snap
+      try { snap = JSON.parse(fs.readFileSync(compareFile, 'utf8')) } catch (e) { refuse(`快照无法解析: ${e.message}`) }
+      const hasStat1 = !!db.prepare("SELECT 1 FROM sqlite_master WHERE name='sqlite_stat1'").get()
+      let cmp
+      try { cmp = compareSnapshot(snap, { fingerprints, latestMigration: applied, sqliteVersion, hasStat1 }) } catch (e) { refuse(`计划快照比较失败: ${e.message}`) }
+      for (const n of cmp.notes) console.log(`  note: ${n}`)
+      for (const d of cmp.drifts) {
+        if (d.whitelisted) { console.log(`  ~ 计划漂移已列入白名单: ${d.statement} (${d.kind}, ${d.afterHash})`); continue }
+        console.error(`  ✗ 计划漂移 ${d.statement} (${d.kind}) ${d.beforeHash ?? '-'} -> ${d.afterHash}${d.note ? `  ${d.note}` : ''}`)
+        for (const l of d.before) console.error(`      - ${l}`)
+        for (const l of d.after) console.error(`      + ${l}`)
+      }
+      for (const w of cmp.staleWhitelist) console.error(`  ✗ 过期白名单条目（该语句没有漂移，请删掉）: ${w.statement}`)
+      const drifted = cmp.drifts.filter(d => !d.whitelisted).length
+      console.log(`explain-audit: 计划指纹比较 ${Object.keys(fingerprints).length} 条, 漂移 ${drifted} (白名单 ${cmp.drifts.length - drifted}), 过期白名单 ${cmp.staleWhitelist.length}`)
+      runAnalyzeScan()
+      if (!cmp.ok) refuse(`计划漂移 ${drifted} 处, 过期白名单 ${cmp.staleWhitelist.length} 条；有意为之请重取快照（--snapshot）或在快照 whitelist 里写 accepted_hash + 理由`, 1)
+    }
     return result
   } finally { db.close() }
 }

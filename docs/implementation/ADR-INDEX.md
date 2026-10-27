@@ -49,17 +49,17 @@
 | 0040 | [ADR-0040 受信代理配置（Z4）](ADR-0040-trust-proxy.md) | 第九批 | 已采纳 | — | — |
 | 0041 | [ADR-0041：MCP `order.trace_document` 与 `doc.query` 按单据解析器表判归属](ADR-0041-mcp-trace-query-scope.md) | 第十批 | 开发实现，尚非产品上线验收 | `check-mcp-coverage.mjs` | — |
 | 0042 | [ADR-0042：OMS 写路由与 MCP 库存工具按组织范围收口](ADR-0042-oms-write-mcp-inventory-scope.md) | 第十批 | 开发实现，尚非产品上线验收 | `check-mcp-coverage.mjs`<br>`check-route-authz.mjs`<br>`test-mcp.mjs`<br>`test-stock-v2.mjs` | — |
-| 0044 | [ADR-0044：低库存口径统一与看板热点块（AA5）](ADR-0044-dashboard-hot-blocks.md) | 第十批 | 开发实现，尚非产品上线验收 | `bench-oms-order-time.mjs`<br>`explain-audit.mjs` | — |
+| 0044 | [ADR-0044：低库存口径统一与看板热点块（AA5）](ADR-0044-dashboard-hot-blocks.md) | 第十批 | 开发实现，尚非产品上线验收 | `bench-oms-order-time.mjs`<br>`explain-audit.mjs`<br>`lib/analyze-scan.mjs`<br>`lib/explain-plan-guard.mjs` | — |
 | 0045 | [ADR-0045 Prometheus 指标导出与抓取令牌（AA10）](ADR-0045-metrics-export.md) | 第十批 | 开发实现，尚非产品上线验收 | — | — |
 | 0046 | [ADR-0046：主数据下拉仓库项、采购订单读与 QC 聚合按仓库组织范围收口](ADR-0046-master-options-qc-scope.md) | 第十一批（进行中） | 开发实现，尚非产品上线验收 | `check-route-authz.mjs` | — |
 | 0047 | [ADR-0047：发行候选证据 Ed25519 签名（AB4）](ADR-0047-evidence-signing.md) | 第十一批（进行中） | 开发实现，尚非产品上线验收 | `lib/evidence-sign.mjs`<br>`release-keygen.mjs` | — |
 | 0048 | [ADR-0048：旧结构快照备份集与免截断的升级演练（AB5）](ADR-0048-schema-snapshot-rehearsal.md) | 第十一批（进行中） | 开发实现，尚非产品上线验收 | `schema-snapshot.mjs` | — |
 | 0049 | [ADR-0049 审计日志防篡改哈希链与归档（AB6）](ADR-0049-audit-hash-chain.md) | 第十一批（进行中） | 开发实现，尚非产品上线验收 | `audit-archive.mjs`<br>`audit-verify-chain.mjs`<br>`lib/audit-chain-cli.mjs`<br>`lib/privacy-common.mjs`<br>`retention.mjs` | — |
 | 0050 | [ADR-0050：MCP 采购订单读工具与剩余聚合读口和 HTTP 范围对齐（AC1）](ADR-0050-mcp-purchase-scope-parity.md) | 第十二批（进行中） | 开发实现，尚非产品上线验收 | — | — |
-| 0051 | [ADR-0051 总部角色名单单点与 docflow 严格门店绑定（AC2）](ADR-0051-hq-roles-docflow-binding.md) | 第十二批（进行中） | 开发实现，尚非产品上线验收 | `gen-role-matrix.mjs`<br>`test-setting-audit.mjs` | — |
+| 0051 | [ADR-0051 总部角色名单单点与 docflow 严格门店绑定（AC2）](ADR-0051-hq-roles-docflow-binding.md) | 第十二批（进行中） | 开发实现，尚非产品上线验收 | `gen-role-matrix.mjs`<br>`test-setting-audit.mjs` | `browser/inactive-role-notice.mjs` |
 | 0052 | [ADR-0052：发行证据透明日志与 CI 签名口径（AC6）](ADR-0052-evidence-transparency-log.md) | 第十二批（进行中） | 开发实现，尚非产品上线验收 | `lib/evidence-log.mjs` | — |
 | 0053 | [ADR-0053：指标接口按范围收口，`report.dashboard_kpi` 与 dealer summary 补功能权限（AD1）](ADR-0053-metrics-scope-and-kpi-permissions.md) | 第十三批（进行中） | 开发实现，尚非产品上线验收 | `test-metrics.mjs` | — |
 | 0054 | [ADR-0054：审计 FTS5 索引可选化与无 FTS5 构建的真实验证（AD4）](ADR-0054-audit-fts-optional.md) | 第十三批（进行中） | 开发实现，尚非产品上线验收 | `audit-fts-maintain.mjs`<br>`bench-audit-fts-toggle.mjs`<br>`test-setting-audit.mjs` | — |
 | 0055 | [ADR-0055：透明日志与审计链的离机签名锚点（AD5）](ADR-0055-offbox-anchors.md) | 第十三批（进行中） | 开发实现，尚非产品上线验收 | `lib/offbox-anchor.mjs`<br>`offbox-anchor.mjs` | — |
 | 0056 | [ADR-0056：MCP 工具级速率限制与日配额（AD9）](ADR-0056-mcp-rate-limit-quota.md) | 第十三批（进行中） | 开发实现，尚非产品上线验收 | `bench-mcp-rate-contention.mjs` | — |
-| 0057 | [ADR-0057：指标按业务查看权限过滤，受限范围默认隐藏无范围语义的指标（AE1）](ADR-0057-metrics-perms-hide.md) | 第十四批（进行中） | 开发实现，尚非产品上线验收 | `test-setting-audit.mjs` | — |
+| 0057 | [ADR-0057：指标按业务查看权限过滤，受限范围默认隐藏无范围语义的指标（AE1）](ADR-0057-metrics-perms-hide.md) | 第十四批（进行中） | 开发实现，尚非产品上线验收 | `check-metrics-scope.mjs`<br>`test-setting-audit.mjs` | — |

@@ -3,7 +3,7 @@
 <!-- generated -->
 <!-- 由 `node scripts/gen-codemap.mjs` 生成，勿手改；CI 校验不漂移 -->
 
-共 201 张表、70 个迁移。“建于”= schema.sql / 迁移编号 / 运行时建表的文件；“改于”= ALTER、addColumn（无后缀）、建索引（·idx）、触发器（·trg）、DROP（·drop）所在迁移编号。“触达”= 该文件的 SQL 文本里出现这张表（server/db/ 下的种子与启动文件不计）。
+共 201 张表、71 个迁移。“建于”= schema.sql / 迁移编号 / 运行时建表的文件；“改于”= ALTER、addColumn（无后缀）、建索引（·idx）、触发器（·trg）、DROP（·drop）所在迁移编号。“触达”= 该文件的 SQL 文本里出现这张表（server/db/ 下的种子与启动文件不计）。
 
 ## 扫描边界（必读）
 
@@ -18,7 +18,7 @@
 | `accounting_periods` | 034 | 035·idx, 036·idx | lib/annual.js, lib/closing.js, lib/period-audit.js, lib/period.js, lib/report.js | — |
 | `accounting_subjects` | 032 | 032·idx | lib/accounting.js, lib/annual.js, lib/closing.js, lib/report.js | routes/accounting.js |
 | `agent_token_roles` | 006 | — | — | — |
-| `agent_tokens` | 006 | 006·idx, 053, 055 | mcp/admin.js, mcp/server.js, mcp/tokens.js | — |
+| `agent_tokens` | 006 | 006·idx, 053, 055 | lib/mcp-rate-limit.js, mcp/admin.js, mcp/server.js, mcp/tokens.js | — |
 | `ai_query_logs` | schema.sql | — | — | routes/ai.js |
 | `approval_instances` | 014 | 014·idx | lib/approval.js, lib/im-sync.js, lib/metrics.js, mcp/tools.js | — |
 | `approval_records` | 014 | 014·idx | lib/approval.js | — |
@@ -63,7 +63,7 @@
 | `doc_states` | 008 | 008·idx | lib/docflow.js, mcp/catalog.js, mcp/tools.js | routes/docflow.js, routes/order-center.js |
 | `doc_transition_policy` | 027 | — | lib/approval.js, lib/docflow.js | — |
 | `doc_types` | 008 | — | lib/approval.js, lib/docflow.js, lib/docno.js, lib/order-center.js, lib/role-matrix.js, mcp/catalog.js, mcp/tools.js | routes/approval.js, routes/docflow.js, routes/purchase-chain.js |
-| `if` | 073 | — | — | — |
+| `if` | 073 | 075·drop | — | — |
 | `im_approval_map` | 040 | 040·idx | lib/im-sync.js | routes/im.js |
 | `im_dept_map` | 040 | 040·idx | lib/im-sync.js | routes/im.js |
 | `im_platform_cfg` | 040 | — | lib/im-sync.js | — |
@@ -290,3 +290,4 @@
 | 072 | `072_audit_anchor_intents.cjs` | 审计锚点操作意图表（audit_anchor_intents） | audit_anchor_intents | audit_anchor_intents, audit_anchor_intents_old |
 | 073 | `073_mcp_rate_buckets.cjs` | MCP 限速桶表（mcp_rate_buckets，db 存储模式） | if | — |
 | 074 | `074_oms_items_order_index.cjs` | 线上订单明细按订单号索引（oms_order_items.oms_order_id） | — | — |
+| 075 | `075_mcp_rate_denied_kind.cjs` | MCP 限速桶 kind 增 denied（拒绝计数，表重建） | — | if |

@@ -191,6 +191,18 @@ if (evidenceArg) {
         } catch (error) { bad('artifact', `cannot read ${zipArg} (${error.message})`) }
       }
     }
+    // AG1：演练（--skip-focused）不是候选。dry_run 与 focused_tests.origin=skipped-dry-run 必须同时出现且互相印证；
+    // 演练必须是托管 CI 未签名构建；它永远不具备进日志的资格，--log / --require-signature 对它一律失败。
+    const skipped = ev.focused_tests?.origin === 'skipped-dry-run'
+    if ('dry_run' in ev && ev.dry_run !== true) bad('dry_run', 'must be true when present (omit the field for a normal candidate)')
+    if (ev.dry_run === true) {
+      if (!skipped || ev.focused_tests?.result !== 'not run') bad('dry_run', 'a dry run must carry focused_tests {result: not run, origin: skipped-dry-run}')
+      if (ev.built_by !== 'hosted-ci' || ev.signature !== null) bad('dry_run', 'a dry run is a hosted-ci build and is never signed')
+      const banner = '#'.repeat(78)
+      console.error(`${banner}\n[verify] DRY RUN, NOT A CANDIDATE: this evidence was produced with --skip-focused, so the focused test suite did NOT run.\n[verify] It rehearses the hosted runner only; it is never log-eligible (--log and --require-signature fail) and must not be\n[verify] ingested, signed or released.\n${banner}`)
+      if (logArg !== undefined) bad('log', 'a dry run is never log-eligible: it must not appear in, or be verified against, the evidence log')
+      if (requireSignature) bad('signature', '--require-signature: a dry run is never a candidate and cannot be signed')
+    } else if (skipped) bad('focused_tests', 'origin skipped-dry-run requires dry_run: true')
     // 签名（AB4）：signature 是 null（未签名）或元数据对象；给了 --pubkey 就必须验过。降级（null/缺失/删 sig 文件）在给了公钥时一律失败。
     if (!('signature' in ev)) bad('signature', 'missing (null for an unsigned candidate)')
     else if (ev.signature !== null && (typeof ev.signature !== 'object' || Array.isArray(ev.signature))) bad('signature', 'must be null or an object')
@@ -209,14 +221,14 @@ if (evidenceArg) {
         }
       } catch (error) { bad('signature', error.message) }
     }
-    if (ev.signature === null) {
+    if (ev.signature === null && ev.dry_run !== true) { // 演练已有自己的醒目警告
       const banner = '!'.repeat(78)
       console.error(`${banner}\n[verify] WARNING: UNSIGNED CANDIDATE (built_by: ${ev.built_by ?? 'unrecorded'}). EVIDENCE.json carries no signature, so nothing\n[verify] proves who approved this evidence. It is a development candidate only: a formal release must be re-signed by the\n[verify] key holder on a controlled machine (docs/release/README.md). Use --pubkey with --require-signature to enforce.\n${banner}`)
       if (requireSignature) bad('signature', '--require-signature: the candidate is unsigned')
     }
     if (ev.built_by !== undefined && !['hosted-ci', 'key-holder', 'local'].includes(ev.built_by)) bad('built_by', 'must be hosted-ci, key-holder or local')
     if (ev.built_by === 'hosted-ci' && ev.signature !== null) bad('built_by', 'a hosted-ci candidate cannot be signed (hosted CI holds no key)')
-    if (logArg !== undefined) {
+    if (logArg !== undefined && ev.dry_run !== true) {
       const lg = readLog(logArg)
       const name = String(ev.artifact?.name ?? '').replace(/\.zip$/, '')
       if (!lg.ok) bad('log', lg.reason)

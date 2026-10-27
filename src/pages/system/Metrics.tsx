@@ -87,7 +87,7 @@ export default function Metrics() {
       .filter((g) => g.items.length > 0)
   }, [groups, kw])
 
-  const restricted = callerRestricted(data, groups.flatMap((g) => g.items))
+  const restricted = callerRestricted(data)
   const errCount = groups.flatMap((g) => g.items).filter((m) => isMetricError(m.value)).length
 
   const doSync = async () => {

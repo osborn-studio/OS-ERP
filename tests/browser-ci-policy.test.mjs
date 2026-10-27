@@ -10,7 +10,7 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync, readdirSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -131,6 +131,16 @@ test('scenarios stay Linux/loopback-only, honour the sandbox switch, and the two
   }
 })
 
+test('AG10 inactive-role-notice asserts banner, dismissal, my-scope text and restores the role', () => {
+  const src = read('tests/browser/inactive-role-notice.mjs')
+  for (const needle of ["'ROLE_INACTIVE_NOTICE'", 'role-inactive-banner', 'role-inactive-banner-dismiss', 'my-scope-inactive-codes', 'my-scope-active-note', 'data.explanations', 'originalStatus', 'GML_TEST_DATA_DIR', 'roles_effective']) {
+    assert.ok(src.includes(needle), `inactive-role-notice must assert ${needle}`)
+  }
+  assert.match(src, /finally \{[\s\S]*run\(originalStatus\)/, 'the role must be restored even when the scenario fails')
+  assert.match(driver, /GML_TEST_DATA_DIR: dataDir/, 'the driver hands scenarios only the throwaway data dir')
+  assert.ok(driver.includes("'inactive-role-notice'"))
+})
+
 test('AA8 scenarios assert API outcomes and observable page results, not only text', () => {
   const myScope = read('tests/browser/my-scope.mjs')
   for (const needle of ["'/api/auth/my-scope'", 'expectOrgScoped', 'expectAdminScope', 'data.explanations', 'tr[data-current="true"]', 'status, 200']) {
@@ -208,7 +218,8 @@ test('AD11 role-matrix scenario asserts the highlighted column, server-equal cel
 test('AF11 scenarios are registered, assert real outcomes and the page hooks exist', () => {
   const declared = driver.match(/const SCENARIOS = \[([^\]]+)\]/)[1].split(',').map((x) => x.trim().replace(/'/g, ''))
   const needles = {
-    'metrics-scoped-marker': ['metric-scoped-marker', 'metric-value-', 'restricted', 'scoped = false', 'route.fulfill', '全局口径', 'count(), 0', 'externalRequests'],
+    'metrics-scoped-real': ['metric-scoped-marker', 'metric-value-', 'scope_restricted', 'createAccount', 'data_scope: \'org\'', 'route.fulfill', '全局口径', 'count(), 0', 'metrics-hidden-note', 'externalRequests'],
+    'audit-fts-fallback': ['audit-fts-fallback', 'audit-fts-fallback-text', 'fallback_total', 'data-count', '/api/meta/audit-logs', 'route.fulfill', 'status, 403', 'scope-notice', 'count(), 0', 'externalRequests'],
     'mcp-token-429': ['/api/mcp/limits/tokens', 'mcp-token-429', 'mcp-token-429-row', 'data-recent', 'busy-agent', 'route.fulfill', 'status, 403', 'status, 401', 'count(), 0', 'externalRequests']
   }
   for (const [f, list] of Object.entries(needles)) {
@@ -225,6 +236,11 @@ test('AF11 scenarios are registered, assert real outcomes and the page hooks exi
   const mcp = read('src/pages/system/McpCenter.tsx')
   for (const hook of ['mcp-token-429', 'mcp-token-429-row', 'data-recent', "'/mcp/limits/tokens'"]) assert.ok(mcp.includes(hook), `McpCenter.tsx must expose ${hook}`)
   assert.ok(read('src/pages/system/AuditLogs.tsx').includes('audit-fts-fallback'), 'AuditLogs.tsx exposes the FTS fallback slot')
+  assert.ok(read('src/pages/system/AuditLogs.tsx').includes('fts.fallback_total'), 'AuditLogs.tsx reads the real fts.fallback_total field')
+  // AG11：标记只认服务端 scope_restricted，不再从行上推断；AG9 配额槽位只在端点 200 时渲染
+  assert.ok(read('src/api/metrics.ts').includes('scope_restricted') && !read('src/api/metrics.ts').includes('AF2-ADAPTER'), 'metrics api reads scope_restricted and has no inference adapter')
+  assert.ok(mcp.includes('data-testid="mcp-quota"') && mcp.includes("'/mcp/limits/quota'"), 'McpCenter.tsx renders the AG9 quota block')
+  assert.ok(!existsSync(path.join(ROOT, 'tests/browser/metrics-scoped-marker.mjs')), 'the AF11 marker scenario is replaced by metrics-scoped-real')
   assert.match(read('server/mcp/admin.js'), /'\/limits\/tokens',\s*requireAuth,\s*requirePerm\('system\.mcp\.manage'\)/)
 })
 

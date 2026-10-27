@@ -46,6 +46,9 @@ import { computeOpsStatus, opsCounters } from '../lib/ops-status.js'
 // Prometheus 文本导出（ADR-0045）：admin JWT 或 GML_METRICS_TOKEN Bearer
 import { renderPrometheus, metricsTokenOk, PROMETHEUS_CONTENT_TYPE } from '../lib/metrics-export.js'
 import { counterSnapshot, histogramSnapshot } from '../lib/process-counters.js'
+
+// AG11：AF4 `audit_fts_fallback_total` 各 reason 之和（本进程自启动以来；与 Prometheus 导出同一计数器，仅随已通过 AUDIT_PERM + 全局数据校验的审计列表返回）
+const ftsFallbackTotal = () => Object.values(counterSnapshot().audit_fts_fallback_total || {}).reduce((a, n) => a + (Number(n) || 0), 0)
 import { createMetricsThrottle } from '../lib/metrics-throttle.js'
 import { writeRetryStats } from '../lib/tx.js'
 import { DATA_DIR } from '../db/index.js'
@@ -419,7 +422,7 @@ r.get(
     return paged(res, {
       rows, total, page, pageSize, has_more, total_cap: AUDIT_COUNT_CAP,
       totalPages: Math.ceil(Math.min(total, AUDIT_COUNT_CAP) / pageSize) || 1,
-      retention: auditRetention(db), export_max_rows: AUDIT_EXPORT_MAX_ROWS, fts: ftsState(db)
+      retention: auditRetention(db), export_max_rows: AUDIT_EXPORT_MAX_ROWS, fts: { ...ftsState(db), fallback_total: ftsFallbackTotal() }
     })
   })
 )

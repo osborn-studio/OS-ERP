@@ -77,4 +77,15 @@ node scripts/audit-fts-maintain.mjs --data-dir /abs/path/to/data --industry cosm
 - 并发与失败：设置与对象在同一个 `BEGIN IMMEDIATE` 事务里改，拿不到锁 → `status: busy`、二者都不变；中途失败 → 整体回滚。
 - **在途请求与 `--disable`（AF4 已处理）**：检索请求「选定走 FTS」与「执行查询」之间索引表被删时，查询路径捕获 `no such table: audit_logs_fts`，**只重试一次**，换 LIKE 重跑（结果与 FTS 路径逐行相同），并使 `os_erp_audit_fts_fallback_total{reason="query"}` +1；CSV 导出跨批次时在原游标处换 LIKE 继续（`reason="export_batch"`），行不重不漏。重试后再失败、或别的错误，照常报错——不吞错。
 - **启动自愈与维护脚本重叠（AF4 已处理）**：启动自愈（迁移 071 经 `supersedesVerifyOf` 接管 067 的自检）与 `--enable`/`--disable` 都用 `BEGIN IMMEDIATE` 先取写锁（遇 `SQLITE_BUSY` / `SQLITE_BUSY_SNAPSHOT` 有上限地重试，脚本总等待不超过 `--busy-ms`），**拿到锁后重读设置与对象**：状态已被对方收敛则什么都不做（脚本报告 `already_in_state: true`；启动日志出现 `heal-skip 071`）。所以「后到者」的结论是：它不会撤销先到者的决定，也不会因陈旧快照使启动失败。仍然成立的边界：重叠的 `--enable` 持写锁到回填结束，等待超过上限的一方得到 `busy`（脚本）或启动失败（重启即可）。
+- 回退计数 `os_erp_audit_fts_fallback_total{reason}` 的读法见操作手册第五十四章。注意：审计页上"维护中 / 回退"槽位读的 `fallback_total` 字段服务端的 FTS 状态目前没有返回，槽位不会显示数据，请以该计数器为准。
 - 无 FTS5 构建：CI 的 `audit-no-fts5` job（`ci.yml`）从源码重编译去掉 `SQLITE_ENABLE_FTS5` 的 better-sqlite3 并跑审计视图与维护测试；该 job 在托管 runner 上的首次运行结果尚未验证（见 ADR-0054）。
+
+## 6. 切换时机与写入失败的含义（AG4，ADR-0054 补充）
+
+`scripts/bench-audit-toggle-under-write.mjs` 在写入者持续写的同时多轮 `--disable` / `--enable`，结果见 capacity-baseline "AG4"。运维要点：
+
+- **在写入低谷切换**。`--disable` 只是 `DROP`（毫秒到数百毫秒），`--enable` 要回填，持写锁时长随行数线性增长（合成数据：2 万行约几十毫秒，50 万行约 2.3–3.2 s，100 万行见 AE4）。持锁期间所有审计写入（和任何别的写事务）排队等 `busy_timeout`（默认 5000 ms，`GML_SQLITE_BUSY_MS` 可调）。
+- **没有丢行、没有链断点**：压测里切换期间已确认的写入全部在表里，哈希链完好；`--disable` 期间写入的行由下一次 `--enable` 回填进索引（开启后 `--integrity-check` 应为 ok）。切换不会让写入者看到 `no such table` 或触发器错误。
+- **写入失败只可能是 `SQLITE_BUSY`**（锁被占超过 `busy_timeout`）：该行**整体没有写入**（没有半截行，哈希链不受影响），不会事后补写。普通审计（`audit()`）遇错只重试一次（去掉明细），再失败则业务请求照常返回、这条审计缺失；严格审计（`auditStrictRow`）失败返回 503 并回滚业务事务。所以：回填预期时间 ≥ `busy_timeout` 的库，先在低谷执行，或临时调大 `GML_SQLITE_BUSY_MS` 后重启；事后用 `scripts/audit-verify-chain.mjs` 与 `--integrity-check` 核对。
+- **怎么自检**：在隔离的库副本上跑 `node scripts/bench-audit-toggle-under-write.mjs --seed-rows <接近生产的行数> --rounds 3 --rate <峰值写入速率>`，看输出里的 `writer.lost_rows`（失败行，按类别）与 `max_write_ms`（最大写停顿），对账 `verify.ok` 应为 true。该脚本只用临时目录，不碰在用库。
+

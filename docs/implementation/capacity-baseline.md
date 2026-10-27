@@ -619,6 +619,12 @@ node scripts/upgrade-rehearsal.mjs --from=58 --backup-dir=/abs/new-dir/data/back
 - 结果：已派发 0 次（`nightly-capacity.yml` 0/3，`capacity-smoke` 0/1，`candidate` 0/1，`dependency-review` 0/1，`audit-no-fts5` 0/1）；没有 run id，结果登记表保持待填，本节没有任何托管 runner 数字。`capacity-smoke` 过渡 job 因此保留（它不在 `main` 上，也从未跑过，且 `nightly-capacity.yml` 也不在 `main` 上）。未修改任何工作流或仓库设置。
 - 等待项不变：合入顺序决定首跑条件；到达 `main` 后各派发一次，全部成功且 `nightly-capacity.yml` 在 `main` 上时才删除 `capacity-smoke`（整块）及其策略测试。
 
+### AG8 复查（2026-10-24）：仍未派发（main 上不可用）
+- 检查：`main`（提交 `a524d3b`）的 `.github/workflows` 只有 `ci.yml` 与 `linux-validation.yml`；`nightly-capacity.yml`、`release-candidate.yml` 的 `gh api …/contents/…?ref=main` 均返回 HTTP 404；`ci.yml` 只含 `checks`、`docker`、`regression`，**没有** `capacity-smoke`、`dependency-review`、`audit-no-fts5`、`candidate`。
+- PR 状态（`gh pr list --state all`）：#1–#3 MERGED；#4–#10 全部 OPEN、未合并；#11 查不到（`gh pr view 11` 与 pulls API 均 404），第十五批候选尚无 PR。
+- 结果：已派发 0 次（`nightly-capacity.yml` 0/3，`capacity-smoke` 0/1，`candidate` 含 `dry_run=true` 与完整各 0/1，`dependency-review` 0/1，`audit-no-fts5` 0/1）；没有 run id，结果登记表保持待填，本节没有任何托管 runner 数字。`capacity-smoke` 过渡 job 保留（不在 `main` 上、从未跑过，`nightly-capacity.yml` 也不在 `main` 上）。未修改任何工作流或仓库设置。
+- 等待项不变：到达 `main` 后各派发一次（`release-candidate.yml` 若有 `dry_run` 输入先 `-f dry_run=true` 再完整一次）；全部成功且 `nightly-capacity.yml` 在 `main` 上时才删除 `capacity-smoke`（整块）及其策略测试。
+
 ### 触发（合入 `main` 之后；只用 `gh workflow run`，不改仓库设置）
 ```bash
 gh workflow run nightly-capacity.yml --ref main -f rehearsal=true -f snapshot_upto=58
@@ -850,6 +856,11 @@ gh run view <run-id> --log-failed
 - 本机（macOS）：`tests/fs-fault.test.mjs` 在加入 `backup.after-enc-rename-fsync` / `backup.after-manifest-fsync` 与多库 × 4 点用例后全部通过；其中 fsync 顺序用例只断言调用顺序，不是断电实验。
 
 
+## AG6 备份报告与清理删除的持久性：故障矩阵耗时（**Mac mini / 非目标主机 / 整机负载 40–60**）
+
+- `tests/fs-fault.test.mjs` 在加入两个新注入点（报告临时文件已写未改名、清理删除后未 fsync 目录）的专用用例与 fsync 顺序用例后共 63 个。**整机负载 40–60（其他批次并行）时实测约 208–224 秒**（AF6 在空闲机约 45–80 秒；本次用例数 52 → 62，其中新增的多为多次子进程的 keep 场景），运行时间受整机负载支配，不能视为空闲机数字，也不是 `dmserver` / Linux 结果。新注入点只用单库夹具（不做三库 × 点的组合），子进程超时与用例级超时不变（120 / 180 秒）。
+- Linux CI 上的该文件：**仍未运行**（同 AF6 记录）。
+
 ## AF3 OMS `/stats` 平台维度、热销与受限范围语句改走时间索引：改写 + 迁移 074（**Mac mini / 合成 20 万 OMS 单 + 每单一行明细 / 非目标主机 / 整机负载 12–25 / 同机轮转计时**）
 
 脚本：`node scripts/bench-oms-order-time.mjs --rows 200000 --span 365 --ordered --writes 4000 --rounds 5 --repeat 31 --out result.json`（输出 `af3` 键；`--span 60 --no-write` 为密集窗口最坏情形；`--ordered` = 订单时间随 id 递增 ±6 h，更接近真实落库，不加则时间与 id 无关、对窗口驱动计划偏不利）。全新临时目录；不跑 `ANALYZE`。四种索引状态各用一份库副本、各开一个连接：S0（仅迁移 070，即 AE3 现状）、S0+B（再加被否决的 `oms_orders(platform_id, order_time, status, pay_amount)`）、S1（+迁移 074，已发布）、S1+B；每条语句**轮转**所有（状态 × 写法）配置计时（每轮每配置一次，31 轮取 p50 / p95），整机负载漂移落在所有配置上，比逐配置连续计时可比。新写法与最初的 `date(order_time)` 旧 SQL 逐条核对：整数 / 文本 / 行序严格相同，浮点列相对误差 `af3.max_rel_diff = 0`（脚本断言 `af3.identical: true`，所有运行均为真）。**负载高，p95 含抖动，只看量级；不是 `dmserver` 结果。**
@@ -917,3 +928,24 @@ gh run view <run-id> --log-failed
 - 复现：见脚本头；`--ordered`（时间随 id）、`--span 60|365|1095`、`--no-write`。
 - 未覆盖：`dmserver` 与生产规模副本；真实标题长度下的明细索引体积；真实订单 / 明细的写入并发争用；空闲机器上的数字；有 `sqlite_stat1` 统计信息时的计划（见 `docs/operations/query-planner.md`）。
 - explain-audit（合成库）见下方验证记录；九条 `oms.stats_*` / `ai.platform_analysis` 无豁免。
+
+
+## AG4 审计写入 vs FTS 开关：写入者持续写、同时 `--disable` / `--enable` 多轮（**Mac mini / 合成库 / 非目标主机 / 单次运行 / 机器负载极高（1 分钟负载 30–65，其它任务并行）**）
+
+脚本：`node scripts/bench-audit-toggle-under-write.mjs`（参数见脚本头；写入者在 `scripts/lib/audit-toggle-writer.mjs`）。流程：临时目录建库（schema + 全部迁移，FTS 与触发器在位）→ `seed()` 预置行 → 派生**一个写入者子进程**（唯一 INSERT 点 `insertAuditRow`，含哈希链，WAL，`busy_timeout` 5000 与服务一致，失败按 `--retries` 重试）→ 逐轮真实子进程 `audit-fts-maintain --disable` 再 `--enable` → 停写入者后对账：已确认写入的行都在且序号不重、`verifyChain` 完好、FTS 索引文档数 = 审计行数、`--integrity-check` 为 ok。**对账不过则退出 1**。
+
+| 场景（预置行 / 写入 / 轮数）| 写入者确认行 | 写失败（行 / 尝试）| 写重试 | 最大写停顿 | `--disable` elapsed_ms（最小 / 中位 / 最大）| `--enable` elapsed_ms（最小 / 中位 / 最大）| 对账 |
+|---|---|---|---|---|---|---|---|
+| 2 万 / steady 200 行/s / 20 轮 | 2906（实测 200.0 行/s）| 0 / 0 | 0 | 130.8 ms（p99 9.7）| 2.1 / 4.5 / 30.8 | 17.6 / 27.6 / 111.3 | 通过 |
+| 2 万 / burst 不停顿（每批 200 行连写）/ 10 轮 | 26380（实测约 2830 行/s）| 0 / 0 | 0 | 211.5 ms（p99 2.7）| 4.1 / 62.7 / 488.1 | 21.5 / 87.3 / 204.7 | 通过 |
+| 50 万 / burst 不停顿 / 5 轮 | 20060（约 970 行/s，被回填挡住）| 0 / 0 | 0 | **3015 ms**（p99 3.0）| 45.6 / 233.7 / 597.6 | **2297 / 2620 / 3191** | 通过 |
+| 30 万 / steady 200 行/s / 3 轮，**写入者 `busy_timeout` 500 ms、不重试**（故意压低以观察失败形态）| 1287 / 1293 | **6 行，全部 `SQLITE_BUSY`** / 6 次 | 0 | 587.6 ms | 14.0 / 18.9 / 27.6 | 980 / 1635 / 1749 | 通过（失败的 6 行没有写入，也没有半截行）|
+
+读法（诚实边界）：
+- **没有发现缺陷**：四个场景共 4 万多次确认写入，**零丢行、零重复序号、哈希链完好、FTS 索引与审计行数一致**（包括 `--disable` 期间写入、由下一次 `--enable` 回填的行）。没有出现 `no such table`、触发器类错误，也没有 `SQLITE_BUSY_SNAPSHOT`——`DROP`/`CREATE` 与写入者的 `BEGIN IMMEDIATE` 在同一把写锁下排队，写入者那边已缓存的预编译语句在表被删后由 SQLite 自动重编译。
+- **写失败只有一种形态：写锁被占时间超过写入者的 `busy_timeout`**（场景 4：`--enable` 回填 1–1.7 s > 500 ms ⇒ `SQLITE_BUSY`，该行**整体未写入**，由调用方决定重试；`audit()` 中间件遇错会去掉明细重试一次，仍失败则请求照常返回而这条审计缺失——这是本来就有的"普通审计写入失败不阻断业务"的口径，严格审计 `auditStrictRow` 则会 503 并回滚业务事务）。默认 5000 ms 下，本表的回填时长（≤ 3.2 s）都在预算内，所以场景 1–3 没有失败；回填超过 5 s 的大库（见 AE4：100 万行约 1.5 s 空闲机、负载高时数倍）上写入会失败，**低峰执行**。
+- **最大写停顿 = 写入者被开关挡住的时间**：`--disable` 很短（中位 4–234 ms，最大 598 ms），`--enable` 随行数线性增长（2 万行约 30–90 ms，50 万行约 2.3–3.2 s）；50 万行场景里写入者停顿 3015 ms 与 `--enable` 的 elapsed 同量级。steady 速率在库小时不受影响（实测 200.0 行/s）。
+- 本机整机负载 30–65，**绝对数字偏大，只看量级与"有无失败"**；写入者是**一个进程一个连接**，不是多写者并发，也不经 HTTP / `audit()` 中间件；没有同时运行服务，故 `os_erp_audit_fts_fallback_total`（`--metrics-url` 采集）本批**未采集**，读路径回退由 AF4 的真实服务用例覆盖。
+- 同一个秒级用例在 `tests/audit-fts-races.test.mjs`（"AG4 writer process keeps inserting…"，约 3 s）：写入者 400 行/s，经轮询（非 sleep）确认「触发器在位时在写 → `--disable` → 索引缺席时仍在写 → `--enable` → 触发器恢复后仍在写」，断言确认行数 = 表内行数、序号不重、链完好、索引文档数 = 行数。
+- 复现：`node scripts/bench-audit-toggle-under-write.mjs --rounds 20 --rate 200 --seed-rows 20000`；`--mode burst --burst-every-ms 0`；`--writer-busy-ms 500 --retries 0` 观察失败形态。
+- 说明：表中四个场景在审计跟进修复（steady 模式落后时不再"补发"积压、`ok` 须含每次开关均真实执行）**之前**跑出；steady 场景的"实测行/秒"因此可能略高估被挡之后的恢复速率，其余结论不受影响。修复后用 `--rounds 3 --seed-rows 3000` 复跑一次，`ok: true`、`toggles_ok: true`、零失败。

@@ -36,7 +36,7 @@
 import { getDb } from '../db/index.js'
 import { stampDef, defStale } from '../db/migrations/_helpers.cjs'
 import { countBelowSafe, stockScopeSql } from './stock.js'
-import { purchaseOrderScopeSql, PO_READ_PERMS } from './purchase.js'
+import { purchaseOrderScopeSql, purchaseScopeSql, PO_READ_PERMS } from './purchase.js'
 import { readSetting } from './settings.js'
 import { salesScopeSql, omsOrderScopeSql } from './sales-order.js'
 import { ocScope, selfCustomerIdReadOnly } from './order-center.js'
@@ -53,12 +53,17 @@ const days = (p, dflt = 30) => {
 
 // AD1（ADR-0053）：范围参数。`compute(db, { days, orgScope })`；不传 orgScope = 全局（内部调用 / 看板口径不变）。
 // 库存类走 `stockScopeSql`（仓库所属组织），采购订单类走 `purchaseOrderScopeSql`（入库仓所属组织），判据各只有一份。
-// 带 `scopeAware: true` 的指标才会按范围收窄；其余指标没有组织归属可套（销售 / 线上 / 财务 / 订货 / 经销商 / 审批），
+// 带 `scopeAware: true` 的指标才会按范围收窄；其余指标必须带 `scopeless: '<理由>'`（AG2，`scripts/check-metrics-scope.mjs` 守卫），
 // 对受限调用者仍是全局口径，由 `metricScopedFlags` 标 `scoped: false`，前端据此标注「全局口径」。
 // 绑定主体（门店 / 经销商账号）对库存 / 采购订单类同样失败关闭（Codex AF2 高项：此前 data_scope=all 的绑定账号会拿全局数）
 const stockSc = (p, alias = 'st') => stockScopeSql(p?.subjectBound ? { scope: 'none' } : p?.orgScope, alias)
 const poSc = (p, alias = 'po') => purchaseOrderScopeSql(p?.subjectBound ? { scope: 'none' } : p?.orgScope, alias)
 /** 调用者是否受限（非全局范围）；不传 = 不受限 */
+/**
+ * 指标是否按调用者范围计算 —— 运行时可见性（`metricVisibility`）、`scoped` 标记（`metricScopedFlags`）与
+ * 守卫 `scripts/check-metrics-scope.mjs`（AG2）读的是同一个判据；不是严格的 `true` 一律视为无范围语义。
+ */
+export const isScopeAware = (m) => m?.scopeAware === true
 export const isScopeRestricted = (orgScope) => !!orgScope && orgScope.scope !== 'all'
 
 // AF2（ADR-0057 补充）：销售 / 线上 OMS / 订货中心 / POS 指标也按范围计算，**复用各自路由的同一份谓词**，不另写第二份：
@@ -74,6 +79,11 @@ export const isScopeRestricted = (orgScope) => !!orgScope && orgScope.scope !== 
 //   · 不声明（存货 / 采购订单类，AD1 既有指标）行为不变。
 const ALL_SQL = { sql: '1=1', params: [], empty: false }
 const NONE_SQL = { sql: '1=0', params: [], empty: true }
+// AG2：应付未结 = 结算单自身 `org_id`（`purchaseScopeSql(...).org`，与应付台账 / 采购链读接口同一份谓词）；绑定主体失败关闭
+const settleSc = (p, alias = 'ps') => {
+  const sc = purchaseScopeSql(p?.subjectBound ? { scope: 'none' } : p?.orgScope, alias)
+  return { sql: sc.org, params: sc.params, empty: sc.empty }
+}
 const salesSc = (p, kind = 'order', alias = 'so') => (p?.subjectBound ? NONE_SQL : salesScopeSql(p?.orgScope, kind, alias))
 const omsSc = (p, alias = 'o') => (p?.subjectBound ? NONE_SQL : omsOrderScopeSql(p?.orgScope, alias))
 const posSc = (p, alias = 'po') => {
@@ -472,11 +482,15 @@ export const METRICS = [
     exclusions: '排除 status = voided（作废结算单不构成应付）',
     source: 'purchase_settlements',
     note: '与采购域「核销生效点=付款单审批通过」同源：paid_amount 由核销明细算出，不是累加出来的',
-    compute: (db) =>
-      round2(num(db.prepare(
-        `SELECT COALESCE(SUM(settle_amount - paid_amount),0) v FROM purchase_settlements
-          WHERE status <> 'voided'`
-      ).get().v))
+    scopeAware: true,
+    bound: 'deny',
+    compute: (db, p) => {
+      const sc = settleSc(p)
+      return round2(num(db.prepare(
+        `SELECT COALESCE(SUM(ps.settle_amount - ps.paid_amount),0) v FROM purchase_settlements ps
+          WHERE ps.status <> 'voided' AND ${sc.sql}`
+      ).get(...sc.params).v))
+    }
   },
 
   // ------------------------------------------------------------------ 订货
@@ -554,6 +568,7 @@ export const METRICS = [
     source: 'dealers',
     note: '整体口径。单客户超限请用 dealer 维度看明细 —— 整体 60% 里可能藏着几个 120%。' +
       '无范围语义（AF2）：经销商档案路由本身没有组织谓词，指标不另造；受限范围下默认隐藏',
+    scopeless: '经销商是客户而非本方组织（ADR-0026），dealers 表与经销商档案路由都没有组织归属谓词，指标不另造第二套口径',
     compute: (db) => {
       const r = db.prepare(
         `SELECT COALESCE(SUM(credit_used),0) u, COALESCE(SUM(credit_limit),0) l
@@ -573,6 +588,7 @@ export const METRICS = [
     exclusions: '仅统计授信额度 > 0 的经销商',
     source: 'dealers',
     note: '「占用率」是整体视角，这个才是能直接催办的名单长度',
+    scopeless: '与 credit_usage 同源：经销商档案没有组织归属谓词（经销商是客户而非本方组织），名单长度无从按组织收窄',
     compute: (db) =>
       num(db.prepare(
         `SELECT COUNT(*) v FROM dealers
@@ -592,6 +608,7 @@ export const METRICS = [
     exclusions: '不含已通过 / 已驳回 / 已撤回',
     source: 'approval_instances',
     note: '这是「卡住的工作流」规模。与采购待办数不是一回事：待办是「该做」，待审批是「等着别人放行」',
+    scopeless: '审批实例按提交人 / 当前审批人 / 管理员全见可见（ADR-0015），不是单一组织维度，没有可复用的组织谓词',
     compute: (db) =>
       num(db.prepare(`SELECT COUNT(*) v FROM approval_instances WHERE status='pending'`).get().v)
   },
@@ -673,7 +690,7 @@ export function metricVisibility(db, { canPerm, orgScope = null, keys = null, su
   let hidden = 0
   const considered = Array.isArray(keys) && keys.length ? keys.filter((k) => METRIC_BY_KEY[k]) : METRICS.map((m) => m.key)
   for (const m of METRICS) {
-    const ok = (m.perms || []).some((c) => canPerm(c)) && !(hideScopeless && m.scopeAware !== true) &&
+    const ok = (m.perms || []).some((c) => canPerm(c)) && !(hideScopeless && !isScopeAware(m)) &&
       !(subjectBound && !boundAllows(m, user))
     if (ok) allow.add(m.key)
   }
@@ -706,7 +723,7 @@ export function metricScopedFlags(orgScope = null, keys = null, allow = null, su
   const restricted = isScopeRestricted(orgScope) || subjectBound
   const want = wantKeys(keys, allow)
   const out = {}
-  for (const k of want) if (METRIC_BY_KEY[k]) out[k] = !restricted || METRIC_BY_KEY[k].scopeAware === true
+  for (const k of want) if (METRIC_BY_KEY[k]) out[k] = !restricted || isScopeAware(METRIC_BY_KEY[k])
   return out
 }
 
@@ -780,5 +797,5 @@ export function metricGroups(db = getDb(), { days: d = 30, withValues = true, or
 
 export default {
   METRICS, METRIC_BY_KEY, metricDefinitions, metricValues, metricCatalog, metricScopedFlags, isScopeRestricted,
-  syncMetricDefs, metricDefsStale, metricGroups, metricVisibility, boundAllows
+  syncMetricDefs, metricDefsStale, metricGroups, metricVisibility, boundAllows, isScopeAware
 }

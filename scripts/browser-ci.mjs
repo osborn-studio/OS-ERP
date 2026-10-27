@@ -24,7 +24,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url))
-const SCENARIOS = ['runtime-capabilities', 'session', 'user-editor', 'funds-review', 'scope-notice', 'my-scope', 'audit-logs', 'inventory-paging', 'approval-template-perm', 'pos-settle-perm', 'audit-fts-hint', 'dashboard-cache-stamp', 'role-matrix', 'audit-fts-state', 'mcp-token-limits', 'metrics-hidden-note', 'metrics-scoped-marker', 'mcp-token-429']
+const SCENARIOS = ['runtime-capabilities', 'session', 'user-editor', 'funds-review', 'scope-notice', 'my-scope', 'audit-logs', 'inventory-paging', 'approval-template-perm', 'pos-settle-perm', 'audit-fts-hint', 'dashboard-cache-stamp', 'role-matrix', 'audit-fts-state', 'mcp-token-limits', 'metrics-hidden-note', 'metrics-scoped-real', 'mcp-token-429', 'audit-fts-fallback', 'inactive-role-notice']
 const SCENARIO_TIMEOUT_MS = 5 * 60 * 1000
 const redact = (text) => text.replace(/[A-Za-z0-9_.-]{32,}/g, '[REDACTED]')
 const tail = (text, n) => text.split('\n').slice(-n).join('\n')
@@ -99,7 +99,7 @@ try {
   const scenarioEnv = {
     PATH: process.env.PATH, HOME: process.env.HOME, CI: process.env.CI,
     ...(process.env.PLAYWRIGHT_BROWSERS_PATH ? { PLAYWRIGHT_BROWSERS_PATH: process.env.PLAYWRIGHT_BROWSERS_PATH } : {}),
-    GML_TEST_BASE_URL: base, GML_PLAYWRIGHT_MODULE: playwrightModule, GML_CHROMIUM_EXECUTABLE: chromiumExecutable,
+    GML_TEST_BASE_URL: base, GML_TEST_DATA_DIR: dataDir, GML_PLAYWRIGHT_MODULE: playwrightModule, GML_CHROMIUM_EXECUTABLE: chromiumExecutable,
     GML_CHROMIUM_SANDBOX: browserInfo.sandbox ? '1' : '0', GML_BROWSER_SHOT_DIR: path.join(outDir, 'screenshots')
   }
   for (const name of SCENARIOS) {
