@@ -465,11 +465,8 @@ const ERR_CASES = [
   ['报表：报表代码不存在', 'GET', '/api/reports/zzz?period=2026-10', null],
   ['报表：关账期间格式非法', 'POST', '/api/reports/periods/2026-13/close', {}],
   ['报表：期初余额缺参数', 'PUT', '/api/reports/opening', {}],
-  // 批次 M（期末结转）的两条。第二条刻意挑**已结转**的期间（2026-07）：它的理由校验
-  // 在删除之前，所以这条用例不会真的动演示数据 —— 而它同时证明了"撤销要走理由"这道闸在 HTTP 层是活的。
   ['结转：期间格式非法（结转）', 'POST', '/api/reports/periods/2026-13/carry-forward', {}],
   ['结转：期间格式非法（结转状态）', 'GET', '/api/reports/closing/2026-13', null],
-  ['结转：撤销已结转期间但没写理由', 'POST', '/api/reports/periods/2026-07/reverse-closing', {}],
   ['DMS：协议不存在', 'POST', '/api/dms/agreements/999999/status', { status: 'x' }],
   ['退款：缺少分摊明细', 'POST', '/api/refunds', { customer_type: 'dealer', customer_id: 1, refund_date: '2026-10-16', amount: 1, idempotency_key: `probe-err-${Date.now()}` }]
 ]
@@ -481,6 +478,29 @@ for (const [label, method, path, body] of ERR_CASES) {
   // 全局兜底中间件放顶层 `error`。两条路径都算"带得走排查"，所以两处取其一即可 ——
   // 但不能两处都没有（那就只剩一句中文，用户报障时没法定位）。
   ok(`${label} 带业务码（便于排查）`, !!(b.error || b.detail?.code), JSON.stringify(b).slice(0, 160))
+}
+
+// 演示结转月份随灌数日期移动；从真实已过账凭证取样，不假定 2026-07 已结转。
+// 选择未关账期间，让理由缺失成为唯一阻断条件；缺夹具必须失败，不能跳过。
+// 这是写账回归探针：若理由守卫失效会真的撤销结转，必须使用隔离测试库。
+{
+  const carried = one(`SELECT p.* FROM accounting_periods p
+    JOIN vouchers v ON v.id=p.closing_voucher_id
+    WHERE p.status='open' AND v.biz_type='profit_carry' AND v.status='posted'
+    ORDER BY p.period LIMIT 1`)
+  if (!carried) throw new Error('结转理由守卫缺少未关账、已结转的测试期间')
+  const voucher = one('SELECT * FROM vouchers WHERE id=?', carried.closing_voucher_id)
+  const entries = all('SELECT * FROM voucher_entries WHERE voucher_id=? ORDER BY id', voucher.id)
+  const r = await api('POST', `/api/reports/periods/${carried.period}/reverse-closing`, { token: adminJwt, body: {} })
+  const b = r.body || {}
+  ok('结转：撤销已结转期间但没写理由 → 400', r.status === 400, `实际 ${r.status}`)
+  ok('结转：缺少撤销理由返回 REVERSE_REASON_REQUIRED',
+    (b.detail?.code || b.error) === 'REVERSE_REASON_REQUIRED', JSON.stringify(b).slice(0, 160))
+  ok('结转：缺少撤销理由不会改写期间记录',
+    JSON.stringify(one('SELECT * FROM accounting_periods WHERE id=?', carried.id)) === JSON.stringify(carried))
+  ok('结转：缺少撤销理由不会删除或改写凭证及分录',
+    JSON.stringify(one('SELECT * FROM vouchers WHERE id=?', voucher.id)) === JSON.stringify(voucher) &&
+    JSON.stringify(all('SELECT * FROM voucher_entries WHERE voucher_id=? ORDER BY id', voucher.id)) === JSON.stringify(entries))
 }
 
 // 期末结转（批次 M）是**写门**：它生成一张已过账的凭证（真的动账）。
@@ -2763,5 +2783,5 @@ ok(
 )
 console.log(`\n${'─'.repeat(56)}`)
 console.log(`通过 ${pass} / 失败 ${fail}`)
-if (fail) console.log('失败项：\n - ' + failed.join('\n - '))
+if (fail) console.log('失败项：\n ✗ ' + failed.join('\n ✗ '))
 process.exit(fail ? 1 : 0)

@@ -20,6 +20,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { createHash, randomBytes } from 'node:crypto'
+import { isDeepStrictEqual } from 'node:util'
 import Database from 'better-sqlite3'
 import { verifyChain, verifyJsonlSegment, chainColumnsPresent } from './audit-chain-verify.js'
 import { decryptFile, shredFile } from './backup-crypto.js'
@@ -146,9 +147,11 @@ export function loadBackupManifest(set, key) {
     let actual = null
     actual = backupFile.endsWith('.enc') ? withTempPlain(backupFile, key, recompute) : recompute(backupFile)
     if (actual) {
+      // 断链摘要只描述有效前缀；不能让清单把此前缀伪装成已验证的完整基线。
       const same = chain.present === actual.present &&
-        (!chain.present || (chain.tip_hash === actual.tip_hash && chain.last_id === actual.last_id && chain.rows === actual.rows && chain.anchors_digest === actual.anchors_digest))
-      if (!same) return bad('manifest-mismatch', '清单中的链尾 / 锚点摘要与备份内容重算结果不一致')
+        (!chain.present || (chain.verified === actual.verified && isDeepStrictEqual(chain.break ?? null, actual.break ?? null) &&
+          chain.tip_hash === actual.tip_hash && chain.last_id === actual.last_id && chain.rows === actual.rows && chain.anchors_digest === actual.anchors_digest))
+      if (!same) return bad('manifest-mismatch', '清单中的链验证状态 / 断点 / 链尾 / 锚点摘要与备份内容重算结果不一致')
       notes.push('已从备份内容重算并与清单一致')
     }
   } else notes.push('备份文件不在本机，仅核对了清单自身' + (enc ? '' : '（明文清单未经认证）'))

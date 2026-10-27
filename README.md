@@ -20,7 +20,7 @@ Goal: single-enterprise deployment with dependable purchasing, inventory, sales,
 
 ## 本地安装包
 
-接收完整发行 ZIP 后，先安装 **Node.js 22.x LTS（含 npm）**，完整解压，再执行：
+接收完整发行 ZIP 后，先安装 **Node.js 22.x LTS（至少 22.2，含 npm）**，完整解压，再执行：
 
 - macOS：双击 `install.command` 安装，再双击 `start.command` 启动。
 - Windows：双击 `install-windows.bat`，再双击 `start-windows.bat`。
@@ -39,7 +39,7 @@ node scripts/local-manage.mjs start
 
 ## 从GitHub源码启动
 
-源码仓库不提交 dist 或 node_modules，克隆后使用 Node.js 22.x 执行：
+源码仓库不提交 dist 或 node_modules，克隆后使用 Node.js 22.x（至少 22.2；ZIP 校验使用该版本起提供的 `zlib.crc32`）执行：
 
 ```bash
 npm ci --include=dev --registry=https://registry.npmjs.org

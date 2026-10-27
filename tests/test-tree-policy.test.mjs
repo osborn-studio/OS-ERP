@@ -15,7 +15,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { checkTimings } from '../scripts/test-timings.mjs'
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url))
@@ -78,13 +78,17 @@ test('docs/implementation/testing.md exists and names the slow directory, the ti
   for (const needle of ['tests/slow', 'scripts/test-timings.mjs', 'GML_TEST_LOAD_FACTOR', 'tests/lib/load-tolerance.mjs']) assert.ok(md.includes(needle), needle)
 })
 
-test('every relative import in tests/slow and tests/lib resolves to an existing file (a moved file with a stale ../ path fails here, not in CI)', () => {
+test('every ../ import in the scanned test files resolves (a moved file with a stale path fails here, not in CI)', () => {
   const files = [...slowEntries.map((f) => path.join(SLOW_DIR, f)), ...fs.readdirSync(path.join(ROOT, 'tests/lib')).map((f) => path.join(ROOT, 'tests/lib', f)), path.join(ROOT, 'tests/write-contention.test.mjs'), path.join(ROOT, 'tests/release-signing.test.mjs')]
   for (const file of files) {
     const text = fs.readFileSync(file, 'utf8')
     // only `../` specifiers (a `./` inside a fixture string is not an import) at the start of a statement or call: `from '…'`, `import('…')`, `require('…')`
     for (const m of text.matchAll(/(?:\bfrom\s+|\bimport\(\s*|\brequire\(\s*)(['"])(\.\.\/[^'"]+)\1/g)) {
-      const target = path.resolve(path.dirname(file), m[2])
+      // ESM specifiers are URLs: a cache-busting query/fragment is not part of the filename.
+      // CommonJS require still resolves a literal filesystem path.
+      const target = m[0].startsWith('require')
+        ? path.resolve(path.dirname(file), m[2])
+        : fileURLToPath(new URL(m[2], pathToFileURL(file)))
       assert.ok(fs.existsSync(target), `${path.relative(ROOT, file)}: ${m[2]} does not resolve (${path.relative(ROOT, target)})`)
     }
   }

@@ -17,6 +17,8 @@ import Database from 'better-sqlite3'
 import { runMigrations, MIGRATIONS_DIR } from '../../server/db/migrations/runner.js'
 import { insertAuditRow, auditStrictRow, deleteAuditRowsAnchored, rehashAuditRow, GENESIS } from '../../server/lib/audit-trail.js'
 import { verifyChain, verifyJsonlSegment } from '../../server/lib/audit-chain-verify.js'
+import { loadBackupManifest, compareLiveToBackup, sha256FileSync } from '../../server/lib/audit-anchor-manifest.js'
+import { encryptFile } from '../../server/lib/backup-crypto.js'
 import { applyPlan } from '../../scripts/lib/privacy-common.mjs'
 import { resolveKeyIdRequirement } from '../../server/lib/audit-anchor-intent.js'
 import { buildSignedAnchor } from '../../scripts/lib/offbox-anchor.mjs'
@@ -866,6 +868,87 @@ test('AC7 hardening: swapping the manifest anchor list while keeping the digest 
   const r = cli(VERIFY, ['--data-dir', dir, '--against-backup', set, '--json'], dir)
   assert.equal(r.status, 1)
   db.close()
+})
+
+test('AC7 hardening: backup verification verdict and break must match the recomputed chain', async (t) => {
+  for (const key of [undefined, BKEY]) await t.test(key ? 'encrypted' : 'plain', async (t) => {
+    const dir = tmp(t)
+    const db = mkDb(dir)
+    t.after(() => db.close())
+    fill(db, 2)
+    const original = db.prepare('SELECT detail FROM audit_logs WHERE id=2').get().detail
+    db.prepare("UPDATE audit_logs SET detail='tampered' WHERE id=2").run()
+    const env = key ? { GML_BACKUP_KEY: key } : {}
+    const b = cli(BACKUP, ['cosmetic'], dir, env)
+    assert.equal(b.status, 0, b.stdout + b.stderr)
+    const set = path.join(backupDirOf(dir), newestBackup(dir))
+    const mf = `${set}.audit-manifest.json`
+    const manifest = JSON.parse(readFileSync(mf, 'utf8'))
+    const keyBytes = key ? Buffer.from(key) : null
+    const backupHash = sha256FileSync(set)
+    assert.equal(manifest.backup_sha256, backupHash)
+    assert.equal(manifest.audit_chain.verified, false)
+    assert.equal(manifest.audit_chain.last_id, 1, 'only the valid prefix was summarized')
+    assert.equal(manifest.audit_chain.break.id, 2)
+    db.prepare('UPDATE audit_logs SET detail=? WHERE id=2').run(original)
+    assert.equal(verifyChain(db).ok, true, 'the live chain is valid and contains the backup prefix')
+    const V = () => cli(VERIFY, ['--data-dir', dir, '--against-backup', set, '--json'], dir, env)
+    const loaded = loadBackupManifest(set, keyBytes)
+    assert.equal(loaded.ok, true, 'an honest broken-chain manifest remains readable')
+    assert.equal(compareLiveToBackup(db, loaded.manifest).kind, 'backup-chain-broken')
+    assert.equal(V().status, 1, 'an honest broken backup is not an accepted baseline')
+
+    for (const [label, mutate] of [
+      ['forged verified flag', c => { c.verified = true }],
+      ['forged flag with hidden break', c => { c.verified = true; delete c.break }],
+      ['hidden break alone', c => { delete c.break }],
+      ['changed break details', c => { c.break.id = 1 }]
+    ]) await t.test(label, () => {
+      const forged = structuredClone(manifest)
+      mutate(forged.audit_chain)
+      writeFileSync(mf, JSON.stringify(forged))
+      if (key) {
+        // Authenticate the same forged summary, so rejection must come from DB recomputation.
+        rmSync(`${set}.audit-manifest.enc`)
+        encryptFile(mf, `${set}.audit-manifest.enc`, keyBytes)
+      }
+      assert.equal(sha256FileSync(set), backupHash, 'backup bytes and sha256 stay unchanged')
+      const read = loadBackupManifest(set, keyBytes)
+      const result = V()
+      assert.equal(result.status, 1, result.stdout + result.stderr)
+      assert.equal(JSON.parse(result.stdout).against_backup?.status, 'manifest-mismatch')
+      assert.deepEqual([read.ok, read.status], [false, 'manifest-mismatch'])
+    })
+  })
+})
+
+test('AC7 hardening: honest content, link and unchained breaks survive manifest JSON round trips', async (t) => {
+  for (const key of [undefined, BKEY]) for (const kind of ['content', 'link', 'unchained']) {
+    await t.test(`${key ? 'encrypted' : 'plain'} ${kind}`, (t) => {
+      const dir = tmp(t)
+      const db = mkDb(dir)
+      t.after(() => db.close())
+      fill(db, 2)
+      const first = db.prepare('SELECT * FROM audit_logs WHERE id=1').get()
+      if (kind === 'content') db.prepare("UPDATE audit_logs SET detail='changed' WHERE id=1").run()
+      if (kind === 'unchained') db.prepare('UPDATE audit_logs SET row_hash=NULL WHERE id=1').run()
+      if (kind === 'link') {
+        const prev = 'f'.repeat(64)
+        db.prepare('UPDATE audit_logs SET prev_hash=?, row_hash=? WHERE id=1').run(prev, spec(first, prev))
+      }
+      const checked = verifyChain(db)
+      assert.equal(checked.brk.kind, kind)
+      assert.equal(checked.tipHash, null, 'the first row is broken; there is no valid prefix')
+      const b = cli(BACKUP, ['cosmetic'], dir, key ? { GML_BACKUP_KEY: key } : {})
+      assert.equal(b.status, 0, b.stdout + b.stderr)
+      const set = path.join(backupDirOf(dir), newestBackup(dir))
+      const loaded = loadBackupManifest(set, key ? Buffer.from(key) : null)
+      assert.equal(loaded.ok, true, loaded.message)
+      assert.deepEqual(loaded.manifest.audit_chain.break, checked.brk)
+      assert.equal(loaded.manifest.audit_chain.verified, false)
+      assert.equal(compareLiveToBackup(db, loaded.manifest).kind, 'backup-chain-broken')
+    })
+  }
 })
 
 test('AC7 hardening: archive digests are re-verified row by row, so a re-signed (sha256 updated) tampered JSONL does not prove descent', (t) => {

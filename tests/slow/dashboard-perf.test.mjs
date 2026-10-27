@@ -1082,19 +1082,26 @@ test('AD3 sales / purchase trend SQL moved into dashboard-sql.js is textually th
 /** 去掉 order_time 区间谓词的 trend 线上语句（只保留 date() 复核）：SQLite 会选覆盖索引全扫 */
 const trendLike = () => 'SELECT date(order_time) AS date, COALESCE(SUM(pay_amount),0) amount FROM oms_orders INDEXED BY idx_oms_order_time WHERE date(order_time) >= date(\'now\') GROUP BY date(order_time)'
 
-test('AD3 explain-audit: trend + channel online use idx_oms_order_time (SEARCH, no SCAN); channel_online exemption is gone; dropping the index turns the guard red', (t) => {
+test('AD3 explain-audit: trend + channel online use idx_oms_order_time (SEARCH, no SCAN); channel_online exemption is gone; dropping the index turns the guard red', async (t) => {
   const { db } = omsFixture(t)
+  // STATEMENTS captures its representative windows at import time. Simulate a long suite
+  // crossing local midnight; compare against that captured instant, not the later clock.
+  const statementTime = new Date(2026, 9, 26, 23, 59, 59)
+  t.mock.timers.enable({ apis: ['Date'], now: statementTime })
+  const { STATEMENTS: midnightStatements } = await import('../../scripts/explain-audit.mjs?dashboard-perf-midnight')
+  t.mock.timers.tick(2000)
+  assert.notDeepEqual(dsql.onlineWindow(30), dsql.onlineWindow(30, statementTime), 'the test crosses local midnight')
   const ids = ['dash.trend_sales', 'dash.trend_purchase', 'dash.trend_online', 'dash.channel_online']
-  const byId = new Map(STATEMENTS.map((s) => [s.id, s]))
+  const byId = new Map(midnightStatements.map((s) => [s.id, s]))
   for (const id of ids) assert.ok(byId.get(id), `${id} registered`)
   assert.equal(byId.get('dash.trend_sales').sql, dsql.trendSalesSql(30))
   assert.equal(byId.get('dash.trend_purchase').sql, dsql.trendPurchaseSql(30))
   assert.equal(byId.get('dash.trend_online').sql, dsql.trendOnlineSql())
-  assert.deepEqual(byId.get('dash.trend_online').params, dsql.onlineWindow(30))
+  assert.deepEqual(byId.get('dash.trend_online').params, dsql.onlineWindow(30, statementTime))
   assert.equal(byId.get('dash.trend_online').expectIndex, 'idx_oms_order_time')
   for (const id of ids) assert.equal(byId.get(id).expectSearch, true, `${id}: must be a constrained SEARCH, not an index scan`)
   assert.equal(byId.get('dash.channel_online').sql, dsql.channelOnlineSql())
-  assert.deepEqual(byId.get('dash.channel_online').params, dsql.onlineWindow(90))
+  assert.deepEqual(byId.get('dash.channel_online').params, dsql.onlineWindow(90, statementTime))
   assert.equal(byId.get('dash.channel_online').expectIndex, 'idx_oms_order_time')
   assert.ok(!ALLOW.some((a) => a.statement === 'dash.channel_online'), 'no exemption left for channel_online')
   const rep = auditStatements(db, ids.map((i) => byId.get(i)), { allow: ALLOW.filter((a) => ids.includes(a.statement)), threshold: 1 })
