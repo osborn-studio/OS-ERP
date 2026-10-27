@@ -25,3 +25,11 @@
 - Claude CLI claude-haiku-5-5 工具禁用只读复审：is_error=false，canonicalModel=claude-haiku-5-5，无确认阻断。审阅者只看所给 diff/context，未执行 Git 或测试；合并父提交及保留内容由执行器核对。
 - 可选意见：区分实现基线与同步基线（已在此澄清）；为快速配置探针统一 10 秒启动上限、补小于 1 的配置测试暂不扩展本次同步。已有正数配置契约和默认预算不变，不把可选建议当已复现缺陷。
 - 不合并 PR，不启用 auto-merge；旧 HEAD 的绿灯仅保留为历史记录。
+
+## 当前 HEAD 浏览器失败修复（2026-10-28 北京时间）
+
+- 旧 1bccb71 的 CI40573432014 浏览器场景22/23通过，唯一失败是 mcp-token-limits.mjs 刷新前配额断言 actual 1 / expected 0；当时隔离回归仍在运行，不能宣称该运行全绿。原始日志保存在 osstack 管理工作区 pr28-browser-failed.log。
+- 源码定位：McpLimitsCard 挂载取数一次，父 McpOperations.load() 完成后增加 nonce 再取一次；原测试仅等首张卡就改配额，可能与第二次取数竞争。仅改浏览器测试：点击前订阅精确 limits 路径的两次初始化响应，检查状态和响应完成，再等精确 DOM 读数；修改配额后、手动刷新前断言请求数未增加，刷新后恰好增加一次。所有原始配额/429计数/授权/秘密不展示/清理断言保留，未增加等待上限或修改产品。
+- 初版按钮可用+networkidle等待经 Haiku 复审被否决（不能证明 SPA 新请求结束），已弃用。第二轮要求补 DOM 提交同步，并核对无定时轮询；已补属性等待，完整 card/useFetch 确认只有挂载与 nonce 驱动。
+- 本机 Node22 策略/API 23/23、语法/diff、helper78/78、header4/4通过；本机不执行 Linux-only 浏览器场景。真实浏览器复现与修复验收仍以推送后当前 HEAD 的 Linux CI 为准，不把静态分析当已复现证明。
+- 三轮指定 Claude CLI claude-haiku-5-5 工具禁用复审均 is_error=false/canonicalModel 已核验；最终无确认阻断。最终条件意见核对：createAccount 返回 username/password，operations 标签按条件挂载，刷新记录按钮唯一。没有声称托管浏览器已通过。
