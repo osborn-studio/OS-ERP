@@ -1,3 +1,4 @@
+// slow: 65 s: builds release candidates in temp copies of the tree (scripts/test-timings.mjs, threshold 60 s)
 /**
  * ============================================================================
  * 文件标识：tests/release-candidate.test.mjs ｜ 发行候选包（Z5）：干净树、命名、证据字段、说明提取
@@ -17,10 +18,10 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { unzipSync } from 'fflate'
-import { BATCHES } from '../scripts/gen-changelog.mjs'
-import { hashTestsTree } from '../scripts/lib/tests-tree.mjs'
+import { BATCHES } from '../../scripts/gen-changelog.mjs'
+import { hashTestsTree } from '../../scripts/lib/tests-tree.mjs'
 
-const ROOT = fileURLToPath(new URL('../', import.meta.url))
+const ROOT = fileURLToPath(new URL('../../', import.meta.url))
 const PATH = process.env.PATH
 
 function tempDir(t, prefix) {
@@ -213,6 +214,8 @@ test('candidate builds RC-<version>-<sha>.zip with sha256, EVIDENCE.json and not
   // 证据绑定真实 zip：hash/名字不符即红
   const bound = spawnSync(process.execPath, ['scripts/verify-release.mjs', `--evidence=${evFile}`, `--artifact=${zip}`], { cwd: pkg, env: { PATH }, encoding: 'utf8' })
   assert.equal(bound.status, 0, bound.stderr)
+  const spaced = spawnSync(process.execPath, ['scripts/verify-release.mjs', '--evidence', evFile, '--artifact', zip], { cwd: pkg, env: { PATH }, encoding: 'utf8' })
+  assert.equal(spaced.status, 0, spaced.stderr)
   const other = path.join(dir, `RC-other.zip`)
   writeFileSync(other, 'not the archive')
   const unbound = spawnSync(process.execPath, ['scripts/verify-release.mjs', `--evidence=${evFile}`, `--artifact=${other}`], { cwd: pkg, env: { PATH }, encoding: 'utf8' })
@@ -350,9 +353,10 @@ test('--run-tests --ci-run auto records produced results bound to the package te
   assert.equal(ft.result, 'passed')
   assert.equal(ft.origin, 'produced')
   assert.ok(ft.duration_ms >= 0)
-  const stubs = readdirSync(path.join(src, 'tests')).filter(f => f.endsWith('.test.mjs') && f !== 'zz-ok.test.mjs').length // 每个桩 1 个用例 + zz-ok 的 2 个（1 通过、1 跳过）
+  // Header-guard fixtures now also create tests/slow stubs; count the entire fixture tree.
+  const stubs = readdirSync(path.join(src, 'tests'), { recursive: true }).filter(f => f.endsWith('.test.mjs') && f !== 'zz-ok.test.mjs').length // 每个桩 1 个用例 + zz-ok 的 2 个（1 通过、1 跳过）
   assert.deepEqual(ft.summary_counts, { tests: stubs + 2, pass: stubs + 1, fail: 0, cancelled: 0, skipped: 1, todo: 0 })
-    assert.equal(ft.tests_tree_sha256, hashTestsTree(src))
+  assert.equal(ft.tests_tree_sha256, hashTestsTree(src))
   for (const g of Object.values(ev.guards)) { assert.equal(g.result, 'passed'); assert.equal(g.origin, 'produced'); assert.ok(g.duration_ms >= 0) }
   // CI：来自 gh 替身，且被标注为查询结果
   assert.equal(ev.ci_run_id, '424242')

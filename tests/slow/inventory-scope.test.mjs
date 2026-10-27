@@ -1,3 +1,4 @@
+// slow: 81 s: org-scoped inventory and purchase routes over HTTP, many cases (scripts/test-timings.mjs, threshold 60 s)
 /**
  * ============================================================================
  * 文件标识：tests/inventory-scope.test.mjs ｜ 测试：库存域与采购订单状态/收货路由按组织范围收口（ADR-0038）
@@ -23,9 +24,9 @@ import net from 'node:net'
 import { fileURLToPath } from 'node:url'
 import { setTimeout as delay } from 'node:timers/promises'
 import Database from 'better-sqlite3'
-import { METRICS } from '../server/lib/metrics.js'
+import { METRICS } from '../../server/lib/metrics.js'
 
-const ROOT = fileURLToPath(new URL('../', import.meta.url))
+const ROOT = fileURLToPath(new URL('../../', import.meta.url))
 const secret = () => randomBytes(24).toString('base64url')
 
 async function server(t) {
@@ -360,8 +361,8 @@ test('MCP inventory tools follow the owner warehouse-org scope (ADR-0042)', { ti
   const f = await server(t)
   const { db } = f
   process.env.GML_RUNTIME_MODE = 'test'
-  const { TOOLS } = await import('../server/mcp/tools.js')
-  const engine = await import('../server/lib/stock.js')
+  const { TOOLS } = await import('../../server/mcp/tools.js')
+  const engine = await import('../../server/lib/stock.js')
   const tool = (name) => TOOLS.find((x) => x.name === name)
   const call = (name, args, scope, extra = {}) => tool(name).handler({ db, args, ctx: { scope, tokenName: 'aa2', orgId: null, engine, ...extra } })
   const codeOf = (fn) => { try { fn(); return null } catch (e) { return e.code ?? `ERR:${e.message}` } }
@@ -826,9 +827,9 @@ test('AC1: MCP purchase tools, dealer summary and master aggregates follow the w
   const f = await server(t)
   const { db, api } = f
   process.env.GML_RUNTIME_MODE = 'test'
-  const { TOOLS } = await import('../server/mcp/tools.js')
-  const { purchaseOrderScopeSql } = await import('../server/lib/purchase.js')
-  const engine = await import('../server/lib/stock.js')
+  const { TOOLS } = await import('../../server/mcp/tools.js')
+  const { purchaseOrderScopeSql } = await import('../../server/lib/purchase.js')
+  const engine = await import('../../server/lib/stock.js')
   const call = (name, args, scope) => TOOLS.find((x) => x.name === name).handler({ db, args, ctx: { scope, tokenName: 'ac1', orgId: null, engine } })
   const whA = db.prepare("SELECT id, org_id FROM warehouses WHERE code='WH01'").get()
   const whB = db.prepare("SELECT id, org_id FROM warehouses WHERE code='WH03'").get()
@@ -968,7 +969,7 @@ test('AD1: /api/metrics values / catalog / dictionary follow the warehouse-org s
     // AF2：销售 / OMS 已按范围计算（scoped:true）；应付 / 审批仍是全局口径
     for (const k of ['sales_amount', 'gmv']) assert.equal(a.scoped[k], true, k)
     assert.equal(a.scoped.payable_open, true, 'AG2: payable_open is scope-aware')
-    assert.equal(a.scoped.approval_pending, false)
+    assert.equal(a.scoped.approval_pending, true, 'AH2: approval_pending is scope-aware')
     const g = await vals(f.admin)
     assert.ok(Object.values(g.scoped).every((x) => x === true), 'a global caller sees every metric as scoped:true')
   })
@@ -990,7 +991,7 @@ test('AD1: /api/metrics values / catalog / dictionary follow the warehouse-org s
     const dict = okData(await api('/api/metrics?days=30', { token: A.token })).groups.flatMap((g) => g.items)
     assert.equal(dict.find((x) => x.key === 'purchase_amount').scoped, true)
     assert.equal(dict.find((x) => x.key === 'gmv').scoped, true)
-    assert.equal(dict.find((x) => x.key === 'approval_pending').scoped, false)
+    assert.equal(dict.find((x) => x.key === 'approval_pending').scoped, true)
     const adm = okData(await api('/api/metrics/catalog', { token: f.admin })).items
     assert.ok(adm.every((x) => x.scoped === true))
   })

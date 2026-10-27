@@ -13,25 +13,33 @@
 ```sh
 node scripts/audit-fts-maintain.mjs --data-dir /abs/path/to/data --industry cosmetic --integrity-check
 node scripts/audit-fts-maintain.mjs --data-dir /abs/path/to/data --industry cosmetic --optimize
-node scripts/audit-fts-maintain.mjs --data-dir /abs/path/to/data --industry cosmetic --rebuild
+node scripts/audit-fts-maintain.mjs --data-dir /abs/path/to/data --industry cosmetic --rebuild [--batch-rows 5000] [--pause-ms 5]
+node scripts/audit-fts-maintain.mjs --data-dir /abs/path/to/data --industry cosmetic --resume
 ```
 
 | 动作 | 做什么 | 持写锁 | 何时用 |
 |---|---|---|---|
 | `--integrity-check` | FTS5 `integrity-check`（含与 `audit_logs` 对账）| 短（一次写事务；大库上与索引大小成正比）| 每周 / 升级后 / 怀疑检索漏行时 |
 | `--optimize` | 合并索引段，不改内容 | 与累积的未合并段成正比 | 大批量写入 / 归档后 |
-| `--rebuild` | 从 `audit_logs` 重建整个索引 | **整个重建期间**（单次写事务）| `integrity-check` 报 corrupt 之后；触发器被重建之后 |
+| `--rebuild` | 从 `audit_logs` 分批重建整个索引（AH4）：每批一个 `BEGIN IMMEDIATE` 事务，批间让出写锁，打印进度 | **每批**（默认 5000 行；30 万行 Mac mini 实测最长一批约 0.3 s，单事务则 1.7 s，见 capacity-baseline AH4）| `integrity-check` 报 corrupt 之后；触发器被重建之后 |
+| `--resume` | 从检查点续跑被中断的 `--rebuild` | 同上 | `--rebuild` 被 SIGTERM / SIGINT / 崩溃中断之后 |
 
 - 必须显式给 `--data-dir`（绝对路径）与 `--industry`。仓库 `data/` 被拒绝（退出 2）；环境里的 `GML_DB` 被忽略。脚本不创建库、不跑迁移、不建 FTS 表。
-- 退出码：0 成功；1 失败（`corrupt` / `busy` / `error`，或表不存在时的 `--optimize` / `--rebuild`）；2 参数 / 环境错误。表不存在时 `--integrity-check` 退出 0，报告 `status: "absent"`（无 FTS5 的构建本来就没有）。
+- 退出码：0 成功；1 失败（`corrupt` / `busy` / `error`，或表不存在时的 `--optimize` / `--rebuild`，或下面的检查点拒绝）；2 参数 / 环境错误；3 分批重建在批边界被信号中断（可 `--resume`）。表不存在时 `--integrity-check` 退出 0，报告 `status: "absent"`（无 FTS5 的构建本来就没有）。
 - 报告：默认写到 `<data-dir>/audit-fts-maintain-<行业>-<动作>-<时间戳>.json`（0600），`--out <绝对路径>` 另指（物理位置不能在仓库 `data/` 下，含经符号链接；不能是库文件或其边车；不覆盖已有文件）。库文件本身是符号链接时拒绝。字段：`status`、`rows`、`elapsed_ms`（BEGIN→COMMIT 墙钟，持写锁时间的粗上界）、`lock_probe`（另一线程用自己的连接反复 `BEGIN IMMEDIATE` 量出的写入者被挡时长：`max_blocked_ms` 近似上界、`max_busy_span_ms` 下界，见 `scripts/lib/lock-probe.mjs`）、`triggers_present`、`bytes_before` / `bytes_after`。报告不含绝对路径。
 - 拿不到写锁（默认等 5 s，`--busy-ms` 可调）时 `status: "busy"`、退出 1，**索引不被改动**。
 
 ### 重建的操作建议
 
 1. 先 `--integrity-check`；只有报 `corrupt` 或触发器曾缺失才需要 `--rebuild`。
-2. `--rebuild` 期间其它写入（包括每条审计写入）会等待 `busy_timeout`（默认 5 s）：**100 万行约数秒**（见 capacity-baseline "AC5"，Mac mini 数字，目标主机请自行实测）。在低峰执行；超过 5 s 的重建会让同时到达的写入收到 `SQLITE_BUSY`。读者不受影响（WAL）。
-3. 重建后再 `--integrity-check` 应为 `ok`。
+2. `--rebuild`（AH4 起分批）只在每一批里持写锁，写入者最多等一批的时间（默认 5000 行/批；`--batch-rows` 1..1000000，`--pause-ms` 批间停顿，默认 5 ms）；每批打印一行 `audit-fts-maintain progress rebuild batch=k/N rows=a/b pct=…`。Mac mini 实测数字见 capacity-baseline "AH4"，目标主机请自行实测；仍建议低峰执行。读者不受影响（WAL）。
+3. **重建期间索引是残缺的**：库里有检查点表 `audit_fts_rebuild_state`，查询路径见到它就不走 FTS（回退 LIKE，结果相同，只是慢），`--integrity-check` / `--optimize` 报 `rebuild_in_progress`。**重建期间不要跑审计归档 / 清理**（见下）。
+4. **中断与续跑**：对脚本发 SIGTERM / SIGINT，它在当前批提交后停止，报告 `status: "interrupted"`、退出 3，检查点留在库里；`--resume` 从检查点继续（`--batch-rows` 缺省沿用检查点里的值）。崩溃 / 杀进程同样可续跑（每批提交后检查点即更新）。
+5. 触发器缺失时（常见于"触发器被重建之后"）分批不适用：初始化事务会在写锁内补齐触发器并做一次完整 `rebuild`（持写锁到结束，同旧行为），报告 `repaired_triggers`；批间触发器被删 → `triggers_missing`（退出 1，`--rebuild --restart` 修复）。
+6. 拒绝路径（退出 1，索引与检查点都不被改动）：`--resume` 没有检查点 → `no_checkpoint`；检查点属于别的行业或别的库（指纹对不上）→ `checkpoint_mismatch`；`--rebuild` 时已有检查点 → `checkpoint_exists`（用 `--resume` 续跑，或确认后 `--rebuild --restart` 丢弃它从头来）。
+7. 重建期间若有**尚未入索引**的审计行被删除（审计归档 / 清理在跑），触发器会对索引发出无效的 delete；续跑到末尾剩余行数对不上时报 `interfered`（检查点保留，索引仍不被查询使用）——用 `--rebuild --restart` 修复。`--disable` / `--enable` 会顺带清掉过期检查点（`--enable` 遇到残缺索引会做一次完整重建）。
+8. 删除检查点之前，最后一批在同一写事务内执行 `integrity-check`（rank=1，对照完整内容表）。这会发现未索引行被更新、触发器短暂缺失导致高水位之后漏行等剩余计数无法发现的问题。失败报告 `error`、退出 1，最后一批回滚且检查点保留；排除并发干扰后用 `--rebuild --restart` 修复。完整性核验随索引大小增长，旧的最长单批耗时不包含这一步，需在托管/目标主机重新测量。完成后仍可另行 `--integrity-check` 复核。
+9. 使用 FTS 的查询把检查点判断与读操作放在同一 SQLite 读事务快照中：重建即便在查询期间开始并完成，也不会返回中途的残缺索引结果。
 
 ### 夜间可选步骤
 
@@ -41,7 +49,7 @@ node scripts/audit-fts-maintain.mjs --data-dir /abs/path/to/data --industry cosm
 
 - 进程环境里 `GML_AUDIT_FTS` 恰为字符串 `0` 时，审计检索一律走 `LIKE`（`keywordUsesFts` 恒为 false）；其它取值（未设、空串、`1`、`false`）不关闭 FTS。代码每次查询时读取该变量；对已运行的服务进程，环境变量只能靠重启来改。
 - **只影响查询路径**：迁移 067 照常建表与触发器，写入照常维护索引，维护脚本照常可用。用途：FTS 索引被怀疑有问题时的**止血开关**（先切 LIKE，再 `--rebuild`），以及测试。
-- CI 的 checks job 有一步 `Audit view tests without FTS (GML_AUDIT_FTS=0)`，用该开关再跑一遍 `tests/audit-logs-view.test.mjs`：在带 FTS5 的构建上真实演练回退路径（此前只靠 `setFtsOverride` 模拟）。依赖"FTS 路径可用"的用例在该运行里按原因跳过，其余照跑。
+- CI 的 slow-tests job（AH1 起；此前在 checks job）有一步 `Audit view tests without FTS (GML_AUDIT_FTS=0)`，用该开关再跑一遍 `tests/slow/audit-logs-view.test.mjs`：在带 FTS5 的构建上真实演练回退路径（此前只靠 `setFtsOverride` 模拟）。依赖"FTS 路径可用"的用例在该运行里按原因跳过，其余照跑。
 - 代价：LIKE 路径在命中稀少的关键词上会读全表（100 万行约百毫秒级，见 capacity-baseline "AB3"）。
 
 ## 4. 完全关闭索引：设置 `audit_fts_enabled`（AD4，ADR-0054）
@@ -58,11 +66,11 @@ node scripts/audit-fts-maintain.mjs --data-dir /abs/path/to/data --industry cosm
 - **启动自愈规则**：只在设置这样说时才动索引——设置开且对象缺失 → 重建并回填；设置关且对象存在 → 删除；设置关且对象已不在 → 什么都不做（不会每次启动重建）。在界面 / API 里改设置不立即动索引，下次启动收敛；要立即生效用上面的脚本。
 - 在带 FTS5 的构建上建过索引的库，不要拿到无 FTS5 的构建上写入；要换构建，先 `--disable`。
 - 与 `GML_AUDIT_FTS=0` 的区别：后者只切查询路径、索引与触发器仍在并被维护；设置关闭是真正删除。
-- CI 的 `audit-no-fts5` job 用从源码重编译、去掉 `SQLITE_ENABLE_FTS5` 的 better-sqlite3 跑 `tests/audit-logs-view.test.mjs` 与 `tests/audit-fts-maintain.test.mjs`（真实无 FTS5 构建）。
+- CI 的 `audit-no-fts5` job 用从源码重编译、去掉 `SQLITE_ENABLE_FTS5` 的 better-sqlite3 跑 `tests/slow/audit-logs-view.test.mjs` 与 `tests/audit-fts-maintain.test.mjs`（真实无 FTS5 构建）。
 
 ## 5. 端到端运维闭环：关闭 → 检索仍可用 → 重启 → 重新开启（AE4，ADR-0054 补充）
 
-`tests/audit-fts-ops-loop.test.mjs` 在真实服务进程（随机 loopback 端口、临时数据目录）上演练下面整条链路；回填耗时见 capacity-baseline "AE4"。
+`tests/slow/audit-fts-ops-loop.test.mjs` 在真实服务进程（随机 loopback 端口、临时数据目录）上演练下面整条链路；回填耗时见 capacity-baseline "AE4"。
 
 | 步骤 | 操作 | 预期（可核对） |
 |---|---|---|
@@ -77,7 +85,7 @@ node scripts/audit-fts-maintain.mjs --data-dir /abs/path/to/data --industry cosm
 - 并发与失败：设置与对象在同一个 `BEGIN IMMEDIATE` 事务里改，拿不到锁 → `status: busy`、二者都不变；中途失败 → 整体回滚。
 - **在途请求与 `--disable`（AF4 已处理）**：检索请求「选定走 FTS」与「执行查询」之间索引表被删时，查询路径捕获 `no such table: audit_logs_fts`，**只重试一次**，换 LIKE 重跑（结果与 FTS 路径逐行相同），并使 `os_erp_audit_fts_fallback_total{reason="query"}` +1；CSV 导出跨批次时在原游标处换 LIKE 继续（`reason="export_batch"`），行不重不漏。重试后再失败、或别的错误，照常报错——不吞错。
 - **启动自愈与维护脚本重叠（AF4 已处理）**：启动自愈（迁移 071 经 `supersedesVerifyOf` 接管 067 的自检）与 `--enable`/`--disable` 都用 `BEGIN IMMEDIATE` 先取写锁（遇 `SQLITE_BUSY` / `SQLITE_BUSY_SNAPSHOT` 有上限地重试，脚本总等待不超过 `--busy-ms`），**拿到锁后重读设置与对象**：状态已被对方收敛则什么都不做（脚本报告 `already_in_state: true`；启动日志出现 `heal-skip 071`）。所以「后到者」的结论是：它不会撤销先到者的决定，也不会因陈旧快照使启动失败。仍然成立的边界：重叠的 `--enable` 持写锁到回填结束，等待超过上限的一方得到 `busy`（脚本）或启动失败（重启即可）。
-- 回退计数 `os_erp_audit_fts_fallback_total{reason}` 的读法见操作手册第五十四章。注意：审计页上"维护中 / 回退"槽位读的 `fallback_total` 字段服务端的 FTS 状态目前没有返回，槽位不会显示数据，请以该计数器为准。
+- 回退计数 `os_erp_audit_fts_fallback_total{reason}` 的读法见操作手册第五十四章。审计列表响应的 `fts.fallback_total`（AG11）是各 `reason` 之和，审计页的索引状态卡据此显示；它同样是本进程自启动以来的累计，重启归零、多进程各自计数，分 `reason` 的明细只在计数器里。
 - 无 FTS5 构建：CI 的 `audit-no-fts5` job（`ci.yml`）从源码重编译去掉 `SQLITE_ENABLE_FTS5` 的 better-sqlite3 并跑审计视图与维护测试；该 job 在托管 runner 上的首次运行结果尚未验证（见 ADR-0054）。
 
 ## 6. 切换时机与写入失败的含义（AG4，ADR-0054 补充）

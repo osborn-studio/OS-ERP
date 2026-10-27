@@ -74,25 +74,27 @@ jobs:
       # AD2: docs/operations/role-matrix.md is generated from the permission dictionary, DOC_VIEW_PERMS, DOC_SCOPE_RESOLVERS and hq-roles.js; drift fails.
       - name: Role matrix is current
         run: node scripts/gen-role-matrix.mjs --check
-      # AC5: re-runs only the audit view tests with the FTS query path switched off (GML_AUDIT_FTS=0), so the no-FTS5 fallback is exercised for real.
-      - name: Audit view tests without FTS (GML_AUDIT_FTS=0)
-        run: GML_AUDIT_FTS=0 node --test --test-concurrency=1 tests/audit-logs-view.test.mjs
+      # AC5's GML_AUDIT_FTS=0 re-run of the audit view tests moved to the slow-tests job (AH1): that file is over 60 s and lives in tests/slow/.
       # AG2 (ADR-0057 supplement 2): every metric declares scopeAware or a written scopeless reason.
       - name: Metrics declare their scope semantics
         run: node scripts/check-metrics-scope.mjs
       # AG3 (ADR-0044 supplement 6): plan fingerprints of every statement registered in scripts/explain-audit.mjs are compared with the committed
       # docs/implementation/explain-plans.json (taken on the default small synthetic database, see docs/operations/query-planner.md); any drift
       # not whitelisted with a reason fails. The same step scans scripts/ and server/ for ANALYZE / PRAGMA optimize in non-test code.
+      # AH3 (ADR-0044 supplement 7): --cross-check also checks the committed docs/implementation/explain-plans.large.json against the small one
+      # (same statements; every plan that differs between the two must be listed with an explanation). The large database itself is NOT built
+      # here (about 20k SKUs / 200k OMS orders, minutes of CPU on a loaded machine); that comparison runs in nightly-capacity.yml.
       - name: Query plan snapshot (explain-audit --compare on a synthetic small database)
         run: |
           set -euo pipefail
           SYNTH_DIR="$(mktemp -d)/synth"
           GML_RUNTIME_MODE=production GML_DATA_DIR="$SYNTH_DIR" GML_DB= node scripts/synth-data.mjs --quiet > /dev/null
-          GML_DATA_DIR="$SYNTH_DIR" node scripts/explain-audit.mjs --compare docs/implementation/explain-plans.json
+          GML_DATA_DIR="$SYNTH_DIR" node scripts/explain-audit.mjs --compare docs/implementation/explain-plans.json --cross-check docs/implementation/explain-plans.large.json
       - name: TypeScript
         run: npx tsc --noEmit
       - name: Vite build
         run: npm run build
+      # AH1: tests/slow/ (files over 60 s) is NOT part of this glob; the slow-tests job runs it in parallel (see docs/implementation/testing.md).
       - name: Focused tests (tests/*.test.mjs)
         run: |
           set -euo pipefail
@@ -134,7 +136,7 @@ jobs:
           try { db.exec('CREATE VIRTUAL TABLE t USING fts5(x)'); console.error('fts5 table could be created'); process.exit(1) } catch { console.log('confirmed: no FTS5 in this SQLite build') }
           "
       - name: Audit view and FTS maintenance tests (no-FTS5 build)
-        run: node --test --test-concurrency=1 tests/audit-logs-view.test.mjs tests/audit-fts-maintain.test.mjs
+        run: node --test --test-concurrency=1 tests/slow/audit-logs-view.test.mjs tests/audit-fts-maintain.test.mjs
 
   docker:
     # Builds the ADR-0012 runtime image for linux/amd64 (no registry, no push, no login) and runs
@@ -219,12 +221,18 @@ jobs:
 
   regression:
     name: Isolated regression (cosmetic, food)
-    needs: checks
+    # Preserve the existing required status while gating the split slow/no-FTS run.
+    needs: [checks, slow-tests]
+    if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
       GML_VERIFY_PLATFORM: linux
     steps:
+      - name: Require focused and slow test success
+        run: |
+          test '${{ needs.checks.result }}' = success
+          test '${{ needs.slow-tests.result }}' = success
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
@@ -392,14 +400,18 @@ jobs:
         if: always()
         run: rm -rf "$CAP_RUN" "$CAP_REPORTS"
 
-  # AE7: manual dependency review. Runs both audit modes (runtime: high+critical vs the "allow" section; dev: critical vs the
-  # "dev" section of docs/security/audit-allowlist.json), writes JSON summaries outside the checkout and uploads them as one
-  # artifact. workflow_dispatch only; read-only token; no secrets. Needs network access to registry.npmjs.org. It has not been
-  # dispatched on GitHub yet.
+  # AE7/AH7: dependency review. Runs on every ci.yml event (pull_request gate, push to main, workflow_dispatch) with no job-level `if`, so it is a valid required check (AF1: no conditional skips). Steps: (1) lock-registry guard (every resolved
+  # host must be registry.npmjs.org; offline), (2) `npm ci --ignore-scripts` from the lockfile (no lifecycle scripts run), (3)
+  # install-vs-lockfile check (node_modules/.package-lock.json equals package-lock.json; it does not show which host served the
+  # downloads), (4) `npm audit signatures` against registry.npmjs.org (verifies the registry's signature over its own metadata for each
+  # installed name@version; npm reads that metadata from the registry, it does not compare it with the lockfile integrity or the
+  # tarball bytes: see docs/security/dependency-notes.md section 12), (5) both audit modes (runtime: high+critical vs the "allow" section; dev: critical
+  # vs the "dev" section of docs/security/audit-allowlist.json) writing JSON summaries outside the checkout, uploaded as one
+  # artifact. Read-only token; no secrets; fork PRs are fine (plain pull_request, not the privileged-token variant). Needs network access to
+  # registry.npmjs.org. It has not run on GitHub yet.
   dependency-review:
-    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -408,7 +420,16 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: .nvmrc
+      - name: Lock registry guard (offline)
+        run: node scripts/check-lock-registry.mjs
+      - name: Install from the lockfile (npm ci, lifecycle scripts disabled)
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Installed tree matches the lockfile
+        run: node scripts/check-install-registry.mjs
+      - name: Verify registry signatures (npm audit signatures, npmjs registry)
+        run: npm audit signatures --registry=https://registry.npmjs.org
       - name: Audit runtime and dev dependencies (both modes always run; the job fails if either fails)
+        if: ${{ !cancelled() }}
         run: |
           set -uo pipefail
           out="$RUNNER_TEMP/dependency-review"
@@ -427,4 +448,82 @@ jobs:
             ${{ runner.temp }}/dependency-review/audit-runtime.json
             ${{ runner.temp }}/dependency-review/audit-dev.json
           if-no-files-found: error
+          retention-days: 30
+
+  # AH6: backup fault-injection matrix on a hosted Linux runner. Runs tests/fs-fault.test.mjs and tests/db-backup.test.mjs with
+  # GML_FS_FAULT_REPORT, which records every injection point, mode and outcome into fs-fault-report.json (uploaded as an artifact).
+  # The report is evidence from a GitHub-hosted ubuntu runner: it is not a result from the dmserver target host and not release
+  # acceptance. Isolated temp directories only; no secrets; read-only token.
+  fs-fault:
+    name: Backup fault injection (hosted Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install locked dependencies and selected native build hooks
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm rebuild better-sqlite3 --no-audit --no-fund
+      - name: Run the fault matrix and backup tests (writes fs-fault-report.json)
+        env:
+          GML_FS_FAULT_REPORT: ${{ runner.temp }}/fs-fault/fs-fault-report.json
+        run: |
+          set -euo pipefail
+          export GML_JWT_SECRET="$(openssl rand -hex 32)"
+          node --test --test-concurrency=1 tests/fs-fault.test.mjs tests/db-backup.test.mjs
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: os-erp-fs-fault-report-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/fs-fault/fs-fault-report.json
+          if-no-files-found: error
+          retention-days: 14
+
+  # AH1: test files that take more than 60 s live in tests/slow/ (each starts with a `// slow: <reason>` line) and run here, in parallel with
+  # the `checks` job, so the PR gate's critical path is shorter. Runs scripts/test-timings.mjs, which executes each file serially under the
+  # same env as the gate and writes per-file timings (uploaded as an artifact). Also re-runs the audit view tests with the FTS query path
+  # switched off (GML_AUDIT_FTS=0; moved here from `checks`). Timings are measurements on a shared hosted runner, not acceptance evidence.
+  # It has not been run on GitHub yet.
+  slow-tests:
+    name: Slow tests (tests/slow) with per-file timings
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Install locked dependencies and selected native build hooks
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm rebuild better-sqlite3 esbuild --no-audit --no-fund
+      - name: Audit view tests without FTS (GML_AUDIT_FTS=0)
+        run: |
+          set -euo pipefail
+          export GML_JWT_SECRET="$(node -e "process.stdout.write(require('node:crypto').randomBytes(32).toString('hex'))")"
+          GML_AUDIT_FTS=0 node --test --test-concurrency=1 tests/slow/audit-logs-view.test.mjs
+      - name: Slow tests with timings (tests/slow/*.test.mjs)
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/test-timings"
+          node scripts/test-timings.mjs --run --output "$RUNNER_TEMP/test-timings/test-timings-slow.json" tests/slow/*.test.mjs
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: os-erp-test-timings-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/test-timings/test-timings-slow.json
+          if-no-files-found: warn
           retention-days: 30

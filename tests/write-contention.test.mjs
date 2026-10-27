@@ -26,6 +26,7 @@ import { sqliteBusyMs } from '../server/db/index.js'
 import {
   withWriteRetry, isBusyError, backoffMs, writeRetryStats, resetWriteRetryStats, writeRetryMaxFromEnv
 } from '../server/lib/tx.js'
+import { CASE_TIMEOUT_FAST_MS, CASE_TIMEOUT_SLOW_MS, SPAWN_TIMEOUT_MEDIUM_MS } from './lib/load-tolerance.mjs'
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url))
 const noSleep = () => {}
@@ -36,7 +37,7 @@ function seededCopy(t) {
   if (!seedTemplate) {
     seedTemplate = mkdtempSync(path.join(tmpdir(), 'os-y7-seed-'))
     const seed = spawnSync(process.execPath, ['scripts/reseed-all.mjs', '--force'], {
-      cwd: ROOT, encoding: 'utf8', timeout: 120000,
+      cwd: ROOT, encoding: 'utf8', timeout: CASE_TIMEOUT_FAST_MS,
       env: { PATH: process.env.PATH, HOME: seedTemplate, GML_RUNTIME_MODE: 'demo', GML_DATA_DIR: seedTemplate }
     })
     assert.equal(seed.status, 0, seed.stderr)
@@ -232,7 +233,7 @@ test('hot write routes are wrapped in withWriteRetry', () => {
   }
 })
 
-test('multi-process writers on one DB: no lost writes, no duplicates, retries recorded', { timeout: 240000 }, async (t) => {
+test('multi-process writers on one DB: no lost writes, no duplicates, retries recorded', { timeout: CASE_TIMEOUT_SLOW_MS }, async (t) => {
   const dir = seededCopy(t)
   const dbPath = path.join(dir, 'gml_cosmetic.db')
   const probe = new Database(dbPath)
@@ -349,10 +350,10 @@ test('multi-process writers on one DB: no lost writes, no duplicates, retries re
 
 // Finite retries do not guarantee zero errors against a writer that keeps reacquiring the lock.
 // Keep the strict all-success contract without contention, and separately check every stress outcome.
-for (const contended of [false, true]) test(`bench-api --profile=write: ${contended ? 'periodic contention accounts for exhausted requests' : 'no contention preserves exact all-success counts'}`, { timeout: 240000 }, (t) => {
+for (const contended of [false, true]) test(`bench-api --profile=write: ${contended ? 'periodic contention accounts for exhausted requests' : 'no contention preserves exact all-success counts'}`, { timeout: CASE_TIMEOUT_SLOW_MS }, (t) => {
   const BENCH = path.join(ROOT, 'scripts/bench-api.mjs')
   const bench = (args, env) => spawnSync(process.execPath, [BENCH, ...args], {
-    cwd: ROOT, encoding: 'utf8', timeout: 150000, env: { PATH: process.env.PATH, HOME: tmpdir(), ...env }
+    cwd: ROOT, encoding: 'utf8', timeout: SPAWN_TIMEOUT_MEDIUM_MS, env: { PATH: process.env.PATH, HOME: tmpdir(), ...env }
   })
   const dir = seededCopy(t)
   const env = { GML_RUNTIME_MODE: 'demo', GML_DATA_DIR: dir }

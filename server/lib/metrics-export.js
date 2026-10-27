@@ -43,7 +43,7 @@ const escLabel = (v) => String(v).replace(/\\/g, '\\\\').replace(/"/g, '\\"').re
 const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
 
 /** 渲染。ops 来自 computeOpsStatus；retry 来自 writeRetryStats()；counters 来自 counterSnapshot()。 */
-export function renderPrometheus({ ops, retry, counters, histograms = {}, version }) {
+export function renderPrometheus({ ops, retry, counters, histograms = {}, version, mcpDeniedRows }) {
   const lines = []
   const family = (name, type, help, samples) => {
     lines.push(`# HELP os_erp_${name} ${help}`, `# TYPE os_erp_${name} ${type}`)
@@ -59,6 +59,10 @@ export function renderPrometheus({ ops, retry, counters, histograms = {}, versio
   gauge('migration_checksum_adopted', 'Migrations registered through explicit checksum adoption; -1 when unknown.', g.migration_checksum_adopted)
   gauge('login_throttle_unavailable', '1 when the login throttle store fails its read-only probe (logins fail closed), else 0.', g.login_throttle_unavailable)
   gauge('disk_free_bytes', 'Free bytes on the volume holding the data directory; -1 when unknown.', g.disk_free_bytes)
+
+  // AH9：限速桶表里 denied 行的行数（无 label）。范围语义：运维 / 进程级 gauge，不属于业务指标字典（`server/lib/metrics.js` 的 METRICS，那里每条都要声明 scopeAware/scopeless），
+  // 数的是"本次抓取所服务的行业库"里的行数，不按调用者的数据范围收窄，也不含任何令牌信息。未提供 ⇒ -1（未知）。
+  gauge('mcp_rate_denied_rows', 'Rows of kind=denied in mcp_rate_buckets of the industry database serving this scrape (per-process ops gauge, not caller-scoped); -1 when unknown. Cleaned by the periodic purge, so sustained growth means the purge is not running.', Number.isFinite(mcpDeniedRows) ? mcpDeniedRows : -1)
 
   for (const [name, def] of Object.entries(COUNTER_DEFS)) {
     const value = counters?.[name]

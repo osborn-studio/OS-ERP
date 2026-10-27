@@ -43,7 +43,9 @@ import { WAREHOUSE_TYPES } from '../lib/warehouse.js'
 import { versionInfo } from '../version.js'
 // 运维健康（ADR-0029）：详情只给 admin，匿名只拿 status
 import { computeOpsStatus, opsCounters } from '../lib/ops-status.js'
+import { anchorIntentSummary } from '../lib/audit-anchor-intent.js'
 // Prometheus 文本导出（ADR-0045）：admin JWT 或 GML_METRICS_TOKEN Bearer
+import { deniedRowCount } from '../lib/mcp-rate-limit.js'
 import { renderPrometheus, metricsTokenOk, PROMETHEUS_CONTENT_TYPE } from '../lib/metrics-export.js'
 import { counterSnapshot, histogramSnapshot } from '../lib/process-counters.js'
 
@@ -182,7 +184,7 @@ r.get(
     res.status(200)
     res.setHeader('Content-Type', PROMETHEUS_CONTENT_TYPE)
     res.setHeader('Cache-Control', 'no-store')
-    return res.end(Buffer.from(renderPrometheus({ ops, retry: writeRetryStats(), counters: counterSnapshot(), histograms: histogramSnapshot(), version: versionInfo().version }), 'utf8'))
+    return res.end(Buffer.from(renderPrometheus({ ops, retry: writeRetryStats(), counters: counterSnapshot(), histograms: histogramSnapshot(), version: versionInfo().version, mcpDeniedRows: deniedRowCount(getDb()) }), 'utf8'))
   })
 )
 
@@ -422,7 +424,8 @@ r.get(
     return paged(res, {
       rows, total, page, pageSize, has_more, total_cap: AUDIT_COUNT_CAP,
       totalPages: Math.ceil(Math.min(total, AUDIT_COUNT_CAP) / pageSize) || 1,
-      retention: auditRetention(db), export_max_rows: AUDIT_EXPORT_MAX_ROWS, fts: { ...ftsState(db), fallback_total: ftsFallbackTotal() }
+      retention: auditRetention(db), export_max_rows: AUDIT_EXPORT_MAX_ROWS, fts: { ...ftsState(db), fallback_total: ftsFallbackTotal() },
+      anchor_intents: anchorIntentSummary(db)
     })
   })
 )

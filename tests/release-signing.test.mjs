@@ -19,6 +19,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { unzipSync } from 'fflate'
+import { CASE_TIMEOUT_CANDIDATE_MS, SPAWN_TIMEOUT_LONG_MS, scaleMs } from './lib/load-tolerance.mjs'
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url))
 const PATH = process.env.PATH
@@ -203,9 +204,9 @@ function minimalSource(t) {
   assert.equal(git(src, 'commit', '-q', '-m', 'stub').status, 0)
   return src
 }
-const candidate = (src, out, env = {}, extra = [], env2 = {}) => spawnSync(process.execPath, ['scripts/release-candidate.mjs', `--output=${out}`, '--skip-build', '--skip-docs', '--reuse-node-modules', ...extra], { cwd: src, env: { PATH, ...env, ...env2 }, encoding: 'utf8', timeout: 280000 })
+const candidate = (src, out, env = {}, extra = [], env2 = {}) => spawnSync(process.execPath, ['scripts/release-candidate.mjs', `--output=${out}`, '--skip-build', '--skip-docs', '--reuse-node-modules', ...extra], { cwd: src, env: { PATH, ...env, ...env2 }, encoding: 'utf8', timeout: SPAWN_TIMEOUT_LONG_MS })
 
-test('candidate signs EVIDENCE.json when GML_RELEASE_SIGN_KEY is set; verify-release --pubkey accepts it and rejects tamper, key swap and downgrade', { timeout: 590000 }, (t) => {
+test('candidate signs EVIDENCE.json when GML_RELEASE_SIGN_KEY is set; verify-release --pubkey accepts it and rejects tamper, key swap and downgrade', { timeout: CASE_TIMEOUT_CANDIDATE_MS }, (t) => {
   const src = minimalSource(t)
   const keys = newKeys(t)
   const outRoot = tempDir(t, 'os-erp-sign-out-')
@@ -265,7 +266,7 @@ test('candidate signs EVIDENCE.json when GML_RELEASE_SIGN_KEY is set; verify-rel
   assert.notEqual(verify(evFile, '--pubkey', path.join(outRoot, 'nope.pem')).status, 0)
 })
 
-test('without GML_RELEASE_SIGN_KEY the candidate still builds with signature null and no EVIDENCE.sig; --pubkey then fails the unsigned evidence', { timeout: 590000 }, (t) => {
+test('without GML_RELEASE_SIGN_KEY the candidate still builds with signature null and no EVIDENCE.sig; --pubkey then fails the unsigned evidence', { timeout: CASE_TIMEOUT_CANDIDATE_MS }, (t) => {
   const src = minimalSource(t)
   const keys = newKeys(t)
   const outRoot = tempDir(t, 'os-erp-sign-out2-')
@@ -287,7 +288,7 @@ test('without GML_RELEASE_SIGN_KEY the candidate still builds with signature nul
   assert.match(lone.stderr, /--evidence/)
 })
 
-test('a configured but unusable signing key aborts the build and writes no candidate (never a silent unsigned fallback)', { timeout: 290000 }, (t) => {
+test('a configured but unusable signing key aborts the build and writes no candidate (never a silent unsigned fallback)', { timeout: scaleMs(290000) }, (t) => {
   const src = minimalSource(t)
   const keys = newKeys(t)
   const out = path.join(tempDir(t, 'os-erp-sign-out3-'), 'release')
@@ -382,7 +383,7 @@ test('evidence log: append refuses a broken chain, a duplicate name and a bad bu
   assert.equal(readFileSync(file, 'utf8'), tampered, 'a broken log is never extended or repaired')
 })
 
-test('candidate --log appends a chained entry; verify-release --log checks chain and presence; unsigned candidates get a loud warning; --require-signature fails them', { timeout: 590000 }, (t) => {
+test('candidate --log appends a chained entry; verify-release --log checks chain and presence; unsigned candidates get a loud warning; --require-signature fails them', { timeout: CASE_TIMEOUT_CANDIDATE_MS }, (t) => {
   const src = minimalSource(t)
   const outRoot = tempDir(t, 'os-erp-log-out-')
   const out = path.join(outRoot, 'release')
@@ -447,7 +448,7 @@ test('candidate --log appends a chained entry; verify-release --log checks chain
   void keys
 })
 
-test('hosted CI candidates record built_by hosted-ci and signature null; a signed one records the signature digest and passes --require-signature with --pubkey', { timeout: 590000 }, (t) => {
+test('hosted CI candidates record built_by hosted-ci and signature null; a signed one records the signature digest and passes --require-signature with --pubkey', { timeout: CASE_TIMEOUT_CANDIDATE_MS }, (t) => {
   const src = minimalSource(t)
   const keys = newKeys(t)
   const outRoot = tempDir(t, 'os-erp-log-out2-')

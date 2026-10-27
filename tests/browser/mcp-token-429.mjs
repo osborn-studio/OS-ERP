@@ -6,6 +6,7 @@
  * 所以 db 模式的形态用 page.route 注入（桶表语义归 tests/mcp-limits-tokens.test.mjs）：
  *   · 真实响应：GET /api/mcp/limits/tokens 管理员 200，store 与页面块的 data-store 一致；memory 模式 tokens 为空且页面没有任何令牌行；
  *   · 注入 db 响应（一张触顶 2 个窗口、一张 0）：页面恰有 1 行，id / 次数与注入一致，不显示 0 的令牌；全为 0 时显示"没有令牌被限流"；
+ *   · AH11：Agent Token 表的「近期限流（429）」列：真实签发两张令牌；memory 存储下列显示破折号（data-recent 为空），注入 db 响应后精确显示 3 / 0 次，窗口说明含注入的秒数；场景结束吊销所签令牌；
  *   · 无权限账号（role=purchase）：接口 403、未登录 401，页面没有该块。
  * 令牌明文与账号密码都不打印；页面文本不得出现令牌哈希 / 前缀字样；外部请求一律拦截并计数，必须为 0。
  * 浏览器部分只在 Linux 托管 CI 运行，未执行前不得称"浏览器场景已通过"。
@@ -20,6 +21,9 @@ const browser = await launchBrowser()
 const pages = []
 const results = []
 let externalRequests = 0
+let adminTokenForCleanup = null
+const createdTokenIds = []
+let cleanupFailed = false
 const step = async (name, fn) => { await fn(); results.push(name); console.log(`PASS ${name}`) }
 const TOKENS_PATH = '/api/mcp/limits/tokens'
 
@@ -83,6 +87,38 @@ try {
     assert.deepEqual(errors, [])
   })
 
+  // AH11：Agent Token 表自己的「近期限流（429）」列。令牌是真实签发的（/api/mcp/tokens），限流数形态用注入（共用服务是 memory 存储）
+  await step('AH11 token list column: real tokens, memory mode shows a dash; injected db counts show exact numbers and the window note', async () => {
+    adminTokenForCleanup = adminToken
+    const busy = okData(await api('/api/mcp/tokens', { token: adminToken, body: { name: `ah11-busy-${Math.random().toString(16).slice(2, 8)}`, scopes: 'read' } }))
+    const quiet = okData(await api('/api/mcp/tokens', { token: adminToken, body: { name: `ah11-quiet-${Math.random().toString(16).slice(2, 8)}`, scopes: 'read' } }))
+    createdTokenIds.push(busy.id, quiet.id)
+    const real = okData(await api(TOKENS_PATH, { token: adminToken }))
+    const m = await openMcp({ username: 'admin', password: '12345' })
+    const cell = (page, id) => page.locator(`[data-testid="mcp-token-limited"][data-token-id="${id}"]`)
+    await cell(m.page, busy.id).waitFor()
+    if (real.store === 'memory') assert.equal(await cell(m.page, busy.id).getAttribute('data-recent'), '')
+    assert.deepEqual(m.errors, [])
+    const inject = { store: 'db', window_seconds: 45, tokens: [{ id: busy.id, name: busy.name, rate_limited_recent: 3 }, { id: quiet.id, name: quiet.name, rate_limited_recent: 0 }] }
+    const { page, errors } = await openMcp({ username: 'admin', password: '12345' }, inject)
+    await cell(page, busy.id).waitFor()
+    assert.equal(await cell(page, busy.id).getAttribute('data-recent'), '3')
+    assert.equal(await cell(page, quiet.id).getAttribute('data-recent'), '0')
+    assert.ok((await cell(page, busy.id).innerText()).includes('3 次'))
+    const note = await page.getByTestId('mcp-token-limited-note').innerText()
+    assert.ok(note.includes('45 秒窗口') && note.includes('不是累计值'))
+    const tableText = await page.locator('table').first().innerText()
+    assert.equal(tableText.includes(busy.token) || tableText.includes(quiet.token), false, 'the list never shows token material')
+    assert.deepEqual(errors, [])
+    // 响应被截断（只含 busy 一张）时，不在响应里的 quiet 令牌是"未知"，不能显示成 0
+    const cut = await openMcp({ username: 'admin', password: '12345' }, { store: 'db', truncated: true, window_seconds: 45, tokens: [{ id: busy.id, name: busy.name, rate_limited_recent: 3 }] })
+    await cell(cut.page, busy.id).waitFor()
+    assert.equal(await cell(cut.page, busy.id).getAttribute('data-recent'), '3')
+    assert.equal(await cell(cut.page, quiet.id).getAttribute('data-recent'), '')
+    assert.ok((await cell(cut.page, quiet.id).innerText()).includes('未知'))
+    assert.deepEqual(cut.errors, [])
+  })
+
   await step('non-admin: the endpoint is 403 (401 without a token) and the page has no block', async () => {
     const plain = await createAccount(api, adminToken, 'af_plain', 'purchase')
     assert.equal((await api(TOKENS_PATH, { token: plain.token })).status, 403)
@@ -99,5 +135,13 @@ try {
   await screenshotPages('mcp-token-429', pages)
   throw error
 } finally {
+  // 吊销本场景签发的令牌；API 失败不会抛错，必须看状态码
+  if (adminTokenForCleanup) {
+    for (const id of createdTokenIds) {
+      const r = await api(`/api/mcp/tokens/${id}`, { token: adminTokenForCleanup, method: 'DELETE' }).catch(() => null)
+      if (!r || r.status !== 200) { cleanupFailed = true; console.error('mcp-token-429: failed to revoke a scenario token') }
+    }
+  }
   await browser.close()
 }
+if (cleanupFailed) process.exitCode = 1

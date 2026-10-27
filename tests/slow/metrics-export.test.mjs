@@ -1,3 +1,4 @@
+// slow: 73 s: throttle, rotation and export cases on real server processes (scripts/test-timings.mjs, threshold 60 s)
 // ADR-0045：Prometheus 文本指标导出、进程级计数器、令牌鉴权
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -12,17 +13,17 @@ import { fileURLToPath } from 'node:url'
 import { setTimeout as delay } from 'node:timers/promises'
 import Database from 'better-sqlite3'
 import jwt from 'jsonwebtoken'
-import { incCounter, counterSnapshot, resetCounters, incMcpToolCall, registerMcpTools, MCP_RESULT_CODES, observeHistogram, histogramSnapshot } from '../server/lib/process-counters.js'
-import { createMetricsThrottle } from '../server/lib/metrics-throttle.js'
-import { cachedForDb } from '../server/lib/db-ttl-cache.js'
-import { insertAuditRow } from '../server/lib/audit-trail.js'
-import { renderPrometheus, metricsTokenOk, METRICS_TOKEN_MIN_LENGTH, shutdownSnapshotLine } from '../server/lib/metrics-export.js'
-import { createToken } from '../server/mcp/tokens.js'
-import { auditStrictRow } from '../server/lib/audit-trail.js'
-import { createLoginThrottle } from '../server/lib/login-throttle.js'
-import { withWriteRetry, resetWriteRetryStats } from '../server/lib/tx.js'
+import { incCounter, counterSnapshot, resetCounters, incMcpToolCall, registerMcpTools, MCP_RESULT_CODES, observeHistogram, histogramSnapshot } from '../../server/lib/process-counters.js'
+import { createMetricsThrottle } from '../../server/lib/metrics-throttle.js'
+import { cachedForDb } from '../../server/lib/db-ttl-cache.js'
+import { insertAuditRow } from '../../server/lib/audit-trail.js'
+import { renderPrometheus, metricsTokenOk, METRICS_TOKEN_MIN_LENGTH, shutdownSnapshotLine } from '../../server/lib/metrics-export.js'
+import { createToken } from '../../server/mcp/tokens.js'
+import { auditStrictRow } from '../../server/lib/audit-trail.js'
+import { createLoginThrottle } from '../../server/lib/login-throttle.js'
+import { withWriteRetry, resetWriteRetryStats } from '../../server/lib/tx.js'
 
-const ROOT = fileURLToPath(new URL('../', import.meta.url))
+const ROOT = fileURLToPath(new URL('../../', import.meta.url))
 const tmp = (t, prefix = 'os-erp-mx-') => {
   const dir = mkdtempSync(path.join(tmpdir(), prefix))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
@@ -180,7 +181,7 @@ test('login throttle rejections increment the rate_limited counter, success path
 
 test('write retries and exhaustion show up in the exposition via writeRetryStats', async () => {
   resetWriteRetryStats()
-  const { writeRetryStats } = await import('../server/lib/tx.js')
+  const { writeRetryStats } = await import('../../server/lib/tx.js')
   const db = new Database(':memory:')
   let n = 0
   withWriteRetry(db, () => { if (++n < 3) throw new Database.SqliteError('busy', 'SQLITE_BUSY') }, { maxAttempts: 4, sleep: () => {}, label: 'mx' })

@@ -24,9 +24,40 @@
  * ============================================================================
  */
 import { createHash, createPublicKey, sign, verify } from 'node:crypto'
+import { runtimeMode } from '../runtime.js'
 
 export const INTENT_FORMAT = 'os-erp-audit-anchor-intent/1'
 export const OPERATION_ACTIONS = { retention: 'RETENTION_PURGE', archive: 'AUDIT_ARCHIVE', erase: 'PRIVACY_ERASE' }
+
+export const KEY_ID_AFTER_ENV = 'GML_ANCHOR_INTENT_KEY_ID_REQUIRED_AFTER'
+export const KEY_ID_AFTER_DEFAULT = '2026-12-01'
+
+/**
+ * `--require-intent-key-id` 的有效值（AH5，ADR-0055 补充 4）。返回 { required, rule, mode, after }：
+ *   · `flag` 为真 ⇒ 强制，rule='flag'（显式开关永远生效，没有“显式关闭”）；
+ *   · demo / test ⇒ 不按日期强制（rule='mode-not-enforcing'，日期不读取、不校验）；
+ *   · production（`GML_RUNTIME_MODE` 未设也按 production，与 runtimeMode() 一致）⇒ 当前 UTC 时间 ≥ `after` 零点才强制；
+ *     `after` = 环境变量（严格 YYYY-MM-DD 且是真实日历日；空串视为未设）或缺省 2026-12-01。非法值 / 不可用的时钟 ⇒ 抛错，绝不回落到“不强制”。
+ * 模式非法时 runtimeMode() 抛 RUNTIME_MODE_INVALID。
+ */
+export function resolveKeyIdRequirement({ flag = false, env = process.env, now = new Date() } = {}) {
+  if (flag) return { required: true, rule: 'flag', mode: null, after: null }
+  const mode = runtimeMode(env)
+  if (mode !== 'production') return { required: false, rule: 'mode-not-enforcing', mode, after: null }
+  const raw = env[KEY_ID_AFTER_ENV]
+  const after = raw === undefined || raw === '' ? KEY_ID_AFTER_DEFAULT : raw
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(after)
+  const day = new Date(0)
+  if (m) day.setUTCFullYear(Number(m[1]), Number(m[2]) - 1, Number(m[3]))
+  if (!m || day.getUTCFullYear() !== Number(m[1]) || day.getUTCMonth() !== Number(m[2]) - 1 || day.getUTCDate() !== Number(m[3])) {
+    throw fault('INTENT_KEY_ID_AFTER_INVALID', `${KEY_ID_AFTER_ENV} must be a real calendar date YYYY-MM-DD (got ${JSON.stringify(String(after)).slice(0, 40)})`, 500)
+  }
+  day.setUTCHours(0, 0, 0, 0)
+  const t = now instanceof Date ? now.getTime() : NaN
+  if (!Number.isFinite(t)) throw fault('INTENT_KEY_ID_AFTER_INVALID', 'clock is not usable; refusing to decide key_id enforcement', 500)
+  const reached = t >= day.getTime()
+  return { required: reached, rule: reached ? 'production-date-reached' : 'production-date-not-reached', mode, after }
+}
 
 const fault = (code, message, status) => Object.assign(new Error(message), { code, status })
 const hasTable = (db, name) => !!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name)
@@ -167,4 +198,26 @@ export function verifyAnchorIntents(db, anchors, { publicKey = null, publicKeys 
     if (!passed) problems.push({ ...first, anchor: a })
   }
   return { ok: problems.length === 0, checked: anchors.length, problems }
+}
+
+/**
+ * 只读摘要（AH11）：给审计页展示"意图用了哪些 key_id、有多少条没有签名 / 没有 key_id"。
+ * 只含 id / 时间 / 操作类型 / key_id（公钥指纹，公开信息）/ 是否带签名；绝不含 signature、intent_hash、anchors_json、range_desc、操作人。
+ * 它**不验签**：公钥集合只在离线的 `audit-verify-chain --intent-pubkey` 里持有，页面上的"已签名"只表示记录里有签名字段。
+ */
+export function anchorIntentSummary(db, { recent = 5 } = {}) {
+  const empty = { table_present: false, total: 0, signed: 0, unsigned: 0, signed_without_key_id: 0, key_ids: [], recent: [] }
+  try {
+    if (!hasTable(db, 'audit_anchor_intents')) return empty
+    const total = db.prepare('SELECT COUNT(*) c FROM audit_anchor_intents').get().c
+    const signed = db.prepare("SELECT COUNT(*) c FROM audit_anchor_intents WHERE signature IS NOT NULL AND signature != ''").get().c
+    const withoutKeyId = db.prepare("SELECT COUNT(*) c FROM audit_anchor_intents WHERE signature IS NOT NULL AND signature != '' AND (key_id IS NULL OR key_id = '')").get().c
+    const keyIds = db.prepare("SELECT key_id, COUNT(*) AS count, MAX(created_at) AS last_at FROM audit_anchor_intents WHERE key_id IS NOT NULL AND key_id != '' GROUP BY key_id ORDER BY MAX(id) DESC LIMIT 20").all()
+      .map((k) => ({ key_id: String(k.key_id).slice(0, 16), count: k.count, last_at: k.last_at }))
+    const rows = db.prepare('SELECT id, created_at, operation, key_id, signature FROM audit_anchor_intents ORDER BY id DESC LIMIT ?').all(Math.max(1, Math.min(Number(recent) || 5, 20)))
+      .map((r) => ({ id: r.id, created_at: r.created_at, operation: r.operation, key_id: r.key_id ? String(r.key_id).slice(0, 16) : null, signed: !!r.signature }))
+    return { table_present: true, total, signed, unsigned: total - signed, signed_without_key_id: withoutKeyId, key_ids: keyIds, recent: rows }
+  } catch {
+    return empty
+  }
 }

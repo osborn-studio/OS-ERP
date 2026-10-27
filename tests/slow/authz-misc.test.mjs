@@ -1,3 +1,4 @@
+// slow: 94 s: per-document-type authorization matrix over HTTP (scripts/test-timings.mjs, threshold 60 s)
 /**
  * ============================================================================
  * 文件标识：tests/authz-misc.test.mjs ｜ 测试：杂项授权缺口收口（ADR-0028）
@@ -27,7 +28,7 @@ import { fileURLToPath } from 'node:url'
 import { setTimeout as delay } from 'node:timers/promises'
 import Database from 'better-sqlite3'
 
-const ROOT = fileURLToPath(new URL('../', import.meta.url))
+const ROOT = fileURLToPath(new URL('../../', import.meta.url))
 const secret = () => randomBytes(24).toString('base64url')
 
 async function server(t) {
@@ -88,7 +89,7 @@ const md5 = (s) => createHash('md5').update(s, 'utf8').digest('hex').toUpperCase
 
 test('doc type to create-permission mapping is total and points at real permissions', { timeout: 300000 }, async (t) => {
   const f = await server(t)
-  const { DOC_CREATE_PERMS, createPermOf } = await import('../server/lib/docflow.js')
+  const { DOC_CREATE_PERMS, createPermOf } = await import('../../server/lib/docflow.js')
   const types = f.db.prepare('SELECT code FROM doc_types').all().map((x) => x.code)
   const perms = new Set(f.db.prepare('SELECT code FROM permissions').all().map((x) => x.code))
   assert.ok(types.length >= 30)

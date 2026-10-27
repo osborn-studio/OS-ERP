@@ -23,7 +23,7 @@
  *   （所有者改密 / 停用 / 过期时不再是 active），两列都来自服务端，页面不自己推断。
  * ============================================================================
  */
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Card, SectionTitle, StatCard, Table, Tabs, useFetch, toast } from '../../components/ui'
 import api from '../../api/client'
 import { PRODUCT_NAME } from '../../constants/brand'
@@ -391,29 +391,56 @@ function McpTokenLimitsBlock({ nonce }: { nonce: number }) {
   )
 }
 
-type McpQuota = { daily_quota: number; enabled: boolean; usage_unavailable?: boolean; truncated?: boolean; tokens: { id: number; name: string; used: number; remaining: number }[] }
+type McpQuotaToken = { id: number; name: string; used: number; remaining: number }
+type McpQuota = { daily_quota: number; enabled: boolean; usage_unavailable?: boolean; truncated?: boolean; next_cursor?: string | null; tokens: McpQuotaToken[] }
 
 /**
  * 每令牌今日配额用量（AG9，只读，仅 system.mcp.manage）。数据来自 `GET /api/mcp/limits/quota`，口径同日配额判定（本地日历日的审计行数）。
  * 配额关闭时服务端返回空列表，这里整块不显示；读取失败（含 403）同样不显示。
+ * AH9：游标分页——首屏 100 行，`next_cursor` 非空时显示「加载更多」，按它取下一页并追加（按 id 去重）；刷新（nonce）时回到首页。
  */
 function McpQuotaBlock({ nonce }: { nonce: number }) {
   const { data, error } = useFetch<McpQuota>('/mcp/limits/quota', undefined, [nonce])
+  const [extra, setExtra] = useState<McpQuotaToken[]>([])
+  const [cursor, setCursor] = useState<string | null>(null)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [moreFailed, setMoreFailed] = useState(false)
+  const generation = useRef(0) // 刷新后到达的旧「加载更多」响应必须丢弃，否则会把已清空的行又塞回来并推进新列表的游标
+  useEffect(() => { generation.current += 1; setExtra([]); setCursor(data?.next_cursor ?? null); setMoreFailed(false); setLoadingMore(false) }, [data])
   if (!data || error || !data.enabled) return null
   if (data.usage_unavailable) return <div data-testid="mcp-quota" data-quota={data.daily_quota} data-unavailable="1" className="mt-3 text-[12px] text-amber-700">今日配额用量暂时读不到（审计表不可读）；此时调用会被安全拒绝，不代表还有剩余额度。</div>
-  const low = data.tokens.filter((t) => t.remaining === 0).length
+  const rows = [...data.tokens, ...extra.filter((t) => !data.tokens.some((d) => d.id === t.id))]
+  const low = rows.filter((t) => t.remaining === 0).length
+  const loadMore = async () => {
+    if (!cursor || loadingMore) return
+    const mine = generation.current
+    setLoadingMore(true); setMoreFailed(false)
+    try {
+      const res = await api.get('/mcp/limits/quota', { cursor, limit: 100 })
+      if (mine !== generation.current) return
+      const page: McpQuota = res.data
+      if (page.usage_unavailable) { setMoreFailed(true); return }
+      setExtra((prev) => [...prev, ...page.tokens.filter((t) => !prev.some((p) => p.id === t.id))])
+      setCursor(page.next_cursor ?? null)
+    } catch { if (mine === generation.current) setMoreFailed(true) } finally { if (mine === generation.current) setLoadingMore(false) }
+  }
   return (
-    <div data-testid="mcp-quota" data-quota={data.daily_quota} data-exhausted={low} className="mt-3">
-      {data.truncated && <div className="text-[12px] text-amber-700 mb-1" data-testid="mcp-quota-truncated">令牌过多，仅列出前 500 张，用量多者优先。</div>}
-      <div className="text-[12px] text-slate-500 mb-1">今日配额用量（每令牌 {data.daily_quota} 次，本地日历日，审计行口径）</div>
-      {data.tokens.length === 0
+    <div data-testid="mcp-quota" data-quota={data.daily_quota} data-exhausted={low} data-loaded={rows.length} data-has-more={cursor ? '1' : '0'} className="mt-3">
+      <div className="text-[12px] text-slate-500 mb-1">今日配额用量（每令牌 {data.daily_quota} 次，本地日历日，审计行口径；用量多者在前）</div>
+      {rows.length === 0
         ? <div className="text-[12px] text-slate-500" data-testid="mcp-quota-empty">没有在用令牌</div>
-        : <ul className="text-[13px] divide-y divide-slate-100">{data.tokens.map((t) => (
+        : <ul className="text-[13px] divide-y divide-slate-100">{rows.map((t) => (
             <li key={t.id} className="py-1 flex justify-between" data-testid="mcp-quota-row" data-token-id={t.id} data-used={t.used} data-remaining={t.remaining}>
               <span>{t.name} <span className="text-slate-400">#{t.id}</span></span>
               <span className={t.remaining === 0 ? 'text-red-600' : 'text-slate-700'}>已用 {t.used} / 剩余 {t.remaining}</span>
             </li>
           ))}</ul>}
+      {cursor && (
+        <button type="button" className="mt-2 text-[12px] text-blue-600 hover:underline disabled:opacity-50" data-testid="mcp-quota-more" disabled={loadingMore} onClick={loadMore}>
+          {loadingMore ? '加载中…' : '加载更多'}
+        </button>
+      )}
+      {moreFailed && <div className="text-[12px] text-amber-700 mt-1" data-testid="mcp-quota-more-failed">加载更多失败，请稍后重试或刷新。</div>}
     </div>
   )
 }
@@ -422,6 +449,8 @@ function McpOperations() {
   const [confirmations, setConfirmations] = useState<any[]>([])
   const [logs, setLogs] = useState<any[]>([])
   const [tokens, setTokens] = useState<any[]>([])
+  // AH11：令牌表的「近期限流（429）」列。来自 /mcp/limits/tokens 的精确次数（AG9 denied 行）；读取失败 / 非 db 存储时整列显示「—」，不猜数
+  const [limits429, setLimits429] = useState<{ store: string; truncated: boolean; window_seconds: number; byId: Record<number, number> } | null>(null)
   const [busy, setBusy] = useState(false)
   const load = async () => {
     setBusy(true)
@@ -432,6 +461,11 @@ function McpOperations() {
       setConfirmations(pending.data || [])
       setLogs(calls.data || [])
       setTokens(list.data || [])
+      try {
+        const lim = await api.get('/mcp/limits/tokens')
+        const d = lim.data
+        setLimits429(d && Array.isArray(d.tokens) ? { store: String(d.store), truncated: d.truncated === true, window_seconds: Number(d.window_seconds) || 60, byId: Object.fromEntries(d.tokens.map((t: any) => [Number(t.id), Number(t.rate_limited_recent) || 0])) } : null)
+      } catch { setLimits429(null) }
       setLimitsNonce((n) => n + 1)
     } catch (e: any) { toast(e.message, 'error') }
     finally { setBusy(false) }
@@ -479,6 +513,7 @@ function McpOperations() {
         desc="「状态」是行历史，「有效状态」是现状：所有者改密 / 退出全部会话 / 角色或权限集变更后，旧令牌每次调用都被拒（TOKEN_OWNER_REVOKED），清扫把它们如实标为已吊销。"
         right={<button className="btn-ghost btn-sm" disabled={busy || stale === 0} onClick={sweep}>清扫失效令牌{stale ? `（${stale}）` : ''}</button>}
       />
+      <div className="text-[12px] text-slate-500 mb-2" data-testid="mcp-token-limited-note">「近期限流（429）」= 当前与上一个 {limits429?.window_seconds ?? 60} 秒窗口内该令牌被限流的精确次数（拒绝时记录），不是累计值；窗口过去后归零。</div>
       <Table data={tokens} rowKey={(r) => r.id} columns={[
         { key: 'name', title: '名称', render: r => <div><div className="font-medium">{r.name}</div><div className="text-[11px] text-ink-500 font-mono">{r.token_prefix}…</div></div> },
         { key: 'owner', title: '所有者', render: r => r.owner_user_id == null ? <span className="text-ink-500">无主</span> : (r.owner_name || r.owner_username || `#${r.owner_user_id}`) },
@@ -489,6 +524,13 @@ function McpOperations() {
           return <span className={`tag ${m.cls}`} title={r.effective_reason || ''}>{m.text}</span>
         } },
         { key: 'reason', title: '说明', render: r => <span className="break-all text-[12px]">{r.revoked_reason ? `${r.revoked_reason}${r.revoked_at ? ` · ${r.revoked_at}` : ''}` : (r.effective_reason || r.remark || '—')}</span> },
+        { key: 'limited', title: '近期限流（429）', render: r => {
+          if (!limits429 || limits429.store !== 'db') return <span className="text-ink-500" data-testid="mcp-token-limited" data-token-id={r.id} data-recent="" title="仅 GML_MCP_RATE_STORE=db 时有每令牌明细">—</span>
+          // 响应被截断（令牌过多）时，没出现在响应里的令牌是"未知"而不是 0
+          if (limits429.byId[r.id] === undefined && limits429.truncated) return <span className="text-ink-500" data-testid="mcp-token-limited" data-token-id={r.id} data-recent="" title="令牌过多，响应被截断，该令牌不在其中">未知</span>
+          const n = limits429.byId[r.id] ?? 0
+          return <span className={n > 0 ? 'text-amber-700' : 'text-ink-500'} data-testid="mcp-token-limited" data-token-id={r.id} data-recent={n}>{n} 次</span>
+        } },
         { key: 'last_used_at', title: '最近调用', render: r => r.last_used_at || '—' },
         { key: 'actions', title: '操作', render: r => r.status === 'active'
           ? <button className="btn-ghost btn-sm" disabled={busy} onClick={() => revoke(r)}>吊销</button>

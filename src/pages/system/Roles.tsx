@@ -21,12 +21,17 @@
  *   · 权限点分组来自 `/auth/permissions` 的 `byModule`，页面里**不写死模块名**；
  *   · 保存是**整体覆盖**（后端先 DELETE 再 INSERT）：所以必须把整份勾选一起提交，
  *     不能只提交变化项 —— 那会把没勾的项全清掉；
+ *   · AH10：角色可「停用 / 启用」。停用前先取影响预告（`GET /auth/roles/:code/deactivation-impact`），弹窗写明
+ *     「受影响用户 N 人（其中主角色为此角色 M 人）」，确认时把 N 原样带回（`confirm_affected`）；预告与停用之间人数变了，
+ *     后端回 409 `ROLE_IMPACT_CHANGED` 并带当前人数，弹窗刷新数字要求重新确认。主角色为已停用角色的账号，
+ *     「重新指派主角色」指向用户页的编辑器（改角色字段），这里不另建编辑器；
  *   · `admin` 角色不给改（后端也拒）：管理员权限被误删会让系统再也进不去设置页。
  * ============================================================================
  */
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { ShieldCheck, Lock, Eye, Save, RotateCcw } from 'lucide-react'
-import { Card, SectionTitle, useFetch, toast } from '../../components/ui'
+import { useNavigate } from 'react-router-dom'
+import { Card, SectionTitle, Modal, useFetch, toast } from '../../components/ui'
 import api from '../../api/client'
 import { useAuth } from '../../store/auth'
 import { useRuntimeCapabilities } from '../../store/runtime-capabilities'
@@ -78,7 +83,13 @@ export default function Roles() {
   const [active, setActive] = useState<string>('')
   const [draft, setDraft] = useState<Set<string>>(new Set())
   const [saving, setSaving] = useState(false)
+  const navigate = useNavigate()
+  // AH10：停用确认弹窗（impact 为打开时取到的预告；confirming 防重复提交）
+  const [dlg, setDlg] = useState<{ code: string; impact: { affected_users: number; primary_users: number }; stale: boolean } | null>(null)
+  const [confirming, setConfirming] = useState(false)
+  const activeRef = useRef('')
 
+  activeRef.current = active
   const list: any[] = roles || []
   const current = list.find((r) => r.code === active) || null
   const byModule: Record<string, any[]> = permMeta?.byModule || {}
@@ -98,6 +109,59 @@ export default function Roles() {
   const changed =
     draft.size !== original.size || [...draft].some((p) => !original.has(p))
   const isAdmin = current?.code === 'admin'
+  const roleInactive = current?.status === 'inactive'
+  // 已停用角色：取一次预告，提示仍以它为主角色的账号数（每次切换角色 / 刷新列表重取）
+  const { data: inactiveImpact, reload: reloadImpact } = useFetch<any>(
+    current && roleInactive ? `/auth/roles/${current.code}/deactivation-impact` : null,
+    undefined,
+    [current?.code, current?.status]
+  )
+
+  async function openDeactivate() {
+    if (!current || isAdmin) return
+    const code = current.code
+    try {
+      const r: any = await api.get(`/auth/roles/${code}/deactivation-impact`)
+      // 预告响应回来时若管理员已切到别的角色，丢弃：弹窗的数字必须属于弹窗标题里的那个角色
+      if (activeRef.current !== code) return
+      setDlg({ code, impact: r.data, stale: false })
+    } catch (e: any) {
+      toast(e?.message || '读取影响预告失败', 'error')
+    }
+  }
+
+  async function confirmDeactivate() {
+    if (!current || !dlg || dlg.code !== current.code) return
+    setConfirming(true)
+    try {
+      await api.post(`/auth/roles/${dlg.code}/deactivate`, { confirm_affected: dlg.impact.affected_users, confirm_primary: dlg.impact.primary_users })
+      toast(`「${current.name}」已停用（受影响 ${dlg.impact.affected_users} 人）`, 'success')
+      setDlg(null)
+      reload()
+      reloadImpact()
+    } catch (e: any) {
+      if (e?.detail?.code === 'ROLE_IMPACT_CHANGED') {
+        // 预告过期：用服务端给的当前人数刷新弹窗，要求管理员重新确认（不自动重试）
+        setDlg({ code: dlg.code, impact: { affected_users: e.detail.affected_users, primary_users: e.detail.primary_users }, stale: true })
+      } else {
+        toast(e?.message || '停用失败', 'error')
+        setDlg(null)
+      }
+    } finally {
+      setConfirming(false)
+    }
+  }
+
+  async function activateRole() {
+    if (!current) return
+    try {
+      await api.post(`/auth/roles/${current.code}/activate`, {})
+      toast(`「${current.name}」已启用`, 'success')
+      reload()
+    } catch (e: any) {
+      toast(e?.message || '启用失败', 'error')
+    }
+  }
 
   function toggle(code: string) {
     if (isAdmin) return
@@ -169,7 +233,7 @@ export default function Roles() {
                   className={`w-full text-left px-3 py-2.5 transition-colors ${on ? 'bg-brand-50' : 'hover:bg-ink-50'}`}
                 >
                   <div className="flex items-center justify-between gap-2">
-                    <span className={`text-[13px] ${on ? 'text-brand-700 font-medium' : 'text-ink-800'}`}>{r.name}</span>
+                    <span className={`text-[13px] ${on ? 'text-brand-700 font-medium' : 'text-ink-800'}`}>{r.name}{r.status === 'inactive' && <span className="ml-1 text-[11px] text-amber-700">（已停用）</span>}</span>
                     <span className="text-[11px] text-ink-500 tabular-nums">{r.permissions?.length || 0}</span>
                   </div>
                   <div className="text-[11px] text-ink-500 mt-0.5 truncate">{r.code} · {SCOPE_LABEL[r.data_scope] || r.data_scope}</div>
@@ -193,6 +257,25 @@ export default function Roles() {
                 <div className="text-[12px] text-ink-600 mt-0.5">{current?.description || '—'}</div>
               </div>
               <div className="flex items-center gap-2">
+                {!isAdmin && current && (
+                  roleInactive ? (
+                    <button
+                      onClick={activateRole}
+                      data-testid="role-activate"
+                      className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md border border-brand-300 text-[12px] text-brand-700 hover:bg-brand-50"
+                    >
+                      启用角色
+                    </button>
+                  ) : (
+                    <button
+                      onClick={openDeactivate}
+                      data-testid="role-deactivate"
+                      className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md border border-red-300 text-[12px] text-red-700 hover:bg-red-50"
+                    >
+                      停用角色
+                    </button>
+                  )
+                )}
                 <button
                   onClick={() => setDraft(new Set(original))}
                   disabled={!changed || isAdmin}
@@ -209,6 +292,20 @@ export default function Roles() {
                 </button>
               </div>
             </div>
+            {roleInactive && (
+              <div className="mt-2 text-[12px] text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-2.5 py-1.5" data-testid="role-inactive-note">
+                该角色已停用：持有者不再获得它的权限，主角色为它的账号数据范围为空。
+                {inactiveImpact && inactiveImpact.primary_users > 0 && (
+                  <>
+                    {' '}仍有 <b data-testid="role-inactive-primary-count">{inactiveImpact.primary_users}</b> 个账号以它为主角色，
+                    <button type="button" className="underline ml-1" data-testid="role-reassign-primary" onClick={() => navigate('/system/users')}>
+                      重新指派主角色
+                    </button>
+                    （在用户页编辑账号，改「角色」字段）。
+                  </>
+                )}
+              </div>
+            )}
             {isAdmin && (
               <div className="mt-2 text-[12px] text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-2.5 py-1.5">
                 管理员角色的权限<b>刻意不可在这里改</b>：删掉 `system.user.edit` 之后，这个系统就再也没有入口能把权限加回来。
@@ -300,6 +397,40 @@ export default function Roles() {
           </Card>
         </div>
       </div>
+      <Modal
+        open={!!dlg}
+        title={`停用角色「${list.find((r) => r.code === dlg?.code)?.name || ''}」`}
+        onClose={() => !confirming && setDlg(null)}
+        width={520}
+        footer={
+          <>
+            <button type="button" onClick={() => setDlg(null)} disabled={confirming} className="px-3 py-1.5 rounded-md border border-ink-300 text-[12px] text-ink-700 hover:bg-ink-50" data-testid="role-deactivate-cancel">
+              取消
+            </button>
+            <button type="button" onClick={confirmDeactivate} disabled={confirming} className="px-3 py-1.5 rounded-md bg-red-600 text-white text-[12px] disabled:opacity-40 hover:bg-red-700" data-testid="role-deactivate-confirm">
+              {confirming ? '停用中…' : `确认停用（影响 ${dlg?.impact.affected_users ?? 0} 人）`}
+            </button>
+          </>
+        }
+      >
+        {dlg && (
+          <div className="space-y-2 text-[13px] text-ink-800" data-testid="role-deactivate-dialog">
+            {dlg.stale && (
+              <div className="rounded border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-[12px] text-amber-800" role="alert" data-testid="role-deactivate-stale">
+                受影响人数在你查看之后发生了变化，已按最新人数刷新，请重新确认。
+              </div>
+            )}
+            <p>
+              受影响用户 <b data-testid="role-impact-affected">{dlg.impact.affected_users}</b> 人（其中主角色为此角色 <b data-testid="role-impact-primary">{dlg.impact.primary_users}</b> 人）。
+            </p>
+            <ul className="list-disc pl-5 text-[12px] text-ink-600 space-y-1">
+              <li>停用后这些账号不再获得该角色的权限点，已登录的会话不会被踢下线，下一次请求即按新状态判断。</li>
+              <li>主角色为此角色的账号，数据范围会收紧为空（除非管理员为账号单独设置了范围），需要在用户页重新指派主角色。</li>
+              <li>管理员账号与已停用账号不计入；停用与之后的启用都会写入审计日志。</li>
+            </ul>
+          </div>
+        )}
+      </Modal>
     </div>
   )
 }

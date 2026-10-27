@@ -485,7 +485,7 @@ export default function Layout() {
 
         <main className="flex-1 overflow-y-auto p-3 lg:p-4">
           {showRoleNotice && (
-            <div role="status" data-testid="role-inactive-banner" className="mb-3 flex items-start gap-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[13px] text-amber-800">
+            <div role="status" data-testid="role-inactive-banner" data-primary-role-inactive={user.primary_role_inactive ? '1' : '0'} className="mb-3 flex items-start gap-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[13px] text-amber-800">
               <div className="flex-1">
                 <span data-testid="role-inactive-banner-text">{user.notice_message}</span>
                 <NavLink to="/system/my-scope" className="underline ml-2">查看我的数据范围</NavLink>

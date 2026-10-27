@@ -148,6 +148,31 @@ export function buildOpenApi() {
     '/api/auth/my-permissions': { get: { tags: ['认证'], summary: '当前用户的有效权限点与数据范围（前端据此收敛按钮与数据）', responses: { 200: jsonResp(null) } } },
     '/api/auth/my-scope': { get: { tags: ['认证'], summary: '**当前用户的有效数据范围**与白话解释（只读，仅描述调用者自己：角色、是否管理员、生效范围及来源、所属组织/门店/经销商、范围内组织数与前 20 个名称）', responses: { 200: jsonResp(null), 401: jsonResp(null) } } },
     '/api/auth/roles-permissions': { get: { tags: ['认证'], summary: '**角色与权限矩阵**：每个角色的权限点集合（仅管理员）', responses: { 200: jsonResp(null), 403: jsonResp(null) } } },
+    '/api/auth/roles/{code}/deactivation-impact': {
+      get: {
+        tags: ['认证'],
+        summary: '**停用角色的影响预告**（仅管理员；AH10，ADR-0051 补充 5）：受影响账号数 N（被授予该角色的启用中非管理员账号）与其中主角色为此角色的 M；只含账号编号不含账号名；角色不存在 404 ROLE_NOT_FOUND',
+        parameters: [idParam],
+        responses: { 200: jsonResp(null), 401: jsonResp(null), 403: jsonResp(null), 404: jsonResp(null) }
+      }
+    },
+    '/api/auth/roles/{code}/deactivate': {
+      post: {
+        tags: ['认证'],
+        summary: '**停用角色**（仅管理员；AH10）：必须带 confirm_affected（先取影响预告），与事务内现算的 N 不一致 409 ROLE_IMPACT_CHANGED（响应 detail 带当前人数）；缺失或不是非负整数 400 ROLE_CONFIRM_REQUIRED；管理员角色 409 ROLE_ADMIN_PROTECTED；已停用 409 ROLE_ALREADY_INACTIVE；写严格审计 ROLE_DEACTIVATE（明细带受影响人数）；不撤销会话',
+        parameters: [idParam],
+        requestBody: body('RoleDeactivate'),
+        responses: { 200: jsonResp(null), 400: jsonResp(null), 403: jsonResp(null), 404: jsonResp(null), 409: jsonResp(null) }
+      }
+    },
+    '/api/auth/roles/{code}/activate': {
+      post: {
+        tags: ['认证'],
+        summary: '**启用角色**（仅管理员；AH10）：恢复被停用的角色，无需确认；已启用 409 ROLE_ALREADY_ACTIVE；写严格审计 ROLE_ACTIVATE（明细带当前持有人数）',
+        parameters: [idParam],
+        responses: { 200: jsonResp(null), 403: jsonResp(null), 404: jsonResp(null), 409: jsonResp(null) }
+      }
+    },
     '/api/auth/roles/{code}/permissions': {
       put: {
         tags: ['认证'],
@@ -1073,7 +1098,7 @@ export function buildOpenApi() {
     // 这里登记的是**管理面**的 REST 接口。数据全部由内核三张表推导，页面不写死名单。
     '/api/mcp/catalog': { get: { tags: ['AI 与 MCP'], summary: '**AI 能力目录**：全部单据类型 × 状态机 × 可推进边（含高危标注）× 工具清单 × 安全边界。由 `doc_types`/`doc_states`/`doc_actions` 实时推导', responses: { 200: jsonResp(null), 403: jsonResp(null) } } },
     '/api/mcp/limits/tokens': { get: { tags: ['AI 与 MCP'], summary: 'MCP 每令牌近期限流（需 system.mcp.manage，只读）：store（memory|db）/ window_seconds / truncated（超过 500 张时 true，触顶令牌优先）/ tokens[{id,name,rate_limited_recent}]。db 模式下 rate_limited_recent = 当前+上一窗口里该令牌被速率额度拒绝（429）的精确次数（来自迁移 075 的 denied 行；拒绝行写失败的那一次不计）；memory 模式 tokens 恒为空。不含令牌前缀/哈希/明文（AF11）', responses: { 200: jsonResp(null), 403: jsonResp(null) } } },
-    '/api/mcp/limits/quota': { get: { tags: ['AI 与 MCP'], summary: 'MCP 每令牌今日日配额用量（需 system.mcp.manage，只读）：daily_quota（0=关闭）/ enabled / truncated（超过 500 张时 true）/ tokens[{id,name,used,remaining}]（仅在用令牌，用量多者在前；口径同 dailyQuotaState：本地日历日的 mcp_call_logs 行数）。配额关闭时 tokens 为空。不含令牌前缀/哈希/明文（AG9）', responses: { 200: jsonResp(null), 403: jsonResp(null) } } },
+    '/api/mcp/limits/quota': { get: { tags: ['AI 与 MCP'], summary: 'MCP 每令牌今日日配额用量（需 system.mcp.manage，只读，游标分页）：daily_quota（0=关闭）/ enabled / usage_unavailable / truncated（还有后续页，= next_cursor 非空）/ next_cursor（不透明游标，null=没有更多）/ tokens[{id,name,used,remaining}]（仅在用令牌，次序固定 used 降序再 id 升序；口径同 dailyQuotaState：本地日历日的 mcp_call_logs 行数）。配额关闭时 tokens 为空。不含令牌前缀/哈希/明文（AG9、AH9）', parameters: [q('limit', '每页条数，1..500，默认 100，超过 500 取 500；非整数或小于 1 返回 400'), q('cursor', '上一页返回的 next_cursor；不合规返回 400。游标是位置而非快照：翻页期间用量变大的令牌只会往前挪，不会重复')], responses: { 200: jsonResp(null), 400: jsonResp(null), 403: jsonResp(null) } } },
     '/api/mcp/limits': { get: { tags: ['AI 与 MCP'], summary: 'MCP 限速读数（需 system.mcp.manage，只读）：rpm / write_rpm / window_seconds / daily_quota（0=关闭）/ rate_limited_total（本进程自启动以来的 429 次数，重启归零）/ counter_scope=process。不含令牌信息（AE11）', responses: { 200: jsonResp(null), 403: jsonResp(null) } } },
     '/api/mcp/tools': { get: { tags: ['AI 与 MCP'], summary: 'MCP 工具清单（名称 / 级别 / 用途），供令牌白名单勾选', responses: { 200: jsonResp(null) } } },
     '/api/mcp/tokens': {
@@ -1196,7 +1221,7 @@ export function buildOpenApi() {
     openapi: '3.0.3',
     info: {
       title: 'GML 供应链协同系统 API',
-      version: '1.44.0',
+      version: '1.45.0',
       description:
         '化妆品 / 服装 双行业轻量级供应链协同系统接口文档。覆盖主数据、采购、销售、存货、经销商、门店要货、委外管理、计划与生产、生产制造（BOM / 领料 / 完工入库）、质量检验、线上 OMS 与经营看板。\n\n' +
         '**多行业**：登录 `POST /api/auth/login` 时传 `industry`（`cosmetic` / `apparel`）选择行业版本；' +
@@ -1706,6 +1731,11 @@ export function buildOpenApi() {
         LogoutAllResult: {
           type: 'object', required: ['revoked'],
           properties: { revoked: { type: 'boolean', enum: [true] } }
+        },
+        RoleDeactivate: {
+          type: 'object',
+          required: ['confirm_affected'],
+          properties: { confirm_primary: { type: 'integer', minimum: 0, description: '可选：影响预告里的 primary_users；给了就必须与停用时现算的一致（总数不变而主角色人数变了同样 409 ROLE_IMPACT_CHANGED）' }, confirm_affected: { type: 'integer', minimum: 0, description: '影响预告里的 affected_users；与停用时事务内现算的人数不一致即拒绝（409 ROLE_IMPACT_CHANGED）' } }
         },
         LoginRequest: {
           type: 'object',

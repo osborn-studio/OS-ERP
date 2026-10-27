@@ -1,3 +1,4 @@
+// slow: 337 s on the macOS reference run: many real server restarts and large audit fixtures (scripts/test-timings.mjs, threshold 60 s)
 /**
  * ============================================================================
  * 文件标识：tests/audit-logs-view.test.mjs ｜ Z7 审计日志查看器：权限、过滤、分页、二次脱敏、CSV 导出（注入安全、封顶、留痕）
@@ -18,13 +19,13 @@ import { setTimeout as delay } from 'node:timers/promises'
 import Database from 'better-sqlite3'
 import bcrypt from 'bcryptjs'
 import { readFileSync, mkdtempSync as mkd, cpSync, rmSync as rm } from 'node:fs'
-import { csvCell, AUDIT_EXPORT_MAX_ROWS, AUDIT_COUNT_CAP, buildWhere, parseFilters, orderOf, AuditViewError, ftsAvailable, ftsEnvDisabled, keywordUsesFts, FTS_RARE_MAX, setFtsOverride, AUDIT_ACTION_NEEDS_MODULE } from '../server/lib/audit-view.js'
-import { runMigrations, MIGRATIONS_DIR } from '../server/db/migrations/runner.js'
-import { auditStatements, STATEMENTS, ALLOW } from '../scripts/explain-audit.mjs'
-import * as m065 from '../server/db/migrations/065_audit_log_indexes.cjs'
-import * as m067 from '../server/db/migrations/067_audit_fts.cjs'
+import { csvCell, AUDIT_EXPORT_MAX_ROWS, AUDIT_COUNT_CAP, buildWhere, parseFilters, orderOf, AuditViewError, ftsAvailable, ftsEnvDisabled, keywordUsesFts, FTS_RARE_MAX, setFtsOverride, AUDIT_ACTION_NEEDS_MODULE } from '../../server/lib/audit-view.js'
+import { runMigrations, MIGRATIONS_DIR } from '../../server/db/migrations/runner.js'
+import { auditStatements, STATEMENTS, ALLOW } from '../../scripts/explain-audit.mjs'
+import * as m065 from '../../server/db/migrations/065_audit_log_indexes.cjs'
+import * as m067 from '../../server/db/migrations/067_audit_fts.cjs'
 
-const ROOT = fileURLToPath(new URL('../', import.meta.url))
+const ROOT = fileURLToPath(new URL('../../', import.meta.url))
 // AC5：CI 以 GML_AUDIT_FTS=0 再跑一遍本文件（真实的无 FTS 路径）。此时依赖"FTS 路径可用"的用例跳过（原因写明），其余用例照跑
 // AD4：CI 的 audit-no-fts5 job 在真正没有 FTS5 的 SQLite 构建上跑本文件；探测一次，依赖 FTS5 的用例跳过（写明原因），无 FTS5 用例真实执行
 const NO_FTS5_BUILD = !m067.ftsSupported(new Database(':memory:'))
@@ -126,6 +127,8 @@ test('Z7 filters + pagination + redaction', { timeout: 90000 }, async t => {
   f.db.exec('DELETE FROM audit_logs')
   // AG11：列表响应带 fts.fallback_total（进程内 audit_fts_fallback_total 各 reason 之和；新进程未发生回退 = 0 的整数）
   { const fts = (await f.request('/api/meta/audit-logs', admin)).body.data.fts; assert.equal(fts.fallback_total, 0); assert.equal(typeof fts.setting_enabled, 'boolean') }
+  // AH11：列表响应带 anchor_intents 摘要（只读；绝无签名 / 哈希 / 范围 / 操作人字段）
+  { const ai = (await f.request('/api/meta/audit-logs', admin)).body.data.anchor_intents; assert.equal(ai.table_present, true); assert.equal(ai.total, 0); assert.deepEqual(ai.key_ids, []); assert.deepEqual(ai.recent, []) }
   ins(f.db, { user: 'alice', uid: 11, action: 'CREATE', module: 'sales', entity: 'order', eid: '100', at: '2026-10-01 10:00:00', detail: '{"note":"first order"}' })
   ins(f.db, { user: 'bob', uid: 12, action: 'APPROVE', module: 'purchase', entity: 'po', eid: '200', at: '2026-10-05 09:00:00', detail: '{"note":"approve x"}' })
   ins(f.db, { user: 'alice', uid: 11, action: 'DEL100%_done', module: 'sales', entity: 'order', eid: '101', at: '2026-10-10 23:59:59', detail: 'plain text' })
@@ -324,7 +327,7 @@ function migrated(t, opts = {}) {
   const db = new Database(':memory:')
   t.after(() => db.close())
   db.pragma('foreign_keys=ON')
-  db.exec(readFileSync(new URL('../server/db/schema.sql', import.meta.url), 'utf8'))
+  db.exec(readFileSync(new URL('../../server/db/schema.sql', import.meta.url), 'utf8'))
   runMigrations(db, { mode: 'test', warn: () => {}, ...opts })
   return db
 }
@@ -386,7 +389,7 @@ const auditRow = (db, r) => db.prepare('INSERT INTO audit_logs (user_id,user_nam
 test('AB3 migration 067: FTS5 external-content table + three triggers, idempotent, checksummed, backfills existing rows', needsFts5Build, (t) => {
   const db = new Database(':memory:')
   t.after(() => db.close())
-  db.exec(readFileSync(new URL('../server/db/schema.sql', import.meta.url), 'utf8'))
+  db.exec(readFileSync(new URL('../../server/db/schema.sql', import.meta.url), 'utf8'))
   // 迁移之前就存在的行必须被回填
   const dir = mkd(path.join(tmpdir(), 'os-ab3-mig-'))
   t.after(() => rm(dir, { recursive: true, force: true }))
@@ -672,8 +675,8 @@ test('AC5 over HTTP: a server started with GML_AUDIT_FTS=0 answers from the base
 // ---------------------------------------------------------------------------------------------------------------------------
 // AD4：FTS 可选化（ADR-0054，迁移 071）：设置键 audit_fts_enabled、"表缺失 = 无 FTS5 构建"、启动自愈只在设置允许时重建
 // ---------------------------------------------------------------------------------------------------------------------------
-const m071 = await import('../server/db/migrations/071_audit_fts_optional.cjs')
-const { SETTING_RULES, writeSetting, ensureSettings, readSetting } = await import('../server/lib/settings.js')
+const m071 = await import('../../server/db/migrations/071_audit_fts_optional.cjs')
+const { SETTING_RULES, writeSetting, ensureSettings, readSetting } = await import('../../server/lib/settings.js')
 const ftsObjects = (db) => db.prepare("SELECT type,name FROM sqlite_master WHERE (type='trigger' AND name LIKE 'audit_logs_fts%') OR name='audit_logs_fts' ORDER BY name").all().map(r => `${r.type}:${r.name}`)
 const setFtsSetting = (db, v) => { ensureSettings(db); writeSetting(db, { key: 'audit_fts_enabled', value: v, reason: 'ad4 test', actor: { id: null, name: 'ad4-test', source: 'script' } }) }
 

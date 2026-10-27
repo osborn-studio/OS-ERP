@@ -123,6 +123,17 @@ node scripts/audit-archive.mjs --data-dir /abs/data --industry cosmetic --before
 
 注意 `.audit-manifest.json` 在加密模式下仍是明文，内容固定为 `format / industry / backup_file / backup_sha256 / created_at / audit_chain`（`audit_chain` 为链尾 id / 行哈希 / 行数与锚点明细，含锚点 reason 与时间戳；不含业务行数据；测试断言键集合），设计如此；需要机密性的离机副本用 `.audit-manifest.enc`。
 
+#### AH6：新增两个注入点、孤儿成因与 Linux 登记
+
+- `backup.encrypt-before-rename`：密文已写完并 fsync、尚未改名（经 `encryptFile` 的 `beforeRename` 回调触发；加密模式才会到达）。abort ⇒ 留下 0600 的 `<终名>.db.enc.partial`（密文）**以及**尚未擦除的 `.plain.tmp`（既有明文窗口的延伸）；throw ⇒ `encryptFile` 删除自己的 partial、明文被擦除，`BACKUP_ENCRYPT_FAILED`。恢复：见 restore-runbook 成因 B。
+- `backup.prune-between-backup-and-manifest`：旧备份已 `unlink`、其清单尚未删除。abort/throw ⇒ 真实的孤儿清单；pre-prune 报告已列出该备份名，下一次运行据此清扫（成因 A）。
+- 报告顶层 `orphan_causes` 把成因 A / B / C 分别计数（见 restore-runbook）。两个新点和成因 C 的既有点各有专用用例（`tests/fs-fault.test.mjs`，AH6 段），不进入通用的"每点 × 两种模式"循环。
+- CI 的 `fs-fault` job（`ci.yml` 末尾）在 ubuntu-latest 上跑 `tests/fs-fault.test.mjs` 与 `tests/db-backup.test.mjs`，并以 `GML_FS_FAULT_REPORT` 上传 `fs-fault-report.json`（每次注入的点名、模式、结果）。**该 job 尚未在 GitHub 上运行过**；运行后的结果填入 capacity-baseline.md 的 AH6 表。
+
+| 注入点族 | macOS（Mac mini，开发机） | Linux（hosted runner） |
+| --- | --- | --- |
+| 全部 `archive.*` / `backup.*`（含两个 AH6 新点）× throw/abort | 本机通过（见 capacity-baseline.md AF6/AG6/AH6 记录） | 待从 CI 产物 `fs-fault-report.json` 填写；**托管 runner，不是目标主机（dmserver）** |
+
 #### 持久性声明：进程崩溃 vs 断电（AF6）
 
 - **进程崩溃（kill -9 / SIGABRT / 异常退出，内核存活）**：上表即全部结论，由 abort 模式的注入测试逐点验证；页缓存里的数据不丢。
@@ -274,3 +285,34 @@ node scripts/verify-release.mjs --log=/abs/repo/docs/release/EVIDENCE-LOG.jsonl 
 **结束条件。** 当同时满足：(a) 库里所有带签名的意图都有 `key_id`（`SELECT COUNT(*) FROM audit_anchor_intents WHERE signature IS NOT NULL AND (key_id IS NULL OR key_id='')` 为 0，或这些行都已经落在最新离机锚点 / 备份的基线之前、不再需要对账），且 (b) 复核方已用 `--require-intent-key-id` 完整跑通一轮每日复核——之后把 `--require-intent-key-id` 写进日常命令。从此没有 `key_id` 的签名意图一律 `intent-key-id-missing`（`rewrite`），过渡规则不再适用。
 
 **限制。** 签名不覆盖 `key_id`（沿用 AE5 的签名输入 `格式标识:intent_hash`，改签名输入会让所有已有意图失效）；它只是选钥提示，不是信任来源。信任来源只有复核方带外保管的公钥集合。
+
+### 8d. 过渡期结束的日期规则与“谁能写库”（AH5，ADR-0055 补充 4）
+
+**`--require-intent-key-id` 现在有按运行模式的缺省值。** 复核命令（`--offbox` / `--against-backup`）按 `GML_RUNTIME_MODE`（未设 = `production`，与服务一致）决定是否要求每条签名意图都记录 `key_id`：
+
+| 条件 | 是否强制 | 输出里的规则 |
+| --- | --- | --- |
+| 命令行带 `--require-intent-key-id` | 强制（永远生效，没有“显式关闭”） | `flag` |
+| `demo` / `test` | 不按日期强制（环境变量里的日期不读取、不校验） | `mode-not-enforcing` |
+| `production`，当前 UTC 时间 < 截止日 | 不强制（过渡规则仍适用） | `production-date-not-reached` |
+| `production`，当前 UTC 时间 ≥ 截止日零点（含当天） | 强制：无 `key_id` 的签名意图 = `intent-key-id-missing`（rewrite，退出 1） | `production-date-reached` |
+
+截止日取自 `GML_ANCHOR_INTENT_KEY_ID_REQUIRED_AFTER`（严格 `YYYY-MM-DD`，真实日历日，UTC；空串视为未设），缺省 **2026-12-01**。格式或日期非法（`2026-02-30`、`2026-12-1`、带时间等）、运行模式非法都是**用法错误，退出 2**，不会悄悄当作“不强制”。该规则只在 `--offbox` / `--against-backup` 下求值。每次复核都会输出用了哪条规则：文本输出第一行 `intent key_id: enforced|not enforced (<规则>, after <日期>, mode <模式>)`，`--json` 为顶层 `intent_key_id_rule: { required, rule, mode, after }`。
+
+**到期前的动作。** 按 §8c 的“结束条件”核对库里已没有无 `key_id` 的签名意图（或都在最新基线之前），在日常命令里提前加上 `--require-intent-key-id`；确有无法补救的旧意图时，做一份新的离机锚点 / 备份作为新基线，而不是推迟截止日。推迟只能靠把环境变量设为更晚的日期，它会随复核输出一并打印，应记入变更记录。生产环境的复核账号不应让不受信账号能改这个环境变量。
+
+**谁能写库：这是一条威胁模型边界，不是已被封死的缺口。** 任何能直接写数据库文件的账号（应用进程被攻破后的代码、有库文件写权限的运维账号、同组 / 其他账号）都能同时写业务行、审计链和 `audit_anchor_intents`，因此能造出自洽的“未签名意图 + 审计行”。签名意图（私钥在业务主机之外，见 §8b）与 `--require-signed-intents` 才挡得住这类写入者；`key_id` 与本节的日期规则都不是信任来源。能做的系统层缓解是账号隔离：数据目录与库文件只属于运维账号，不对组 / 其他开放写权限，维护类操作（保留清理 / 归档 / 隐私抹除）由运维账号执行。**限制要说清楚**：当前是单个 SQLite 文件，应用账号为了写业务数据必然能写这个文件，所以“意图表只许 CLI 账号写、应用账号只读”在文件级做不到，只能靠签名补位。
+
+**安装检查（只报告，不强制）。** `node scripts/local-manage.mjs doctor` 的 JSON 里有 `dataSeparation`：
+
+| `status` | 含义 | 怎么办 |
+| --- | --- | --- |
+| `exposed` | 数据目录或库文件对其他账号可写（高危） | 立刻收紧：目录 `0700` / `0750`、库文件 `0600` / `0640` |
+| `group-shared` | 同组账号可写（中危） | 确认组成员都可信，否则去掉组写位 |
+| `single-account` | 数据归当前账号或当前账号仍可写：没有账号级隔离 | 需要抗“能写库者”时必须用离机私钥签名意图 |
+| `separated` | 数据属于另一个账号，当前账号不可写 | 保持；维护操作用属主账号执行 |
+| `unknown` | 含符号链接或 stat / 读目录失败，没检查到真实位置 | 手工核对真实路径的属主与权限 |
+| `not-created` | 数据目录尚未创建 | 先 `setup` / `start` 再检查 |
+| `skipped` | 平台无法判定（Windows 没有可比的 uid / 模式位；取不到账号 id） | 手工检查目录 ACL；该状态不代表安全 |
+
+`findings` 逐条列出路径、严重度与原因；`enforced` 恒为 `false`：任何发现都不会改变 `doctor` 的退出码，也不会改动文件权限。符号链接一律不跟随。库文件的 `-wal` / `-shm` 一并检查。

@@ -1,3 +1,4 @@
+// slow: 204 s: starts a second real server process and replays cache/perf fixtures over HTTP (scripts/test-timings.mjs, threshold 60 s)
 /**
  * ============================================================================
  * 文件标识：tests/dashboard-perf.test.mjs ｜ 测试：低库存口径统一与看板热点块（roadmap-v6 AA5，ADR-0044）
@@ -22,15 +23,15 @@ import net from 'node:net'
 import { fileURLToPath } from 'node:url'
 import { setTimeout as delay } from 'node:timers/promises'
 import Database from 'better-sqlite3'
-import { runMigrations } from '../server/db/migrations/runner.js'
-import { listBelowSafe, countBelowSafe } from '../server/lib/stock.js'
-import { METRIC_BY_KEY } from '../server/lib/metrics.js'
-import { TOOL_MAP } from '../server/mcp/tools.js'
-import { createProfiler, profilingEnabled } from '../server/lib/profile.js'
-import { cachedForDb, invalidateForDb, cacheTtlMs, cacheKeyCount } from '../server/lib/db-ttl-cache.js'
+import { runMigrations } from '../../server/db/migrations/runner.js'
+import { listBelowSafe, countBelowSafe } from '../../server/lib/stock.js'
+import { METRIC_BY_KEY } from '../../server/lib/metrics.js'
+import { TOOL_MAP } from '../../server/mcp/tools.js'
+import { createProfiler, profilingEnabled } from '../../server/lib/profile.js'
+import { cachedForDb, invalidateForDb, cacheTtlMs, cacheKeyCount } from '../../server/lib/db-ttl-cache.js'
 
-const ROOT = fileURLToPath(new URL('../', import.meta.url))
-const SCHEMA = readFileSync(new URL('../server/db/schema.sql', import.meta.url), 'utf8')
+const ROOT = fileURLToPath(new URL('../../', import.meta.url))
+const SCHEMA = readFileSync(new URL('../../server/db/schema.sql', import.meta.url), 'utf8')
 
 const strip = ({ value, hit }) => ({ value, hit })
 
@@ -674,9 +675,9 @@ test('AC11 GML_DASHBOARD_CACHE_MS=0 reports cache_ttl_ms 0 so the page can say "
 
 // ============================ AC4：/channel、/recent 剖析，explain-audit 登记，缓存命中率阈值依据（ADR-0044 补充 2）============================
 
-import * as dsql from '../server/lib/dashboard-sql.js'
-import { auditStatements, STATEMENTS, ALLOW } from '../scripts/explain-audit.mjs'
-import { counterSnapshot, resetCounters } from '../server/lib/process-counters.js'
+import * as dsql from '../../server/lib/dashboard-sql.js'
+import { auditStatements, STATEMENTS, ALLOW } from '../../scripts/explain-audit.mjs'
+import { counterSnapshot, resetCounters } from '../../server/lib/process-counters.js'
 
 const AC4_ROUTES = { channel: '/api/dashboard/channel', recent: '/api/dashboard/recent' }
 
@@ -693,7 +694,7 @@ const OLD_CHANNEL = (days) => {
 }
 
 test('AC4 explain-audit statements for dashboard come from the route-side SQL module (no hand copy), with declared indexes', () => {
-  const route = readFileSync(new URL('../server/routes/dashboard.js', import.meta.url), 'utf8')
+  const route = readFileSync(new URL('../../server/routes/dashboard.js', import.meta.url), 'utf8')
   // 路由里不再内联这些语句：所有文本都来自 lib/dashboard-sql.js，explain-audit 引用的是同一份
   assert.match(route, /from '\.\.\/lib\/dashboard-sql\.js'/)
   for (const frag of ['CROSS JOIN', 'LEFT JOIN platforms pf ON pf.id=o.platform_id', 'FROM inventory_stocks st LEFT JOIN', 'ORDER BY so.id DESC']) assert.ok(!route.includes(frag), `route must not inline: ${frag}`)
@@ -948,7 +949,7 @@ const OLD_TREND = (days) => {
 
 test('AD3 migration 070: creates idx_oms_order_time, idempotent, verify() follows up()', (t) => {
   const { db } = fixture(t)
-  const mig = requireCjs('../server/db/migrations/070_oms_order_time_index.cjs')
+  const mig = requireCjs('../../server/db/migrations/070_oms_order_time_index.cjs')
   const idx = () => db.prepare("SELECT sql FROM sqlite_master WHERE type='index' AND name='idx_oms_order_time'").get()
   assert.match(idx().sql, /oms_orders\s*\(\s*order_time\s*,\s*status\s*,\s*platform_id\s*,\s*pay_amount\s*\)/, 'order_time-leading covering index for the two dashboard queries')
   assert.equal(mig.verify(db), true)
@@ -1087,7 +1088,7 @@ test('AD3 explain-audit: trend + channel online use idx_oms_order_time (SEARCH, 
   // crossing local midnight; compare against that captured instant, not the later clock.
   const statementTime = new Date(2026, 9, 26, 23, 59, 59)
   t.mock.timers.enable({ apis: ['Date'], now: statementTime })
-  const { STATEMENTS: midnightStatements } = await import('../scripts/explain-audit.mjs?dashboard-perf-midnight')
+  const { STATEMENTS: midnightStatements } = await import('../../scripts/explain-audit.mjs?dashboard-perf-midnight')
   t.mock.timers.tick(2000)
   assert.notDeepEqual(dsql.onlineWindow(30), dsql.onlineWindow(30, statementTime), 'the test crosses local midnight')
   const ids = ['dash.trend_sales', 'dash.trend_purchase', 'dash.trend_online', 'dash.channel_online']
@@ -1143,6 +1144,6 @@ test('AD3 routes: /trend and /channel (HTTP) equal the old SQL on the seeded ins
   const tr30 = (await f.api('/api/dashboard/trend?days=30')).body.data
   assert.ok(tr30.some((r) => r.online > 0))
   assert.deepEqual(Object.keys(tr30[0]), ['date', 'offline', 'online', 'purchase', 'orders', 'total'])
-  const route = readFileSync(new URL('../server/routes/dashboard.js', import.meta.url), 'utf8')
+  const route = readFileSync(new URL('../../server/routes/dashboard.js', import.meta.url), 'utf8')
   assert.ok(!/date\(o?\.?order_time\)\s*>=/.test(route), 'route inlines no oms date() predicate')
 })

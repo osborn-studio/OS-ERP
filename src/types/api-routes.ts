@@ -1,7 +1,7 @@
 // ⚠️ 本文件由 scripts/gen-api-types.mjs 自动生成，请勿手改。
 // 改接口请改 server/openapi.js，然后执行：npm run gen:api
 //
-// 生成源：server/openapi.js ｜ OpenAPI 3.0.3 ｜ 契约版本 1.44.0
+// 生成源：server/openapi.js ｜ OpenAPI 3.0.3 ｜ 契约版本 1.45.0
 //
 // ============================================================================
 // 文件标识：src/types/api-routes.ts ｜ 【自动生成，勿手改】接口路径与标签的类型定义
@@ -11,14 +11,14 @@
 // 【注意】本文件由脚本写出：**文件标识块也必须由脚本输出**，否则下次 gen:api 会把它冲掉 ——
 //   "登记了不等于守住了"。改格式请改 scripts/gen-api-types.mjs。
 // ============================================================================
-// 路径 527 条 ｜ 标签 34 个
+// 路径 530 条 ｜ 标签 34 个
 //
 // 用法：
 //   import { typedGet, typedPost } from '../api/typed'
 //   typedGet('/api/purchase/chain/overview')   // 路径写错编译期就报
 
-export const OPENAPI_VERSION = '1.44.0'
-export const API_ROUTE_COUNT = 527
+export const OPENAPI_VERSION = '1.45.0'
+export const API_ROUTE_COUNT = 530
 
 /** 全部已登记的接口路径 */
 export type ApiRoute =
@@ -85,6 +85,9 @@ export type ApiRoute =
   | '/api/auth/my-scope'
   | '/api/auth/permissions'
   | '/api/auth/roles-permissions'
+  | '/api/auth/roles/{code}/activate'
+  | '/api/auth/roles/{code}/deactivate'
+  | '/api/auth/roles/{code}/deactivation-impact'
   | '/api/auth/roles/{code}/permissions'
   | '/api/auth/users'
   | '/api/costing/adjustments'
@@ -615,6 +618,9 @@ export type ApiRouteMap = {
   '/api/auth/my-scope': { get: true }
   '/api/auth/permissions': { get: true }
   '/api/auth/roles-permissions': { get: true }
+  '/api/auth/roles/{code}/activate': { post: true }
+  '/api/auth/roles/{code}/deactivate': { post: true }
+  '/api/auth/roles/{code}/deactivation-impact': { get: true }
   '/api/auth/roles/{code}/permissions': { put: true }
   '/api/auth/users': { get: true; post: true }
   '/api/costing/adjustments': { get: true; post: true }
@@ -1154,6 +1160,9 @@ export const API_ROUTES: readonly ApiRoute[] = [
   '/api/auth/my-scope',
   '/api/auth/permissions',
   '/api/auth/roles-permissions',
+  '/api/auth/roles/{code}/activate',
+  '/api/auth/roles/{code}/deactivate',
+  '/api/auth/roles/{code}/deactivation-impact',
   '/api/auth/roles/{code}/permissions',
   '/api/auth/users',
   '/api/costing/adjustments',
@@ -1685,6 +1694,9 @@ export const ROUTE_METHODS: Record<ApiRoute, string[]> = {
   '/api/auth/my-scope': ['get'],
   '/api/auth/permissions': ['get'],
   '/api/auth/roles-permissions': ['get'],
+  '/api/auth/roles/{code}/activate': ['post'],
+  '/api/auth/roles/{code}/deactivate': ['post'],
+  '/api/auth/roles/{code}/deactivation-impact': ['get'],
   '/api/auth/roles/{code}/permissions': ['put'],
   '/api/auth/users': ['get', 'post'],
   '/api/costing/adjustments': ['get', 'post'],

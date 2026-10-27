@@ -80,7 +80,7 @@ function keys(t) {
 function fixturePackage(t) {
   const pkg = tmp(t, 'os-ad5-pkg-')
   const put = (rel, content) => { mkdirSync(path.dirname(path.join(pkg, rel)), { recursive: true }); writeFileSync(path.join(pkg, rel), content) }
-  for (const f of ['scripts/verify-release.mjs', ...readdirSync(path.join(ROOT, 'scripts/lib')).filter((x) => /^(evidence-sign|evidence-log|fs-fault|safe-path|tests-tree|offbox-anchor|sbom-diff)\.mjs$/.test(x)).map((x) => `scripts/lib/${x}`)]) put(f, readFileSync(path.join(ROOT, f)))
+  for (const f of ['scripts/verify-release.mjs', ...readdirSync(path.join(ROOT, 'scripts/lib')).filter((x) => /^(evidence-sign|evidence-log|fs-fault|safe-path|tests-tree|offbox-anchor|sbom-diff|zip-safe)\.mjs$/.test(x)).map((x) => `scripts/lib/${x}`)]) put(f, readFileSync(path.join(ROOT, f)))
   put('THIRD_PARTY_NOTICES.md', 'notices\n'); put('CHANGELOG.md', '<!-- generated -->\n')
   put('release/sbom.cdx.json', JSON.stringify({ bomFormat: 'CycloneDX', specVersion: '1.5', components: [{ name: 'x', version: '1', 'bom-ref': 'x@1' }] }))
   const files = {}
