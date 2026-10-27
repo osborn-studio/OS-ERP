@@ -21,6 +21,7 @@ import Database from 'better-sqlite3'
 import { INDUSTRIES, dbPathFor } from '../../server/db/index.js'
 import { keyedPseudonym } from '../../server/lib/secret-box.js'
 import { rehashAuditRow } from '../../server/lib/audit-trail.js'
+import { assertAuditMutationAllowed } from '../../server/lib/audit-fts-state.js'
 
 export const PHONE_RE = /^1\d{10}$/
 export const ERASED_PREFIX = 'erased:'
@@ -391,6 +392,8 @@ export function planErase(db, phone, c, { includeAmbiguous = false } = {}) {
 
 /** 执行计划（调用方负责事务）。只写计划里列出的列，返回实际改动的行数（与 plan.counts 相等是测试的断言）。 */
 export function applyPlan(db, plan) {
+  // 在整个计划的任何写入前拒绝，避免先修改隐私字段，再让 FTS UPDATE 触发器遇到残缺索引。
+  if (plan.ops.some((op) => op.table === 'audit_logs')) assertAuditMutationAllowed(db)
   const done = {}
   for (const op of plan.ops) {
     const cols = Object.keys(op.set)

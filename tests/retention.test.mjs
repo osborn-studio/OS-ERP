@@ -1,4 +1,5 @@
 import test from 'node:test'
+import { REBUILD_STATE_DDL, REBUILD_STATE_TABLE } from '../server/lib/audit-fts-state.js'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { mkdtempSync, rmSync, existsSync } from 'node:fs'
@@ -49,6 +50,20 @@ function seed(db) {
   ml.run('old_read', 'read', at(100)); ml.run('old_danger', 'danger', at(100)); ml.run('new_read', 'read', at(5))
 }
 const count = (db, sql) => db.prepare(sql).get().n
+
+test('E02 retention CLI refuses a rebuild checkpoint and preserves all three tables', (t) => {
+  const dir = fixture(t); const db = open(dir); t.after(() => db.close()); seed(db)
+  const snapshot = () => ['audit_logs', 'notify_logs', 'mcp_call_logs'].map(table => db.prepare(`SELECT * FROM ${table} ORDER BY id`).all())
+  const before = snapshot()
+  db.exec(REBUILD_STATE_DDL)
+  const r = run(dir, ['--execute', '--json'])
+  assert.equal(r.status, 1, r.stdout + r.stderr)
+  assert.match(r.stdout, /AUDIT_FTS_REBUILD_IN_PROGRESS/)
+  assert.deepEqual(snapshot(), before, 'no table partially purged and no success audit appended')
+  db.exec(`DROP TABLE ${REBUILD_STATE_TABLE}`) // empty synthetic marker, no index rebuild was started
+  const retry = run(dir, ['--execute', '--json'])
+  assert.equal(retry.status, 0, retry.stdout + retry.stderr)
+})
 
 test('settings registry has the three retention keys as danger settings with the specified defaults', () => {
   for (const [key, def] of [['retention_audit_days', '365'], ['retention_notify_log_days', '90'], ['retention_mcp_log_days', '90']]) {

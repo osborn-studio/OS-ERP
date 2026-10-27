@@ -1,4 +1,6 @@
 import test from 'node:test'
+import { REBUILD_STATE_DDL, REBUILD_STATE_TABLE } from '../server/lib/audit-fts-state.js'
+import { insertAuditRow } from '../server/lib/audit-trail.js'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { mkdtempSync, rmSync, existsSync, readFileSync, statSync, writeFileSync } from 'node:fs'
@@ -7,6 +9,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
 import Database from 'better-sqlite3'
+import { collect } from '../scripts/lib/privacy-common.mjs'
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url))
 const PHONE = '13812345678'
@@ -14,6 +17,21 @@ const OTHER = '13987654321'
 const envFor = (dir, extra = {}) => ({ PATH: process.env.PATH, HOME: dir, TMPDIR: dir, GML_RUNTIME_MODE: 'test', GML_DATA_DIR: dir, GML_DB: '', GML_JWT_SECRET: 'b'.repeat(48), ...extra })
 const run = (script, dir, args = [], extra = {}) => spawnSync(process.execPath, [script, ...args], { cwd: ROOT, env: envFor(dir, extra), encoding: 'utf8', timeout: 60000 })
 const open = (dir) => new Database(path.join(dir, 'gml_cosmetic.db'))
+
+test('E02 privacy CLI refuses audit rewrites during a rebuild without partially erasing the subject', (t) => {
+  const { dir, cid } = fixture(t); const db = open(dir); t.after(() => db.close())
+  insertAuditRow(db, { action: 'READ', entity: 'mall_customers', entityId: cid, detail: { phone: PHONE, name: '张三' } })
+  assert.equal(collect(db, PHONE).audit_logs.length, 1, 'fixture must select the linked audit row for erasure')
+  const snapshot = () => ['mall_customers', 'oms_orders', 'audit_logs'].map(table => db.prepare(`SELECT * FROM ${table} ORDER BY id`).all())
+  const before = snapshot(); db.exec(REBUILD_STATE_DDL)
+  const r = run('scripts/privacy-erase.mjs', dir, [PHONE, '--confirm', '--actor', 'boss'])
+  assert.equal(r.status, 1, r.stdout + r.stderr)
+  assert.match(r.stdout + r.stderr, /ERASE_FAILED 审计 FTS 分批重建未完成/) // CLI wraps non-Refusal errors; helper tests assert the internal code
+  assert.deepEqual(snapshot(), before)
+  db.exec(`DROP TABLE ${REBUILD_STATE_TABLE}`) // empty synthetic marker, no partial index to repair
+  const retry = run('scripts/privacy-erase.mjs', dir, [PHONE, '--confirm', '--actor', 'boss'])
+  assert.equal(retry.status, 0, retry.stdout + retry.stderr)
+})
 
 function fixture(t, { openOrder = false } = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), 'os-x9-priv-'))
