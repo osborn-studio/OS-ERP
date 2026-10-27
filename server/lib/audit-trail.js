@@ -24,6 +24,7 @@
 import { createRequire } from 'node:module'
 import { redactValue } from './redact.js'
 import { verifyChain } from './audit-chain-verify.js'
+import { assertAuditMutationAllowed } from './audit-fts-state.js'
 import { incCounter, observeHistogram } from './process-counters.js'
 
 const { GENESIS, hashRow, adoptOrphans, anchorAccepts } = createRequire(import.meta.url)('../db/migrations/_audit_chain.cjs')
@@ -166,6 +167,7 @@ export function insertAuditRow(db, row, options) {
  */
 export function deleteAuditRowsAnchored(db, where, params, { kind, reason } = {}) {
   if (!db.inTransaction) throw fault(AUDIT_OUTSIDE_TX, '受控删除审计行必须在事务内（锚点与删除要一起提交）', 500)
+  assertAuditMutationAllowed(db)
   if (!hasChainColumns(db)) return db.prepare(`DELETE FROM audit_logs WHERE ${where}`).run(...params).changes
   // 先验整条链：删除会把"删掉的区间"登记成合法断口，如果链里本来就有未登记的缺口 / 篡改，登记锚点会把它一并洗白（审计 AB6 二轮）。
   adoptOrphans(db) // 表尾的裸 INSERT 孤儿先接上链（与追加路径、迁移自愈同一规则）；夹在中间的空哈希不动，下面的验链会把它当断点
@@ -188,6 +190,7 @@ export function deleteAuditRowsAnchored(db, where, params, { kind, reason } = {}
 
 /**
  * 受控改行（隐私抹除改写 detail 之后）：按当前列值重算该行 row_hash，并给下一行登记锚点（它的 prev_hash 仍指向旧哈希）。
+ * 当前生产调用者仅为 privacy-common.applyPlan：它必须在整个计划的任何 UPDATE 之前检查 FTS 重建状态，本函数不能代替写前检查。
  * 必须在调用方事务内。返回是否改动。
  */
 export function rehashAuditRow(db, id, { kind = 'rewrite', reason } = {}) {

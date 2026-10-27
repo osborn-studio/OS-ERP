@@ -15,10 +15,13 @@ import { fileURLToPath } from 'node:url'
 import Database from 'better-sqlite3'
 import { runMigrations } from '../server/db/migrations/runner.js'
 import * as m067 from '../server/db/migrations/067_audit_fts.cjs'
-import { REBUILD_STATE_TABLE } from '../server/lib/audit-fts-state.js'
+import { REBUILD_STATE_TABLE, assertAuditMutationAllowed } from '../server/lib/audit-fts-state.js'
 import { ftsAvailable, ftsState, auditQueryPlan, parseFilters, keywordUsesFts } from '../server/lib/audit-view.js'
 import { REBUILD_STATE_DDL } from '../server/lib/audit-fts-state.js'
 import { counterSnapshot, resetCounters } from '../server/lib/process-counters.js'
+import { insertAuditRow, deleteAuditRowsAnchored } from '../server/lib/audit-trail.js'
+import { verifyChain } from '../server/lib/audit-chain-verify.js'
+import { applyPlan } from '../scripts/lib/privacy-common.mjs'
 
 // AD4：CI 的 audit-no-fts5 job 在没有 FTS5 的 SQLite 构建上跑本文件：依赖索引存在的用例跳过，无 FTS5 用例真实执行
 const NO_FTS5 = !m067.ftsSupported(new Database(':memory:'))
@@ -276,6 +279,84 @@ const BASE = (dir) => ['--data-dir', dir, '--industry', 'cosmetic']
 const docs = (db) => db.prepare('SELECT COUNT(*) c FROM audit_logs_fts_docsize').get().c
 const stateRow = (db) => (db.prepare("SELECT name FROM sqlite_master WHERE name=?").get(REBUILD_STATE_TABLE) ? db.prepare(`SELECT * FROM ${REBUILD_STATE_TABLE}`).get() : null)
 const matchCount = (db, q) => db.prepare('SELECT COUNT(*) c FROM audit_logs_fts WHERE audit_logs_fts MATCH ?').get(`"${q}"`).c
+
+test('E02 an empty checkpoint still blocks audit mutations; unrelated privacy updates remain available', (t) => {
+  const db = new Database(':memory:'); t.after(() => db.close())
+  assert.throws(() => assertAuditMutationAllowed(db), { code: 'AUDIT_OUTSIDE_TX' })
+  db.exec(`${REBUILD_STATE_DDL}; CREATE TABLE subject(id INTEGER PRIMARY KEY, value TEXT); INSERT INTO subject VALUES(1,'old')`)
+  db.transaction(() => {
+    assert.throws(() => assertAuditMutationAllowed(db), { code: 'AUDIT_FTS_REBUILD_IN_PROGRESS' })
+    applyPlan(db, { ops: [{ table: 'subject', id: 1, set: { value: 'erased' } }] })
+  }).immediate()
+  assert.equal(db.prepare('SELECT value FROM subject').get().value, 'erased')
+  db.exec(`DROP TABLE ${REBUILD_STATE_TABLE}`)
+  db.transaction(() => assertAuditMutationAllowed(db)).immediate()
+})
+
+test('E02 a DEFERRED writer cannot use a pre-checkpoint WAL snapshot to delete audit rows', needsFts5, (t) => {
+  const { dir, db } = fixture(t, 0); t.after(() => db.close())
+  insertAuditRow(db, { action: 'CREATE', entity: 'keep' })
+  const other = new Database(path.join(dir, 'gml_cosmetic.db')); t.after(() => other.close())
+  db.exec('BEGIN')
+  const before = db.prepare('SELECT * FROM audit_logs').all() // pin the old read snapshot
+  other.exec(REBUILD_STATE_DDL)
+  try {
+    assert.throws(() => deleteAuditRowsAnchored(db, 'id=?', [1]), (e) => e.code.startsWith('SQLITE_BUSY'))
+  } finally { db.exec('ROLLBACK') }
+  assert.deepEqual(db.prepare('SELECT * FROM audit_logs').all(), before)
+  assert.equal(verifyChain(db).ok, true)
+})
+
+for (const operation of ['retention', 'privacy', 'archive']) {
+  test(`E02 ${operation} refuses a checkpoint from another connection before changing rows; resume restores maintenance`, needsFts5, async (t) => {
+    const { dir, db } = fixture(t, 0)
+    t.after(() => db.close())
+    for (let i = 0; i < 30; i++) insertAuditRow(db, { userName: 'operator', action: 'CREATE', entity: `original${i}`, detail: 'original' })
+    const out = mkdtempSync(path.join(tmpdir(), 'os-e02-archive-'))
+    t.after(() => rmSync(out, { recursive: true, force: true }))
+    const archive = (extra = []) => spawnSync(process.execPath, ['scripts/audit-archive.mjs', ...BASE(dir), '--before', '2099-01-01', '--out', out, ...extra], { cwd: ROOT, env: env(dir), encoding: 'utf8', timeout: 60000 })
+    // Take the archive token before the other connection starts its rebuild: the write-side check must re-read it.
+    const planned = operation === 'archive' ? archive() : null
+    if (planned) assert.equal(planned.status, 0, planned.stdout + planned.stderr)
+    const token = planned?.stdout.match(/口令：(ARCHIVE-[0-9A-F]{16})/)?.[1]
+    const partial = await interrupted(dir, { batchRows: 10, afterBatch: 1, out: `e02-${operation}` })
+    assert.equal(partial.code, 3, partial.stdout + partial.stderr)
+    const rows = () => db.prepare('SELECT * FROM audit_logs ORDER BY id').all()
+    const before = rows(); const checkpoint = stateRow(db)
+    const privacyPlan = { ops: [
+      { table: 'e02_subject', id: 1, set: { value: 'changed' } },
+      { table: 'audit_logs', id: 25, set: { detail: 'changed' } }
+    ] }
+    // A tiny unrelated row makes premature partial privacy writes observable, even if its caller catches the error.
+    db.exec('CREATE TABLE e02_subject(id INTEGER PRIMARY KEY, value TEXT); INSERT INTO e02_subject VALUES(1,\'original\')')
+    const mutate = () => operation === 'retention'
+      ? deleteAuditRowsAnchored(db, 'id = ?', [25], { kind: 'retention' })
+      : applyPlan(db, privacyPlan)
+    if (operation === 'archive') {
+      const r = archive(['--confirm', token])
+      assert.equal(r.status, 1, r.stdout + r.stderr)
+      assert.match(r.stdout, /AUDIT_FTS_REBUILD_IN_PROGRESS/)
+      assert.deepEqual(readdirSync(out), [], 'refusal precedes export')
+    } else {
+      db.transaction(() => {
+        assert.throws(mutate, { code: 'AUDIT_FTS_REBUILD_IN_PROGRESS' })
+        assert.equal(db.prepare('SELECT value FROM e02_subject').get().value, 'original')
+      }).immediate()
+    }
+    assert.deepEqual(rows(), before)
+    assert.deepEqual(stateRow(db), checkpoint)
+    assert.equal(verifyChain(db).ok, true)
+    insertAuditRow(db, { userName: 'late', action: 'CREATE', entity: 'lateappend' })
+    assert.equal(run([...BASE(dir), '--resume', '--pause-ms', '0'], dir).status, 0)
+    assert.equal(stateRow(db), null)
+    if (operation === 'archive') {
+      const fresh = archive().stdout.match(/口令：(ARCHIVE-[0-9A-F]{16})/)[1]
+      const r = archive(['--confirm', fresh]); assert.equal(r.status, 0, r.stdout + r.stderr)
+    } else db.transaction(mutate).immediate()
+    assert.equal(verifyChain(db).ok, true, 'maintenance preserves the chain after resuming')
+    assert.equal(run([...BASE(dir), '--integrity-check'], dir).status, 0)
+  })
+}
 /** 有唯一实体名的 n 行：让 MATCH 能逐行核对；绕过 fixture 的循环以便大表快速建 */
 function bigFixture(t, rows) {
   const { dir, db } = fixture(t, 0)
