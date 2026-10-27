@@ -14,9 +14,9 @@ import os from 'node:os'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { zipSync, strToU8 } from 'fflate'
-import { cleanEntryName, extractZipSafe, listZip, DEFAULT_LIMITS, ZipLimitError } from '../scripts/lib/zip-safe.mjs'
+import { cleanEntryName, extractZipSafe, extractZipBytesSafe, readZipBounded, listZip, DEFAULT_LIMITS, ZipLimitError } from '../scripts/lib/zip-safe.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const tmp = (t, p = 'os-ah7-zip-') => { const d = fs.mkdtempSync(path.join(os.tmpdir(), p)); t.after(() => fs.rmSync(d, { recursive: true, force: true })); return d }
@@ -50,6 +50,30 @@ test('defaults are finite and sane', () => {
   assert.ok(DEFAULT_LIMITS.maxEntries >= 1000 && DEFAULT_LIMITS.maxEntries <= 100000)
   assert.ok(DEFAULT_LIMITS.maxFileBytes < DEFAULT_LIMITS.maxTotalBytes)
   assert.ok(Object.isFrozen(DEFAULT_LIMITS))
+})
+
+test('bounded archive snapshot is independent of subsequent file replacement and rejects oversize input', (t) => {
+  const d = tmp(t)
+  const original = mk({ 'pkg/a': strToU8('verified') })
+  const z = write(d, 'a.zip', original)
+  refused(() => readZipBounded(z, { maxArchiveBytes: original.length - 1 }), /byte limit/)
+  const bytes = readZipBounded(z, { maxArchiveBytes: original.length })
+  fs.writeFileSync(z, mk({ 'pkg/a': strToU8('replacement') }))
+  const out = path.join(d, 'out')
+  extractZipBytesSafe(bytes, out, {}, { strip: 1 })
+  assert.equal(fs.readFileSync(path.join(out, 'a'), 'utf8'), 'verified')
+  assert.deepEqual(bytes, original, 'the same validated snapshot can be saved and hashed')
+  refused(() => extractZipBytesSafe(bytes, path.join(d, 'limited'), { maxArchiveBytes: bytes.length - 1 }), /byte limit/)
+})
+
+test('bounded archive reader refuses a FIFO without waiting for a writer', { skip: process.platform === 'win32' }, (t) => {
+  const d = tmp(t)
+  const fifo = path.join(d, 'archive.pipe')
+  assert.equal(spawnSync('mkfifo', [fifo]).status, 0)
+  const moduleUrl = pathToFileURL(path.join(ROOT, 'scripts/lib/zip-safe.mjs')).href
+  const code = `import { readZipBounded } from ${JSON.stringify(moduleUrl)}; try { readZipBounded(process.argv[1]); process.exitCode = 1 } catch (e) { if (!/not a regular file/.test(e.message)) throw e }`
+  const r = spawnSync(process.execPath, ['--input-type=module', '-e', code, fifo], { encoding: 'utf8', timeout: 5000 })
+  assert.equal(r.status, 0, r.error?.message ?? r.stderr)
 })
 
 test('entry-count limit is checked from the central directory before anything is inflated', (t) => {

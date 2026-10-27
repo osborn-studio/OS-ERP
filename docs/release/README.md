@@ -279,3 +279,8 @@ node scripts/verify-release.mjs --artifact=RC-<version>-<sha>.zip --extract-to=<
 
 Entries, per-file and total inflated bytes are capped (the real output is measured, not the header), and absolute or `..` paths, backslashes, symlinks, special files, encrypted entries and zip64 are refused. Details and limits: `docs/security/dependency-notes.md` section 12.
 
+The candidate builder and the hosted workflow's self-verification use this same bounded reader, with its fixed defaults
+(5,000 entries, 64 MiB per file, 512 MiB total output, 256 MiB archive). The builder checks these limits before copying
+or hashing the archive; an extraction failure removes the candidate outputs. These size/path checks do not replace
+the subsequent MANIFEST, secret-scan, production-acceptance or evidence checks.
+

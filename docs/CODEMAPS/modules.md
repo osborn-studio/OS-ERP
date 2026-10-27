@@ -252,6 +252,7 @@
 |---|---|---|---|---|
 | `REBUILD_STATE_DDL` | const | — | — | — |
 | `REBUILD_STATE_TABLE` | const | — | — | lib/audit-view.js |
+| `assertAuditMutationAllowed` | fn | — | — | lib/audit-trail.js |
 | `rebuildInProgress` | fn | — | — | lib/audit-view.js |
 
 ## `server/lib/audit-trail.js`

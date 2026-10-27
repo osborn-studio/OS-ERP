@@ -42,6 +42,7 @@ import { parseArgs, locateDatabases, die } from './lib/audit-chain-cli.mjs'
 import { sha256FileSync } from '../server/lib/audit-anchor-manifest.js'
 import { faultPoint, assertFsFaultAllowed } from './lib/fs-fault.mjs'
 import { loadIntentSigner } from './lib/anchor-intent-signer.mjs'
+import { assertAuditMutationAllowed } from '../server/lib/audit-fts-state.js'
 
 const { anchorAccepts } = createRequire(import.meta.url)('../server/db/migrations/_audit_chain.cjs')
 
@@ -297,6 +298,7 @@ if (args.confirm && !failed) {
       let resumed = false
       try {
         const done = db.transaction(() => {
+          assertAuditMutationAllowed(db) // IMMEDIATE 写锁内，重新计划/导出/续做前检查，不能依赖演练时的状态
           const p = plan(db) // 锁内重算：与口令绑定的段必须与演练时一致
           if (p.error || tokenOf(code, p) !== tokenOf(code, p0)) throw Object.assign(new Error(p.error ? p.message : '加锁后计划与演练不一致'), { code: p.error || 'PLAN_CHANGED' })
           if (args.resume) { made = checkResume(db, code, p); resumed = true } else { made = exportSegment(db, code, p); pauseAfterExport() }

@@ -31,4 +31,16 @@ export function rebuildInProgress(db) {
   try { return !!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(REBUILD_STATE_TABLE) } catch { return false }
 }
 
-export default { REBUILD_STATE_TABLE, REBUILD_STATE_DDL, rebuildInProgress }
+/**
+ * 受控删改必须在同一写事务内、任何改动/导出之前检查。写锁保证检查点不会在检查与写入之间出现；
+ * DEFERRED 旧快照升级失败时也必须回滚。与查询的探测不同，状态读取失败不能当作“不在重建”。
+ * 空检查点表同样拒绝；中断后先 --resume / --rebuild --restart，或 --disable 收敛状态。
+ */
+export function assertAuditMutationAllowed(db) {
+  if (!db.inTransaction) throw Object.assign(new Error('审计删改检查必须在事务内'), { code: 'AUDIT_OUTSIDE_TX', status: 500 })
+  if (db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(REBUILD_STATE_TABLE)) {
+    throw Object.assign(new Error('审计 FTS 分批重建未完成，暂不能清理、归档或抹除审计行；先 --resume、--rebuild --restart 或 --disable 完成维护'), { code: 'AUDIT_FTS_REBUILD_IN_PROGRESS', status: 409 })
+  }
+}
+
+export default { REBUILD_STATE_TABLE, REBUILD_STATE_DDL, rebuildInProgress, assertAuditMutationAllowed }

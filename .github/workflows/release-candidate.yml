@@ -98,7 +98,7 @@ jobs:
           zip="$(ls "$CAND_OUT"/RC-*.zip)"
           name="$(basename "$zip" .zip)"
           mkdir -p "$RUNNER_TEMP/pkg-x"
-          unzip -q "$zip" -d "$RUNNER_TEMP/pkg-x"
+          node --input-type=module -e 'import { extractZipSafe } from "./scripts/lib/zip-safe.mjs"; extractZipSafe(process.argv[1], process.argv[2]);' "$zip" "$RUNNER_TEMP/pkg-x"
           pkg="$(ls -d "$RUNNER_TEMP"/pkg-x/*/)"
           mkdir -p "$CAND_UPLOAD"
           # AG1: a dry run has no evidence log (no --log, no evidence-log-line.jsonl in its artifact).
