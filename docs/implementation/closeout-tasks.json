@@ -1,0 +1,249 @@
+{
+  "schema_version": 1,
+  "baseline": "98480e7cf93b01d56dafed6f2994cecdeb4a3d50",
+  "as_of": "2026-10-27",
+  "scope": "已记录的单企业ERP收尾；非全仓库无遗漏保证；工作包数量不是缺陷数量",
+  "tasks": [
+    {
+      "id": "E01",
+      "category": "engineering",
+      "priority": "P1",
+      "status": "local_verified",
+      "title": "候选包全路径受限解压",
+      "sources": [
+        "scripts/release-candidate.mjs",
+        ".github/workflows/release-candidate.yml",
+        "docs/implementation/backlog.md#第十七批集成后仍-open-的残留"
+      ],
+      "acceptance": "生成器与工作流都在解压前执行条目/压缩包/单文件/总量限制；恶意包拒绝与正常候选测试通过；Haiku无阻断且精确HEAD CI通过。",
+      "depends_on": [],
+      "evidence": [
+        "Node63/63; fast56/56; red-to-green oversized ZIP",
+        "Haiku5.5 two rounds verified; final no confirmed blocker"
+      ]
+    },
+    {
+      "id": "E02",
+      "category": "engineering",
+      "priority": "P1",
+      "status": "open",
+      "title": "FTS 重建与审计删改协调",
+      "sources": [
+        "scripts/audit-fts-maintain.mjs",
+        "server/lib/audit-trail.js",
+        "scripts/audit-archive.mjs"
+      ],
+      "acceptance": "在持久重建检查点存在时阻止受控删改/归档破坏索引；两连接确定性负向、恢复续跑、审计链与FTS完整性通过。当前已有interfered检测和LIKE回退，不能称为已证实数据丢失。",
+      "depends_on": []
+    },
+    {
+      "id": "E03",
+      "category": "engineering",
+      "priority": "P2",
+      "status": "open",
+      "title": "慢测试超时与负载预算收敛",
+      "sources": [
+        "docs/implementation/backlog.md#第十七批-AH1-后仍-open-的残留",
+        "tests/lib/load-tolerance.mjs"
+      ],
+      "acceptance": "盘点仍分散的慢用例预算，按实际耗时迁移适用常量；保留业务断言、不盲增重试；更新Linux耗时证据并通过慢套件。",
+      "depends_on": []
+    },
+    {
+      "id": "E04",
+      "category": "engineering",
+      "priority": "P1",
+      "status": "implemented",
+      "title": "过时进度与债务账本清理",
+      "sources": [
+        "docs/implementation/backlog.md",
+        "docs/implementation/progress.md",
+        "docs/release/README.md",
+        "docs/implementation/capacity-baseline.md"
+      ],
+      "acceptance": "发布带来源的当前清单；历史待办标记为历史、不抹去失败；已关闭/已覆盖项有代码与运行证据；生成物和文档守卫通过。",
+      "depends_on": []
+    },
+    {
+      "id": "V01",
+      "category": "validation",
+      "priority": "P1",
+      "status": "waiting_dependencies",
+      "title": "固定候选三轮 Linux 回归",
+      "sources": [
+        "handoff.md",
+        ".github/workflows/ci.yml"
+      ],
+      "acceptance": "冻结同一SHA，所有适用检查通过且cosmetic/food三轮实际执行；记录每轮通过、失败、跳过和运行链接。PR13旧SHA单轮不能替代新候选三轮。",
+      "depends_on": [
+        "E01",
+        "E02"
+      ]
+    },
+    {
+      "id": "V02",
+      "category": "validation",
+      "priority": "P1",
+      "status": "running",
+      "title": "容量、旧结构升级与大库查询计划",
+      "sources": [
+        "docs/implementation/capacity-baseline.md",
+        ".github/workflows/nightly-capacity.yml"
+      ],
+      "acceptance": "完成medium升级/rehearsal、snapshot_upto旧结构、large-ci规模与大库计划/FTS检查；检查步骤真实结果而非工作流总绿灯；记录partial和达到规模。",
+      "depends_on": []
+    },
+    {
+      "id": "V03",
+      "category": "validation",
+      "priority": "P2",
+      "status": "open",
+      "title": "有节奏写入下 FTS 切换基准",
+      "sources": [
+        "scripts/bench-audit-toggle-under-write.mjs",
+        "docs/implementation/capacity-baseline.md"
+      ],
+      "acceptance": "在Linux隔离合成库重跑修正后的脚本；行数、链与索引完整性通过，记录负载参数、锁等待、p95与主机边界。",
+      "depends_on": [
+        "E02"
+      ]
+    },
+    {
+      "id": "V04",
+      "category": "validation",
+      "priority": "P1",
+      "status": "open",
+      "title": "候选流水线首跑与精确包验收",
+      "sources": [
+        "docs/release/README.md",
+        ".github/workflows/release-candidate.yml"
+      ],
+      "acceptance": "先dry_run再完整候选，核对每步/产物/哈希/未签名状态；全新目录安装与生产模式验收通过。只产artifact，不创建Release、不签名不部署。",
+      "depends_on": [
+        "E01",
+        "V01"
+      ]
+    },
+    {
+      "id": "V05",
+      "category": "validation",
+      "priority": "P2",
+      "status": "open",
+      "title": "30 分钟混合负载与增长趋势",
+      "sources": [
+        "handoff.md",
+        "docs/implementation/capacity-baseline.md"
+      ],
+      "acceptance": "定义可复现业务读写/备份/MCP混合负载，在Linux合成库运行至少30分钟；记录错误、账务不变量、WAL/内存增长和p95，性能结论只限被测环境。",
+      "depends_on": [
+        "V02"
+      ]
+    },
+    {
+      "id": "A01",
+      "category": "external",
+      "priority": "P1",
+      "status": "external_required",
+      "title": "来源与权属证明补齐",
+      "sources": [
+        "docs/implementation/backlog.md#商用整改跟踪",
+        "docs/PUBLICATION_HISTORY.md",
+        "THIRD_PARTY_NOTICES.md"
+      ],
+      "acceptance": "开发可核对SBOM/来源/许可清单；权利人、员工/外包及资源归属由持有人确认并留证。MIT声明不能代替该证据。",
+      "depends_on": []
+    },
+    {
+      "id": "A02",
+      "category": "external",
+      "priority": "P1",
+      "status": "external_required",
+      "title": "试点业务验收",
+      "sources": [
+        "handoff.md",
+        "docs/audit/GML_商用可行性源码审阅报告_2026-10-21.md"
+      ],
+      "acceptance": "按handoff业务链和试点清单以独立预期核对；业务负责人确认实际规则和结果。未经授权不读客户数据；合成回归不是客户签收。",
+      "depends_on": [
+        "V01",
+        "V04"
+      ]
+    },
+    {
+      "id": "A03",
+      "category": "external",
+      "priority": "P1",
+      "status": "external_required",
+      "title": "交付主机容量与恢复目标",
+      "sources": [
+        "handoff.md",
+        "docs/operations/restore-runbook.md",
+        "docs/implementation/capacity-baseline.md"
+      ],
+      "acceptance": "在确定的交付环境验证容量余量、异地恢复RPO/RTO与断电恢复范围；托管故障注入不冒充真实掉电。涉及生产/断电需单独授权。",
+      "depends_on": [
+        "V02",
+        "V04"
+      ]
+    },
+    {
+      "id": "A04",
+      "category": "external",
+      "priority": "P1",
+      "status": "external_required",
+      "title": "运维安全交接与校准",
+      "sources": [
+        "docs/operations/audit-integrity.md",
+        "docs/operations/monitoring.md",
+        "docs/release/README.md"
+      ],
+      "acceptance": "确认离机公钥信任/私钥保管和轮换、历史凭据处置、流量阈值校准；登记SSH临时文件清理失败处置。助手不生成真实签名身份、不改认证或生产配置。",
+      "depends_on": [
+        "V03",
+        "V05"
+      ]
+    }
+  ],
+  "covered": [
+    {
+      "item": "AH9动态配额/午夜用例",
+      "evidence": "tests/mcp-quota-paging.test.mjs:186,192,300：旧日游标拒绝、用量变化无重复、HTTP过期拒绝；非快照分页可能略过向前移动的条目是已声明语义"
+    },
+    {
+      "item": "AH10预览后成员变化",
+      "evidence": "tests/role-deactivate-preview.test.mjs:152,220：409 ROLE_IMPACT_CHANGED及人数/主角色变化负向；不等于任意并发写者穷尽证明"
+    },
+    {
+      "item": "AH1/AH6/AH7/AH11托管门禁",
+      "evidence": "PR13 HEAD4cbd1db CI40490320709：七必执行作业+dependency-review成功；当前main需自身结果"
+    },
+    {
+      "item": "旧scopeless/角色矩阵/权限、zod、供应链源等重复项",
+      "evidence": "progress.md第十四至十七批实现说明及对应测试；历史F01–F16不能累计当作16个现存代码缺陷"
+    },
+    {
+      "item": "nightly工作流不在main",
+      "evidence": "已在main；40477532158 success但upgrade/FTS可选步骤skipped，不能关闭V02"
+    }
+  ],
+  "boundaries": [
+    "credit_usage/over_credit_dealers：经销商无组织归属列，默认对受限用户隐藏；新增经销商归属模型需产品决定，不按当前缺陷实施。",
+    "SQLite单文件无法表级属主隔离；已有签名/离机锚点及威胁模型，不声称doctor能提供数据库管理员隔离。",
+    "真实支付/短信/外部WMS-OMS、多租户SaaS、自动AI写账不属于本轮第一版范围。",
+    "大陆网络安装时延、Windows或其他未选定交付平台属于环境特定验证，按实际交付范围再立项。"
+  ],
+  "runs": [
+    {
+      "id": 40515519569,
+      "sha": "98480e7cf93b01d56dafed6f2994cecdeb4a3d50",
+      "purpose": "main push CI",
+      "status": "in_progress"
+    },
+    {
+      "id": 40516882283,
+      "sha": "98480e7cf93b01d56dafed6f2994cecdeb4a3d50",
+      "purpose": "medium + rehearsal + snapshot_upto=58 + audit_fts=integrity-check",
+      "status": "queued"
+    }
+  ]
+}

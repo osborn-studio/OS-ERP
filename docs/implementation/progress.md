@@ -1,5 +1,8 @@
 # 开发进度
 
+> **当前入口（2026-10-27）**：原开发 PR 已收口（24 个已合并，#6 由 #14–#25 拆分替代）。请先看 [合并后收尾清单](closeout-2026-10-27.md) 与 [机器账本](closeout-tasks.json)。下文保留各批次历史快照；其中“未合并/未实跑/open”不代表当前状态，不可累加为现存缺陷。
+
+
 更新：2026-10-22。全新公开仓库：[osborn-studio/OS-ERP](https://github.com/osborn-studio/OS-ERP)，采用 MIT，仅导入清理后的当前文件快照。旧仓库保留为私有归档，其 PR/Actions/历史对象不导入本仓库。未发布正式 Release、未部署。来源及旧 checkout 使用限制见 [PUBLICATION_HISTORY](../PUBLICATION_HISTORY.md)，MIT 决策不替代第三方权属核验。
 
 ## 第十七批当前状态（2026-10-24，续接）

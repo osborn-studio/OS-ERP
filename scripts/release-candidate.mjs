@@ -38,7 +38,7 @@ import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { unzipSync } from 'fflate'
+import { readZipBounded, extractZipBytesSafe } from './lib/zip-safe.mjs'
 import { hashTestsTree, TESTS_TREE_FILE } from './lib/tests-tree.mjs'
 import { KEY_ENV, SIG_FILE, loadSigningKey, signEvidence } from './lib/evidence-sign.mjs'
 import { createPublicKey } from 'node:crypto'
@@ -125,17 +125,6 @@ function assertClean(when) {
   if (ignored.length) throw new Error(`Working tree is dirty ${when}: git-ignored files would be copied into the package (the packager copies whole directories):\n${ignored.slice(0, 10).join('\n')}`)
   const status = git('status', '--porcelain', '--untracked-files=all')
   if (status) throw new Error(`Working tree is dirty ${when}; commit or stash first (a candidate must be built from a clean, committed tree):\n${status.split('\n').slice(0, 10).join('\n')}`)
-}
-
-function extractZip(zipFile, dest) {
-  for (const [name, bytes] of Object.entries(unzipSync(new Uint8Array(fs.readFileSync(zipFile))))) {
-    if (name.endsWith('/')) continue
-    const rel = name.split('/').slice(1).join('/')
-    const target = path.resolve(dest, rel)
-    if (!rel || !target.startsWith(dest + path.sep)) throw new Error(`Unsafe archive entry: ${name}`)
-    fs.mkdirSync(path.dirname(target), { recursive: true })
-    fs.writeFileSync(target, bytes)
-  }
 }
 
 // 模式写成片段拼接，避免本文件自身被扫描命中。
@@ -262,16 +251,17 @@ function main() {
     if (git('rev-parse', 'HEAD') !== commit) throw new Error('HEAD moved during the build')
     const zips = fs.readdirSync(path.join(work, 'build')).filter(f => f.endsWith('.zip'))
     if (zips.length !== 1) throw new Error(`Expected exactly one archive from npm run release, found ${zips.length}`)
+    // Apply the same hard limits as verify-release before copying or hashing the archive in memory.
+    const builtZip = path.join(work, 'build', zips[0])
+    const pkg = path.join(work, 'pkg')
+    const zipBytes = readZipBounded(builtZip)
+    extractZipBytesSafe(zipBytes, pkg, {}, { strip: 1 })
     // 2. 以 RC 名落盘
     fs.mkdirSync(output, { recursive: true })
-    fs.copyFileSync(path.join(work, 'build', zips[0]), zipFile)
-    const zipBytes = fs.readFileSync(zipFile)
+    fs.writeFileSync(zipFile, zipBytes, { flag: 'wx' })
     const zipHash = sha256(zipBytes)
     fs.writeFileSync(`${zipFile}.sha256`, `${zipHash}  ${name}.zip\n`)
     // 3. 全新解压并校验清单
-    const pkg = path.join(work, 'pkg')
-    fs.mkdirSync(pkg)
-    extractZip(zipFile, pkg)
     const manifest = JSON.parse(fs.readFileSync(path.join(pkg, 'MANIFEST.json'), 'utf8'))
     if (manifest.baseCommit !== commit) throw new Error(`MANIFEST.baseCommit ${manifest.baseCommit} != HEAD ${commit}`)
     if (manifest.includesUncommittedFixes !== false) throw new Error('MANIFEST says the package includes uncommitted changes')

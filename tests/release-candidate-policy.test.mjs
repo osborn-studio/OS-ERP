@@ -64,6 +64,8 @@ test('candidate job builds with the documented flags, writes outside the checkou
   assert.match(code, /CAND_LOG=\$RUNNER_TEMP\//)
   assert.match(code, /verify-release\.mjs --evidence="[^"]+" --artifact="\$zip" --log="\$CAND_LOG"/)
   assert.ok(code.indexOf('release-candidate.mjs') < code.indexOf('verify-release.mjs'))
+  assert.match(code, /extractZipSafe\(process\.argv\[1\], process\.argv\[2\]\)/, 'workflow extraction shares the bounded ZIP reader')
+  assert.doesNotMatch(code, /unzip -q/, 'self-verification must not first extract without limits')
   assert.doesNotMatch(code, /GML_RELEASE_SIGN_KEY|secrets\./, 'hosted CI must not hold the signing key or secrets')
   // AF7 adds the SBOM-diff step as the second (and only other) holder of the read-only token
   assert.ok((code.match(/GH_TOKEN/g) ?? []).length === 2, 'the token is passed to exactly two steps (build + SBOM diff)')
