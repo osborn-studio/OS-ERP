@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync, readFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { percentile, summarize, startContender } from '../scripts/bench-api.mjs'
+import { percentile, summarize, startContender, parseArgs } from '../scripts/bench-api.mjs'
 
 test('contender startup is acknowledged while holding a real write lock; startup errors reject', async (t) => {
   const { default: Database } = await import('better-sqlite3')
@@ -91,12 +91,18 @@ test('shortest profile runs against a freshly seeded demo DB and emits the fixed
     })
     assert.equal(seed.status, 0, seed.stderr)
     const out = path.join(dir, 'result.json')
-    const r = run(['--concurrency', '2', '--iterations', '2', '--login-iterations', '2', '--out', out], { GML_RUNTIME_MODE: 'demo', GML_DATA_DIR: dir })
+    const timedOut = run(['--startup-timeout-ms', '1', '--out', path.join(dir, 'timed-out.json')], { GML_RUNTIME_MODE: 'demo', GML_DATA_DIR: dir })
+    assert.equal(timedOut.status, 1)
+    assert.match(timedOut.stderr, /BENCH_FAILURE:startup_timeout/)
+    assert.equal(existsSync(path.join(dir, 'timed-out.json')), false, 'failed readiness must not emit a successful benchmark report')
+    const r = run(['--startup-timeout-ms', '600000', '--concurrency', '2', '--iterations', '2', '--login-iterations', '2', '--out', out], { GML_RUNTIME_MODE: 'demo', GML_DATA_DIR: dir })
     assert.equal(r.status, 0, r.stdout + r.stderr)
     assert.ok(existsSync(out))
     const j = JSON.parse(readFileSync(out, 'utf8'))
     assert.deepEqual(Object.keys(j), ['schema_version', 'generated_at', 'scope_notice', 'host', 'config', 'endpoints', 'totals', 'sqlite_busy_count'])
     assert.equal(j.schema_version, 1)
+    assert.equal(j.config.startup_timeout_ms, 600000)
+    assert.ok(Number.isFinite(j.config.startup_wall_ms) && j.config.startup_wall_ms >= 0)
     assert.equal(j.endpoints.length, 10)
     assert.deepEqual(j.endpoints.map(e => e.name), ['login', 'dashboard_summary', 'purchase_order_list', 'purchase_order_detail', 'stock_query', 'receivable_receipt_list', 'report_operating', 'meta_health', 'order_center_overview', 'notify_meta'])
     for (const e of j.endpoints) {
@@ -110,4 +116,16 @@ test('shortest profile runs against a freshly seeded demo DB and emits the fixed
     assert.equal(j.sqlite_busy_count, 0)
     assert.match(j.scope_notice, /NOT a target-host/)
   } finally { rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('startup readiness budget is bounded and leaves request workload unchanged', () => {
+  assert.equal(parseArgs([]).startupTimeoutMs, 60000)
+  const extended = parseArgs(['--startup-timeout-ms', '600000'])
+  assert.equal(extended.startupTimeoutMs, 600000)
+  const { startupTimeoutMs, ...rest } = extended
+  const { startupTimeoutMs: original, ...defaults } = parseArgs([])
+  assert.deepEqual(rest, defaults)
+  for (const value of ['0', '-1', '600001', '1.5', 'Infinity', 'NaN', '']) {
+    assert.throws(() => parseArgs(['--startup-timeout-ms=' + value]), /startup-timeout-ms/)
+  }
 })

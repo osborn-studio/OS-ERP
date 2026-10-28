@@ -139,9 +139,11 @@ jobs:
           GML_BENCH_USER: synthadmin
         run: |
           set -uo pipefail
+          startup_ms=60000
+          if [ "$CAP_SCALE" = "large-ci" ]; then startup_ms=600000; fi
           cp -R "$CAP_RUN/bench-copy" "$CAP_RUN/write-copy" || exit 1
           GML_DATA_DIR="$CAP_RUN/write-copy" GML_BENCH_PASSWORD="$GML_PIPELINE_ADMIN_PASSWORD" \
-            node scripts/bench-api.mjs --profile=write --iterations 50 --concurrency 4 --max-error-rate 0 --out "$CAP_REPORTS/bench-write.json" > "$CAP_REPORTS/bench-write.log" 2>&1
+            node scripts/bench-api.mjs --profile=write --startup-timeout-ms "$startup_ms" --iterations 50 --concurrency 4 --max-error-rate 0 --out "$CAP_REPORTS/bench-write.json" > "$CAP_REPORTS/bench-write.log" 2>&1
           rc=$?
           [ "$rc" -eq 0 ] || echo "::error::bench write profile exited with code $rc (raw output withheld)"
           exit "$rc"

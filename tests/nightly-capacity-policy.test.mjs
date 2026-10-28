@@ -201,3 +201,27 @@ test('AC8: summary shows scale large-ci, partial, partial_reason and reached; ho
   assert.equal(none.partial_reason, null)
   assert.equal(none.reached, null)
 })
+
+test('failed steps expose only numeric exit codes and fixed failure classes', () => {
+  const p = {ok:false, steps:{bench_api:{ok:false,status:1,wall_ms:60273,failure_kind:'startup_timeout'}, hostile:{ok:false,status:'/private/secret',failure_kind:'secret'}, unknown:{status:Infinity,failure_kind:'unclassified'}}}
+  const {summary, failures} = buildSummary(p, null)
+  assert.equal(summary.steps[0].exit_code, 1)
+  assert.equal(summary.steps[0].failure_kind, 'startup_timeout')
+  assert.equal(summary.steps[1].exit_code, null)
+  assert.equal(summary.steps[1].failure_kind, null)
+  assert.equal(summary.steps[2].exit_code, null)
+  assert.equal(summary.steps[2].failure_kind, 'unclassified')
+  assert.ok(failures.includes('pipeline_step_failed'))
+  assert.equal(summary.verdict, 'FAIL')
+  assert.ok(!JSON.stringify(summary).includes('secret'))
+})
+
+test('startup measurements expose only finite numbers and large-ci alone extends readiness', () => {
+  const { summary } = buildSummary({ steps: { bench_api: { config: { startup_timeout_ms: 600000, startup_wall_ms: 1234 } } } }, { config: { startup_timeout_ms: '/private/secret', startup_wall_ms: Infinity } })
+  assert.equal(summary.bench_read.startup_timeout_ms, 600000)
+  assert.equal(summary.bench_read.startup_wall_ms, 1234)
+  assert.equal(summary.bench_write.startup_timeout_ms, null)
+  assert.equal(summary.bench_write.startup_wall_ms, null)
+  assert.match(code, /if \[ "\$CAP_SCALE" = "large-ci" \]; then startup_ms=600000; fi/)
+  assert.match(read('scripts/synth-pipeline.mjs'), /o.profile === 'large-ci' \? 600000 : 60000/)
+})

@@ -48,7 +48,7 @@ export function buildSummary(pipeline, write, { scale = null, sha = null } = {})
   if (!p) failures.push('pipeline_report_missing')
   else if (p.ok !== true) failures.push('pipeline_step_failed')
 
-  const stepList = Object.keys(steps).slice(0, 20).map((k) => ({ step: name(k), ok: bool(steps[k]?.ok), wall_ms: num(steps[k]?.wall_ms) }))
+  const stepList = Object.keys(steps).slice(0, 20).map((k) => ({ step: name(k), ok: bool(steps[k]?.ok), wall_ms: num(steps[k]?.wall_ms), exit_code: num(steps[k]?.status ?? steps[k]?.exit), failure_kind: ['startup_timeout', 'startup_exit', 'unclassified'].includes(steps[k]?.failure_kind) ? steps[k].failure_kind : null }))
   const ea = steps.explain_audit
   const violationCount = num(ea?.violations)
   if (p && ea == null) failures.push('explain_audit_missing')
@@ -84,8 +84,9 @@ export function buildSummary(pipeline, write, { scale = null, sha = null } = {})
     dataset: { table_counts: Object.fromEntries(Object.entries(p?.dataset?.table_counts && typeof p.dataset.table_counts === 'object' ? p.dataset.table_counts : {}).slice(0, 60).map(([k, v]) => [name(k), num(v)])), db_bytes: num(p?.dataset?.db_bytes), invariants_ok: bool(p?.dataset?.invariants_ok) },
     steps: stepList,
     explain_audit: { statements: num(ea?.statements), violations: violationCount, unused_allow: num(ea?.unused_allow), violation_statement_ids: violationIds },
-    bench_read: { totals: { requests: num(br?.totals?.requests), errors: readErrors, error_rate: num(br?.totals?.error_rate), wall_seconds: num(br?.totals?.wall_seconds), throughput_rps: num(br?.totals?.throughput_rps) }, sqlite_busy_count: num(br?.sqlite_busy_count), endpoints: reduceBenchEndpoints(br?.endpoints) },
+    bench_read: { startup_timeout_ms: num(br?.config?.startup_timeout_ms), startup_wall_ms: num(br?.config?.startup_wall_ms), totals: { requests: num(br?.totals?.requests), errors: readErrors, error_rate: num(br?.totals?.error_rate), wall_seconds: num(br?.totals?.wall_seconds), throughput_rps: num(br?.totals?.throughput_rps) }, sqlite_busy_count: num(br?.sqlite_busy_count), endpoints: reduceBenchEndpoints(br?.endpoints) },
     bench_write: {
+      startup_timeout_ms: num(w?.config?.startup_timeout_ms), startup_wall_ms: num(w?.config?.startup_wall_ms),
       totals: { requests: num(w?.totals?.requests), errors: wErrors, error_rate: num(w?.totals?.error_rate), wall_seconds: num(w?.totals?.wall_seconds), throughput_rps: num(w?.totals?.throughput_rps) },
       integrity_ok: bool(w?.integrity?.ok),
       contention: { server_busy_log_lines: num(w?.contention?.server_busy_log_lines), write_retry_log_lines: num(w?.contention?.write_retry_log_lines), write_retry_exhausted_log_lines: num(w?.contention?.write_retry_exhausted_log_lines) },
