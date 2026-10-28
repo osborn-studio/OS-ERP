@@ -23,3 +23,11 @@ test('preflight guards reject other hosts, SHAs and existing or relative output'
 })
 
 test('a silent mid-run gap fails even when early and late requests succeeded',()=>{const r=good();r.operations.read.max_success_gap_ms=300001;assert.equal(verdict(r),false)})
+
+test('workflow resolves runner paths inside execution steps, not job-level env',async()=>{
+ const fs=await import('node:fs')
+ const y=fs.readFileSync(new URL('../.github/workflows/nightly-capacity.yml',import.meta.url),'utf8').split('\n  mixed-soak:')[1]
+ assert.doesNotMatch(y.split('    steps:')[0],/runner\.temp/)
+ assert.match(y,/export SOAK_OUTPUT="\$RUNNER_TEMP\/soak-evidence\.json"/)
+ assert.match(y,/ref: \$\{\{ github.sha \}\}/)
+})
