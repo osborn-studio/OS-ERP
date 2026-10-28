@@ -23,3 +23,11 @@ YAML parsed with Ruby; all run blocks pass bash syntax checks; sanitizer positiv
 Run 40610934626 found the same standalone-return oracle failure as V01, plus missing version comments on the FTS job's pinned Actions and a legacy single-upload assertion. The reviewed PR30 test-only oracle correction is included unchanged. The workflow now carries the same version comments as the capacity job; the policy requires exactly one upload per job and the exact capacity-summary/FTS-evidence paths, without globs or raw databases/logs.
 
 Node22 policy 16/16 and file-header 4/4 pass; metrics correction previously passed its full file 30/30 and fixed-UTC reproduction 10/10. Claude CLI `claude-haiku-5-5` tools-disabled review returned `is_error=false`, verified canonical model, no confirmed blockers. These are development checks; the updated PR HEAD still needs Linux CI. V03's already successful explicit-source benchmark is retained and not rerun. No PR has been merged by this task.
+
+## PR29 sync after PR30 merge
+
+Merged main `3d55724e534f07bc3e341dc35daea2a99d54f6d5` into PR29's `feb025aa25d27fed8f060e8398ef3a921837abae` with a normal merge. The sole add/add conflict was metrics-validation-review.md: main's version was a strict extension of the common audit and is preserved exactly, including the aggregate budget and CSRF fixture records. CI workflow and security-header tests merged automatically and match main exactly. No product logic was manually changed.
+
+Node22 affected checks: 39 entries, 38 pass, 0 fail, 1 skipped because dist was not built; headers 4/4 and diff checks passed. This is development evidence only. New PR HEAD hosted CI remains pending; prior PR29 and PR30 green runs cannot replace it. Three-round integrated acceptance remains a separate requirement. No PR merge or deployment performed.
+
+Two specified text-only Claude CLI Haiku 5.5 reviews validated is_error=false and canonicalModel. After supplying current hosted evidence and distinguishing branch synchronization from PR merge approval, the final review found no confirmed code or merge-resolution defect preventing the push. Hosted verification remains pending. Raw reviews: pr29-sync-haiku*.json in the osstack workspace.
