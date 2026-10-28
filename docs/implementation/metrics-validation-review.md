@@ -15,3 +15,11 @@ Three deterministic fixtures add standalone in-scope 10000, out-of-scope 100000 
 Explicit Claude CLI `claude-haiku-5-5`, tools disabled: `is_error=false`, canonicalModel verified, no confirmed blockers. Review confirmed SQL equivalence and requested that numerical evidence from different runs be distinguished; addressed above. Optional insert-status simplification and raw-vs-rounded denominator cleanup were not part of this narrowly diagnosed fix. No tolerance/retry/time-budget relaxation.
 
 Local Node22 full metrics permissions file: 30/30 pass, 0 fail/skip. Metrics scope guard: 25 definitions, 0 issues; file headers4/4; diff check. Additional fixed-UTC diagnostic rerun is recorded in the osstack workspace. Local results are development evidence only. A new exact-source Linux three-round run must pass before V01 is accepted. PR29 must not be merged automatically; no production, release or authentication change is authorized.
+
+## Three-round aggregate job budget
+
+Run40614529636 on ff3ed2a passed all prerequisite jobs and completed round1, then was cancelled during round2. GitHub check122585977574 explicitly reports: `The job has exceeded the maximum execution time of 2h0m0s`. The regression job ran02:00:09–04:00:29 UTC; it was not a failed assertion.
+
+Only a manual dispatch with rounds exactly3 now receives355 minutes aggregate job time; single-round events retain120. All test deadlines, round contents and failure gates remain unchanged. This does not claim that355 minutes has been empirically validated; the new three-round run must finish. Other manually supplied round counts remain outside this targeted change.
+
+Node22 relevant CI policies39/39 and diff checks passed. Two tools-disabled Claude CLI Haiku5.5 reviews verified is_error=false/canonicalModel. The first review's job-identity concern was resolved with the complete regression block; the second retains hosted execution and budget sufficiency as validation requirements. Exact GitHub timeout annotation subsequently confirms cancellation cause. No completed three-round acceptance is claimed.
