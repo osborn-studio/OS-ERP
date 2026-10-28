@@ -1,0 +1,7 @@
+# Large-ci failure diagnostics
+
+Run 40610467723 on main a2d0b3826320e4e06e992a478c2385188cfd19ee reached 100000 SKUs, 100000 documents and 1000000 transactions with partial=false and dataset invariants true. Plain/encrypted backups and restore drills succeeded; explain-audit checked 120 statements with zero violations. bench_prewarm succeeded in 259240ms; bench_api failed after 60273ms without its report. Write benchmark and optional upgrade/FTS steps did not execute. This is not successful capacity acceptance.
+
+The timing suggests the 60-second server readiness deadline, but the public summary discarded the failure detail, so the cause is unconfirmed. This change emits fixed startup_timeout/startup_exit markers, carries an allowlisted failure classification and finite numeric exit code into the sanitized summary. It changes no timeouts, retries, product behavior or success gates. Raw logs/reports remain disposable and are not uploaded. An instrumented hosted run is needed before a root-cause fix.
+
+Node22 nightly-capacity-policy passed 17/17 (16 pre-existing plus one new malicious-value/finite-number test); file-header4/4, syntax and diff checks passed. Exact Claude CLI Haiku5.5 tools-disabled review returned is_error=false and canonicalModel=claude-haiku-5-5, no confirmed blockers. Reviewer caveats were checked: num() excludes strings/nonfinite values, raw report is withheld, and the 17 count is correct for this main-based branch. PR30's reviewed metrics oracle correction is carried unchanged to avoid the already-known CI failure. No PR is merged.

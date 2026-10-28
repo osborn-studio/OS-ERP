@@ -190,7 +190,10 @@ export async function runBench(argv = process.argv.slice(2), env = process.env) 
   const stop = async () => { if (child.exitCode === null) child.kill('SIGTERM'); await closed }
   try {
     for (let i = 0; i < 1200 && !ready && child.exitCode === null; i++) await new Promise(r => setTimeout(r, 50))
-    if (!ready) refuse(`服务未能启动：${tail.slice(-400)}`, 1)
+    if (!ready) {
+      console.error(child.exitCode === null && child.signalCode === null ? 'BENCH_FAILURE:startup_timeout' : 'BENCH_FAILURE:startup_exit')
+      refuse(`服务未能启动：${tail.slice(-400)}`, 1)
+    }
     const base = `http://127.0.0.1:${port}`
     const call = async (method, route, token, body) => {
       if (child.exitCode !== null) throw Object.assign(new Error('服务子进程已退出，停止发送请求'), { fatal: true })

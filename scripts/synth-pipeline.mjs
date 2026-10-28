@@ -106,7 +106,7 @@ export async function runPipeline(o) {
     host: { platform: process.platform, arch: process.arch, cpus: os.cpus().length, cpu_model: os.cpus()[0]?.model ?? null, total_mem_mb: Math.round(os.totalmem() / 1048576), node: process.version, loadavg_start: os.loadavg().map((n) => Math.round(n * 100) / 100) },
     steps: {}, ok: true
   }
-  const fail = (name, s) => { report.ok = false; report.steps[name] = { ok: false, status: s.status, wall_ms: s.wall_ms, stderr_tail: s.stderr.slice(-800) } }
+  const fail = (name, s) => { report.ok = false; report.steps[name] = { ok: false, status: s.status, wall_ms: s.wall_ms, failure_kind: /^BENCH_FAILURE:(startup_timeout|startup_exit)$/m.exec(s.stderr)?.[1] ?? 'unclassified', stderr_tail: s.stderr.slice(-800) } }
 
   // ① 生成
   const gArgs = ['scripts/synth-data.mjs', '--quiet', '--out', path.join(o.dir, 'synth-summary.json')]

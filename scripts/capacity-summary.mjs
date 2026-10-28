@@ -48,7 +48,7 @@ export function buildSummary(pipeline, write, { scale = null, sha = null } = {})
   if (!p) failures.push('pipeline_report_missing')
   else if (p.ok !== true) failures.push('pipeline_step_failed')
 
-  const stepList = Object.keys(steps).slice(0, 20).map((k) => ({ step: name(k), ok: bool(steps[k]?.ok), wall_ms: num(steps[k]?.wall_ms) }))
+  const stepList = Object.keys(steps).slice(0, 20).map((k) => ({ step: name(k), ok: bool(steps[k]?.ok), wall_ms: num(steps[k]?.wall_ms), exit_code: num(steps[k]?.status ?? steps[k]?.exit), failure_kind: ['startup_timeout', 'startup_exit', 'unclassified'].includes(steps[k]?.failure_kind) ? steps[k].failure_kind : null }))
   const ea = steps.explain_audit
   const violationCount = num(ea?.violations)
   if (p && ea == null) failures.push('explain_audit_missing')
