@@ -225,7 +225,8 @@ jobs:
     needs: [checks, slow-tests]
     if: ${{ always() }}
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    # Three sequential manual rounds need more time than a single round.
+    timeout-minutes: ${{ github.event_name == 'workflow_dispatch' && inputs.rounds == '3' && 355 || 120 }}
     env:
       GML_VERIFY_PLATFORM: linux
     steps:
