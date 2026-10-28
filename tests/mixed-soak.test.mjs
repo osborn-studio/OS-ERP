@@ -60,3 +60,10 @@ test('production boot preserves synthetic business invariants',async()=>{
   execFileSync(process.execPath,['--input-type=module','-e',`import assert from 'node:assert/strict';import Database from 'better-sqlite3';import {verifyInvariants} from './scripts/synth-data.mjs';import {bootAll} from './server/db/production-boot.js';const db=new Database(process.env.GML_DATA_DIR+'/gml_cosmetic.db');assert.equal((await verifyInvariants(db)).ok,true);bootAll();assert.equal((await verifyInvariants(db)).ok,true);process.exit(0)`],{env,stdio:'ignore',timeout:120000})
  }finally{fs.rmSync(dir,{recursive:true,force:true})}
 })
+
+test('request diagnostics never expose response text or unknown codes',async()=>{
+ const {requestDiagnostic}=await import('../scripts/mixed-soak.mjs')
+ assert.deepEqual(requestDiagnostic(503,{error:'FEATURE_DISABLED',message:'secret'}),{status:503,code:'FEATURE_DISABLED'})
+ assert.deepEqual(requestDiagnostic(500,{error:'/private/path',code:'credential'}),{status:500,code:'request_failed'})
+ assert.deepEqual(requestDiagnostic('secret',{error:{data:{code:'SQLITE_BUSY'}}}),{status:null,code:'SQLITE_BUSY'})
+})

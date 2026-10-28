@@ -27,8 +27,13 @@ export function verdict(r) {
 const children=new Set()
 let aborter
 const sleep=ms=>delay(ms,undefined,{signal:aborter?.signal})
-const FAILURE_CODES=new Set(['linux_required','source_sha_mismatch','fresh_absolute_output_required','seed_incomplete','seed_classification_invalid','seed_copy_incomplete','baseline_invariants_failed','startup_failed','login_failed','worker_failed','sampling_failed','child_command_failed','soak_failed','cancelled'])
+const FAILURE_CODES=new Set(['linux_required','source_sha_mismatch','fresh_absolute_output_required','seed_incomplete','seed_classification_invalid','seed_copy_incomplete','baseline_invariants_failed','mcp_preflight_failed','startup_failed','login_failed','worker_failed','sampling_failed','child_command_failed','soak_failed','cancelled'])
 export const failureCode=e=>FAILURE_CODES.has(e?.message)?e.message:'unexpected_error'
+export function requestDiagnostic(status, body) {
+  const allowed=new Set(['FEATURE_DISABLED','MCP_RATE_LIMITED','TOKEN_RATE_LIMITED','TOKEN_INVALID','TOKEN_OWNER_PERM_DENIED','SQLITE_BUSY','SQLITE_BUSY_SNAPSHOT'])
+  const code=[body?.error,body?.code,body?.error?.data?.code,body?.detail?.code].find(x=>typeof x==='string' && allowed.has(x))
+  return {status:Number.isInteger(status)&&status>=100&&status<=599?status:null,code:code||'request_failed'}
+}
 export function validatePreflight(platform,source,expected,output,exists){
   if(platform!=='linux')throw Error('linux_required')
   if(source!==expected || !/^[a-f0-9]{40}$/.test(source))throw Error('source_sha_mismatch')
@@ -57,7 +62,7 @@ export async function run() {
   let server, closed, db
   let stopping = false, cancelRequested = false
   const r = { schema:1, source_sha:source, harness_sha: /^[a-f0-9]{40}$/.test(process.env.SOAK_HARNESS_SHA||'')?process.env.SOAK_HARNESS_SHA:null, harness_sha256:createHash('sha256').update(fs.readFileSync(fileURLToPath(import.meta.url))).digest('hex'), duration_target_ms:1800000, elapsed_ms:0, invariants:false, write_integrity:false,
-    operations:Object.fromEntries(['read','write','mcp','backup'].map(k=>[k,{success:0,errors:0,max_success_gap_ms:0,first_success_ms:null,last_success_ms:null,latency_ms:[]} ])), samples:[], ok:false }
+    operations:Object.fromEntries(['read','write','mcp','backup'].map(k=>[k,{success:0,errors:0,max_success_gap_ms:0,first_success_ms:null,last_success_ms:null,error_counts:{},latency_ms:[]} ])), samples:[], ok:false }
   const cancel=()=>{cancelRequested=true;stopping=true;aborter.abort();for(const child of children)child.kill('SIGKILL');if(server)server.kill('SIGKILL')}
   process.on('SIGINT',cancel);process.on('SIGTERM',cancel)
   try {
@@ -100,8 +105,9 @@ export async function run() {
     const call=async(route,token,body)=>{
       if(server.exitCode!==null || server.signalCode!==null) throw Error('server_exit')
       const res=await fetch(`http://127.0.0.1:${port}${route}`,{method:body?'POST':'GET',headers:{'content-type':'application/json',...(token?{authorization:`Bearer ${token}`}:{})},...(body?{body:JSON.stringify(body)}:{}),signal:AbortSignal.timeout(30000)})
-      const b=await res.json()
-      if(!res.ok || b.success===false || b.error || b.result?.isError)throw Error('request_failed')
+      let b
+      try { b=await res.json() } catch { throw Object.assign(Error('request_failed'),{diagnostic:requestDiagnostic(res.status,null)}) }
+      if(!res.ok || b.success===false || b.error || b.result?.isError)throw Object.assign(Error('request_failed'),{diagnostic:requestDiagnostic(res.status,b)})
       return b
     }
     const login=await call('/api/auth/login',null,{username:'synthadmin',password,industry:'cosmetic'})
@@ -111,9 +117,12 @@ export async function run() {
     r.dataset={pre_boot:preBoot,synthetic_copy:true,runtime_mode:'production',skus:db.prepare('SELECT COUNT(*) n FROM product_skus').get().n,txns:db.prepare('SELECT COUNT(*) n FROM inventory_transactions').get().n}
 
     r.dataset.overlay_delta={skus:r.dataset.skus-preBoot.skus,txns:r.dataset.txns-preBoot.txns}
+    r.phase='preflight'
+    try { await call('/mcp',agent,{jsonrpc:'2.0',id:0,method:'tools/call',params:{name:'inventory.query_stock',arguments:{limit:5}}}) }
+    catch(e){r.preflight_error=e.diagnostic||{status:null,code:'request_failed'};throw Error('mcp_preflight_failed')}
     r.phase='workload'
     const started=performance.now(), deadline=started+1800000
-    const task=async(name,fn,interval)=>{while(!stopping && performance.now()<deadline){const t=performance.now();try{await fn();r.operations[name].success++;const ms=Math.round(performance.now()-started);r.operations[name].max_success_gap_ms=Math.max(r.operations[name].max_success_gap_ms,ms-(r.operations[name].last_success_ms??0));r.operations[name].first_success_ms ??= ms;r.operations[name].last_success_ms=ms}catch{r.operations[name].errors++}r.operations[name].latency_ms.push(performance.now()-t);await sleep(Math.min(interval,Math.max(0,deadline-performance.now())))}}
+    const task=async(name,fn,interval)=>{while(!stopping && performance.now()<deadline){const t=performance.now();try{await fn();r.operations[name].success++;const ms=Math.round(performance.now()-started);r.operations[name].max_success_gap_ms=Math.max(r.operations[name].max_success_gap_ms,ms-(r.operations[name].last_success_ms??0));r.operations[name].first_success_ms ??= ms;r.operations[name].last_success_ms=ms}catch(e){r.operations[name].errors++;const d=e.diagnostic||{status:null,code:'request_failed'};const key=String(d.status)+':'+d.code;r.operations[name].error_counts[key]=(r.operations[name].error_counts[key]||0)+1}r.operations[name].latency_ms.push(performance.now()-t);await sleep(Math.min(interval,Math.max(0,deadline-performance.now())))}}
     let rpc=0
     const sampler=async()=>{try { while(!stopping && performance.now()<deadline){const status=fs.readFileSync(`/proc/${server.pid}/status`,'utf8');const rss=Number(status.match(/^VmRSS:\s+(\d+)/m)?.[1]);if(!Number.isFinite(rss))throw Error('rss_unavailable');r.samples.push({elapsed_ms:Math.round(performance.now()-started),rss_bytes:rss*1024,wal_bytes:fs.existsSync(dbPath+'-wal')?fs.statSync(dbPath+'-wal').size:0});await sleep(Math.min(30000,Math.max(0,deadline-performance.now())))}} catch { stopping=true; throw Error('sampling_failed') }}
     const outcomes = await Promise.allSettled([
