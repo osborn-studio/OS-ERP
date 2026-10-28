@@ -31,3 +31,21 @@ test('workflow resolves runner paths inside execution steps, not job-level env',
  assert.match(y,/export SOAK_OUTPUT="\$RUNNER_TEMP\/soak-evidence\.json"/)
  assert.match(y,/ref: \$\{\{ github.sha \}\}/)
 })
+
+test('production seed is rejected by test boot; only a disposable copy is reclassified',async()=>{
+ const {default:Database}=await import('better-sqlite3')
+ const fs=await import('node:fs'),os=await import('node:os'),path=await import('node:path')
+ const {classifyEmptyDatabase,assertDatabaseMode}=await import('../server/db/runtime-policy.js')
+ const {classifySoakCopy}=await import('../scripts/mixed-soak.mjs')
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'soak-mode-test-'))
+ let source,copy
+ try {
+  source=new Database(path.join(dir,'source.db'));classifyEmptyDatabase(source,'production');source.close();source=null
+  fs.copyFileSync(path.join(dir,'source.db'),path.join(dir,'copy.db'))
+  copy=new Database(path.join(dir,'copy.db'))
+  assert.throws(()=>assertDatabaseMode(copy,'test'),{code:'DATABASE_MODE_MISMATCH'})
+  classifySoakCopy(copy);assert.doesNotThrow(()=>assertDatabaseMode(copy,'test'))
+  assert.throws(()=>classifySoakCopy(copy),/seed_classification_invalid/)
+  source=new Database(path.join(dir,'source.db'),{readonly:true});assert.doesNotThrow(()=>assertDatabaseMode(source,'production'))
+ } finally {source?.close();copy?.close();fs.rmSync(dir,{recursive:true,force:true})}
+})

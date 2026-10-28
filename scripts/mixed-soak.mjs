@@ -27,7 +27,7 @@ export function verdict(r) {
 const children=new Set()
 let aborter
 const sleep=ms=>delay(ms,undefined,{signal:aborter?.signal})
-const FAILURE_CODES=new Set(['linux_required','source_sha_mismatch','fresh_absolute_output_required','seed_incomplete','startup_failed','login_failed','worker_failed','sampling_failed','child_command_failed','soak_failed','cancelled'])
+const FAILURE_CODES=new Set(['linux_required','source_sha_mismatch','fresh_absolute_output_required','seed_incomplete','seed_classification_invalid','seed_copy_incomplete','baseline_invariants_failed','startup_failed','login_failed','worker_failed','sampling_failed','child_command_failed','soak_failed','cancelled'])
 export const failureCode=e=>FAILURE_CODES.has(e?.message)?e.message:'unexpected_error'
 export function validatePreflight(platform,source,expected,output,exists){
   if(platform!=='linux')throw Error('linux_required')
@@ -41,13 +41,17 @@ async function command(args, env, timeout = 1200000) {
   try { const [code] = await once(child, 'close'); if (code !== 0) throw Error('child_command_failed') }
   finally { clearTimeout(timer);children.delete(child) }
 }
+export function classifySoakCopy(db) {
+  if(db.prepare('SELECT mode FROM os_egp_runtime WHERE id=1').get()?.mode!=='production')throw Error('seed_classification_invalid')
+  db.prepare("UPDATE os_egp_runtime SET mode='test' WHERE id=1").run()
+}
 export async function run() {
   const source = execFileSync('git', ['rev-parse','HEAD'], { cwd: ROOT, encoding:'utf8' }).trim()
   const output = process.env.SOAK_OUTPUT
   validatePreflight(process.platform,source,process.env.SOAK_SOURCE_SHA,output,output && fs.existsSync(output))
   aborter=new AbortController()
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'os-erp-soak-'))
-  const data = path.join(dir, 'data')
+  let data = path.join(dir, 'data')
   const password = randomBytes(24).toString('hex')
   const env = { PATH:process.env.PATH, HOME:dir, TMPDIR:dir, GML_DATA_DIR:data, GML_DB:'', GML_RUNTIME_MODE:'production', GML_SYNTH_ADMIN_PASSWORD:password }
   let server, closed, db
@@ -62,6 +66,13 @@ export async function run() {
     const seed=JSON.parse(fs.readFileSync(path.join(dir,'seed.json')))
     if(seed.partial || seed.invariants?.ok !== true || seed.reached.skus < 10000 || seed.reached.txns < 100000) throw Error('seed_incomplete')
     r.seed={skus:seed.reached.skus,docs:seed.reached.docs,txns:seed.reached.txns}
+    // Like synth-pipeline: only a newly owned copy may become test-classified.
+    // Production gating stays unchanged; test boot adds a demo overlay, measured below.
+    const benchData=path.join(dir,'bench-copy');fs.mkdirSync(benchData,{mode:0o700})
+    const sourceWal=path.join(data,'gml_cosmetic.db-wal')
+    if(fs.existsSync(sourceWal) && fs.statSync(sourceWal).size>0)throw Error('seed_copy_incomplete')
+    fs.copyFileSync(path.join(data,'gml_cosmetic.db'),path.join(benchData,'gml_cosmetic.db'))
+    data=benchData;env.GML_DATA_DIR=data
     // Imports happen only after the owned instance environment is fixed.
     Object.assign(process.env,{GML_DATA_DIR:data,GML_DB:'',GML_RUNTIME_MODE:'test'})
     const {default:Database}=await import('better-sqlite3')
@@ -69,11 +80,14 @@ export async function run() {
     const {verifyInvariants}=await import('./synth-data.mjs')
     const dbPath=path.join(data,'gml_cosmetic.db')
     db=new Database(dbPath); db.pragma('busy_timeout=5000')
+    const preBoot={skus:db.prepare('SELECT COUNT(*) n FROM product_skus').get().n,txns:db.prepare('SELECT COUNT(*) n FROM inventory_transactions').get().n}
+    if(preBoot.skus!==seed.reached.skus || preBoot.txns!==seed.reached.txns)throw Error('seed_copy_incomplete')
+    classifySoakCopy(db)
     const owner=db.prepare("SELECT id FROM users WHERE username='synthadmin'").get()
     const agent=createToken(db,{name:'synthetic-soak',ownerUserId:owner.id,industry:'cosmetic',scopes:'read',allowTools:'inventory.query_stock'}).token
     const target=db.prepare('SELECT warehouse_id,sku_id,batch_no FROM inventory_stocks WHERE qty_on_hand>0 ORDER BY id LIMIT 1').get()
     const stock=()=>db.prepare('SELECT SUM(qty_on_hand) q FROM inventory_stocks WHERE warehouse_id=? AND sku_id=? AND batch_no=?').get(target.warehouse_id,target.sku_id,target.batch_no).q
-    const before=stock()
+    let before
     const marker='soak-'+randomBytes(8).toString('hex')
     const probe=net.createServer();probe.listen(0,'127.0.0.1');await once(probe,'listening');const port=probe.address().port;await new Promise(resolve=>probe.close(resolve))
     r.phase='startup'
@@ -93,6 +107,11 @@ export async function run() {
     }
     const login=await call('/api/auth/login',null,{username:'synthadmin',password,industry:'cosmetic'})
     const token=login.data?.token;if(!token)throw Error('login_failed')
+    if(!(await verifyInvariants(db)).ok)throw Error('baseline_invariants_failed')
+    before=stock()
+    r.dataset={pre_boot:preBoot,test_copy:true,demo_overlay:true,skus:db.prepare('SELECT COUNT(*) n FROM product_skus').get().n,txns:db.prepare('SELECT COUNT(*) n FROM inventory_transactions').get().n}
+
+    r.dataset.overlay_delta={skus:r.dataset.skus-preBoot.skus,txns:r.dataset.txns-preBoot.txns}
     r.phase='workload'
     const started=performance.now(), deadline=started+1800000
     const task=async(name,fn,interval)=>{while(!stopping && performance.now()<deadline){const t=performance.now();try{await fn();r.operations[name].success++;const ms=Math.round(performance.now()-started);r.operations[name].max_success_gap_ms=Math.max(r.operations[name].max_success_gap_ms,ms-(r.operations[name].last_success_ms??0));r.operations[name].first_success_ms ??= ms;r.operations[name].last_success_ms=ms}catch{r.operations[name].errors++}r.operations[name].latency_ms.push(performance.now()-t);await sleep(Math.min(interval,Math.max(0,deadline-performance.now())))}}
