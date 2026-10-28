@@ -1,0 +1,13 @@
+# V05 synthetic mixed-load validation
+
+The nightly-capacity manual `mixed_soak_only=true` entry requires an exact 40-character `validation_sha`. It checks out that application source separately and overlays only the reviewed soak harness from the workflow revision. Record both revisions; no release, tag or deployment is created.
+
+The harness owns a new temporary directory, generates 10,000 SKU / 10,000 documents / at least 100,000 inventory transactions with seed 20261028, and refuses partial or invalid seed output. One loopback server and one database stay alive for the full measured 1,800 seconds (generation and boot excluded). Concurrent workers issue stock-list HTTP reads, inventory adjustment writes, delegated read-only MCP stock queries, and online backups (retaining two). This is one writer and paced synthetic traffic, not a claim of ten-user or production capacity.
+
+Evidence contains successful/error operation counts, p50/p95/p99, server RSS and WAL samples every 30 seconds, initial scale, startup duration, inventory/net-transaction and credit-ledger invariants, and acknowledged writes versus committed adjustment rows/quantity. Zero errors and nonzero work in every stream, at least six backups, at least 30 samples, and at least 30 measured minutes are required. Latency and growth are measured trends; no unapproved capacity SLA is implied. Only the fixed summary is uploaded; no credentials, databases or raw logs are artifacts. The local Mac runs only Node checks; the workload itself refuses non-Linux execution.
+
+Status: implementation under review; no hosted V05 acceptance yet. Common-source integration of earlier V01–V04 evidence remains separate.
+
+Development verification: Node22 policy/gate tests23/23, header4/4, JavaScript syntax, YAML parse and diff whitespace checks passed. First Haiku5.5 review identified lifecycle, preflight and traceability gaps; fixes added nested cleanup, cancellation abort/owned-child termination, allowlisted failure codes, guard tests, pinned harness SHA/file hash, and minimum27-minute successful activity span for each stream. Hosted source will be main bea2d2d46775618ec128a500c329024047f9d5f9 (PR31 externally merged; identical tree to602d4c7). No agent merge performed.
+
+Final independent review: three Claude CLI calls used claude-haiku-5-5 with is_error=false and verified canonicalModel. Final report: no confirmed blockers. The second review added distinct cancellation diagnostics and a maximum300s successful-activity gap (including beginning/end) per stream. Workflow also requires a clean source checkout immediately before the single harness overlay. Raw reviews: soak-haiku*.json in the management workspace, not public artifacts.
