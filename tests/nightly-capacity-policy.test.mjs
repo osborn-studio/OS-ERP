@@ -66,9 +66,21 @@ test('scale input is matched against a fixed list through an env var and never i
   assert.match(code, /\*\)\s*echo '::error::unknown scale'; exit 1/)
 })
 
-test('uploads exactly one file: the allowlisted summary JSON', () => {
+test('each job uploads exactly its own allowlisted evidence file', () => {
   const uploads = [...code.matchAll(/uses:\s*actions\/upload-artifact@[\s\S]*?(?=^\s+- |(?![\s\S]))/gm)].map(m => m[0])
-  assert.equal(uploads.length, 1)
+  assert.equal(uploads.length, 2)
+  const capacityCode = code.split('\n  fts-write-benchmark:')[0]
+  const ftsCode = code.split('\n  fts-write-benchmark:')[1]
+  for (const job of [capacityCode, ftsCode]) {
+    assert.equal((job.match(/uses:\s*actions\/upload-artifact@/g) || []).length, 1)
+  }
+  for (const upload of uploads) {
+    assert.doesNotMatch(upload, /^\s+path:\s*\|/m, 'single explicit path only')
+    assert.doesNotMatch(upload, /[*]/, 'no globs')
+    assert.doesNotMatch(upload, /capacity-run|capacity-reports|\.db|backup|\.log/i)
+    assert.match(upload, /if-no-files-found:\s*error/)
+  }
+  assert.match(uploads[1], /^\s+path:\s*\$\{\{\s*runner\.temp\s*\}\}\/fts-evidence\.json\s*$/m)
   const withBlock = uploads[0]
   assert.match(withBlock, /^\s+path:\s*\$\{\{\s*runner\.temp\s*\}\}\/capacity-summary\/capacity-summary\.json\s*$/m)
   assert.doesNotMatch(withBlock, /^\s+path:\s*\|/m, 'single explicit path only')
