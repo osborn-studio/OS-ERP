@@ -18,10 +18,28 @@ import net from 'node:net'
 import { fileURLToPath } from 'node:url'
 import { setTimeout as delay } from 'node:timers/promises'
 import { securityHeaders, cspMode, buildCsp } from '../server/middleware/security-headers.js'
-import { sessionTransport, issueSessionCookies } from '../server/middleware/session-transport.js'
+import { sessionTransport, issueSessionCookies, csrfFor, csrfValid } from '../server/middleware/session-transport.js'
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url))
 const sha = (s) => `'sha256-${createHash('sha256').update(s).digest('base64')}'`
+
+// Flip one character instead of replacing a suffix that may already match.
+const differentCsrf = (value) => (value[0] === 'A' ? 'B' : 'A') + value.slice(1)
+
+test('CSRF negative fixture always changes the token, including the old AA suffix collision', () => {
+  const secret = 'synthetic-test-only'
+  const jwt = 'synthetic-599'
+  const token = csrfFor(jwt, secret)
+  assert.ok(token.endsWith('AA'), 'fixture covers the former unchanged-suffix case')
+  const req = (header) => ({ headers: { cookie: `gml_csrf=${token}`, 'x-csrf-token': header } })
+  assert.equal(csrfValid(req(token), jwt, secret), true)
+  assert.equal(csrfValid(req(differentCsrf(token)), jwt, secret), false)
+  for (const value of [token, 'AabcAA', 'BabcAA']) {
+    const changed = differentCsrf(value)
+    assert.equal(changed.length, value.length)
+    assert.ok(changed !== value, 'negative token must differ without exposing its value')
+  }
+})
 
 // ---------------------------------------------------------------- in-process: header sets
 async function mini(t, { env = {}, trust, staticRoot } = {}) {
@@ -237,9 +255,9 @@ test('cookie mode: login sets HttpOnly session + readable CSRF cookie, token not
   assert.equal(me.status, 200)
   // writes: missing / wrong CSRF header rejected before the handler
   const w = { oldPassword: 'wrong-old-password', newPassword: 'x'.repeat(14) }
-  for (const headers of [{ cookie }, { cookie, 'x-csrf-token': 'nope' }, { cookie, 'x-csrf-token': csrf.value.slice(0, -2) + 'AA' }]) {
+  for (const headers of [{ cookie }, { cookie, 'x-csrf-token': 'nope' }, { cookie, 'x-csrf-token': differentCsrf(csrf.value) }]) {
     const r = await s.call('/api/auth/change-password', { headers, body: w })
-    assert.equal(r.status, 403); assert.equal(r.body.detail?.code, 'CSRF_TOKEN_INVALID')
+    assert.equal(r.status, 403, 'invalid CSRF must be rejected'); assert.equal(r.body.detail?.code, 'CSRF_TOKEN_INVALID', 'invalid CSRF must fail at the CSRF gate')
   }
   // header without the cookie pair is not a CSRF proof, and the csrf cookie alone is not a session
   assert.equal((await s.call('/api/auth/change-password', { headers: { cookie: `gml_session=${sess.value}`, 'x-csrf-token': csrf.value }, body: w })).status, 403)

@@ -23,3 +23,11 @@ Run40614529636 on ff3ed2a passed all prerequisite jobs and completed round1, the
 Only a manual dispatch with rounds exactly3 now receives355 minutes aggregate job time; single-round events retain120. All test deadlines, round contents and failure gates remain unchanged. This does not claim that355 minutes has been empirically validated; the new three-round run must finish. Other manually supplied round counts remain outside this targeted change.
 
 Node22 relevant CI policies39/39 and diff checks passed. Two tools-disabled Claude CLI Haiku5.5 reviews verified is_error=false/canonicalModel. The first review's job-identity concern was resolved with the complete regression block; the second retains hosted execution and budget sufficiency as validation requirements. Exact GitHub timeout annotation subsequently confirms cancellation cause. No completed three-round acceptance is claimed.
+
+## Cookie regression follow-up (2026-10-28)
+
+PR CI 40632754787 / job122643442870 completed 114/115 regression checks, 8981 assertions, with the cookie-mode CSRF test failing (not a job timeout). The filtered hosted output omits the individual assertion values, so the exact hosted cause is not proven.
+
+A deterministic synthetic reproduction found a defect in the negative fixture: csrfFor('synthetic-599', 'synthetic-test-only') ends in AA; replacing its last two characters with AA leaves it unchanged and csrfValid correctly accepts it. The test now flips the first character, preserving length while guaranteeing inequality. A deterministic regression covers that suffix collision and both first-character branches. Product authentication/CSRF behavior and rejection assertions are unchanged. Full current-HEAD hosted regression remains required.
+
+Node22 full security-headers file: 18 tests, 17 pass, 0 fail, 1 skipped (dist not built); this is development evidence, not Linux acceptance. Specified Claude CLI claude-haiku-5-5 text-only review returned is_error=false and canonicalModel=claude-haiku-5-5, no confirmed blockers. Raw review: pr30-cookie-haiku.json in the task management workspace. Hosted causality remains unconfirmed pending the new run.
