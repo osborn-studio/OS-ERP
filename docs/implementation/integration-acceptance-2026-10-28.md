@@ -17,3 +17,9 @@ V04 waits for V01: exact frozen SHA dry-run, then full unsigned artifact-only ca
 Two tool-disabled Claude CLI reviews explicitly selected `claude-haiku-5-5`; both `is_error=false` and `modelUsage` canonical model verified. Round 1: hardened numeric/boolean gates and output keys. Request to hardcode a single SHA was not adopted: exact SHA is intentionally an explicit reusable input; this task binds dispatch to the recorded frozen main. Round 2: no confirmed blockers. Its incidental reference to git status is not independent tool evidence (tools disabled).
 
 YAML parsed with Ruby; all run blocks pass bash syntax checks; sanitizer positive fixture passed, truthy-string result fixture rejected, path/secret fixture keys/values omitted; git diff --check passed. These are local configuration checks, not Linux benchmark acceptance. No product code changed, no test assertions relaxed, no release/tag/deployment/auto-merge created.
+
+### PR29 CI policy correction
+
+Run 40610934626 found the same standalone-return oracle failure as V01, plus missing version comments on the FTS job's pinned Actions and a legacy single-upload assertion. The reviewed PR30 test-only oracle correction is included unchanged. The workflow now carries the same version comments as the capacity job; the policy requires exactly one upload per job and the exact capacity-summary/FTS-evidence paths, without globs or raw databases/logs.
+
+Node22 policy 16/16 and file-header 4/4 pass; metrics correction previously passed its full file 30/30 and fixed-UTC reproduction 10/10. Claude CLI `claude-haiku-5-5` tools-disabled review returned `is_error=false`, verified canonical model, no confirmed blockers. These are development checks; the updated PR HEAD still needs Linux CI. V03's already successful explicit-source benchmark is retained and not rerun. No PR has been merged by this task.
