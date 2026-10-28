@@ -15,6 +15,7 @@
  * ============================================================================
  */
 import test from 'node:test'
+import { SLOW_WAIT } from '../lib/load-tolerance.mjs'
 import { readFileSync } from 'node:fs'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
@@ -52,7 +53,7 @@ async function server(t) {
     await stopped
     rmSync(dir, { recursive: true, force: true })
   })
-  for (let i = 0; i < 2400 && !output.includes('服务已启动') && child.exitCode === null; i++) await delay(50)
+  for (let i = 0; i < SLOW_WAIT.extendedReadyAttempts && !output.includes('服务已启动') && child.exitCode === null; i++) await delay(50)
   assert.ok(output.includes('服务已启动'), `test-mode server must become ready:\n${output.slice(-2000)}`)
   const base = `http://127.0.0.1:${port}`
   const api = async (route, { token, body, method = body === undefined ? 'GET' : 'POST' } = {}) => {
@@ -60,7 +61,7 @@ async function server(t) {
       method,
       headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-      signal: AbortSignal.timeout(10000)
+      signal: AbortSignal.timeout(SLOW_WAIT.httpShortMs)
     })
     return { status: res.status, body: await res.json() }
   }
@@ -85,7 +86,7 @@ async function server(t) {
 const okData = (r) => { assert.equal(r.status, 200, JSON.stringify(r.body)); return r.body.data }
 const notFound = (r, m) => assert.equal(r.status, 404, `${m}: ${JSON.stringify(r.body)}`)
 
-test('approval instances are scoped to the org of the document they point at', { timeout: 300000 }, async (t) => {
+test('approval instances are scoped to the org of the document they point at', { timeout: SLOW_WAIT.serverCaseMs }, async (t) => {
   const f = await server(t)
   const { db, api } = f
   const whs = db.prepare(`SELECT w.id, w.org_id, o.path, o.parent_id FROM warehouses w JOIN orgs o ON o.id = w.org_id
@@ -309,7 +310,7 @@ test('MCP approval.approve passes the human signer org scope into decideApproval
 // ---------------------------------------------------------------------------
 // AA3：模板维护权限（system:approval:template，迁移 063）+ 全局范围 + 审批人范围校验，堵 Z9 的模板自授权逃逸
 // ---------------------------------------------------------------------------
-test('AA3: template maintenance needs system:approval:template AND global scope; the Z9 self-assignment escape fails', { timeout: 300000 }, async (t) => {
+test('AA3: template maintenance needs system:approval:template AND global scope; the Z9 self-assignment escape fails', { timeout: SLOW_WAIT.serverCaseMs }, async (t) => {
   const f = await server(t)
   const { db, api } = f
   const whs = db.prepare(`SELECT w.id, w.org_id, o.path, o.parent_id FROM warehouses w JOIN orgs o ON o.id = w.org_id
@@ -410,7 +411,7 @@ test('AA3: template maintenance needs system:approval:template AND global scope;
 
 // AC3（ADR-0011 补充 2 的 Codex 审计 high）：data_scope=all 不绕过单据类型的账号绑定——审批实例的可见性与单据范围判据
 // （approvalDocScope / instanceVisibleTo）对绑定账号按 DOC_SCOPE_RESOLVERS 的 binding 过滤。
-test('AC3: approval visibility honours account bindings under data_scope=all', { timeout: 300000 }, async (t) => {
+test('AC3: approval visibility honours account bindings under data_scope=all', { timeout: SLOW_WAIT.serverCaseMs }, async (t) => {
   const f = await server(t)
   const { db } = f
   const { approvalDocScope, instanceVisibleTo } = await import('../../server/lib/approval.js')

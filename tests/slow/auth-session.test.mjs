@@ -1,5 +1,6 @@
 // slow: 97 s: multi-session password change and reset flows over a real server with password hashing (scripts/test-timings.mjs, threshold 60 s)
 import test from 'node:test'
+import { SLOW_WAIT } from '../lib/load-tolerance.mjs'
 import assert from 'node:assert/strict'
 import { spawn, spawnSync } from 'node:child_process'
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -25,7 +26,7 @@ async function fixture(t, overrides = {}) {
   const env = { PATH: process.env.PATH, HOME: dir, TMPDIR: dir, HOST: '127.0.0.1', NODE_ENV: 'production',
     GML_RUNTIME_MODE: 'production', GML_DATA_DIR: dir, GML_DB: '', GML_JWT_SECRET: jwtSecret, ...overrides }
   const bootstrap = spawnSync(process.execPath, ['scripts/bootstrap-admin.mjs', '--industry=cosmetic', '--company-code=SESSION',
-    '--company-name=会话测试', '--username=owner', '--name=Owner'], { cwd: ROOT, env, input: password + '\n', encoding: 'utf8', timeout: 30000 })
+    '--company-name=会话测试', '--username=owner', '--name=Owner'], { cwd: ROOT, env, input: password + '\n', encoding: 'utf8', timeout: SLOW_WAIT.bootstrapMs })
   assert.equal(bootstrap.status, 0, bootstrap.stderr)
   const db = new Database(path.join(dir, 'gml_cosmetic.db'))
   let child, stopped, port
@@ -37,13 +38,13 @@ async function fixture(t, overrides = {}) {
     child = spawn(process.execPath, ['server/index.js'], { cwd: ROOT, env: { ...env, PORT: String(port) }, stdio: ['ignore', 'pipe', 'pipe'] })
     let output = ''; child.stdout.on('data', d => { output += d }); child.stderr.on('data', () => {})
     stopped = once(child, 'close')
-    for (let i = 0; i < 250 && !output.includes('服务已启动') && child.exitCode === null; i++) await delay(40)
+    for (let i = 0; i < SLOW_WAIT.productionReadyAttempts && !output.includes('服务已启动') && child.exitCode === null; i++) await delay(40)
     assert.ok(output.includes('服务已启动'), 'isolated production server must become ready')
   }
   const call = async (route, { token, body, method = body === undefined ? 'GET' : 'POST', headers = {} } = {}) => {
     const res = await fetch(`http://127.0.0.1:${port}/api/auth${route}`, { method,
       headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...headers },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: AbortSignal.timeout(10000) })
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: AbortSignal.timeout(SLOW_WAIT.httpShortMs) })
     return { status: res.status, body: await res.json(), retryAfter: res.headers.get('retry-after') }
   }
   const login = (username = 'owner', pass = password) => call('/login', { body: { username, password: pass, industry: 'cosmetic' } })

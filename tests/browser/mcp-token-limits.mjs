@@ -23,7 +23,7 @@ const results = []
 let externalRequests = 0
 const step = async (name, fn) => { await fn(); results.push(name); console.log(`PASS ${name}`) }
 
-async function openMcp(actor) {
+async function openMcp(actor, settleLimits = false) {
   const ctx = await browser.newContext()
   ctx.setDefaultTimeout(15000)
   await ctx.route('**/*', (route) => {
@@ -32,6 +32,8 @@ async function openMcp(actor) {
   })
   const page = await ctx.newPage()
   pages.push(page)
+  let limitsRequests = 0
+  page.on('request', (request) => { if (new URL(request.url()).pathname === '/api/mcp/limits') limitsRequests++ })
   const errors = []
   page.on('pageerror', (e) => errors.push(e.message))
   await uiLogin(page, base, actor.username, actor.password)
@@ -39,8 +41,24 @@ async function openMcp(actor) {
   await page.waitForLoadState('networkidle')
   // 无权限账号可能被页面守卫挡住而根本没有标签：有则点开，没有就保持原样（后面断言读数卡不存在）
   const tab = page.getByText('人工确认与审计', { exact: true })
-  if (await tab.count()) await tab.click()
-  return { page, errors }
+  if (await tab.count()) {
+    const initialResponses = []
+    // 卡片挂载和父级 load() 的 nonce 更新各取一次；先订阅再点击，不能把首张卡当成初始化完成。
+    const settled = settleLimits ? page.waitForResponse((response) => {
+      if (new URL(response.url()).pathname !== '/api/mcp/limits') return false
+      initialResponses.push(response)
+      return initialResponses.length === 2
+    }) : null
+    await Promise.all([settled, tab.click()])
+    if (settled) {
+      for (const response of initialResponses) {
+        assert.equal(response.status(), 200, 'initial limits request succeeds')
+        assert.equal(await response.finished(), null, 'initial limits response completed')
+      }
+      assert.equal(limitsRequests, 2, 'mount plus parent load refresh are both accounted for')
+    }
+  }
+  return { page, errors, limitsRequestCount: () => limitsRequests }
 }
 const readout = (page) => page.getByTestId('mcp-limits').evaluate((el) => ({
   rpm: Number(el.getAttribute('data-rpm')), write_rpm: Number(el.getAttribute('data-write-rpm')),
@@ -67,17 +85,22 @@ try {
   originalQuota = (await limitsOf(adminToken)).daily_quota
 
   // 同一个页面贯穿两步：第二步靠"刷新记录"取新读数，证明刷新路径真的重新取了限速读数
-  const admin = await openMcp({ username: 'admin', password: '12345' })
+  const admin = await openMcp({ username: 'admin', password: '12345' }, true)
 
   await step('admin: the readout card equals GET /api/mcp/limits field by field', async () => {
     const limits = await limitsOf(adminToken)
     for (const k of ['rpm', 'write_rpm', 'daily_quota', 'rate_limited_total']) assert.ok(Number.isInteger(limits[k]) && limits[k] >= 0, `limits.${k}`)
     assert.ok(limits.rpm >= 1 && limits.write_rpm >= 1)
-    await admin.page.getByTestId('mcp-limits').waitFor()
+    await admin.page.waitForFunction((expected) => {
+      const el = document.querySelector('[data-testid="mcp-limits"]')
+      const attrs = { rpm: 'data-rpm', write_rpm: 'data-write-rpm', daily_quota: 'data-daily-quota', rate_limited_total: 'data-limited' }
+      return el && Object.entries(attrs).every(([key, attr]) => el.getAttribute(attr) === String(expected[key]))
+    }, limits)
     assert.deepEqual(await readout(admin.page), { rpm: limits.rpm, write_rpm: limits.write_rpm, daily_quota: limits.daily_quota, rate_limited_total: limits.rate_limited_total })
   })
 
   await step('a real 429 (daily quota 1, second call) moves the counter by exactly one; clicking refresh on the open page shows quota and count', async () => {
+    const initialRequestCount = admin.limitsRequestCount()
     const before = await limitsOf(adminToken)
     assert.equal((await putQuota(adminToken, '1')).status, 200)
     const created = okData(await api('/api/mcp/tokens', { token: adminToken, body: { name: `ae11-limits-${randomSuffix()}`, scopes: 'read' } }))
@@ -89,9 +112,11 @@ try {
     assert.equal(after.rate_limited_total, before.rate_limited_total + 1)
     // 刷新前页面仍是旧读数
     assert.equal((await readout(admin.page)).daily_quota, before.daily_quota)
+    assert.equal(admin.limitsRequestCount(), initialRequestCount, 'no background limits request before manual refresh')
     await admin.page.getByRole('button', { name: '刷新记录' }).click()
     await admin.page.waitForFunction((n) => document.querySelector('[data-testid="mcp-limits"]')?.getAttribute('data-limited') === String(n), after.rate_limited_total)
     assert.deepEqual(await readout(admin.page), { rpm: after.rpm, write_rpm: after.write_rpm, daily_quota: 1, rate_limited_total: after.rate_limited_total })
+    assert.equal(admin.limitsRequestCount(), initialRequestCount + 1, 'manual refresh issues exactly one new limits request')
     assert.equal((await admin.page.getByTestId('mcp-limits').innerText()).includes(created.token), false, 'the readout never shows token material')
     assert.deepEqual(admin.errors, [])
   })

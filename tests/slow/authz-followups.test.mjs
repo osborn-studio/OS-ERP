@@ -22,6 +22,7 @@
  * ============================================================================
  */
 import test from 'node:test'
+import { SLOW_WAIT } from '../lib/load-tolerance.mjs'
 import assert from 'node:assert/strict'
 import { spawn, execFileSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
@@ -59,7 +60,7 @@ async function server(t) {
     await stopped
     rmSync(dir, { recursive: true, force: true })
   })
-  for (let i = 0; i < 2400 && !output.includes('服务已启动') && child.exitCode === null; i++) await delay(50)
+  for (let i = 0; i < SLOW_WAIT.extendedReadyAttempts && !output.includes('服务已启动') && child.exitCode === null; i++) await delay(50)
   assert.ok(output.includes('服务已启动'), `test-mode server must become ready:\n${output.slice(-2000)}`)
   const base = `http://127.0.0.1:${port}`
   const api = async (route, { token, body, method = body === undefined ? 'GET' : 'POST' } = {}) => {
@@ -67,7 +68,7 @@ async function server(t) {
       method,
       headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-      signal: AbortSignal.timeout(10000)
+      signal: AbortSignal.timeout(SLOW_WAIT.httpShortMs)
     })
     return { status: res.status, body: await res.json() }
   }
@@ -77,7 +78,7 @@ async function server(t) {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) },
       body: JSON.stringify({ jsonrpc: '2.0', id: ++seq, method, params }),
-      signal: AbortSignal.timeout(10000)
+      signal: AbortSignal.timeout(SLOW_WAIT.httpShortMs)
     })
     return { status: res.status, body: await res.json() }
   }
@@ -106,7 +107,7 @@ const rpcCode = (r) => r.body?.error?.data?.code ?? null
 // ① 待办接口：权限门 + 范围
 // ---------------------------------------------------------------------------
 
-test('purchase chain todos require an internal purchase-reading role and are scoped to the caller', { timeout: 300000 }, async (t) => {
+test('purchase chain todos require an internal purchase-reading role and are scoped to the caller', { timeout: SLOW_WAIT.serverCaseMs }, async (t) => {
   const f = await server(t)
   const { db, api } = f
 
@@ -172,7 +173,7 @@ test('purchase chain todos require an internal purchase-reading role and are sco
   })
 })
 
-test('approval todos require an approval permission and only count instances the caller can act on', { timeout: 300000 }, async (t) => {
+test('approval todos require an approval permission and only count instances the caller can act on', { timeout: SLOW_WAIT.serverCaseMs }, async (t) => {
   const f = await server(t)
   const { db, api } = f
 
@@ -242,7 +243,7 @@ test('approval todos require an approval permission and only count instances the
 // ② Agent Token 有效状态：所有者版本变化 ⇒ 列表 / 详情如实报告；清扫落库；重签可用
 // ---------------------------------------------------------------------------
 
-test('agent token list reports an effective status after the owner auth_version changes, and a sweep persists it', { timeout: 300000 }, async (t) => {
+test('agent token list reports an effective status after the owner auth_version changes, and a sweep persists it', { timeout: SLOW_WAIT.serverCaseMs }, async (t) => {
   const f = await server(t)
   const { db, api, mcp } = f
   const owner = await f.account('tok_owner', 'warehouse', { data_scope: 'all' })
@@ -320,7 +321,7 @@ test('agent token list reports an effective status after the owner auth_version 
 // AF10（ADR-0051 补充 3）：有效权限只合并 status='active' 的角色
 // ---------------------------------------------------------------------------
 
-test('AF10: permContext ignores inactive roles (primary included); login discloses roles_inactive + ROLE_INACTIVE_NOTICE; no cache', { timeout: 300000 }, async (t) => {
+test('AF10: permContext ignores inactive roles (primary included); login discloses roles_inactive + ROLE_INACTIVE_NOTICE; no cache', { timeout: SLOW_WAIT.serverCaseMs }, async (t) => {
   const f = await server(t)
   const { db, api } = f
   const permsOf = (roles) => new Set(db.prepare(`SELECT perm_code FROM role_permissions WHERE role_code IN (${roles.map(() => '?').join(',')})`).all(...roles).map((r) => r.perm_code))
@@ -416,7 +417,7 @@ test('AF10: permContext ignores inactive roles (primary included); login disclos
 // AG10（ADR-0051 补充 4）：my-scope 的说明按生效（active）角色生成，并标明每个范围要素由哪个角色贡献
 // ---------------------------------------------------------------------------
 
-test('AG10: my-scope explanations come from active roles only; inactive primary is called out; caller-only disclosure', { timeout: 300000 }, async (t) => {
+test('AG10: my-scope explanations come from active roles only; inactive primary is called out; caller-only disclosure', { timeout: SLOW_WAIT.serverCaseMs }, async (t) => {
   const f = await server(t)
   const { db, api } = f
   const setStatus = (code, status) => db.prepare('UPDATE roles SET status=? WHERE code=?').run(status, code)
@@ -534,7 +535,7 @@ test('AG10: my-scope explanations come from active roles only; inactive primary 
   setStatus('purchase', 'active')
 })
 
-test('role matrix cells match real /api/docflow/events behaviour (10 sampled role x type cells)', { timeout: 300000 }, async (t) => {
+test('role matrix cells match real /api/docflow/events behaviour (10 sampled role x type cells)', { timeout: SLOW_WAIT.serverCaseMs }, async (t) => {
   // 期望值写死在这里：生成器若画错，光靠"矩阵 = 路由"的自证循环抓不到；这里同时钉住字面结论
   const SAMPLES = [
     ['boss', 'RC', 'G'], // AD2：老板是总部角色，未绑门店也看全部门店日结
@@ -549,7 +550,7 @@ test('role matrix cells match real /api/docflow/events behaviour (10 sampled rol
     ['dealer', 'OC', '-']
   ]
   const model = JSON.parse(
-    execFileSync(process.execPath, ['scripts/gen-role-matrix.mjs', '--json'], { cwd: ROOT, env: { PATH: process.env.PATH }, timeout: 120000, maxBuffer: 16 * 1024 * 1024 }).toString()
+    execFileSync(process.execPath, ['scripts/gen-role-matrix.mjs', '--json'], { cwd: ROOT, env: { PATH: process.env.PATH }, timeout: SLOW_WAIT.cliMs, maxBuffer: 16 * 1024 * 1024 }).toString()
   )
   const md = readFileSync(path.join(ROOT, 'docs/operations/role-matrix.md'), 'utf8')
   const mdRoles = md.split('\n').find((l) => l.startsWith('| 单据 |')).split('|').map((x) => x.trim().replace(/`/g, '')).slice(2, -1)
@@ -614,10 +615,10 @@ test('role matrix cells match real /api/docflow/events behaviour (10 sampled rol
   })
 })
 
-test('role matrix generator: committed file is current and --check fails on drift', { timeout: 300000 }, () => {
+test('role matrix generator: committed file is current and --check fails on drift', { timeout: SLOW_WAIT.serverCaseMs }, () => {
   const run = (args, env = {}) => {
     try {
-      return { code: 0, out: execFileSync(process.execPath, ['scripts/gen-role-matrix.mjs', ...args], { cwd: ROOT, env: { PATH: process.env.PATH, ...env }, timeout: 120000 }).toString() }
+      return { code: 0, out: execFileSync(process.execPath, ['scripts/gen-role-matrix.mjs', ...args], { cwd: ROOT, env: { PATH: process.env.PATH, ...env }, timeout: SLOW_WAIT.cliMs }).toString() }
     } catch (e) {
       return { code: e.status, out: `${e.stdout || ''}${e.stderr || ''}` }
     }

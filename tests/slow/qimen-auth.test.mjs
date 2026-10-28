@@ -13,6 +13,7 @@
  * ============================================================================
  */
 import test from 'node:test'
+import { SLOW_WAIT } from '../lib/load-tolerance.mjs'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { createHash, createHmac, randomBytes } from 'node:crypto'
@@ -65,7 +66,7 @@ async function server(t) {
     await stopped
     rmSync(dir, { recursive: true, force: true })
   })
-  for (let i = 0; i < 2400 && !output.includes('服务已启动') && child.exitCode === null; i++) await delay(50)
+  for (let i = 0; i < SLOW_WAIT.extendedReadyAttempts && !output.includes('服务已启动') && child.exitCode === null; i++) await delay(50)
   assert.ok(output.includes('服务已启动'), `test-mode server must become ready:\n${output.slice(-2000)}`)
   const base = `http://127.0.0.1:${port}`
   const api = async (route, { token, body, method = body === undefined ? 'GET' : 'POST' } = {}) => {
@@ -73,7 +74,7 @@ async function server(t) {
       method,
       headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-      signal: AbortSignal.timeout(10000)
+      signal: AbortSignal.timeout(SLOW_WAIT.httpShortMs)
     })
     const text = await res.text()
     return { status: res.status, text, body: JSON.parse(text), headers: res.headers }
@@ -111,7 +112,7 @@ function gatewayBody(secret, platform, { method = METHOD, request = { itemCode: 
   return { method, app_key: platform.app_key, timestamp: s.timestamp, nonce: s.nonce, request, sign: signWith(secret, { appKey: platform.app_key, method, request, ...s }) }
 }
 
-test('migration 060 is idempotent, verifies, and only the demo platform starts with a secret', { timeout: 300000 }, async (t) => {
+test('migration 060 is idempotent, verifies, and only the demo platform starts with a secret', { timeout: SLOW_WAIT.serverCaseMs }, async (t) => {
   const f = await server(t)
   const m060 = require('../../server/db/migrations/060_qimen_secrets.cjs')
   assert.equal(m060.verify(f.db), true)
@@ -148,7 +149,7 @@ test('canonical contract: key order does not matter, content does', () => {
   })
 })
 
-test('issue and rotate: permission, once-only plaintext, sealed storage, immediate invalidation', { timeout: 300000 }, async (t) => {
+test('issue and rotate: permission, once-only plaintext, sealed storage, immediate invalidation', { timeout: SLOW_WAIT.serverCaseMs }, async (t) => {
   const f = await server(t)
   const { api, db } = f
   const [pf, other] = twoPlatforms(db)
@@ -206,7 +207,7 @@ test('issue and rotate: permission, once-only plaintext, sealed storage, immedia
   assert.ok(!logs2.includes('LEAK-TOKEN-123') && !logs2.includes('LEAK-SECRET-456'))
 })
 
-test('gateway verifies per-platform HMAC, time window and replay', { timeout: 300000 }, async (t) => {
+test('gateway verifies per-platform HMAC, time window and replay', { timeout: SLOW_WAIT.serverCaseMs }, async (t) => {
   const f = await server(t)
   const { api, db } = f
   const [pf, other] = twoPlatforms(db)
@@ -268,7 +269,7 @@ test('gateway verifies per-platform HMAC, time window and replay', { timeout: 30
   await rejected(gatewayBody(s2, other), '1003', 'disabled platform')
 })
 
-test('nonce table is pruned on accept and survives as the replay authority', { timeout: 300000 }, async (t) => {
+test('nonce table is pruned on accept and survives as the replay authority', { timeout: SLOW_WAIT.serverCaseMs }, async (t) => {
   const f = await server(t)
   const { api, db } = f
   const [pf] = twoPlatforms(db)
@@ -282,7 +283,7 @@ test('nonce table is pruned on accept and survives as the replay authority', { t
   assert.equal(rows.length, 2)
 })
 
-test('capabilities needs the manage permission and no read surface exposes secret material', { timeout: 300000 }, async (t) => {
+test('capabilities needs the manage permission and no read surface exposes secret material', { timeout: SLOW_WAIT.serverCaseMs }, async (t) => {
   const f = await server(t)
   const { api, db } = f
   const [pf] = twoPlatforms(db)
@@ -334,7 +335,7 @@ test('capabilities needs the manage permission and no read surface exposes secre
   assert.equal(db.prepare("SELECT app_secret_sealed s FROM platforms WHERE code='QZ9'").get().s, null)
 })
 
-test('warehouse binding and protocol errors still work behind the new signature', { timeout: 300000 }, async (t) => {
+test('warehouse binding and protocol errors still work behind the new signature', { timeout: SLOW_WAIT.serverCaseMs }, async (t) => {
   const f = await server(t)
   const { api, db } = f
   const [pf] = twoPlatforms(db)
@@ -365,7 +366,7 @@ test('front-end debug signer (src/utils/qimen-sign.ts) matches the server contra
 // ===================== AB8：按安装生成的密钥（ADR-0033 补充，迁移 069） =====================
 const DEMO_CONSTANT = 'GML-DEMO-SECRET'
 
-test('migration 069 clears rows holding the public demo constant, records it, and keeps real secrets', { timeout: 300000 }, async (t) => {
+test('migration 069 clears rows holding the public demo constant, records it, and keeps real secrets', { timeout: SLOW_WAIT.serverCaseMs }, async (t) => {
   const f = await server(t)
   const { sealSecret, openSecret } = await import('../../server/lib/secret-box.js')
   const env = { GML_SECRET_KEY: 'ab8-test-key-0123456789abcdef' }
@@ -411,14 +412,14 @@ test('migration 069 clears rows holding the public demo constant, records it, an
   assert.deepEqual(trail.problems.filter((p) => ['SETTING_KEY_UNKNOWN', 'SETTING_AUDIT_DESYNC'].includes(p.code)), [])
 })
 
-test('migration 069 on a clean database writes no settings row and verifies', { timeout: 300000 }, async (t) => {
+test('migration 069 on a clean database writes no settings row and verifies', { timeout: SLOW_WAIT.serverCaseMs }, async (t) => {
   const f = await server(t)
   const m069 = require('../../server/db/migrations/069_qimen_clear_demo_secret.cjs')
   assert.equal(m069.verify(f.db), true)
   assert.equal(f.db.prepare("SELECT COUNT(*) c FROM settings WHERE key='qimen_demo_secret_cleared'").get().c, 0)
 })
 
-test('demo/test startup generates a per-install secret for the demo platform only; it is never printed or reused', { timeout: 300000 }, async (t) => {
+test('demo/test startup generates a per-install secret for the demo platform only; it is never printed or reused', { timeout: SLOW_WAIT.serverCaseMs }, async (t) => {
   const f = await server(t)
   const { openSecret } = await import('../../server/lib/secret-box.js')
   const env = { GML_JWT_SECRET: f.jwtSecret, GML_RUNTIME_MODE: 'test' }
@@ -478,7 +479,7 @@ test('ensureDemoQimenSecret is idempotent, skips a demo platform that already ha
   assert.equal(ensureDemoQimenSecret(db4, { env }).created, false)
 })
 
-test('issuance CLI is the only way to obtain a usable secret', { timeout: 300000 }, async (t) => {
+test('issuance CLI is the only way to obtain a usable secret', { timeout: SLOW_WAIT.serverCaseMs }, async (t) => {
   const f = await server(t)
   const [pf] = twoPlatforms(f.db)
   const run = (args) => new Promise((resolve) => {

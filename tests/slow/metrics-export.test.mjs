@@ -1,6 +1,7 @@
 // slow: 73 s: throttle, rotation and export cases on real server processes (scripts/test-timings.mjs, threshold 60 s)
 // ADR-0045：Prometheus 文本指标导出、进程级计数器、令牌鉴权
 import test from 'node:test'
+import { CASE_TIMEOUT_MEDIUM_MS, FETCH_TIMEOUT_MS, READY_POLL_ATTEMPTS, SLOW_WAIT } from '../lib/load-tolerance.mjs'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
@@ -206,7 +207,7 @@ async function server(t, extraEnv = {}) {
   child.stderr.on('data', (d) => { output += d })
   const stopped = once(child, 'close')
   t.after(async () => { if (child.exitCode === null) child.kill('SIGTERM'); await stopped })
-  for (let i = 0; i < 1200 && !ready && child.exitCode === null; i++) await delay(50)
+  for (let i = 0; i < READY_POLL_ATTEMPTS && !ready && child.exitCode === null; i++) await delay(50)
   assert.ok(ready, `server must start\n${output}`)
   const tokenFor = (username) => {
     const db = new Database(path.join(dir, 'gml_cosmetic.db'), { readonly: true })
@@ -214,13 +215,13 @@ async function server(t, extraEnv = {}) {
     db.close()
     return jwt.sign({ uid: u.id, auth_version: u.auth_version, username: u.username, role: u.role, name: u.name, industry: 'cosmetic' }, secret, { audience: 'gml-erp', algorithm: 'HS256', expiresIn: '1h' })
   }
-  const get = (route, token) => fetch(`http://127.0.0.1:${port}${route}`, { headers: token ? { Authorization: `Bearer ${token}` } : {}, signal: AbortSignal.timeout(5000) })
-  const post = (route, body) => fetch(`http://127.0.0.1:${port}${route}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(5000) })
+  const get = (route, token) => fetch(`http://127.0.0.1:${port}${route}`, { headers: token ? { Authorization: `Bearer ${token}` } : {}, signal: AbortSignal.timeout(SLOW_WAIT.probeMs) })
+  const post = (route, body) => fetch(`http://127.0.0.1:${port}${route}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(SLOW_WAIT.probeMs) })
   return { dir, port, get, post, tokenFor, output: () => output }
 }
 const PROM = '/api/meta/metrics?format=prometheus'
 
-test('GET metrics?format=prometheus: anonymous 401, viewer 403, admin 200 text exposition, JSON format unchanged', { timeout: 180000 }, async (t) => {
+test('GET metrics?format=prometheus: anonymous 401, viewer 403, admin 200 text exposition, JSON format unchanged', { timeout: CASE_TIMEOUT_MEDIUM_MS }, async (t) => {
   const s = await server(t)
   assert.equal((await s.get(PROM)).status, 401)
   assert.equal((await s.get(PROM, 'not-a-jwt')).status, 401)
@@ -244,7 +245,7 @@ test('GET metrics?format=prometheus: anonymous 401, viewer 403, admin 200 text e
   assert.equal((await s.get('/api/meta/metrics?format=bogus', s.tokenFor('admin'))).status, 400)
 })
 
-test('GML_METRICS_TOKEN: Bearer token reads the prometheus format only; wrong/short/unset tokens never do; token is never logged', { timeout: 180000 }, async (t) => {
+test('GML_METRICS_TOKEN: Bearer token reads the prometheus format only; wrong/short/unset tokens never do; token is never logged', { timeout: CASE_TIMEOUT_MEDIUM_MS }, async (t) => {
   const token = randomBytes(24).toString('hex')
   const s = await server(t, { GML_METRICS_TOKEN: token })
   const ok = await s.get(PROM, token)
@@ -263,14 +264,14 @@ test('GML_METRICS_TOKEN: Bearer token reads the prometheus format only; wrong/sh
   assert.ok(!s.output().includes(token), 'token must not appear in server output')
 })
 
-test('metrics token unset or too short disables the token path', { timeout: 180000 }, async (t) => {
+test('metrics token unset or too short disables the token path', { timeout: CASE_TIMEOUT_MEDIUM_MS }, async (t) => {
   const none = await server(t)
   assert.equal((await none.get(PROM, 'x'.repeat(40))).status, 401)
   const short = await server(t, { GML_METRICS_TOKEN: 'shortshort' })
   assert.equal((await short.get(PROM, 'shortshort')).status, 401)
 })
 
-test('login throttle rejections reach the scrape end to end', { timeout: 180000 }, async (t) => {
+test('login throttle rejections reach the scrape end to end', { timeout: CASE_TIMEOUT_MEDIUM_MS }, async (t) => {
   const s = await server(t, { GML_LOGIN_ACCOUNT_LIMIT: '2' })
   const bad = { username: 'nobody', password: 'wrong-password-1', industry: 'cosmetic' }
   assert.equal((await s.post('/api/auth/login', bad)).status, 401)
@@ -381,7 +382,7 @@ test('AB10 metrics throttle: per-IP fixed window, separate buckets, capacity fai
   assert.equal(z.consume('192.0.2.1%b').allowed, false)
 })
 
-test('AB10 HTTP: metrics throttled per IP (429 + bizcode + Retry-After), bad tokens count, accepted rotation tokens, new series present', { timeout: 180000 }, async (t) => {
+test('AB10 HTTP: metrics throttled per IP (429 + bizcode + Retry-After), bad tokens count, accepted rotation tokens, new series present', { timeout: CASE_TIMEOUT_MEDIUM_MS }, async (t) => {
   const a = randomBytes(24).toString('hex')
   const b = randomBytes(24).toString('hex')
   const s = await server(t, { GML_METRICS_TOKEN: a, GML_METRICS_TOKEN_NEXT: b, GML_METRICS_IP_LIMIT: '5', GML_METRICS_IP_WINDOW_MS: '60000' })
@@ -407,7 +408,7 @@ test('AB10 HTTP: metrics throttled per IP (429 + bizcode + Retry-After), bad tok
 })
 
 // ------------------------------------------------------------ AC9
-test('AC9 HTTP: a real MCP tools/call increments os_erp_mcp_tool_calls_total{tool,code} as scraped from /metrics', { timeout: 180000 }, async (t) => {
+test('AC9 HTTP: a real MCP tools/call increments os_erp_mcp_tool_calls_total{tool,code} as scraped from /metrics', { timeout: CASE_TIMEOUT_MEDIUM_MS }, async (t) => {
   const s = await server(t)
   const admin = s.tokenFor('admin')
   const series = (tool, code) => `os_erp_mcp_tool_calls_total{tool="${tool}",code="${code}"}`
@@ -420,7 +421,7 @@ test('AC9 HTTP: a real MCP tools/call increments os_erp_mcp_tool_calls_total{too
   const call = async (name, args = {}) => {
     const res = await fetch(`http://127.0.0.1:${s.port}/mcp`, {
       method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
-      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }), signal: AbortSignal.timeout(15000)
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }), signal: AbortSignal.timeout(FETCH_TIMEOUT_MS)
     })
     return res.json()
   }
@@ -454,7 +455,7 @@ test('AC9 shutdownSnapshotLine: one JSON line with counters and histograms, no o
   resetCounters()
 })
 
-test('AC9 SIGTERM: a server we spawn writes a one-line JSON metrics snapshot to the log and exits cleanly', { timeout: 180000 }, async (t) => {
+test('AC9 SIGTERM: a server we spawn writes a one-line JSON metrics snapshot to the log and exits cleanly', { timeout: CASE_TIMEOUT_MEDIUM_MS }, async (t) => {
   const dir = tmp(t, 'os-erp-mx-term-')
   const probe = net.createServer(); probe.listen(0, '127.0.0.1'); await once(probe, 'listening')
   const port = probe.address().port; await new Promise((r) => probe.close(r))

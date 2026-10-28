@@ -6,6 +6,7 @@
  * ============================================================================
  */
 import test from 'node:test'
+import { SLOW_WAIT } from '../lib/load-tolerance.mjs'
 import assert from 'node:assert/strict'
 import { spawn, spawnSync } from 'node:child_process'
 import { createHash, createPublicKey } from 'node:crypto'
@@ -52,7 +53,7 @@ const fill = (db, n, start = 0) => db.transaction(() => { for (let i = start; i 
 const sha = (s) => createHash('sha256').update(s, 'utf8').digest('hex')
 /** 独立于实现的哈希（按规格手写）：八个分量先转字符串，JSON 数组序列化 */
 const spec = (r, prev) => sha(JSON.stringify([r.id, r.created_at, r.user_id, r.action, r.entity, r.entity_id, r.detail, prev].map((v) => (v === null || v === undefined ? null : String(v)))))
-const cli = (script, args, dir, extra = {}) => spawnSync(process.execPath, [script, ...args], { cwd: ROOT, env: envFor(dir, extra), encoding: 'utf8', timeout: 120000 })
+const cli = (script, args, dir, extra = {}) => spawnSync(process.execPath, [script, ...args], { cwd: ROOT, env: envFor(dir, extra), encoding: 'utf8', timeout: SLOW_WAIT.cliMs })
 
 test('every inserted row carries prev_hash/row_hash computed per the ADR-0049 spec; genesis is 64 zeros', (t) => {
   const db = mkDb(tmp(t))
@@ -169,7 +170,7 @@ test('concurrency: stale deferred snapshot cannot fork the chain (SQLITE_BUSY_SN
   b.close()
 })
 
-test('concurrency across processes: two writers hammering one file produce one unbroken chain', { timeout: 120000 }, async (t) => {
+test('concurrency across processes: two writers hammering one file produce one unbroken chain', { timeout: SLOW_WAIT.cliMs }, async (t) => {
   const dir = tmp(t)
   const db = mkDb(dir)
   db.close()
@@ -723,7 +724,7 @@ async function crashedArchive(t) {
   const child = spawn(process.execPath, [ARCHIVE, ...archiveArgs(f.dir, f.out, ['--confirm', token])], { cwd: ROOT, env: envFor(f.dir, { GML_TEST_ARCHIVE_PAUSE_AFTER_EXPORT: '1' }), stdio: 'ignore' })
   t.after(() => { try { child.kill('SIGKILL') } catch { /* 已退出 */ } })
   const marker = path.join(f.out, '.archive-paused')
-  for (let i = 0; i < 600 && !existsSync(marker); i++) await new Promise((r) => setTimeout(r, 50))
+  for (let i = 0; i < SLOW_WAIT.archivePauseAttempts && !existsSync(marker); i++) await new Promise((r) => setTimeout(r, 50))
   assert.ok(existsSync(marker), 'child reached the pause point after the export fsync')
   const exited = new Promise((r) => child.once('exit', (code, signal) => r({ code, signal })))
   child.kill('SIGKILL')
@@ -734,7 +735,7 @@ async function crashedArchive(t) {
 }
 const outFiles = (out) => readdirSync(out).sort()
 
-test('AC7 archive crash window: SIGKILL after export fsync leaves the db untouched and the export complete; --resume finishes it idempotently', { timeout: 120000 }, async (t) => {
+test('AC7 archive crash window: SIGKILL after export fsync leaves the db untouched and the export complete; --resume finishes it idempotently', { timeout: SLOW_WAIT.cliMs }, async (t) => {
   const f = await crashedArchive(t)
   const { dir, out, db, A, token } = f
   // 库：事务未提交 ⇒ 全部还在、没有锚点 / 归档审计、链完好
@@ -782,7 +783,7 @@ test('AC7 archive crash window: SIGKILL after export fsync leaves the db untouch
   db.close()
 })
 
-test('AC7 --resume refuses an export that is not exactly the db segment, an altered digest, and an incomplete export', { timeout: 120000 }, async (t) => {
+test('AC7 --resume refuses an export that is not exactly the db segment, an altered digest, and an incomplete export', { timeout: SLOW_WAIT.cliMs }, async (t) => {
   // 1) 库里不进哈希的列（user_name）在崩溃后被改：链仍通过，但导出文件已不是库里的那一段
   let f = await crashedArchive(t)
   f.db.prepare("UPDATE audit_logs SET user_name='mallory' WHERE id=7").run()

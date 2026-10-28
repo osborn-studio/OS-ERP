@@ -62,3 +62,18 @@ export async function pollUntil(pred, { attempts = UNTIL_POLL_ATTEMPTS, interval
   }
   return Boolean(await pred())
 }
+
+/** 慢套件剩余等待预算：默认值保持原上限；不用于 TTL、锁持有、数据量或业务断言。 */
+export const SLOW_WAIT = Object.freeze({
+  probeMs: scaleMs(5_000),
+  bootstrapMs: scaleMs(30_000),
+  cliMs: scaleMs(120_000),
+  httpShortMs: scaleMs(10_000),
+  httpCaseMs: scaleMs(90_000),
+  serverCaseMs: scaleMs(300_000),
+  candidateCaseMs: scaleMs(290_000),
+  extendedReadyAttempts: Math.ceil(2400 * LOAD_FACTOR),
+  productionReadyAttempts: Math.ceil(250 * LOAD_FACTOR),
+  archivePauseAttempts: Math.ceil(600 * LOAD_FACTOR),
+  profileAttempts: Math.ceil(100 * LOAD_FACTOR)
+})
