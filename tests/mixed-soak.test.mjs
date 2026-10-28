@@ -32,11 +32,11 @@ test('workflow resolves runner paths inside execution steps, not job-level env',
  assert.match(y,/ref: \$\{\{ github.sha \}\}/)
 })
 
-test('production seed is rejected by test boot; only a disposable copy is reclassified',async()=>{
+test('synthetic copy retains production classification and rejects other modes',async()=>{
  const {default:Database}=await import('better-sqlite3')
  const fs=await import('node:fs'),os=await import('node:os'),path=await import('node:path')
  const {classifyEmptyDatabase,assertDatabaseMode}=await import('../server/db/runtime-policy.js')
- const {classifySoakCopy}=await import('../scripts/mixed-soak.mjs')
+ const {validateSoakCopy}=await import('../scripts/mixed-soak.mjs')
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'soak-mode-test-'))
  let source,copy
  try {
@@ -44,8 +44,19 @@ test('production seed is rejected by test boot; only a disposable copy is reclas
   fs.copyFileSync(path.join(dir,'source.db'),path.join(dir,'copy.db'))
   copy=new Database(path.join(dir,'copy.db'))
   assert.throws(()=>assertDatabaseMode(copy,'test'),{code:'DATABASE_MODE_MISMATCH'})
-  classifySoakCopy(copy);assert.doesNotThrow(()=>assertDatabaseMode(copy,'test'))
-  assert.throws(()=>classifySoakCopy(copy),/seed_classification_invalid/)
+  validateSoakCopy(copy);assert.doesNotThrow(()=>assertDatabaseMode(copy,'production'))
+  copy.prepare("UPDATE os_egp_runtime SET mode='test'").run()
+  assert.throws(()=>validateSoakCopy(copy),/seed_classification_invalid/)
   source=new Database(path.join(dir,'source.db'),{readonly:true});assert.doesNotThrow(()=>assertDatabaseMode(source,'production'))
  } finally {source?.close();copy?.close();fs.rmSync(dir,{recursive:true,force:true})}
+})
+
+test('production boot preserves synthetic business invariants',async()=>{
+ const fs=await import('node:fs'),os=await import('node:os'),path=await import('node:path'),{execFileSync}=await import('node:child_process')
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'soak-production-'))
+ const env={...process.env,GML_DATA_DIR:dir,GML_RUNTIME_MODE:'production',GML_DB:''}
+ try {
+  execFileSync(process.execPath,['scripts/synth-data.mjs','--skus','60','--docs','120','--txns','600','--quiet'],{env,stdio:'ignore'})
+  execFileSync(process.execPath,['--input-type=module','-e',`import assert from 'node:assert/strict';import Database from 'better-sqlite3';import {verifyInvariants} from './scripts/synth-data.mjs';import {bootAll} from './server/db/production-boot.js';const db=new Database(process.env.GML_DATA_DIR+'/gml_cosmetic.db');assert.equal((await verifyInvariants(db)).ok,true);bootAll();assert.equal((await verifyInvariants(db)).ok,true);process.exit(0)`],{env,stdio:'ignore',timeout:120000})
+ }finally{fs.rmSync(dir,{recursive:true,force:true})}
 })

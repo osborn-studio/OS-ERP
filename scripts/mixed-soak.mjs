@@ -41,9 +41,9 @@ async function command(args, env, timeout = 1200000) {
   try { const [code] = await once(child, 'close'); if (code !== 0) throw Error('child_command_failed') }
   finally { clearTimeout(timer);children.delete(child) }
 }
-export function classifySoakCopy(db) {
+export function validateSoakCopy(db) {
   if(db.prepare('SELECT mode FROM os_egp_runtime WHERE id=1').get()?.mode!=='production')throw Error('seed_classification_invalid')
-  db.prepare("UPDATE os_egp_runtime SET mode='test' WHERE id=1").run()
+
 }
 export async function run() {
   const source = execFileSync('git', ['rev-parse','HEAD'], { cwd: ROOT, encoding:'utf8' }).trim()
@@ -66,15 +66,14 @@ export async function run() {
     const seed=JSON.parse(fs.readFileSync(path.join(dir,'seed.json')))
     if(seed.partial || seed.invariants?.ok !== true || seed.reached.skus < 10000 || seed.reached.txns < 100000) throw Error('seed_incomplete')
     r.seed={skus:seed.reached.skus,docs:seed.reached.docs,txns:seed.reached.txns}
-    // Like synth-pipeline: only a newly owned copy may become test-classified.
-    // Production gating stays unchanged; test boot adds a demo overlay, measured below.
+    // Keep the owned synthetic copy production-classified: demo boot mutates business data.
     const benchData=path.join(dir,'bench-copy');fs.mkdirSync(benchData,{mode:0o700})
     const sourceWal=path.join(data,'gml_cosmetic.db-wal')
     if(fs.existsSync(sourceWal) && fs.statSync(sourceWal).size>0)throw Error('seed_copy_incomplete')
     fs.copyFileSync(path.join(data,'gml_cosmetic.db'),path.join(benchData,'gml_cosmetic.db'))
     data=benchData;env.GML_DATA_DIR=data
     // Imports happen only after the owned instance environment is fixed.
-    Object.assign(process.env,{GML_DATA_DIR:data,GML_DB:'',GML_RUNTIME_MODE:'test'})
+    Object.assign(process.env,{GML_DATA_DIR:data,GML_DB:'',GML_RUNTIME_MODE:'production'})
     const {default:Database}=await import('better-sqlite3')
     const {createToken}=await import('../server/mcp/tokens.js')
     const {verifyInvariants}=await import('./synth-data.mjs')
@@ -82,7 +81,7 @@ export async function run() {
     db=new Database(dbPath); db.pragma('busy_timeout=5000')
     const preBoot={skus:db.prepare('SELECT COUNT(*) n FROM product_skus').get().n,txns:db.prepare('SELECT COUNT(*) n FROM inventory_transactions').get().n}
     if(preBoot.skus!==seed.reached.skus || preBoot.txns!==seed.reached.txns)throw Error('seed_copy_incomplete')
-    classifySoakCopy(db)
+    validateSoakCopy(db)
     const owner=db.prepare("SELECT id FROM users WHERE username='synthadmin'").get()
     const agent=createToken(db,{name:'synthetic-soak',ownerUserId:owner.id,industry:'cosmetic',scopes:'read',allowTools:'inventory.query_stock'}).token
     const target=db.prepare('SELECT warehouse_id,sku_id,batch_no FROM inventory_stocks WHERE qty_on_hand>0 ORDER BY id LIMIT 1').get()
@@ -91,7 +90,7 @@ export async function run() {
     const marker='soak-'+randomBytes(8).toString('hex')
     const probe=net.createServer();probe.listen(0,'127.0.0.1');await once(probe,'listening');const port=probe.address().port;await new Promise(resolve=>probe.close(resolve))
     r.phase='startup'
-    server=spawn(process.execPath,['server/index.js'],{cwd:ROOT,env:{...env,GML_RUNTIME_MODE:'test',GML_JWT_SECRET:randomBytes(32).toString('hex'),HOST:'127.0.0.1',PORT:String(port)},stdio:['ignore','pipe','pipe']})
+    server=spawn(process.execPath,['server/index.js'],{cwd:ROOT,env:{...env,GML_RUNTIME_MODE:'production',GML_JWT_SECRET:randomBytes(32).toString('hex'),HOST:'127.0.0.1',PORT:String(port)},stdio:['ignore','pipe','pipe']})
     closed=once(server,'close');let ready=false
     server.stdout.on('data',d=>{if(d.toString().includes('服务已启动'))ready=true});server.stderr.resume()
     const boot=performance.now()
@@ -109,7 +108,7 @@ export async function run() {
     const token=login.data?.token;if(!token)throw Error('login_failed')
     if(!(await verifyInvariants(db)).ok)throw Error('baseline_invariants_failed')
     before=stock()
-    r.dataset={pre_boot:preBoot,test_copy:true,demo_overlay:true,skus:db.prepare('SELECT COUNT(*) n FROM product_skus').get().n,txns:db.prepare('SELECT COUNT(*) n FROM inventory_transactions').get().n}
+    r.dataset={pre_boot:preBoot,synthetic_copy:true,runtime_mode:'production',skus:db.prepare('SELECT COUNT(*) n FROM product_skus').get().n,txns:db.prepare('SELECT COUNT(*) n FROM inventory_transactions').get().n}
 
     r.dataset.overlay_delta={skus:r.dataset.skus-preBoot.skus,txns:r.dataset.txns-preBoot.txns}
     r.phase='workload'
@@ -121,7 +120,7 @@ export async function run() {
       task('read',()=>call('/api/inventory/stocks',token),500),
       task('write',()=>call('/api/inventory/adjust',token,{...target,qty:1,direction:'in',reason:marker}),1000),
       task('mcp',()=>call('/mcp',agent,{jsonrpc:'2.0',id:++rpc,method:'tools/call',params:{name:'inventory.query_stock',arguments:{limit:5}}}),1000),
-      task('backup',()=>command(['scripts/db-backup.mjs','cosmetic','--keep=2'],{...env,GML_RUNTIME_MODE:'test'},120000),60000),
+      task('backup',()=>command(['scripts/db-backup.mjs','cosmetic','--keep=2'],{...env,GML_RUNTIME_MODE:'production'},120000),60000),
       sampler()
     ])
     const rejected=outcomes.find(x=>x.status==='rejected');if(rejected)throw rejected.reason
