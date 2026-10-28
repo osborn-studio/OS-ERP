@@ -181,7 +181,7 @@ export async function runPipeline(o) {
   bdb.close()
   // bench-api 起的是 test 模式的 server/index.js，启动时会走 db/boot.js 的 bootAll：对库补跑幂等的演示种子、
   // 并为 food/apparel 另建两份演示库。大库上这要几十秒~两分钟，会撞 bench-api 的 60 s 启动等待；
-  // 所以先在副本上单独跑一遍同一个 bootAll 并计时（预热），之后 bench 自己的启动只是空转校验。
+  // 预热不保证后续启动只做空转校验；large-ci 显式提供有界 10 分钟准备预算，另报启动耗时，不计入请求延迟。
   // 副作用必须说清：压测的 cosmetic 库 = 合成数据 + 演示种子的小量叠加（几十个演示经销商/订单量级，相对合成量 <1%）。
   const pre = step('bench_prewarm', ['--input-type=module', '-e', "const { bootAll } = await import('./server/db/boot.js'); bootAll()"],
     { env: { GML_RUNTIME_MODE: 'test', GML_DATA_DIR: benchDir, GML_DB: '' } })
@@ -199,7 +199,7 @@ export async function runPipeline(o) {
   report.steps.bench_prewarm = { ok: true, wall_ms: pre.wall_ms }
   report.bench_dataset = benchDataset
   const benchOut = path.join(o.dir, 'bench.json')
-  const b = step('bench_api', ['scripts/bench-api.mjs', '--concurrency', String(o.concurrency), '--iterations', String(o.iterations), '--out', benchOut],
+  const b = step('bench_api', ['scripts/bench-api.mjs', '--concurrency', String(o.concurrency), '--startup-timeout-ms', String(o.profile === 'large-ci' ? 600000 : 60000), '--iterations', String(o.iterations), '--out', benchOut],
     { env: { GML_RUNTIME_MODE: 'test', GML_DATA_DIR: benchDir, GML_BENCH_USER: 'synthadmin', GML_BENCH_PASSWORD: adminPassword } })
   if (fs.existsSync(benchOut)) {
     const j = JSON.parse(fs.readFileSync(benchOut, 'utf8'))

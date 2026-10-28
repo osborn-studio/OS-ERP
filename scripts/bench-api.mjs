@@ -13,7 +13,7 @@
  *   ③ 输出文件不得落在仓库 data/ 内。压测会写库（登录更新 last_login_at、WAL），所以用副本。
  *
  * 【用法】GML_RUNTIME_MODE=demo GML_DATA_DIR=/abs/copy node scripts/bench-api.mjs
- *          [--profile=read|write] [--concurrency 4] [--iterations 30] [--login-iterations 10] [--out file.json] [--max-error-rate 0.05]
+ *          [--startup-timeout-ms 60000] [--profile=read|write] [--concurrency 4] [--iterations 30] [--login-iterations 10] [--out file.json] [--max-error-rate 0.05]
  *          写档专用：[--contender-hold-ms 30] [--contender-gap-ms 20]（0 = 不起外部写者）[--busy-ms N] [--retry-max N]
  * 退出码：0 完成且错误率不超阈值；1 运行失败或错误率超阈值（写档：或完整性校验失败）；2 用法/安全拒绝。
  *
@@ -71,14 +71,14 @@ export function summarize(name, method, route, samples, statuses, errors) {
   }
 }
 
-function parseArgs(argv) {
+export function parseArgs(argv) {
   const o = {
     concurrency: 4, iterations: 30, loginIterations: 10, out: null, maxErrorRate: 0.05,
-    profile: 'read', contenderHoldMs: 30, contenderGapMs: 20, busyMs: null, retryMax: null
+    startupTimeoutMs: 60000, profile: 'read', contenderHoldMs: 30, contenderGapMs: 20, busyMs: null, retryMax: null
   }
   const map = {
     '--concurrency': 'concurrency', '--iterations': 'iterations', '--login-iterations': 'loginIterations', '--max-error-rate': 'maxErrorRate', '--out': 'out',
-    '--profile': 'profile', '--contender-hold-ms': 'contenderHoldMs', '--contender-gap-ms': 'contenderGapMs', '--busy-ms': 'busyMs', '--retry-max': 'retryMax'
+    '--startup-timeout-ms': 'startupTimeoutMs', '--profile': 'profile', '--contender-hold-ms': 'contenderHoldMs', '--contender-gap-ms': 'contenderGapMs', '--busy-ms': 'busyMs', '--retry-max': 'retryMax'
   }
   const text = new Set(['out', 'profile'])
   for (let i = 0; i < argv.length; i++) {
@@ -91,6 +91,7 @@ function parseArgs(argv) {
     const v = inline !== undefined ? inline : argv[++i]
     o[key] = text.has(key) ? v : Number(v)
   }
+  if (!Number.isInteger(o.startupTimeoutMs) || o.startupTimeoutMs < 1 || o.startupTimeoutMs > 600000) throw Object.assign(new Error('startup-timeout-ms 必须是 1..600000 的整数'), { usage: true })
   if (!['read', 'write'].includes(o.profile)) throw Object.assign(new Error('profile 只能是 read 或 write'), { usage: true })
   for (const k of ['contenderHoldMs', 'contenderGapMs']) {
     if (!Number.isInteger(o[k]) || o[k] < 0 || o[k] > 5000) throw Object.assign(new Error(`${k} 必须是 0..5000 的整数毫秒`), { usage: true })
@@ -166,6 +167,7 @@ export async function runBench(argv = process.argv.slice(2), env = process.env) 
     ...(opts.retryMax !== null ? { GML_WRITE_RETRY_MAX: String(opts.retryMax) } : {})
   }
   const writePlan = opts.profile === 'write' ? await prepareWrite({ dataDir, industry: env.GML_BENCH_INDUSTRY || 'cosmetic', n: opts.iterations }) : null
+  const startupStarted = performance.now()
   const child = spawn(process.execPath, ['server/index.js'], { cwd: ROOT, env: childEnv, stdio: ['ignore', 'pipe', 'pipe'] })
   let ready = false; let busy = 0; let tail = ''
   const logCounts = { retry: 0, exhausted: 0 }
@@ -189,11 +191,12 @@ export async function runBench(argv = process.argv.slice(2), env = process.env) 
   const closed = once(child, 'close')
   const stop = async () => { if (child.exitCode === null) child.kill('SIGTERM'); await closed }
   try {
-    for (let i = 0; i < 1200 && !ready && child.exitCode === null; i++) await new Promise(r => setTimeout(r, 50))
+    while (performance.now() - startupStarted < opts.startupTimeoutMs && !ready && child.exitCode === null && child.signalCode === null) await new Promise(r => setTimeout(r, 50))
     if (!ready) {
       console.error(child.exitCode === null && child.signalCode === null ? 'BENCH_FAILURE:startup_timeout' : 'BENCH_FAILURE:startup_exit')
       refuse(`服务未能启动：${tail.slice(-400)}`, 1)
     }
+    const startupWallMs = Math.round(performance.now() - startupStarted)
     const base = `http://127.0.0.1:${port}`
     const call = async (method, route, token, body) => {
       if (child.exitCode !== null) throw Object.assign(new Error('服务子进程已退出，停止发送请求'), { fatal: true })
@@ -212,7 +215,7 @@ export async function runBench(argv = process.argv.slice(2), env = process.env) 
     try { token = JSON.parse(login.text).data.token } catch { /* handled below */ }
     if (login.status !== 200 || !token) refuse(`登录失败（HTTP ${login.status}）；种子库账号需与 GML_BENCH_USER/PASSWORD 一致`, 1)
     if (writePlan) {
-      const out = await runWriteProfile({ opts, call, token, writePlan, logCounts, getBusy: () => busy, stop: async () => { await stop(); flushPartial() }, mode, creds, outFile })
+      const out = await runWriteProfile({ opts, startupWallMs, call, token, writePlan, logCounts, getBusy: () => busy, stop: async () => { await stop(); flushPartial() }, mode, creds, outFile })
       return out
     }
     const list = await call('GET', '/api/purchase/orders', token)
@@ -253,7 +256,7 @@ export async function runBench(argv = process.argv.slice(2), env = process.env) 
       generated_at: new Date().toISOString(),
       scope_notice: 'Local-host measurement on a demo/test database. NOT a target-host (dmserver) result and NOT a capacity commitment.',
       host: { platform: process.platform, arch: process.arch, cpus: os.cpus().length, cpu_model: os.cpus()[0]?.model ?? null, total_mem_mb: Math.round(os.totalmem() / 1048576), node: process.version },
-      config: { runtime_mode: mode, concurrency: opts.concurrency, iterations: opts.iterations, login_iterations: opts.loginIterations, industry: creds.industry },
+      config: { startup_timeout_ms: opts.startupTimeoutMs, startup_wall_ms: startupWallMs, runtime_mode: mode, concurrency: opts.concurrency, iterations: opts.iterations, login_iterations: opts.loginIterations, industry: creds.industry },
       endpoints: results,
       totals: { requests: total, errors: totalErr, error_rate: total ? r3(totalErr / total) : 0, wall_seconds: r3(wall), throughput_rps: wall ? r3(total / wall) : 0 },
       sqlite_busy_count: busy
@@ -342,7 +345,7 @@ export async function startContender({ dbFile, holdMs, gapMs }) {
   }
 }
 
-async function runWriteProfile({ opts, call, token, writePlan: W, logCounts, getBusy, stop, mode, creds, outFile }) {
+async function runWriteProfile({ opts, startupWallMs, call, token, writePlan: W, logCounts, getBusy, stop, mode, creds, outFile }) {
   const n = opts.iterations
   const ops = [
     { name: 'purchase_order_create', method: 'POST', route: '/api/purchase/orders', key: (i) => `${W.runId}-po-${i}`,
@@ -389,6 +392,7 @@ async function runWriteProfile({ opts, call, token, writePlan: W, logCounts, get
     scope_notice: 'Local-host measurement on a demo/test database copy. NOT a target-host (dmserver) result and NOT a capacity commitment. Single server process plus (optionally) one in-process worker thread holding the write lock; real multi-process contention is only approximated.',
     host: { platform: process.platform, arch: process.arch, cpus: os.cpus().length, cpu_model: os.cpus()[0]?.model ?? null, total_mem_mb: Math.round(os.totalmem() / 1048576), node: process.version },
     config: {
+      startup_timeout_ms: opts.startupTimeoutMs, startup_wall_ms: startupWallMs,
       runtime_mode: mode, concurrency: opts.concurrency, ops_per_type: n, industry: creds.industry,
       contender_hold_ms: opts.contenderHoldMs, contender_gap_ms: opts.contenderGapMs,
       sqlite_busy_ms: opts.busyMs ?? 'server default', write_retry_max: opts.retryMax ?? 'server default'

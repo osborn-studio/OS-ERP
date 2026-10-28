@@ -203,3 +203,13 @@ test('failed steps expose only numeric exit codes and fixed failure classes', ()
   assert.equal(summary.verdict, 'FAIL')
   assert.ok(!JSON.stringify(summary).includes('secret'))
 })
+
+test('startup measurements expose only finite numbers and large-ci alone extends readiness', () => {
+  const { summary } = buildSummary({ steps: { bench_api: { config: { startup_timeout_ms: 600000, startup_wall_ms: 1234 } } } }, { config: { startup_timeout_ms: '/private/secret', startup_wall_ms: Infinity } })
+  assert.equal(summary.bench_read.startup_timeout_ms, 600000)
+  assert.equal(summary.bench_read.startup_wall_ms, 1234)
+  assert.equal(summary.bench_write.startup_timeout_ms, null)
+  assert.equal(summary.bench_write.startup_wall_ms, null)
+  assert.match(code, /if \[ "\$CAP_SCALE" = "large-ci" \]; then startup_ms=600000; fi/)
+  assert.match(read('scripts/synth-pipeline.mjs'), /o.profile === 'large-ci' \? 600000 : 60000/)
+})
