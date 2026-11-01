@@ -68,7 +68,7 @@ Read-only. Checks: the recorded pid is alive, is `node server/index.js`, cwd is 
 
 Per-feature recipes: [`features/README.md`](features/README.md). Mechanics:
 
-- **Browser:** `$V ui <label> <journey.json>` → `ui/<label>.<shot>.{png,text.txt,aria.txt}` + `ui/<label>.steps.log`; on failure a `fail-<n>` shot and exit 1. `${RUN_ID}` and `${ADMIN_USER}` are substituted in journeys. Stable handles from this repo:
+- **Browser:** `$V ui <label> <journey.json>` → `ui/<label>.<shot>.{png,text.txt,aria.txt}` + `ui/<label>.steps.log`; on failure a `fail-<n>` shot and exit 1. Before that shot the log records `at failure: matches=… loading=… pendingApi=…` (the shot waits for networkidle, so a late row can appear in it), and any API call ≥2s is logged as `slow <ms>` — read these before calling a wait timeout a UI fault. `${RUN_ID}` and `${ADMIN_USER}` are substituted in journeys. Stable handles from this repo:
   - Login: `{"login":"${ADMIN_USER}","industry":"cosmetic"}` opens `/login?industry=…`, types into placeholders `请输入账号`/`请输入密码`, clicks `登 录`, waits to leave `/login` (store users land on `/pos`).
   - Sidebar: `{"nav":["主数据","商品档案"]}` — groups are click-to-open `<div>`s, children are `NavLink`s inside `<aside>`; labels exactly as in `MENUS`.
   - DataPage pages: `{"click":"新增","role":"button"}`, modal heading `新增<title>`, fields `{"fill":"<字段 label>"}` / `{"select":"<label>","option"|"index"}`, `{"click":"保存","role":"button","exact":true}`, toast `已新增`; search with `{"fillPlaceholder":"关键词搜索"}` + `查询`; assert rows with `"within":"table"`. Row buttons: `编辑`, `删除` (confirm auto-accepted).

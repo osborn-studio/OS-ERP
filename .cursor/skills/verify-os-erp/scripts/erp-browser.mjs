@@ -22,7 +22,7 @@
 //   {"waitText": "已新增"}                        wait until the text is visible (toasts live ~2.6s)
 //   {"waitGone": "保存中…"}
 //   {"expectUrl": "/master/products"}           regex tested against pathname+search
-//   {"expectText": "…", "count": 1}             assert visible occurrences (default ≥1)
+//   {"expectText": "…", "count": 1}             assert visible occurrences (default ≥1); polls until stable, "timeout" (10s)
 //   {"shot": "after-save"}                       <label>.<shot>.png + .text.txt (innerText) + .aria.txt (ARIA snapshot)
 //   {"sleep": 300}
 // window.confirm/alert are auto-accepted and logged. Requests leaving ERP_URL's origin are blocked and counted.
@@ -71,6 +71,14 @@ page.on('dialog', async (d) => { say(`dialog ${d.type()}: ${d.message().slice(0,
 const consoleErrors = []
 page.on('console', (m) => { if (m.type() === 'error') consoleErrors.push(m.text()) })
 page.on('response', (r) => { const u = new URL(r.url()); if (u.pathname.startsWith('/api/') && r.status() >= 400) say(`HTTP ${r.status()} ${r.request().method()} ${u.pathname}`) })
+// Slow API calls are logged so a wait timeout can be told apart from a missing row (server slow vs UI wrong).
+const started = new Map()
+page.on('request', (q) => { if (new URL(q.url()).pathname.startsWith('/api/')) started.set(q, Date.now()) })
+page.on('requestfinished', (q) => {
+  const t0 = started.get(q); started.delete(q)
+  if (t0 !== undefined && Date.now() - t0 >= 2000) say(`slow ${Date.now() - t0}ms ${q.method()} ${new URL(q.url()).pathname}`)
+})
+page.on('requestfailed', (q) => started.delete(q))
 
 const scope = (s) => (s.within ? page.locator(s.within).first() : page)
 const textLoc = (s, text) => {
@@ -149,9 +157,24 @@ try {
     } else if (s.expectUrl) {
       await page.waitForURL((u) => new RegExp(s.expectUrl).test(u.pathname + u.search), { timeout: 10000 })
     } else if (s.expectText !== undefined) {
-      const c = await textLoc(s, s.expectText).count()
-      const ok = s.count === undefined ? c >= 1 : c === s.count
-      if (!ok) throw new Error(`expectText ${JSON.stringify(s.expectText)}: found ${c}, want ${s.count ?? '>=1'}`)
+      // A list refresh (e.g. 查询 right after save) briefly swaps rows for 「加载中…」, so a one-shot count can read 0
+      // while the row is about to come back. Poll until the count matches on two reads 250ms apart with no loading row.
+      const want = (c) => (s.count === undefined ? c >= 1 : c === s.count)
+      const read = async () => ((await scope(s).getByText('加载中…').count()) > 0 ? -1 : textLoc(s, s.expectText).count())
+      const deadline = Date.now() + (s.timeout || 10000)
+      let c = await read(), stable = false
+      while (Date.now() < deadline) {
+        if (want(c)) {
+          await page.waitForTimeout(250)
+          const again = await read()
+          if (again === c) { stable = true; break }
+          c = again
+        } else {
+          await page.waitForTimeout(100)
+          c = await read()
+        }
+      }
+      if (!stable) throw new Error(`expectText ${JSON.stringify(s.expectText)}: found ${c < 0 ? 'loading' : c}, want ${s.count ?? '>=1'}`)
       say(`expectText ok (${c})`)
     } else if (s.shot) {
       await shot(s.shot)
@@ -164,6 +187,13 @@ try {
   await browser.close()
 } catch (e) {
   say(`FAIL ${LABEL} at step ${n}: ${String(e.message).split('\n')[0]}`)
+  // State at the moment of failure, before the fail shot waits for networkidle (which can let the row arrive late)
+  const s = steps[n - 1] || {}, text = s.waitText ?? s.expectText
+  if (text !== undefined) {
+    const matches = await textLoc(s, text).count().catch(() => -1)
+    const loading = await scope(s).getByText('加载中…').count().catch(() => -1)
+    say(`at failure: matches=${matches} loading=${loading > 0} pendingApi=${started.size}`)
+  }
   await shot(`fail-${n}`).catch(() => {})
   await browser.close()
   process.exit(1)
