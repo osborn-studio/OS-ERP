@@ -1232,7 +1232,9 @@ export function seedAll({ silent = true } = {}) {
        VALUES (?,?,?,?,?,?,?,?,?,?,?)`
     )
     const periods = [0, 1, 2].map((m) => {
+      // 先归到 1 号再减月：月末（如 10-31）直接 setMonth 会溢出到下月 1 号，生成重复期间并撞 dealer_rebates 唯一键
       const d = new Date(seedNow())
+      d.setDate(1)
       d.setMonth(d.getMonth() - m)
       return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
     })
@@ -1523,7 +1525,9 @@ export function seedAll({ silent = true } = {}) {
     {
       const bd = bundleByCode['BND001']
       const date = ymd(dayAgo(1))
-      const docNo = nextDocNo(db, 'DS', 'assembly_orders', 'doc_no', date)
+      // 组装拆卸单统一用 AS（doc_types 与 /api/inventory 同一前缀）；DS 是经销商对账单的前缀，
+      // 用 DS 时每月 1 号这张单（日期=昨天）会与上月末对账单撞同一个单号，order.trace_document 会把两张单混在一起
+      const docNo = nextDocNo(db, 'AS', 'assembly_orders', 'doc_no', date)
       const pc = bd.parent.cost || 0
       const info = insAsm.run(docNo, 'disassemble', bd.id, mainWh, date, 'draft', 3, 0, '沈仓管', '礼盒改拆零（待确认）')
       insAsmItem.run(info.lastInsertRowid, 'parent', bd.parent.id, '', 3, pc, Number((pc * 3).toFixed(2)))
@@ -1798,7 +1802,9 @@ export function seedAll({ silent = true } = {}) {
       `INSERT INTO dealer_requisition_plans (dealer_id,period,sku_id,plan_qty,plan_amount,status)
        VALUES (?,?,?,?,?, 'forecast') ON CONFLICT(dealer_id,period,sku_id) DO NOTHING`
     )
-    const periods = [ymOf(now()), ymOf(addMonths(now(), 1)), ymOf(addMonths(now(), 2))]
+    // 期间按月份算，从当月 1 号起加月（月末直接加月会跳过下月，见返利期间同一问题）
+    const monthStart = new Date(now().getFullYear(), now().getMonth(), 1)
+    const periods = [ymOf(monthStart), ymOf(addMonths(monthStart, 1)), ymOf(addMonths(monthStart, 2))]
     let pc = 0
     for (const dealerId of dealerIds) {
       for (const period of periods) {
