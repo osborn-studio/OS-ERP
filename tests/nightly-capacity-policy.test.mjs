@@ -68,10 +68,11 @@ test('scale input is matched against a fixed list through an env var and never i
 
 test('each job uploads exactly its own allowlisted evidence file', () => {
   const uploads = [...code.matchAll(/uses:\s*actions\/upload-artifact@[\s\S]*?(?=^\s+- |(?![\s\S]))/gm)].map(m => m[0])
-  assert.equal(uploads.length, 2)
+  assert.equal(uploads.length, 3)
   const capacityCode = code.split('\n  fts-write-benchmark:')[0]
-  const ftsCode = code.split('\n  fts-write-benchmark:')[1]
-  for (const job of [capacityCode, ftsCode]) {
+  const ftsCode = code.split('\n  fts-write-benchmark:')[1].split('\n  mixed-soak:')[0]
+  const soakCode = code.split('\n  mixed-soak:')[1]
+  for (const job of [capacityCode, ftsCode, soakCode]) {
     assert.equal((job.match(/uses:\s*actions\/upload-artifact@/g) || []).length, 1)
   }
   for (const upload of uploads) {
@@ -81,6 +82,7 @@ test('each job uploads exactly its own allowlisted evidence file', () => {
     assert.match(upload, /if-no-files-found:\s*error/)
   }
   assert.match(uploads[1], /^\s+path:\s*\$\{\{\s*runner\.temp\s*\}\}\/fts-evidence\.json\s*$/m)
+  assert.match(uploads[2], /path:.*runner\.temp.*\/soak-evidence\.json/ )
   const withBlock = uploads[0]
   assert.match(withBlock, /^\s+path:\s*\$\{\{\s*runner\.temp\s*\}\}\/capacity-summary\/capacity-summary\.json\s*$/m)
   assert.doesNotMatch(withBlock, /^\s+path:\s*\|/m, 'single explicit path only')
