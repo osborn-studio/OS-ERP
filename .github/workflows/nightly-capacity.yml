@@ -14,6 +14,10 @@ on:
     - cron: '17 3 * * *'
   workflow_dispatch:
     inputs:
+      mixed_soak_only:
+        description: Run 30-minute synthetic mixed workload on an exact source SHA
+        type: boolean
+        default: false
       fts_benchmark_only:
         description: Run isolated FTS write/toggle benchmarks instead of capacity
         type: boolean
@@ -58,12 +62,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ inputs.fts_benchmark_only && 'fts-write-benchmark' || 'nightly-capacity' }}
+  group: ${{ inputs.mixed_soak_only && 'mixed-soak' || inputs.fts_benchmark_only && 'fts-write-benchmark' || 'nightly-capacity' }}
   cancel-in-progress: false
 
 jobs:
   capacity:
-    if: ${{ !inputs.fts_benchmark_only }}
+    if: ${{ !inputs.fts_benchmark_only && !inputs.mixed_soak_only }}
     name: Synthetic capacity baseline (hosted, trend only)
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.scale == 'large-ci' && 355 || 60 }}
@@ -249,7 +253,7 @@ jobs:
           fi
 
   fts-write-benchmark:
-    if: github.event_name == 'workflow_dispatch' && inputs.fts_benchmark_only
+    if: github.event_name == 'workflow_dispatch' && inputs.fts_benchmark_only && !inputs.mixed_soak_only
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -297,5 +301,49 @@ jobs:
         with:
           name: fts-validation-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/fts-evidence.json
+          if-no-files-found: error
+          retention-days: 14
+
+  mixed-soak:
+    if: github.event_name == 'workflow_dispatch' && inputs.mixed_soak_only
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      SOAK_HARNESS_SHA: ${{ github.sha }}
+      SOAK_SOURCE_SHA: ${{ inputs.validation_sha }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+          path: harness
+      - name: Validate exact source
+        run: |
+          set -euo pipefail
+          [[ "$SOAK_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.validation_sha }}
+          persist-credentials: false
+          path: app
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: app/.nvmrc
+      - name: Install locked dependencies and run fixed-duration soak
+        working-directory: app
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOAK_SOURCE_SHA"
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm rebuild better-sqlite3 esbuild --no-audit --no-fund
+          test -z "$(git status --porcelain)"
+          cp ../harness/scripts/mixed-soak.mjs scripts/mixed-soak.mjs
+          export SOAK_OUTPUT="$RUNNER_TEMP/soak-evidence.json"
+          node scripts/mixed-soak.mjs
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: mixed-soak-evidence
+          path: ${{ runner.temp }}/soak-evidence.json
           if-no-files-found: error
           retention-days: 14
