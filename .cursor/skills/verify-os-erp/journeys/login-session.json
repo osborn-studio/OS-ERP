@@ -1,0 +1,16 @@
+[
+  {"login": "${ADMIN_USER}", "industry": "cosmetic"},
+  {"expectUrl": "^/$"},
+  {"waitText": "经营看板", "within": "aside"},
+  {"shot": "home"},
+  {"click": "系统管理员", "within": "header"},
+  {"waitText": "退出全部会话"},
+  {"shot": "user-menu"},
+  {"click": "退出全部会话", "role": "button"},
+  {"expectUrl": "^/login"},
+  {"waitText": "登录", "role": "heading", "exact": true},
+  {"shot": "after-logout"},
+  {"goto": "/master/products"},
+  {"expectUrl": "^/login"},
+  {"shot": "guarded-route"}
+]
