@@ -10,7 +10,7 @@
  * ============================================================================
  */
 
-import { ReactNode, useCallback, useEffect, useState } from 'react'
+import { ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 import api, { ApiError } from '../api/client'
 
 // ============ 格式化 ============
@@ -325,17 +325,23 @@ export function useFetch<T = any>(path: string | null, params?: Record<string, a
   // AC11：服务端缓存接口顶层的 cached_at / cache_ttl_ms（看板“数据截至”戳）；其它接口为 null
   const [stamp, setStamp] = useState<{ cachedAt: string; ttlMs: number } | null>(null)
 
+  // 同一列表连续发请求时（保存后刷新、紧接着点查询），先发的慢请求可能后到并覆盖新结果；只认最后一次发出的请求
+  const latest = useRef(0)
+
   const reload = useCallback(async () => {
     if (!path) return
+    const seq = ++latest.current
     setLoading(true)
     setError(null)
     try {
       const res = await api.get(path, params)
+      if (seq !== latest.current) return
       setData(res.data)
       setStamp(typeof res.cached_at === 'string' ? { cachedAt: res.cached_at, ttlMs: Number(res.cache_ttl_ms) || 0 } : null)
       // 只有成功响应才解除 403/功能关闭的阻断态，重试期间不提前回到"空数据"页面
       setErrorStatus(null); setErrorCode(null)
     } catch (e: any) {
+      if (seq !== latest.current) return
       setError(e.message)
       const status = e instanceof ApiError ? e.status : null
       const code = e instanceof ApiError ? e.code || null : null
@@ -343,7 +349,7 @@ export function useFetch<T = any>(path: string | null, params?: Record<string, a
       // 403/401/功能关闭时清掉旧数据，避免把拒绝画成上一次的成功结果
       if (status === 401 || status === 403 || code === 'FEATURE_DISABLED') { setData(null); setStamp(null) }
     } finally {
-      setLoading(false)
+      if (seq === latest.current) setLoading(false)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path, JSON.stringify(params || {})])
